@@ -1,0 +1,41 @@
+{
+  "name": "nabd-os",
+  "version": "0.4.0",
+  "description": "Cyberpunk Bento-Box Agent Dashboard — Termux Edge AI Interface",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "nabd": "dist/nabd.mjs"
+  },
+  "scripts": {
+    "dev": "node --import tsx src/index.tsx",
+    "build": "tsc",
+    "bundle": "node scripts/bundle.mjs",
+    "start": "node dist/nabd.mjs",
+    "link": "npm run bundle && npm link"
+  },
+  "keywords": [
+    "termux",
+    "ink",
+    "tui",
+    "agent",
+    "llm"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "ink": "^5.1.0",
+    "react": "^18.3.0",
+    "zod": "^4.4.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
+  }
+}
