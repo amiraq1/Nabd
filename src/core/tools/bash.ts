@@ -83,8 +83,14 @@ export async function executeBash(
     // Fire-and-forget stream consumer that forwards events to the callback.
     (async () => {
       for await (const event of session.stream()) {
-        if (event.type === 'stdout') onStream(event.chunk, false);
-        if (event.type === 'stderr') onStream(event.chunk, true);
+        if (event.type === 'StdoutChunk') onStream((event as any).chunk, false);
+        if (event.type === 'StderrChunk') onStream((event as any).chunk, true);
+        if (event.type === 'StdoutBatch') {
+          for (const chunk of (event as any).chunks) onStream(chunk, false);
+        }
+        if (event.type === 'StderrBatch') {
+          for (const chunk of (event as any).chunks) onStream(chunk, true);
+        }
       }
     })().catch(() => {
       // The stream consumer is best-effort; downstream consumers may be
@@ -117,6 +123,12 @@ export async function executeBash(
  */
 export const executeBashTool: ToolDefinition = {
   ...executeBashSchema,
+  id: 'tool-execute_bash-v1',
+  version: '1.0.0',
+  category: 'system',
+  visibility: 'stable',
+  permissions: ['system', 'filesystem', 'dangerous'],
+  aliases: ['bash', 'shell', 'terminal'],
   getPolicy: () => getBashPolicy(),
   execute: async (
     args: unknown,

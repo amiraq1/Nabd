@@ -56,7 +56,7 @@ describe('ProcessSession', () => {
       const consumer = (async () => {
         for await (const event of session.stream()) {
           events.push(event);
-          if (events.length >= 1) break;
+          if (event.type === 'SessionStarted') break;
         }
       })();
 
@@ -66,8 +66,8 @@ describe('ProcessSession', () => {
         assert.equal(snapshot.status, 'running');
         assert.equal(snapshot.pid, 12345);
         assert.ok(snapshot.startedAt !== null);
-        const started = events.find((e) => e.type === 'started');
-        assert.ok(started && started.type === 'started' && started.pid === 12345);
+        const started = events.find((e) => e.type === 'SessionStarted');
+        assert.ok(started && started.type === 'SessionStarted' && (started as any).pid === 12345);
       });
     });
 
@@ -234,10 +234,10 @@ describe('ProcessSession', () => {
       session.finish(0, null);
 
       await consumer;
-      assert.ok(collected.some((e) => e.type === 'started'));
-      assert.ok(collected.some((e) => e.type === 'stdout'));
+      assert.ok(collected.some((e) => e.type === 'SessionStarted'));
+      assert.ok(collected.some((e) => e.type === 'StdoutChunk'));
       assert.ok(
-        collected[collected.length - 1]?.type === 'finished',
+        collected[collected.length - 1]?.type === 'Completed',
         'stream should end on finished event',
       );
     });
@@ -255,7 +255,7 @@ describe('ProcessSession', () => {
         events.push(event);
       }
       assert.ok(events.length >= 1);
-      assert.equal(events[events.length - 1]?.type, 'finished');
+      assert.equal(events[events.length - 1]?.type, 'Completed');
     });
 
     it('supports multiple independent consumers', async () => {
@@ -287,16 +287,16 @@ describe('ProcessSession', () => {
       // don't assert both because, depending on microtask scheduling, an
       // event emitted before the second consumer attaches is queued and
       // replayed to that consumer.
-      const aFinished = consumerA.some((e) => e.type === 'finished');
-      const bFinished = consumerB.some((e) => e.type === 'finished');
+      const aFinished = consumerA.some((e) => e.type === 'Completed');
+      const bFinished = consumerB.some((e) => e.type === 'Completed');
       assert.ok(
         aFinished || bFinished,
         'at least one consumer should observe the finished event',
       );
       // Combined stdout payload from both consumers should include "data".
       const combined = [...consumerA, ...consumerB]
-        .filter((e) => e.type === 'stdout')
-        .map((e) => (e.type === 'stdout' ? e.chunk : ''))
+        .filter((e) => e.type === 'StdoutChunk')
+        .map((e) => (e.type === 'StdoutChunk' ? (e as any).chunk : ''))
         .join('');
       assert.match(combined, /data/);
     });

@@ -1,186 +1,199 @@
-import type { ProcessSession } from './ProcessSession.js';
-import type { ProcessSessionSnapshot } from './types.js';
+import type { ProcessSessionSnapshot, ProcessSessionStatus, ExecutionMetrics } from './types.js';
+import type { EventBus } from './events/EventBus.js';
+import { globalEventBus } from './events/EventBus.js';
+import { type ExecutionEventV3, type SystemEvent, isExecutionEvent } from './events/ExecutionEvent.js';
+import { replayService } from './replay/ReplayService.js';
 
-/**
- * Aggregate counts of sessions currently tracked by the registry.
- */
 export interface RegistryStatistics {
-  /** Total number of registered sessions (running + terminal). */
   total: number;
-  /** Number of sessions whose status is `'running'`. */
   running: number;
-  /** Number of sessions whose status is `'finished'`. */
   completed: number;
-  /** Number of sessions whose status is `'error'` or `'cancelled'`. */
   failed: number;
-  /** Configured upper bound on registered sessions before pruning kicks in. */
   maxSessions: number;
 }
 
-/** Default upper bound used when no `maxSessions` is supplied to the ctor. */
 const DEFAULT_MAX_SESSIONS = 1000;
-
-/**
- * Statuses that represent a session that has not yet reached a terminal
- * state and must therefore never be pruned.
- */
 const ACTIVE_STATUSES = new Set(['queued', 'running']);
-
-/**
- * Statuses that represent a finished execution and are eligible for
- * pruning once `maxSessions` is exceeded.
- */
 const TERMINAL_STATUSES = new Set(['finished', 'cancelled', 'error']);
 
-/**
- * Central lookup of every `ProcessSession` known to the runtime.
- *
- * The registry maintains two indices — by `executionId` and by `pid` — and
- * produces immutable snapshots for consumers. It also enforces a soft cap
- * on the number of tracked sessions by pruning the oldest terminal entries
- * once the limit is exceeded.
- */
+type Mutable<T> = {
+  -readonly [P in keyof T]: T[P] extends object ? Mutable<T[P]> : T[P];
+};
+type MutableSnapshot = Mutable<ProcessSessionSnapshot>;
+
 export class ExecutionRegistry {
   private readonly maxSessions: number;
-  private readonly byId = new Map<string, ProcessSession>();
-  private readonly byPid = new Map<number, ProcessSession>();
+  private readonly byId = new Map<string, MutableSnapshot>();
+  private readonly byPid = new Map<number, MutableSnapshot>();
 
-  constructor(maxSessions: number = DEFAULT_MAX_SESSIONS) {
+  constructor(maxSessions: number = DEFAULT_MAX_SESSIONS, bus = globalEventBus) {
     if (!Number.isFinite(maxSessions) || maxSessions <= 0) {
-      throw new Error(
-        `ExecutionRegistry: maxSessions must be a positive number, got ${maxSessions}`,
-      );
+      throw new Error(`ExecutionRegistry: maxSessions must be a positive number, got ${maxSessions}`);
     }
     this.maxSessions = Math.floor(maxSessions);
+    
+    bus.subscribe((event) => this.handleEvent(event));
   }
 
-  /**
-   * Register a session. Indexes it by `executionId` immediately and, if the
-   * session already has a `pid`, also by `pid`.
-   *
-   * Re-registering an `executionId` overwrites the previous entry.
-   */
-  register(session: ProcessSession): void {
-    this.byId.set(session.executionId, session);
-    if (session.pid !== null) {
-      this.byPid.set(session.pid, session);
+  private handleEvent(event: SystemEvent): void {
+    if (!isExecutionEvent(event)) return;
+
+    if (event.type === 'SessionQueued') {
+      const snapshot: MutableSnapshot = {
+        executionId: event.executionId,
+        pid: null,
+        command: event.command,
+        args: [...event.args],
+        cwd: event.cwd,
+        status: 'queued',
+        startedAt: null,
+        endedAt: null,
+        exitCode: null,
+        signal: null,
+        durationMs: null,
+        timedOut: false,
+        cancelled: false,
+        truncated: false,
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        totalBytes: 0,
+        metrics: {
+          queuedAt: event.timestamp,
+          stdoutBytes: 0,
+          stderrBytes: 0,
+          peakOutputRate: 0,
+          terminationReason: 'unknown',
+        },
+      };
+      this.byId.set(event.executionId, snapshot);
+      return;
+    }
+
+    const snapshot = this.byId.get(event.executionId);
+    if (!snapshot) return;
+
+    switch (event.type) {
+      case 'SessionStarted':
+        if (snapshot.pid !== null && snapshot.pid !== event.pid) {
+          const current = this.byPid.get(snapshot.pid);
+          if (current === snapshot) {
+            this.byPid.delete(snapshot.pid);
+          }
+        }
+        snapshot.pid = event.pid;
+        snapshot.status = 'running';
+        snapshot.startedAt = event.timestamp;
+        snapshot.metrics.startedAt = event.timestamp;
+        if (snapshot.metrics.queuedAt !== undefined) {
+          snapshot.metrics.waitTime = event.timestamp - snapshot.metrics.queuedAt;
+        }
+        this.byPid.set(event.pid, snapshot);
+        break;
+      case 'StdoutChunk':
+        snapshot.stdoutBytes += event.bytes;
+        snapshot.totalBytes += event.bytes;
+        snapshot.metrics.stdoutBytes = snapshot.stdoutBytes;
+        break;
+      case 'StdoutBatch':
+        snapshot.stdoutBytes += event.bytes;
+        snapshot.totalBytes += event.bytes;
+        snapshot.metrics.stdoutBytes = snapshot.stdoutBytes;
+        break;
+      case 'StderrChunk':
+        snapshot.stderrBytes += event.bytes;
+        snapshot.totalBytes += event.bytes;
+        snapshot.metrics.stderrBytes = snapshot.stderrBytes;
+        break;
+      case 'StderrBatch':
+        snapshot.stderrBytes += event.bytes;
+        snapshot.totalBytes += event.bytes;
+        snapshot.metrics.stderrBytes = snapshot.stderrBytes;
+        break;
+      case 'Metrics':
+        // Not all metrics are tracked in the legacy ExecutionMetrics yet
+        break;
+      case 'Completed':
+        snapshot.status = 'finished';
+        snapshot.exitCode = event.exitCode;
+        snapshot.signal = event.signal;
+        snapshot.endedAt = event.timestamp;
+        snapshot.durationMs = event.durationMs;
+        snapshot.metrics.endedAt = event.timestamp;
+        snapshot.metrics.runTime = event.durationMs;
+        snapshot.metrics.terminationReason = 'natural';
+        this.prune();
+        break;
+      case 'Cancelled':
+        snapshot.status = 'cancelled';
+        snapshot.cancelled = true;
+        snapshot.signal = event.reason;
+        snapshot.endedAt = event.timestamp;
+        if (snapshot.startedAt) snapshot.durationMs = event.timestamp - snapshot.startedAt;
+        snapshot.metrics.endedAt = event.timestamp;
+        snapshot.metrics.runTime = snapshot.durationMs ?? undefined;
+        snapshot.metrics.terminationReason = 'cancelled';
+        this.prune();
+        break;
+      case 'Failed':
+        snapshot.status = 'error';
+        if (event.reason === 'timeout') snapshot.timedOut = true;
+        if (event.reason === 'truncation') snapshot.truncated = true;
+        snapshot.endedAt = event.timestamp;
+        if (snapshot.startedAt) snapshot.durationMs = event.timestamp - snapshot.startedAt;
+        snapshot.metrics.endedAt = event.timestamp;
+        snapshot.metrics.runTime = snapshot.durationMs ?? undefined;
+        snapshot.metrics.terminationReason = event.reason;
+        this.prune();
+        break;
     }
   }
 
-  /**
-   * Remove a session from both indices. Safe to call multiple times.
-   */
-  unregister(session: ProcessSession): void {
-    this.byId.delete(session.executionId);
-    if (session.pid !== null) {
-      const current = this.byPid.get(session.pid);
-      if (current === session) {
-        this.byPid.delete(session.pid);
-      }
-    }
+  getById(executionId: string): ProcessSessionSnapshot | undefined {
+    const snap = this.byId.get(executionId);
+    return snap ? this.clone(snap) : undefined;
   }
 
-  /**
-   * Update the PID a session is indexed under.
-   *
-   * Called by the `ProcessManager` once the child process has been spawned
-   * and `session.pid` becomes known. Sets `session.pid` to the supplied
-   * value and refreshes the `byPid` index — removing the previous mapping,
-   * if any, before inserting the new one.
-   */
-  updatePid(session: ProcessSession, pid: number): void {
-    if (!Number.isInteger(pid) || pid <= 0) {
-      throw new Error(
-        `ExecutionRegistry.updatePid: pid must be a positive integer, got ${pid}`,
-      );
-    }
-    if (session.pid !== null && session.pid !== pid) {
-      const current = this.byPid.get(session.pid);
-      if (current === session) {
-        this.byPid.delete(session.pid);
-      }
-    }
-    session.pid = pid;
-    this.byPid.set(pid, session);
+  getByPid(pid: number): ProcessSessionSnapshot | undefined {
+    const snap = this.byPid.get(pid);
+    return snap ? this.clone(snap) : undefined;
   }
 
-  /** Look up a session by its `executionId`. */
-  getById(executionId: string): ProcessSession | undefined {
-    return this.byId.get(executionId);
-  }
-
-  /** Look up a session by its OS process id. */
-  getByPid(pid: number): ProcessSession | undefined {
-    return this.byPid.get(pid);
-  }
-
-  /** Snapshot every session whose status is `'running'`. */
   getRunning(): ProcessSessionSnapshot[] {
     return this.collectByStatus('running');
   }
 
-  /** Snapshot every session whose status is `'finished'`. */
   getCompleted(): ProcessSessionSnapshot[] {
     return this.collectByStatus('finished');
   }
 
-  /**
-   * Snapshot every session that reached a failure terminal state
-   * (status `'error'` or `'cancelled'`).
-   */
   getFailed(): ProcessSessionSnapshot[] {
     const out: ProcessSessionSnapshot[] = [];
-    for (const session of this.byId.values()) {
-      if (session.status === 'error' || session.status === 'cancelled') {
-        out.push(session.snapshot());
+    for (const snapshot of this.byId.values()) {
+      if (snapshot.status === 'error' || snapshot.status === 'cancelled') {
+        out.push(this.clone(snapshot));
       }
     }
     return out;
   }
 
-  /**
-   * Return snapshots of every registered session, ordered oldest first by
-   * `queuedAt` (with insertion order as a stable tiebreaker). If `limit` is
-   * supplied, only the first `limit` entries are returned.
-   */
   getHistory(limit?: number): ProcessSessionSnapshot[] {
     const sessions = Array.from(this.byId.values());
     sessions.sort((a, b) => {
       const aQ = a.metrics.queuedAt ?? 0;
       const bQ = b.metrics.queuedAt ?? 0;
-      if (aQ !== bQ) {
-        return aQ - bQ;
-      }
-      // Fallback to insertion order via executionId to guarantee stability.
+      if (aQ !== bQ) return aQ - bQ;
       return a.executionId < b.executionId ? -1 : a.executionId > b.executionId ? 1 : 0;
     });
-    const sliced =
-      typeof limit === 'number' && limit >= 0
-        ? sessions.slice(0, limit)
-        : sessions;
-    return sliced.map((session) => session.snapshot());
+    const sliced = typeof limit === 'number' && limit >= 0 ? sessions.slice(0, limit) : sessions;
+    return sliced.map(s => this.clone(s));
   }
 
-  /** Return aggregate counts of tracked sessions. */
   stats(): RegistryStatistics {
-    let running = 0;
-    let completed = 0;
-    let failed = 0;
-    for (const session of this.byId.values()) {
-      switch (session.status) {
-        case 'running':
-          running += 1;
-          break;
-        case 'finished':
-          completed += 1;
-          break;
-        case 'error':
-        case 'cancelled':
-          failed += 1;
-          break;
-        case 'queued':
-          break;
-      }
+    let running = 0, completed = 0, failed = 0;
+    for (const snapshot of this.byId.values()) {
+      if (snapshot.status === 'running') running++;
+      else if (snapshot.status === 'finished') completed++;
+      else if (snapshot.status === 'error' || snapshot.status === 'cancelled') failed++;
     }
     return {
       total: this.byId.size,
@@ -191,76 +204,77 @@ export class ExecutionRegistry {
     };
   }
 
-  /**
-   * If the total number of registered sessions exceeds `maxSessions`,
-   * remove the oldest terminal sessions until the total is within bounds.
-   *
-   * Sessions whose status is `'queued'` or `'running'` are never pruned; if
-   * no terminal sessions remain and the cap is still exceeded, this method
-   * is a no-op.
-   */
   prune(): void {
     const total = this.byId.size;
-    if (total <= this.maxSessions) {
-      return;
-    }
+    if (total <= this.maxSessions) return;
     const toRemove = total - this.maxSessions;
-    if (toRemove <= 0) {
-      return;
-    }
+    if (toRemove <= 0) return;
 
-    const terminal: ProcessSession[] = [];
-    for (const session of this.byId.values()) {
-      if (TERMINAL_STATUSES.has(session.status)) {
-        terminal.push(session);
+    const terminal: MutableSnapshot[] = [];
+    for (const snapshot of this.byId.values()) {
+      if (TERMINAL_STATUSES.has(snapshot.status)) {
+        terminal.push(snapshot);
       }
     }
-    if (terminal.length === 0) {
-      return;
-    }
+    if (terminal.length === 0) return;
 
     terminal.sort((a, b) => {
       const aEnd = a.endedAt ?? a.metrics.endedAt ?? a.metrics.queuedAt ?? 0;
       const bEnd = b.endedAt ?? b.metrics.endedAt ?? b.metrics.queuedAt ?? 0;
-      if (aEnd !== bEnd) {
-        return aEnd - bEnd;
-      }
+      if (aEnd !== bEnd) return aEnd - bEnd;
       const aQ = a.metrics.queuedAt ?? 0;
       const bQ = b.metrics.queuedAt ?? 0;
-      if (aQ !== bQ) {
-        return aQ - bQ;
-      }
+      if (aQ !== bQ) return aQ - bQ;
       return a.executionId < b.executionId ? -1 : a.executionId > b.executionId ? 1 : 0;
     });
 
     const count = Math.min(toRemove, terminal.length);
     for (let i = 0; i < count; i += 1) {
-      const session = terminal[i];
-      if (session === undefined) {
-        break;
+      const snapshot = terminal[i];
+      if (!snapshot || ACTIVE_STATUSES.has(snapshot.status)) continue;
+      this.byId.delete(snapshot.executionId);
+      if (snapshot.pid !== null) {
+        const current = this.byPid.get(snapshot.pid);
+        if (current === snapshot) {
+          this.byPid.delete(snapshot.pid);
+        }
       }
-      // Re-check status in case it transitioned between collection and prune.
-      if (ACTIVE_STATUSES.has(session.status)) {
-        continue;
-      }
-      this.unregister(session);
     }
   }
 
-  private collectByStatus(
-    status: ProcessSessionSnapshot['status'],
-  ): ProcessSessionSnapshot[] {
+  updateMetrics(executionId: string, partialMetrics: Partial<ExecutionMetrics>): void {
+    const snapshot = this.byId.get(executionId);
+    if (!snapshot) return;
+    Object.assign(snapshot.metrics, partialMetrics);
+  }
+
+  private collectByStatus(status: ProcessSessionSnapshot['status']): ProcessSessionSnapshot[] {
     const out: ProcessSessionSnapshot[] = [];
-    for (const session of this.byId.values()) {
-      if (session.status === status) {
-        out.push(session.snapshot());
-      }
+    for (const snapshot of this.byId.values()) {
+      if (snapshot.status === status) out.push(this.clone(snapshot));
     }
     return out;
   }
+
+  private clone(snapshot: MutableSnapshot): ProcessSessionSnapshot {
+    return {
+      ...snapshot,
+      args: [...snapshot.args],
+      metrics: { ...snapshot.metrics }
+    };
+  }
+
+  formatForReplay(sessionId: string): Record<string, any> | null {
+    return replayService.formatForReplay(sessionId, this);
+  }
+
+  formatForReplayJSON(sessionId: string): string {
+    return replayService.formatForReplayJSON(sessionId, this);
+  }
+
+  formatForReplayMarkdown(sessionId: string): string {
+    return replayService.formatForReplayMarkdown(sessionId, this);
+  }
 }
 
-/**
- * Singleton registry allowed by the architecture constraints.
- */
 export const executionRegistry = new ExecutionRegistry();

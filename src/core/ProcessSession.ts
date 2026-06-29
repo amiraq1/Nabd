@@ -1,14 +1,13 @@
 import type {
-  ExecutionEvent,
   ExecutionMetrics,
   ExecutionPolicy,
   ProcessSessionSnapshot,
   ProcessSessionStatus,
 } from './types.js';
+import type { ExecutionEventV3 } from './events/ExecutionEvent.js';
+import { globalEventBus } from './events/EventBus.js';
+import { RuntimeInvariantError } from './errors.js';
 
-/**
- * Options used to construct a ProcessSession.
- */
 export interface ProcessSessionOptions {
   executionId: string;
   command: string;
@@ -16,6 +15,13 @@ export interface ProcessSessionOptions {
   cwd: string;
   env?: Record<string, string | undefined>;
   policy?: ExecutionPolicy;
+  highWaterMark?: number;
+  lowWaterMark?: number;
+  pauseStreams?: () => void;
+  resumeStreams?: () => void;
+  traceId?: string;
+  sessionId?: string;
+  parentExecutionId?: string;
 }
 
 interface Deferred<T> {
@@ -25,17 +31,10 @@ interface Deferred<T> {
 }
 
 interface StreamWaiter {
-  resolve: (value: ExecutionEvent) => void;
+  resolve: (value: ExecutionEventV3) => void;
   reject: (err: Error) => void;
 }
 
-/**
- * ProcessSession owns the lifecycle of a single execution.
- *
- * It does NOT retain stdout/stderr text; chunks are forwarded as events to
- * consumers and only byte counts are kept. This prevents memory blow-up when
- * many long-running executions are tracked simultaneously.
- */
 export class ProcessSession {
   readonly executionId: string;
   readonly command: string;
@@ -43,6 +42,10 @@ export class ProcessSession {
   readonly cwd: string;
   readonly env: Record<string, string | undefined>;
   readonly policy: ExecutionPolicy | undefined;
+  
+  readonly traceId?: string;
+  readonly sessionId?: string;
+  readonly parentExecutionId?: string;
 
   pid: number | null = null;
   status: ProcessSessionStatus = 'queued';
@@ -59,10 +62,21 @@ export class ProcessSession {
   totalBytes: number = 0;
   metrics: ExecutionMetrics;
 
-  private readonly eventQueue: ExecutionEvent[] = [];
+  private readonly eventQueue: ExecutionEventV3[] = [];
   private readonly streamWaiters: StreamWaiter[] = [];
-  private rateWindowStart: number | null = null;
-  private rateWindowBytes: number = 0;
+  
+  private sequenceNumber: number = 0;
+  private readonly highWaterMark: number;
+  private readonly lowWaterMark: number;
+  private isPaused = false;
+  private readonly pauseStreams: (() => void) | undefined;
+  private readonly resumeStreams: (() => void) | undefined;
+
+  private stdoutBuffer: string[] = [];
+  private stdoutBufferBytes = 0;
+  private stderrBuffer: string[] = [];
+  private stderrBufferBytes = 0;
+  private flushTimeout: NodeJS.Immediate | null = null;
 
   constructor(options: ProcessSessionOptions) {
     this.executionId = options.executionId;
@@ -71,6 +85,14 @@ export class ProcessSession {
     this.cwd = options.cwd;
     this.env = { ...(options.env ?? {}) };
     this.policy = options.policy;
+    this.highWaterMark = options.highWaterMark ?? 1024;
+    this.lowWaterMark = options.lowWaterMark ?? 256;
+    this.pauseStreams = options.pauseStreams;
+    this.resumeStreams = options.resumeStreams;
+    
+    this.traceId = options.traceId;
+    this.sessionId = options.sessionId;
+    this.parentExecutionId = options.parentExecutionId;
 
     const queuedAt = Date.now();
     this.metrics = {
@@ -80,23 +102,28 @@ export class ProcessSession {
       peakOutputRate: 0,
       terminationReason: 'unknown',
     };
+
+    this.emit({
+      type: 'SessionQueued',
+      executionId: this.executionId,
+      timestamp: Date.now(),
+      sequenceNumber: this.nextSeq(),
+      command: this.command,
+      args: this.args,
+      cwd: this.cwd,
+    });
   }
 
-  /**
-   * Mark the session as running and record the spawned child's PID.
-   *
-   * Can only be called while the session is in the `queued` status.
-   */
+  private nextSeq(): number {
+    return ++this.sequenceNumber;
+  }
+
   start(pid: number): void {
     if (this.status !== 'queued') {
-      throw new Error(
-        `ProcessSession ${this.executionId}: start() requires status 'queued', got '${this.status}'`,
-      );
+      throw new RuntimeInvariantError(`ProcessSession ${this.executionId}: start() requires status 'queued', got '${this.status}'`);
     }
     if (!Number.isInteger(pid) || pid <= 0) {
-      throw new Error(
-        `ProcessSession ${this.executionId}: start() requires a positive integer pid, got ${pid}`,
-      );
+      throw new Error(`ProcessSession ${this.executionId}: start() requires a positive integer pid, got ${pid}`);
     }
     const now = Date.now();
     this.pid = pid;
@@ -107,65 +134,105 @@ export class ProcessSession {
       this.metrics.waitTime = now - this.metrics.queuedAt;
     }
     this.emit({
-      type: 'started',
+      type: 'SessionStarted',
       executionId: this.executionId,
+      timestamp: now,
+      sequenceNumber: this.nextSeq(),
       pid,
-      startedAt: now,
     });
   }
 
-  /**
-   * Forward a stdout chunk from the child process.
-   *
-   * Emits a `stdout` event and updates byte counters and peak throughput.
-   * The chunk text itself is NOT retained on the session.
-   */
   appendStdout(chunk: string): void {
-    if (chunk.length === 0) {
-      return;
-    }
+    if (chunk.length === 0) return;
     const bytes = Buffer.byteLength(chunk, 'utf8');
     this.stdoutBytes += bytes;
     this.totalBytes += bytes;
     this.metrics.stdoutBytes = this.stdoutBytes;
-    this.recordOutput(bytes);
-    this.emit({
-      type: 'stdout',
-      executionId: this.executionId,
-      chunk,
-      bytes,
-    });
+    
+    this.stdoutBuffer.push(chunk);
+    this.stdoutBufferBytes += bytes;
+    this.scheduleFlush();
   }
 
-  /**
-   * Forward a stderr chunk from the child process.
-   *
-   * Emits a `stderr` event and updates byte counters and peak throughput.
-   * The chunk text itself is NOT retained on the session.
-   */
   appendStderr(chunk: string): void {
-    if (chunk.length === 0) {
-      return;
-    }
+    if (chunk.length === 0) return;
     const bytes = Buffer.byteLength(chunk, 'utf8');
     this.stderrBytes += bytes;
     this.totalBytes += bytes;
     this.metrics.stderrBytes = this.stderrBytes;
-    this.recordOutput(bytes);
-    this.emit({
-      type: 'stderr',
-      executionId: this.executionId,
-      chunk,
-      bytes,
-    });
+    
+    this.stderrBuffer.push(chunk);
+    this.stderrBufferBytes += bytes;
+    this.scheduleFlush();
   }
 
-  /**
-   * Mark the session as having exited normally (or via signal) and emit a
-   * `finished` event. Can only be called once.
-   */
+  private scheduleFlush(): void {
+    if (this.isTerminal()) {
+      throw new RuntimeInvariantError(`ProcessSession ${this.executionId}: Output appended to terminal session`);
+    }
+    if (!this.flushTimeout) {
+      this.flushTimeout = setImmediate(() => this.flushBuffers());
+    }
+  }
+
+  private flushBuffers(): void {
+    if (this.flushTimeout) {
+      clearImmediate(this.flushTimeout);
+      this.flushTimeout = null;
+    }
+    
+    if (this.stdoutBuffer.length > 0) {
+      if (this.stdoutBuffer.length === 1) {
+        this.emit({
+          type: 'StdoutChunk',
+          executionId: this.executionId,
+          timestamp: Date.now(),
+          sequenceNumber: this.nextSeq(),
+          chunk: this.stdoutBuffer[0],
+          bytes: this.stdoutBufferBytes,
+        });
+      } else {
+        this.emit({
+          type: 'StdoutBatch',
+          executionId: this.executionId,
+          timestamp: Date.now(),
+          sequenceNumber: this.nextSeq(),
+          chunks: Object.freeze([...this.stdoutBuffer]),
+          bytes: this.stdoutBufferBytes,
+        });
+      }
+      this.stdoutBuffer = [];
+      this.stdoutBufferBytes = 0;
+    }
+
+    if (this.stderrBuffer.length > 0) {
+      if (this.stderrBuffer.length === 1) {
+        this.emit({
+          type: 'StderrChunk',
+          executionId: this.executionId,
+          timestamp: Date.now(),
+          sequenceNumber: this.nextSeq(),
+          chunk: this.stderrBuffer[0],
+          bytes: this.stderrBufferBytes,
+        });
+      } else {
+        this.emit({
+          type: 'StderrBatch',
+          executionId: this.executionId,
+          timestamp: Date.now(),
+          sequenceNumber: this.nextSeq(),
+          chunks: Object.freeze([...this.stderrBuffer]),
+          bytes: this.stderrBufferBytes,
+        });
+      }
+      this.stderrBuffer = [];
+      this.stderrBufferBytes = 0;
+    }
+  }
+
   finish(exitCode: number | null, signal: string | null): void {
     this.assertCanTerminate('finish');
+    this.flushBuffers();
     this.exitCode = exitCode;
     this.signal = signal;
     this.status = 'finished';
@@ -178,21 +245,19 @@ export class ProcessSession {
     this.metrics.runTime = this.durationMs ?? undefined;
     this.metrics.terminationReason = 'natural';
     this.emit({
-      type: 'finished',
+      type: 'Completed',
       executionId: this.executionId,
+      timestamp: now,
+      sequenceNumber: this.nextSeq(),
       exitCode,
       signal,
       durationMs: this.durationMs ?? 0,
-      totalBytes: this.totalBytes,
     });
   }
 
-  /**
-   * Mark the session as cancelled and emit a `cancelled` event. Can only be
-   * called once.
-   */
   cancel(signal: string | null): void {
     this.assertCanTerminate('cancel');
+    this.flushBuffers();
     this.cancelled = true;
     this.signal = signal;
     this.status = 'cancelled';
@@ -205,19 +270,17 @@ export class ProcessSession {
     this.metrics.runTime = this.durationMs ?? undefined;
     this.metrics.terminationReason = 'cancelled';
     this.emit({
-      type: 'cancelled',
+      type: 'Cancelled',
       executionId: this.executionId,
-      signal,
-      durationMs: this.durationMs ?? 0,
+      timestamp: now,
+      sequenceNumber: this.nextSeq(),
+      reason: signal ?? 'user_aborted',
     });
   }
 
-  /**
-   * Mark the session as having timed out and emit a `timeout` event. Can only
-   * be called once.
-   */
   timeout(signal: string | null): void {
     this.assertCanTerminate('timeout');
+    this.flushBuffers();
     this.timedOut = true;
     this.signal = signal;
     this.status = 'error';
@@ -230,20 +293,19 @@ export class ProcessSession {
     this.metrics.runTime = this.durationMs ?? undefined;
     this.metrics.terminationReason = 'timeout';
     this.emit({
-      type: 'timeout',
+      type: 'Failed',
       executionId: this.executionId,
-      signal,
-      durationMs: this.durationMs ?? 0,
+      timestamp: now,
+      sequenceNumber: this.nextSeq(),
+      error: 'Execution timed out',
+      reason: 'timeout',
     });
   }
 
-  /**
-   * Mark the session as failed due to an internal error and emit an `error`
-   * event. Can only be called once.
-   */
   error(error: Error | string): void {
     this.assertCanTerminate('error');
-    const message = error instanceof Error ? error.message : error;
+    this.flushBuffers();
+    const message = error instanceof Error ? error.message : String(error);
     this.status = 'error';
     const now = Date.now();
     this.endedAt = now;
@@ -254,27 +316,33 @@ export class ProcessSession {
     this.metrics.runTime = this.durationMs ?? undefined;
     this.metrics.terminationReason = 'error';
     this.emit({
-      type: 'error',
+      type: 'Failed',
       executionId: this.executionId,
+      timestamp: now,
+      sequenceNumber: this.nextSeq(),
       error: message,
+      reason: 'error',
     });
   }
 
-  /**
-   * Mark the session as having produced output that exceeded the configured
-   * byte limit. No-op once the session is in a terminal status.
-   */
   markTruncated(): void {
     if (this.isTerminal()) return;
+    this.flushBuffers();
     this.truncated = true;
+    this.emit({
+      type: 'Failed',
+      executionId: this.executionId,
+      timestamp: Date.now(),
+      sequenceNumber: this.nextSeq(),
+      error: 'Output truncated due to exceeding maxOutputBytes',
+      reason: 'truncation',
+    });
   }
 
-  /** True while the child process is running. */
   isRunning(): boolean {
     return this.status === 'running';
   }
 
-  /** True once the session has reached a terminal status. */
   isTerminal(): boolean {
     return (
       this.status === 'finished' ||
@@ -283,7 +351,6 @@ export class ProcessSession {
     );
   }
 
-  /** Capture an immutable snapshot of the current session state. */
   snapshot(): ProcessSessionSnapshot {
     return {
       executionId: this.executionId,
@@ -307,22 +374,21 @@ export class ProcessSession {
     };
   }
 
-  /**
-   * Consume the event stream for this session.
-   *
-   * Each invocation creates an independent consumer that observes every event
-   * emitted from the moment the generator starts (including any events that
-   * were already queued). The generator returns once the session reaches a
-   * terminal status and all queued events have been delivered.
-   */
-  stream(): AsyncGenerator<ExecutionEvent, void, void> {
+  stream(): AsyncGenerator<ExecutionEventV3, void, void> {
     return this.createStream();
   }
 
-  private async *createStream(): AsyncGenerator<ExecutionEvent, void, void> {
+  private async *createStream(): AsyncGenerator<ExecutionEventV3, void, void> {
     while (true) {
       if (this.eventQueue.length > 0) {
-        const event = this.eventQueue.shift() as ExecutionEvent;
+        const event = this.eventQueue.shift() as ExecutionEventV3;
+        
+        // BACKPRESSURE: Check low watermark
+        if (this.isPaused && this.eventQueue.length <= this.lowWaterMark) {
+          this.isPaused = false;
+          if (this.resumeStreams) this.resumeStreams();
+        }
+
         yield event;
         if (this.isTerminal() && this.eventQueue.length === 0) {
           return;
@@ -332,23 +398,43 @@ export class ProcessSession {
       if (this.isTerminal()) {
         return;
       }
-      const deferred = this.createDeferred<ExecutionEvent>();
+      const deferred = this.createDeferred<ExecutionEventV3>();
       this.streamWaiters.push({
         resolve: deferred.resolve,
         reject: deferred.reject,
       });
       const event = await deferred.promise;
       yield event;
-      // Loop: more events may now be queued, or session may have terminated.
     }
   }
 
-  private emit(event: ExecutionEvent): void {
-    const waiter = this.streamWaiters.shift();
-    if (waiter !== undefined) {
-      waiter.resolve(event);
+  private emit(event: any): void {
+    if (this.isTerminal() && !['Completed', 'Failed', 'Cancelled'].includes(event.type)) {
+      throw new RuntimeInvariantError(`ProcessSession ${this.executionId}: Cannot emit ${event.type} after session is terminal`);
+    }
+
+    const fullEvent: ExecutionEventV3 = {
+      ...event,
+      traceId: this.traceId,
+      sessionId: this.sessionId,
+      parentExecutionId: this.parentExecutionId,
+    };
+    Object.freeze(fullEvent);
+
+    globalEventBus.emit(fullEvent);
+
+    if (this.streamWaiters.length > 0) {
+      for (const waiter of this.streamWaiters) {
+        waiter.resolve(fullEvent);
+      }
+      this.streamWaiters.length = 0;
     } else {
-      this.eventQueue.push(event);
+      this.eventQueue.push(fullEvent);
+      // BACKPRESSURE: Check high watermark
+      if (!this.isPaused && this.eventQueue.length >= this.highWaterMark) {
+        this.isPaused = true;
+        if (this.pauseStreams) this.pauseStreams();
+      }
     }
   }
 
@@ -362,28 +448,9 @@ export class ProcessSession {
     return { promise, resolve: resolveFn, reject: rejectFn };
   }
 
-  private recordOutput(bytes: number): void {
-    const now = Date.now();
-    if (this.rateWindowStart === null) {
-      this.rateWindowStart = now;
-      this.rateWindowBytes = 0;
-    }
-    this.rateWindowBytes += bytes;
-    const elapsed = now - this.rateWindowStart;
-    if (elapsed >= 1000) {
-      const seconds = elapsed / 1000;
-      const rate = this.rateWindowBytes / seconds;
-      if (rate > this.metrics.peakOutputRate) {
-        this.metrics.peakOutputRate = rate;
-      }
-      this.rateWindowStart = now;
-      this.rateWindowBytes = 0;
-    }
-  }
-
   private assertCanTerminate(method: string): void {
     if (this.isTerminal()) {
-      throw new Error(
+      throw new RuntimeInvariantError(
         `ProcessSession ${this.executionId}: ${method}() called on terminal session (status='${this.status}')`,
       );
     }

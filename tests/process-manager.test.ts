@@ -18,10 +18,10 @@ async function runSession(
 ): Promise<{ chunks: StreamChunk[]; snapshot: ProcessSessionSnapshot }> {
   const chunks: StreamChunk[] = [];
   for await (const event of session.stream()) {
-    if (event.type === 'stdout') {
-      chunks.push({ chunk: event.chunk, isStderr: false });
-    } else if (event.type === 'stderr') {
-      chunks.push({ chunk: event.chunk, isStderr: true });
+    if (event.type === 'StdoutChunk') {
+      chunks.push({ chunk: (event as any).chunk, isStderr: false });
+    } else if (event.type === 'StderrChunk') {
+      chunks.push({ chunk: (event as any).chunk, isStderr: true });
     }
   }
   return { chunks, snapshot: session.snapshot() };
@@ -31,7 +31,7 @@ describe('ProcessManager', () => {
   it('runs echo and captures stdout with exit code 0', async () => {
     const pm = new ProcessManager();
     const session = await pm.run({
-      command: '/bin/echo',
+      command: 'echo',
       args: ['hello'],
     });
 
@@ -53,7 +53,7 @@ describe('ProcessManager', () => {
   it('reports stderr chunks with isStderr=true and exit code 0', async () => {
     const pm = new ProcessManager();
     const session = await pm.run({
-      command: '/bin/bash',
+      command: 'bash',
       args: ['-c', 'echo error >&2'],
     });
 
@@ -77,7 +77,7 @@ describe('ProcessManager', () => {
   it('propagates non-zero exit code from the child process', async () => {
     const pm = new ProcessManager();
     const session = await pm.run({
-      command: '/bin/bash',
+      command: 'bash',
       args: ['-c', 'exit 42'],
     });
 
@@ -94,7 +94,7 @@ describe('ProcessManager', () => {
   it('times out long-running commands and reports a kill signal', async () => {
     const pm = new ProcessManager();
     const session = await pm.run({
-      command: '/bin/sleep',
+      command: 'sleep',
       args: ['10'],
       maxExecutionTimeMs: 100,
     });
@@ -122,7 +122,7 @@ describe('ProcessManager', () => {
     const abortController = new AbortController();
 
     const promise = pm.run({
-      command: '/bin/sleep',
+      command: 'sleep',
       args: ['10'],
       signal: abortController.signal,
     });
@@ -152,7 +152,7 @@ describe('ProcessManager', () => {
   it('truncates output that exceeds maxOutputBytes', async () => {
     const pm = new ProcessManager();
     const session = await pm.run({
-      command: '/usr/bin/seq',
+      command: 'seq',
       args: ['1', '1000000'],
       maxOutputBytes: 100,
     });
@@ -189,7 +189,7 @@ describe('ProcessManager', () => {
     const pm = new ProcessManager();
     const start = Date.now();
     const session = await pm.run({
-      command: '/bin/bash',
+      command: 'bash',
       args: ['-c', "trap '' INT; trap '' TERM; while :; do :; done"],
       maxExecutionTimeMs: 200,
     });
@@ -217,7 +217,7 @@ describe('ProcessManager', () => {
 
     const start = Date.now();
     const session = await pm.run({
-      command: '/bin/sleep',
+      command: 'sleep',
       args: ['10'],
       signal: controller.signal,
     });
@@ -240,7 +240,7 @@ describe('ProcessManager', () => {
   it('truncates when output reaches exactly maxOutputBytes (>= threshold)', async () => {
     const pm = new ProcessManager();
     const session = await pm.run({
-      command: '/bin/printf',
+      command: 'printf',
       args: ['%.6s', 'abcdef'],
       maxOutputBytes: 6,
     });
@@ -257,7 +257,7 @@ describe('ProcessManager', () => {
   it('emits a started event and yields stdout chunks before finishing', async () => {
     const pm = new ProcessManager();
     const session = await pm.run({
-      command: '/bin/echo',
+      command: 'echo',
       args: ['streamed'],
     });
 
@@ -266,20 +266,20 @@ describe('ProcessManager', () => {
       events.push(event);
     }
 
-    const started = events.find((e) => e.type === 'started');
-    const stdout = events.filter((e) => e.type === 'stdout');
-    const finished = events.find((e) => e.type === 'finished');
+    const started = events.find((e) => e.type === 'SessionStarted');
+    const stdout = events.filter((e) => e.type === 'StdoutChunk');
+    const finished = events.find((e) => e.type === 'Completed');
 
-    assert.ok(started && started.type === 'started', 'expected a started event');
+    assert.ok(started && started.type === 'SessionStarted', 'expected a started event');
     assert.ok(
-      started.type === 'started' && started.pid > 0,
+      started && started.type === 'SessionStarted' && (started as any).pid > 0,
       'started event must carry a positive pid',
     );
     assert.ok(stdout.length > 0, 'expected at least one stdout event');
     assert.ok(
-      stdout.map((e) => (e.type === 'stdout' ? e.chunk : '')).join('').includes('streamed'),
+      stdout.map((e) => (e.type === 'StdoutChunk' ? (e as any).chunk : '')).join('').includes('streamed'),
       'stdout payload must include the echo content',
     );
-    assert.ok(finished && finished.type === 'finished', 'expected a finished event');
+    assert.ok(finished && finished.type === 'Completed', 'expected a finished event');
   });
 });

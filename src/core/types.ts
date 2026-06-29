@@ -7,6 +7,7 @@
  */
 
 import type { ProcessSession } from './ProcessSession.js';
+import type { SecurityContext } from './security/SecurityContext.js';
 
 /**
  * Callback invoked for each chunk of output produced by a running tool.
@@ -58,8 +59,10 @@ export interface ProcessOptions {
   maxOutputBytes?: number;
   /** External abort signal forwarded to the child process. */
   signal?: AbortSignal;
-  /** Streaming callback invoked as the process produces output. */
-  onStream?: ToolStreamHandler;
+  
+  traceId?: string;
+  sessionId?: string;
+  parentExecutionId?: string;
 }
 
 /**
@@ -73,21 +76,49 @@ export interface ToolContext {
   onStream?: ToolStreamHandler;
   /** Optional abort signal to cancel execution cooperatively. */
   signal?: AbortSignal;
+  /** Request the V3 event stream instead of legacy ToolExecutionResult */
+  streamV3?: boolean;
+  /** Security context for the execution. Required in V5. */
+  security?: SecurityContext; // Optional for backward compat with v1 tests, but mandated by v5 architecture runtime
+  
+  traceId?: string;
+  parentExecutionId?: string;
 }
+
+export type ToolVisibility = 'stable' | 'experimental' | 'deprecated' | 'hidden';
+export type PermissionLevel = 'safe' | 'filesystem' | 'network' | 'system' | 'dangerous';
 
 /**
  * Definition of a single tool registered with the ToolEngine.
  */
 export interface ToolDefinition {
+  /** Unique tool identifier. */
+  id: string;
   /** Unique tool name used for dispatch. */
   name: string;
   /** Human-readable description of what the tool does. */
   description: string;
+  /** Version of the tool. */
+  version: string;
+  /** Logical category for grouping. */
+  category: string;
   /**
    * JSON Schema describing the tool's argument shape. Consumers (e.g. an LLM
    * client) use this to validate and prompt for arguments.
    */
   parameters: Record<string, unknown>;
+  /** JSON Schema for the tool's return value (optional). */
+  returns?: Record<string, unknown>;
+  /** Examples of how to use the tool. */
+  examples?: string[];
+  /** Permission levels required to execute this tool. */
+  permissions: PermissionLevel[];
+  /** Optional policy identifier. */
+  policyId?: string;
+  /** Visibility in manifests. */
+  visibility: ToolVisibility;
+  /** Alternative names for capability resolution. */
+  aliases?: string[];
   /**
    * Returns the execution policy overrides for this invocation. The
    * ToolEngine merges this with its default policy via
@@ -120,23 +151,21 @@ export type ProcessSessionStatus =
 
 /** Timing and throughput metrics captured for a single execution. */
 export interface ExecutionMetrics {
-  /** Wall-clock timestamp when the session was created and queued. */
   queuedAt?: number;
-  /** Wall-clock timestamp when the child process was spawned. */
   startedAt?: number;
-  /** Wall-clock timestamp when the session reached a terminal state. */
   endedAt?: number;
-  /** Time spent queued (startedAt - queuedAt), in milliseconds. */
-  waitTime?: number;
-  /** Time spent running (endedAt - startedAt), in milliseconds. */
-  runTime?: number;
-  /** Number of stdout bytes emitted by the child process. */
+  waitTime?: number; // legacy alias for queueWaitMs
+  queueWaitMs?: number;
+  runTime?: number; // legacy alias for executionMs
+  executionMs?: number;
   stdoutBytes: number;
-  /** Number of stderr bytes emitted by the child process. */
   stderrBytes: number;
-  /** Peak throughput observed, in bytes/second, over 1-second windows. */
-  peakOutputRate: number;
-  /** Reason the execution reached a terminal state. */
+  stdoutLines?: number;
+  stderrLines?: number;
+  eventsPerSecond?: number;
+  averageChunkSize?: number;
+  peakChunkSize?: number;
+  peakOutputRate: number; // legacy
   terminationReason:
     | 'natural'
     | 'timeout'
@@ -174,34 +203,38 @@ export interface PolicyViolation {
   message: string;
 }
 
-/** Event emitted when the child process writes to stdout. */
-export interface StdoutEvent {
-  type: 'stdout';
+/** Base interface for all execution events to include tracing information. */
+export interface TracedEvent {
   executionId: string;
+  traceId?: string;
+  sessionId?: string;
+  parentExecutionId?: string;
+}
+
+/** Event emitted when the child process writes to stdout. */
+export interface StdoutEvent extends TracedEvent {
+  type: 'stdout';
   chunk: string;
   bytes: number;
 }
 
 /** Event emitted when the child process writes to stderr. */
-export interface StderrEvent {
+export interface StderrEvent extends TracedEvent {
   type: 'stderr';
-  executionId: string;
   chunk: string;
   bytes: number;
 }
 
 /** Event emitted when the child process has been spawned. */
-export interface StartedEvent {
+export interface StartedEvent extends TracedEvent {
   type: 'started';
-  executionId: string;
   pid: number;
   startedAt: number;
 }
 
 /** Event emitted when the child process exits normally or via signal. */
-export interface FinishedEvent {
+export interface FinishedEvent extends TracedEvent {
   type: 'finished';
-  executionId: string;
   exitCode: number | null;
   signal: string | null;
   durationMs: number;
@@ -209,25 +242,22 @@ export interface FinishedEvent {
 }
 
 /** Event emitted when execution is cancelled by the caller. */
-export interface CancelledEvent {
+export interface CancelledEvent extends TracedEvent {
   type: 'cancelled';
-  executionId: string;
   signal: string | null;
   durationMs: number;
 }
 
 /** Event emitted when execution exceeds the configured time limit. */
-export interface TimeoutEvent {
+export interface TimeoutEvent extends TracedEvent {
   type: 'timeout';
-  executionId: string;
   signal: string | null;
   durationMs: number;
 }
 
 /** Event emitted when execution fails due to an internal error. */
-export interface ErrorEvent {
+export interface ErrorEvent extends TracedEvent {
   type: 'error';
-  executionId: string;
   error: string;
 }
 

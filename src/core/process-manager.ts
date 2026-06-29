@@ -1,5 +1,8 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import type { ToolExecutionResult } from './types.js';
+import type { ToolExecutionResult, ProcessOptions } from './types.js';
+import './telemetry/ExecutionLogger.js';
+import './telemetry/MetricsCollector.js';
+import './replay/ReplayService.js';
 import { ProcessSession } from './ProcessSession.js';
 import { executionRegistry } from './ExecutionRegistry.js';
 
@@ -11,6 +14,9 @@ export interface RuntimeOptions {
   maxExecutionTimeMs?: number;
   maxOutputBytes?: number;
   signal?: AbortSignal;
+  traceId?: string;
+  sessionId?: string;
+  parentExecutionId?: string;
 }
 
 export class ProcessManager {
@@ -28,8 +34,26 @@ export class ProcessManager {
     } = options;
 
     const executionId = `exec-${Date.now()}-${this.counter++}`;
-    const session = new ProcessSession({ executionId, command, args, cwd, env });
-    executionRegistry.register(session);
+    let child: ChildProcess | undefined;
+    const session = new ProcessSession({
+      executionId,
+      command: options.command,
+      args: options.args,
+      cwd: options.cwd || process.cwd(),
+      env: options.env,
+      pauseStreams: () => {
+        if (child?.stdout) child.stdout.pause();
+        if (child?.stderr) child.stderr.pause();
+      },
+      resumeStreams: () => {
+        if (child?.stdout) child.stdout.resume();
+        if (child?.stderr) child.stderr.resume();
+      },
+      traceId: options.traceId,
+      sessionId: options.sessionId,
+      parentExecutionId: options.parentExecutionId,
+    });
+    // ExecutionRegistry is now decoupled and listens to globalEventBus
 
     return new Promise((resolve, reject) => {
       let timeoutId: NodeJS.Timeout | undefined;
@@ -52,7 +76,6 @@ export class ProcessManager {
         if (finished) return;
         finished = true;
         cleanup();
-        executionRegistry.unregister(session);
         resolve(session);
       };
 
@@ -61,20 +84,19 @@ export class ProcessManager {
         if (reason === 'truncation') killedByTruncation = true;
         if (processExited || session.isTerminal()) return;
 
-        child.kill('SIGINT');
+        child?.kill('SIGINT');
 
         sigtermTimeout = setTimeout(() => {
-          if (!processExited && !session.isTerminal()) child.kill('SIGTERM');
+          if (!processExited && !session.isTerminal()) child?.kill('SIGTERM');
         }, 2000);
 
         sigkillTimeout = setTimeout(() => {
-          if (!processExited && !session.isTerminal()) child.kill('SIGKILL');
+          if (!processExited && !session.isTerminal()) child?.kill('SIGKILL');
         }, 4000);
       };
 
       const abortHandler = () => killSequence('abort');
 
-      let child: ChildProcess;
       try {
         child = spawn(command, args, {
           shell: false,
@@ -90,7 +112,6 @@ export class ProcessManager {
 
       if (typeof child.pid === 'number' && child.pid > 0) {
         session.start(child.pid);
-        executionRegistry.updatePid(session, child.pid);
       }
 
       child.stdout!.setEncoding('utf8');
@@ -154,12 +175,18 @@ export const processManager = new ProcessManager();
 /**
  * Backward-compatible helper: run a process and wait for the final result.
  */
-export async function runToCompletion(options: RuntimeOptions): Promise<ToolExecutionResult> {
+export async function runToCompletion(options: RuntimeOptions, onStream?: (chunk: string, isStderr: boolean) => void): Promise<ToolExecutionResult> {
   const session = await processManager.run(options);
 
   // Drain the stream to ensure events flow and session reaches terminal state.
-  for await (const _event of session.stream()) {
-    // no-op; result is read from snapshot
+  for await (const event of session.stream()) {
+    if (onStream) {
+      if (event.type === 'StdoutChunk') {
+        onStream(event.chunk, false);
+      } else if (event.type === 'StderrChunk') {
+        onStream(event.chunk, true);
+      }
+    }
   }
 
   const snap = session.snapshot();

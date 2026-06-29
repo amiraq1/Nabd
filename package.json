@@ -4,10 +4,10 @@
   "description": "",
   "main": "./src/index.js",
   "scripts": {
-    "test": "tsx --test tests/**/*.test.ts",
-    "start": "node src/cli.js",
-    "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "test": "node ./node_modules/tsx/dist/cli.mjs --test tests/**/*.test.ts",
+    "start": "node dist/main.js",
+    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
+    "build": "node ./node_modules/typescript/bin/tsc"
   },
   "keywords": [],
   "author": "",
@@ -19,6 +19,6 @@
   "devDependencies": {
     "@types/node": "^26.0.1",
     "tsx": "^4.22.4",
-    "typescript": "^5.4.0"
+    "typescript": "^5.9.3"
   }
 }
