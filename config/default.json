@@ -1,0 +1,29 @@
+{
+  "version": "1.0.0",
+  "dryRun": false,
+  "safeMode": true,
+  "shell": {
+    "allowedCommands": [
+      "ls",
+      "pwd",
+      "cat",
+      "echo",
+      "mkdir",
+      "touch",
+      "cp",
+      "mv",
+      "rm",
+      "find",
+      "grep",
+      "termux-*"
+    ],
+    "blockedPatterns": [
+      "rm -rf /",
+      "> /dev/null",
+      "\\| sh",
+      "curl .*\\| sh",
+      "wget .*\\| sh"
+    ],
+    "maxTimeoutMs": 30000
+  }
+}
