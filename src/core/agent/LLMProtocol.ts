@@ -3,7 +3,20 @@ export interface ToolCall {
   arguments: any;
 }
 
+export type ParsedOutput =
+  | { kind: 'tool_call'; call: ToolCall }
+  | { kind: 'final_answer'; text: string };
+
 export class LLMProtocol {
+  static parse(output: string): ParsedOutput {
+    const call = this.parseToolCall(output);
+    if (call) {
+      return { kind: 'tool_call', call };
+    }
+    // لا يوجد tool call صالح — اعتبره إجابة نهائية
+    return { kind: 'final_answer', text: output.trim() };
+  }
+
   /**
    * Parses LLM output into a typed ToolCall using cascading strategies.
    * Never throws on malformed JSON.

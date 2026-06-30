@@ -1,12 +1,13 @@
 import type { InferenceCapabilities, InferenceRequest } from '../InferenceProvider.js';
 import type { InferenceEvent } from '../InferenceEvents.js';
 import { BaseProvider } from './BaseProvider.js';
+import { globalConfig } from '../../../GlobalConfig.js';
 
 export class OpenAICompatibleProvider extends BaseProvider {
   readonly name = 'OpenAICompatible';
-  private baseUrl = process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
-  private apiKey = process.env.OPENAI_API_KEY || '';
-  private model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+  private baseUrl = globalConfig.endpoint || process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1';
+  private apiKey = globalConfig.nvidiaApiKey || globalConfig.openaiApiKey || process.env.OPENAI_API_KEY || '';
+  private model = globalConfig.model || process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
   async health(): Promise<boolean> {
     return this.pool.healthCheck(`${this.baseUrl}/models`);

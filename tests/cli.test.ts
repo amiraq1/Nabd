@@ -20,7 +20,6 @@ describe('Phase 7 - Cyberpunk CLI', () => {
     assert.ok(cli);
     assert.equal(typeof cli.start, 'function');
     
-    // Cleanup readline so process can exit cleanly in tests
-    (cli as any).rl.close();
+    // Ink cleans up after itself, no readline to close
   });
 });

@@ -33,4 +33,16 @@ export interface ToolCallEvent extends AgentEventBase {
   callId: string;
 }
 
-export type AgentEvent = StateTransitionEvent | PlannerDecisionEvent | ToolCallEvent;
+export interface ToolResultEvent extends AgentEventBase {
+  type: 'ToolResult';
+  toolName: string;
+  result: unknown;
+  callId: string;
+}
+
+export interface ConfirmationRequiredEvent extends AgentEventBase {
+  type: 'ConfirmationRequired';
+  command: string;
+}
+
+export type AgentEvent = StateTransitionEvent | PlannerDecisionEvent | ToolCallEvent | ToolResultEvent | ConfirmationRequiredEvent;

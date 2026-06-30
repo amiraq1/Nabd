@@ -2,23 +2,24 @@
   "name": "termux-ai-agent",
   "version": "1.0.0",
   "description": "",
-  "main": "./src/index.js",
   "scripts": {
     "test": "node ./node_modules/tsx/dist/cli.mjs --test tests/**/*.test.ts",
-    "start": "node dist/main.js",
+    "start": "node ./dist/nabd.mjs",
     "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit",
-    "build": "node ./node_modules/typescript/bin/tsc"
+    "build": "node ./node_modules/esbuild/bin/esbuild src/main.ts --bundle --platform=node --format=esm --outfile=dist/nabd.mjs --external:fsevents --external:yoga-wasm-web --banner:js=\"import { createRequire } from 'module'; const require = createRequire(import.meta.url);\" --alias:chalk=./node_modules/chalk/source/index.js",
+    "postbuild": "mkdir -p ~/.local/bin && cp dist/nabd.mjs ~/.local/bin/nabd && chmod +x ~/.local/bin/nabd"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
-  "bin": {
-    "termux-ai-agent": "./src/cli.js"
-  },
   "devDependencies": {
     "@types/node": "^26.0.1",
+    "esbuild": "^0.28.1",
     "tsx": "^4.22.4",
     "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2"
   }
 }

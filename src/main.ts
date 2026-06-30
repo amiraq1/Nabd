@@ -1,9 +1,15 @@
+#!/usr/bin/env node
 import { globalEventBus } from './core/events/EventBus.js';
 import { semanticMemory } from './core/memory/SemanticMemory.js';
 import { toolEngine } from './core/tool-engine.js';
 import { executeBashTool } from './core/tools/bash.js';
+import { writeTodosTool, updateTodoTool } from './core/tools/todos.js';
+import { fileReadTool } from './core/tools/read.js';
+import { listDirTool } from './core/tools/list.js';
 import { inferenceManager } from './core/inference/InferenceManager.js';
 import { OllamaProvider } from './core/inference/providers/OllamaProvider.js';
+import { OpenAICompatibleProvider } from './core/inference/providers/OpenAICompatibleProvider.js';
+import { globalConfig } from './GlobalConfig.js';
 import { AgentLoop } from './core/agent/AgentLoop.js';
 import { NabdCLI } from './cli/NabdCLI.js';
 import type { SecurityContext } from './core/security/SecurityContext.js';
@@ -17,14 +23,24 @@ async function bootstrap() {
 
   // 3. Register tools
   toolEngine.register(executeBashTool);
-  // Add other built-in tools here if needed
+  toolEngine.register(writeTodosTool);
+  toolEngine.register(updateTodoTool);
+  toolEngine.register(fileReadTool);
+  toolEngine.register(listDirTool);
   console.log('Tools registered.');
 
-  // 4. Initialize Local Inference Provider
-  const ollama = new OllamaProvider();
-  await ollama.initialize();
-  inferenceManager.registerProvider(ollama);
-  console.log('Inference Provider (Ollama) registered.');
+  // 4. Initialize Inference Provider based on Config
+  if (globalConfig.provider === 'nvidia' || globalConfig.provider === 'openai') {
+    const cloudProvider = new OpenAICompatibleProvider();
+    await cloudProvider.initialize();
+    inferenceManager.registerProvider(cloudProvider);
+    console.log(`Inference Provider (${globalConfig.provider}) registered.`);
+  } else {
+    const ollama = new OllamaProvider();
+    await ollama.initialize();
+    inferenceManager.registerProvider(ollama);
+    console.log('Inference Provider (Ollama) registered.');
+  }
 
   // 5. Instantiate AgentLoop
   const security: SecurityContext = {

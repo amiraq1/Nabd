@@ -129,7 +129,7 @@ export interface ToolDefinition {
    * Executes the tool with the supplied (already-validated) arguments and
    * returns a `ProcessSession` representing the running execution.
    */
-  execute: (args: unknown, context: ToolContext) => Promise<ProcessSession>;
+  execute: (args: unknown, context: ToolContext) => Promise<ProcessSession | any>;
 }
 
 /* ---------------------------------------------------------------------------

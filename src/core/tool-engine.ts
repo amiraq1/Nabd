@@ -95,6 +95,10 @@ export class ToolEngine {
       session = await this.queue.enqueue(() => tool.execute(args, context));
     }
 
+    if (typeof (session as any).stream !== 'function') {
+      return session as any;
+    }
+
     if (context.streamV3) {
       return session.stream();
     }

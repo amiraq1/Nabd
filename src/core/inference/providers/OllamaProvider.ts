@@ -7,6 +7,10 @@ export class OllamaProvider extends BaseProvider {
   private baseUrl = process.env.OLLAMA_URL || 'http://localhost:11434';
   private model = process.env.OLLAMA_MODEL || 'llama3';
 
+  async initialize(): Promise<void> {
+    console.log(`[OllamaProvider] Initialized: ${this.baseUrl} | Model: ${this.model}`);
+  }
+
   async health(): Promise<boolean> {
     return this.pool.healthCheck(`${this.baseUrl}/api/version`);
   }
