@@ -29,6 +29,10 @@ export class OpenAICompatibleProvider extends BaseProvider {
   }
 
   protected buildRequest(request: InferenceRequest) {
+    if (!this.apiKey) {
+      throw new Error('فشل إرسال الطلب: مفتاح الـ API غير مهيأ (Empty API Key).');
+    }
+    
     const messages = [];
     if (request.systemPrompt) {
       messages.push({ role: 'system', content: request.systemPrompt });

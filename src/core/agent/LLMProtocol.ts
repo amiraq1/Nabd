@@ -13,56 +13,47 @@ export class LLMProtocol {
     if (call) {
       return { kind: 'tool_call', call };
     }
-    // لا يوجد tool call صالح — اعتبره إجابة نهائية
     return { kind: 'final_answer', text: output.trim() };
   }
 
   /**
-   * Parses LLM output into a typed ToolCall using cascading strategies.
-   * Never throws on malformed JSON.
+   * استخراج ذكي لـ ToolCall مع طبقة تعقيم مسبقة لحماية النظام من هلوسة تنسيق الـ Markdown
    */
   static parseToolCall(output: string): ToolCall | null {
+    // 0. Sanitization: تنظيف علامات الماركداون التي تعشق النماذج إضافتها
+    const cleanOutput = output
+      .replace(/```(?:json)?/gi, '')
+      .replace(/```/g, '')
+      .trim();
+
     // Strategy 1: Strict JSON
     try {
-      const parsed = JSON.parse(output);
-      if (this.isValidToolCall(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // Fallback
-    }
+      const parsed = JSON.parse(cleanOutput);
+      if (this.isValidToolCall(parsed)) return parsed;
+    } catch { /* Fallback */ }
 
-    // Strategy 2: Partial JSON parsing (find first {} block)
-    const blockMatch = output.match(/\{[\s\S]*\}/);
+    // Strategy 2: Partial JSON parsing (البحث عن أول كائن {} آمن خوارزمياً)
+    const blockMatch = cleanOutput.match(/\{[\s\S]*?\}/);
     if (blockMatch) {
       try {
         const parsed = JSON.parse(blockMatch[0]);
-        if (this.isValidToolCall(parsed)) {
-          return parsed;
-        }
-      } catch {
-        // Fallback
-      }
+        if (this.isValidToolCall(parsed)) return parsed;
+      } catch { /* Fallback */ }
     }
 
-    // Strategy 3: Regex fallback extraction (e.g. action: "tool", action_input: {...})
-    const toolMatch = output.match(/"?tool"?\s*:\s*"?([^",\s]+)"?/i) || output.match(/"?action"?\s*:\s*"?([^",\s]+)"?/i);
+    // Strategy 3: Regex Regex fallback extraction (أسرع وأقل استهلاكاً للمعالج)
+    const toolMatch = cleanOutput.match(/"?tool"?\s*:\s*"?([^",\s}]+)"?/i) || cleanOutput.match(/"?action"?\s*:\s*"?([^",\s}]+)"?/i);
     if (toolMatch) {
       const tool = toolMatch[1];
-      
-      // Try to find arguments object
-      const argsMatch = output.match(/"?(?:arguments|action_input)"?\s*:\s*(\{[\s\S]*?\})/i);
+      const argsMatch = cleanOutput.match(/"?(?:arguments|action_input)"?\s*:\s*(\{[\s\S]*?\})/i);
       if (argsMatch) {
         try {
-          // It could be malformed, so we regex the args block or try strict parse
           const args = JSON.parse(argsMatch[1]);
           return { tool, arguments: args };
         } catch {
-          // Ultimate fallback: return empty object if args fail to parse
           return { tool, arguments: {} };
         }
       }
-      
       return { tool, arguments: {} };
     }
 

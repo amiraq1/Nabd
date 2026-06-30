@@ -230,6 +230,20 @@ export class ProcessSession {
     }
   }
 
+  /**
+   * تنظيف أي مستمعين معلقين لمنع تسرب الـ Promises في الذاكرة
+   */
+  private resolveDanglingWaiters(): void {
+    if (this.streamWaiters.length > 0) {
+      // إرسال حدث إنهاء كاذب (أو رفض) للمنتظرين لفك تعليقهم
+      const terminalError = new Error(`تم إنهاء الجلسة ${this.executionId} قسرياً.`);
+      for (const waiter of this.streamWaiters) {
+        waiter.reject(terminalError);
+      }
+      this.streamWaiters.length = 0;
+    }
+  }
+
   finish(exitCode: number | null, signal: string | null): void {
     this.assertCanTerminate('finish');
     this.flushBuffers();
@@ -253,6 +267,9 @@ export class ProcessSession {
       signal,
       durationMs: this.durationMs ?? 0,
     });
+    
+    // سد ثغرة تسرب الذاكرة
+    this.resolveDanglingWaiters();
   }
 
   cancel(signal: string | null): void {
@@ -276,6 +293,9 @@ export class ProcessSession {
       sequenceNumber: this.nextSeq(),
       reason: signal ?? 'user_aborted',
     });
+    
+    // سد ثغرة تسرب الذاكرة
+    this.resolveDanglingWaiters();
   }
 
   timeout(signal: string | null): void {
@@ -300,6 +320,9 @@ export class ProcessSession {
       error: 'Execution timed out',
       reason: 'timeout',
     });
+    
+    // سد ثغرة تسرب الذاكرة
+    this.resolveDanglingWaiters();
   }
 
   error(error: Error | string): void {
@@ -323,6 +346,9 @@ export class ProcessSession {
       error: message,
       reason: 'error',
     });
+    
+    // سد ثغرة تسرب الذاكرة
+    this.resolveDanglingWaiters();
   }
 
   markTruncated(): void {

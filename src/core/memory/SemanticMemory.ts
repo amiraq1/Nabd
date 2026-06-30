@@ -61,12 +61,11 @@ export class SemanticMemory {
   }
 
   /**
-   * كتابة ذرية (Atomic Write) لحماية ملف الـ JSON من الفساد عند الانقطاع المفاجئ.
+   * كتابة ذرية (Atomic Write) لحماية ملف الـ JSON
    */
-  private async executeAtomicSave(): Promise<void> {
+  private async executeAtomicSave(isForce = false): Promise<void> {
     if (this.isSaving) {
-      // إذا كان هناك حفظ جاري، أعد جدولة الحفظ الحالي
-      this.scheduleSave();
+      if (!isForce) this.scheduleSave();
       return;
     }
 
@@ -75,16 +74,15 @@ export class SemanticMemory {
 
     try {
       const data = JSON.stringify(this.entries, null, 2);
-      // 1. الكتابة في ملف مؤقت
       await fsp.writeFile(this.tempDbPath, data, 'utf8');
-      // 2. استبدال الملف الأصلي دفعة واحدة (عملية ذرية في أنظمة Unix/Linux)
       await fsp.rename(this.tempDbPath, this.dbPath);
     } catch (error) {
       console.error(`[SemanticMemory] خطأ حرج أثناء حفظ الذاكرة:`, error);
-      this.needsSave = true; // إعادة المحاولة لاحقاً
+      if (!isForce) this.needsSave = true; // لا تحاول مجدداً إذا كنا نغلق النظام بالقوة
     } finally {
       this.isSaving = false;
-      if (this.needsSave) {
+      // لا تجدول حفظاً جديداً إذا كان هذا إغلاقاً قسرياً (force)
+      if (this.needsSave && !isForce) {
         this.scheduleSave();
       }
     }
@@ -102,10 +100,13 @@ export class SemanticMemory {
     }
   }
 
+  /**
+   * الحفظ القسري للإغلاق النظيف (Graceful Shutdown)
+   */
   public forceSave(): void {
     if (this.saveTimeout) clearTimeout(this.saveTimeout);
-    // تنفيذ مباشر للحفظ (مفيد عند إغلاق التطبيق Graceful Shutdown)
-    void this.executeAtomicSave();
+    this.needsSave = false; // تصفير الحالة لمنع أي جدولة خلفية شبحية
+    void this.executeAtomicSave(true); // تمرير flag لمنع الجدولة المتكررة
   }
 
   public remember(content: string, tags: string[] = []): string {

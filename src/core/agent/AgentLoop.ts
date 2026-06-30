@@ -21,6 +21,8 @@ export class AgentLoop {
   
   // سقوف الأمان الخاصة بالحلقة في بيئة موبايل/Termux
   private readonly MAX_LOOP_ITERATIONS = 20;
+  // أضف هذا الثابت أعلى كلاس AgentLoop لحماية ذاكرة الموبايل
+  private readonly MAX_HISTORY_TURNS = 6; 
   // مخزن منظم لإدارة الرسائل بدلاً من التراكم النصي العشوائي لمنع Bloat
   private history: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
 
@@ -56,12 +58,24 @@ export class AgentLoop {
   /**
    * صياغة النص التوجيهي بناءً على تاريخ الحوار الحالي (Sliding Context Assembly)
    */
+  /**
+   * صياغة النص التوجيهي مع ضغط السياق (Sliding Context Assembly) لمنع (Context Window Overflow)
+   */
   private compilePrompt(systemInstruction: string): string {
-    // الاحتفاظ بالتعليمات الأساسية، وتلخيص أو اقتطاع الرسائل القديمة جداً إذا تطلب الأمر
-    const historyStr = this.history
+    // الاحتفاظ بآخر N رسائل فقط للحفاظ على خفة وسرعة النموذج
+    let compressedHistory = this.history;
+    if (this.history.length > this.MAX_HISTORY_TURNS) {
+      compressedHistory = [
+        this.history[0], // الاحتفاظ بالطلب الأصلي دائماً
+        ...this.history.slice(-(this.MAX_HISTORY_TURNS - 1)) // جلب أحدث الرسائل
+      ];
+    }
+
+    const historyStr = compressedHistory
       .map(msg => `${msg.role === 'user' ? 'User Request' : msg.role === 'assistant' ? 'Assistant' : 'System'}: ${msg.content}`)
       .join('\n\n');
-    return `${systemInstruction}\n\n${historyStr}`;
+      
+    return `${systemInstruction}\n\n[CONTEXT COMPRESSED FOR MOBILE MEMORY]\n\n${historyStr}`;
   }
 
   async run(prompt: string): Promise<void> {

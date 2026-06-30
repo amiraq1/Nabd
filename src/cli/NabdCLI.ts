@@ -198,6 +198,10 @@ export class NabdCLI {
     if (event.decision === 'STOP') {
       const reason = event.reason || 'تم إنجاز المهمة بنجاح.';
       console.log(chalk.magenta(reason));
+      
+      // تفريغ ذاكرة تفاصيل الأدوات قسرياً لمنع تسرب الذاكرة (Memory Cleanup)
+      this.callDetails.clear();
+      
       this.rl.prompt();
     }
   }

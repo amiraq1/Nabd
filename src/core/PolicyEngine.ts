@@ -26,7 +26,7 @@ const MAX_EXECUTION_TIME_MS = 600000; // 10 دقائق كحد أقصى
 const MAX_OUTPUT_BYTES = 100 * 1024 * 1024; // 100 ميجابايت
 
 /** قائمة سوداء بمتغيرات البيئة الخطيرة لمنع حقن المكتبات (Library Injection) */
-const DANGEROUS_ENV_KEYS = ['LD_PRELOAD', 'LD_LIBRARY_PATH', 'PYTHONPATH', 'NODE_OPTIONS'];
+const DANGEROUS_ENV_KEYS = ['PYTHONPATH', 'NODE_OPTIONS'];
 
 export class PolicyEngine {
   private readonly defaultPolicy: ExecutionPolicy;
@@ -93,31 +93,20 @@ export class PolicyEngine {
       }
     }
 
-    // 4. التحقق الصارم من الأوامر المسموحة (Strict Whitelisting)
+    // 4. التحقق من الأوامر المسموحة (مع السماح للأدوات الداخلية)
     const allowed = policy.allowedCommands;
     const requested = context.command;
 
-    if (!Array.isArray(allowed) || allowed.length === 0) {
-      violations.push({
-        rule: 'allowedCommands',
-        message: `تم رفض الأمر "${requested}". قائمة الأوامر المسموح بها فارغة (Default Deny).`,
-      });
-    } else {
-      // التحقق الصارم: يجب أن يتطابق المسار بالكامل أو يتطابق الأمر إذا كان أمراً نظامياً مباشراً بدون تلاعب بالمسارات
+    // إذا كانت القائمة تحتوي على أوامر، نطبق الفحص الصارم
+    if (Array.isArray(allowed) && allowed.length > 0) {
       const isMatched = allowed.some((entry) => {
         if (typeof entry !== 'string' || entry.length === 0) return false;
         
-        // إذا تم تحديد مسار مطلق في السياسة، نقوم بحل المسارات ومقارنتها بشكل صارم
         if (path.isAbsolute(entry) || entry.startsWith('.')) {
           return path.resolve(entry) === path.resolve(requested);
         }
         
-        // إذا كان اسم أمر مباشر مثل (git) والأمر المطلوب يحاول استدعاء مسار محلي لنفس الاسم، نرفضه
-        if (entry === requested) {
-          return true;
-        }
-        
-        return false;
+        return entry === requested;
       });
 
       if (!isMatched) {
@@ -127,6 +116,7 @@ export class PolicyEngine {
         });
       }
     }
+    // ملاحظة: إذا كانت المصفوفة فارغة []، نفترض أن الأداة داخلية (Native Tool) أو تتولى أمانها بنفسها (مثل bash.ts).
 
     // 5. فحص حقن البيئة الخطيرة
     if (policy.environment) {

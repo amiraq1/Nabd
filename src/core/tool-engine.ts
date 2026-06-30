@@ -97,13 +97,16 @@ export class ToolEngine {
         }
       } catch (err) {
         console.warn(`[ToolEngine] حدث خطأ أثناء سحب البيانات من الأداة (${name}):`, err);
+        // نعيد الخطأ للاستدعاء الرئيسي لكي لا يعتقد الوكيل أن المهمة نجحت
+        throw err; 
       }
     } else {
       // تفريغ التدفق لضمان عدم حدوث Deadlocks في الذاكرة
       try {
         for await (const _event of session.stream()) {}
       } catch (err) {
-        // يتم بلع الخطأ هنا عمداً لأن المستخدم لم يطلب التدفق (Fire-and-Forget حقيقي)
+        // بدلاً من البلع الصامت، نسجل الخطأ تحذيرياً
+        console.warn(`[ToolEngine] تم تفريغ الأداة (${name}) بنجاح جزئي، مع تحذير:`, err);
       }
     }
 

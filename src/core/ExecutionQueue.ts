@@ -29,16 +29,16 @@ interface Deferred<T> {
 
 interface WaitingItem {
   executionId: string; // معرف الطابور الموحد والثابت
-  factory: () => Promise<ProcessSession>;
+  factory: () => Promise<ProcessSession | any>; // قبول نتائج مباشرة أو جلسات
   priority: number;
   sequenceNumber: number; // لضمان الـ FIFO الصارم مع تساؤل الأولويات
   enqueuedAt: number;
-  deferred: Deferred<ProcessSession>;
+  deferred: Deferred<ProcessSession | any>;
 }
 
 interface RunningItem {
   queueExecutionId: string; // الاحتفاظ بمعرف الطابور الأصلي للربط
-  session: ProcessSession;
+  session: ProcessSession | any;
 }
 
 export class ExecutionQueue {
@@ -62,13 +62,13 @@ export class ExecutionQueue {
    * إدراج مهمة جديدة في الطابور.
    */
   enqueue(
-    factory: () => Promise<ProcessSession>,
+    factory: () => Promise<ProcessSession | any>,
     options: QueueOptions = {},
-  ): Promise<ProcessSession> {
+  ): Promise<ProcessSession | any> {
     const priority = options.priority ?? 0;
     const executionId = this.generateExecutionId();
-    const deferred = this.createDeferred<ProcessSession>();
-    
+    const deferred = this.createDeferred<ProcessSession | any>();
+
     this.globalSequence += 1;
 
     const item: WaitingItem = {
@@ -82,7 +82,7 @@ export class ExecutionQueue {
 
     this.insertSortedOptimized(item);
     this.drain();
-    
+
     return deferred.promise;
   }
 
@@ -101,17 +101,22 @@ export class ExecutionQueue {
     // 2. البحث في قائمة التنفيذ النشطة باستخدام معرف الطابور الموحد
     const running = this.runningItems.get(executionId);
     if (running !== undefined) {
-      if (!running.session.isTerminal()) {
-        running.session.cancel('SIGTERM');
+      // تحقق مما إذا كانت الجلسة قابلة للإلغاء (ProcessSession حقيقي وليس كائن JSON)
+      if (typeof running.session?.isTerminal === 'function' && typeof running.session?.cancel === 'function') {
+         if (!running.session.isTerminal()) {
+           running.session.cancel('SIGTERM');
+         }
       }
       return true;
     }
 
     // 3. محاولة الفحص الاحتياطي بمعرف الجلسة الداخلي في حال تم الاستدعاء به
     for (const [queueId, item] of this.runningItems.entries()) {
-      if (item.session.executionId === executionId) {
-        if (!item.session.isTerminal()) {
-          item.session.cancel('SIGTERM');
+      if (item.session?.executionId === executionId) {
+        if (typeof item.session?.isTerminal === 'function' && typeof item.session?.cancel === 'function') {
+           if (!item.session.isTerminal()) {
+             item.session.cancel('SIGTERM');
+           }
         }
         return true;
       }
@@ -138,7 +143,7 @@ export class ExecutionQueue {
     return count;
   }
 
-  running(): ProcessSession[] {
+  running(): any[] {
     return Array.from(this.runningItems.values()).map(item => item.session);
   }
 
@@ -167,7 +172,7 @@ export class ExecutionQueue {
    */
   private insertSortedOptimized(item: WaitingItem): void {
     let insertIndex = this.waitingItems.length;
-    
+
     for (let i = 0; i < this.waitingItems.length; i++) {
       const current = this.waitingItems[i];
       // الترتيب: الأولوية الأعلى أولاً، وفي حال التساوي، الرقم التسلسلي الأصغر (الأقدم زمنيًا FIFO) أولاً
@@ -179,7 +184,7 @@ export class ExecutionQueue {
         break;
       }
     }
-    
+
     this.waitingItems.splice(insertIndex, 0, item);
   }
 
@@ -212,13 +217,13 @@ export class ExecutionQueue {
       .factory()
       .then((session) => {
         this.inflightDispatches -= 1;
-        
+
         // ربط وحفظ الجلسة باستخدام معرف الطابور الأصلي لمنع التضارب وضمان نجاح الـ cancel
-        this.runningItems.set(item.executionId, { 
-          queueExecutionId: item.executionId, 
-          session 
+        this.runningItems.set(item.executionId, {
+          queueExecutionId: item.executionId,
+          session
         });
-        
+
         item.deferred.resolve(session);
         void this.drainSession(item.executionId, session);
       })
@@ -230,13 +235,16 @@ export class ExecutionQueue {
       });
   }
 
-  private async drainSession(queueExecutionId: string, session: ProcessSession): Promise<void> {
+  private async drainSession(queueExecutionId: string, session: ProcessSession | any): Promise<void> {
     try {
-      const stream = session.stream();
-      while (true) {
-        const result = await stream.next();
-        if (result.done === true) {
-          break;
+      // ✅ التعديل الرئيسي: فحص نوع النتيجة، إذا كانت كائنًا وليس ProcessSession قابل للتدفق، فلا تفعل شيئًا.
+      if (session && typeof session.stream === 'function') {
+        const stream = session.stream();
+        while (true) {
+          const result = await stream.next();
+          if (result.done === true) {
+            break;
+          }
         }
       }
     } catch (err: any) {

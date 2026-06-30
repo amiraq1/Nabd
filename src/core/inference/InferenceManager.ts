@@ -37,60 +37,73 @@ export class InferenceManager {
       prompt,
     };
 
-    let fullOutput = '';
-    const generator = provider.generate(request);
+    let attempt = 0;
+    const maxRetries = 3;
 
-    try {
-      for await (const event of generator) {
-        // فحص مبكر: التوقف فوراً إذا أرسل المستخدم أو النظام إشارة إلغاء
-        if (abortSignal?.aborted) {
-          throw new Error('Inference cancelled by user signal');
-        }
-
-        // توحيد الواجهات برمجياً بدلاً من الـ unknown casting
-        const systemEvent = event as unknown as SystemEvent;
-        this.bus.emit(systemEvent);
-
-        switch (event.type) {
-          case 'Token':
-            // استخدام عملية جمع السلاسل بشكل آمن
-            if ('text' in event) fullOutput += event.text;
-            break;
-          case 'Failed':
-            if ('fatal' in event && event.fatal) {
-              throw new Error(`Inference failed: ${'error' in event ? event.error : 'Unknown'}`);
-            }
-            break;
-          case 'Cancelled':
-            throw new Error('Inference cancelled');
-          case 'Timeout':
-            throw new Error('Inference timed out');
-        }
-      }
-    } catch (err: any) {
-      const isExpectedInterrupt = 
-        err.message === 'Inference cancelled' || 
-        err.message === 'Inference cancelled by user signal' || 
-        err.message === 'Inference timed out' || 
-        err.message.startsWith('Inference failed:');
-
-      // إذا كان انهياراً غير متوقع للشبكة أو المحرك، نقوم بإرسال حدث فشل صريح
-      if (!isExpectedInterrupt) {
-        this.bus.emit({
-          type: 'Failed',
-          error: `انقطاع غير متوقع في محرك الذكاء الاصطناعي: ${err.message}`,
-          fatal: true,
-          traceId: request.traceId,
-          sessionId: request.sessionId,
-          requestId: request.requestId,
-          timestamp: Date.now()
-        } as unknown as SystemEvent);
-      }
+    while (attempt < maxRetries) {
+      attempt++;
+      let fullOutput = '';
       
-      throw err;
-    }
+      try {
+        const generator = provider.generate(request);
+        
+        for await (const event of generator) {
+          // فحص مبكر: التوقف فوراً إذا أرسل المستخدم أو النظام إشارة إلغاء
+          if (abortSignal?.aborted) {
+            throw new Error('Inference cancelled by user signal');
+          }
 
-    return fullOutput;
+          // توحيد الواجهات برمجياً بدلاً من الـ unknown casting
+          const systemEvent = event as unknown as SystemEvent;
+          this.bus.emit(systemEvent);
+
+          switch (event.type) {
+            case 'Token':
+              // استخدام عملية جمع السلاسل بشكل آمن
+              if ('text' in event) fullOutput += event.text;
+              break;
+            case 'Failed':
+              if ('fatal' in event && event.fatal) {
+                throw new Error(`Inference failed: ${'error' in event ? event.error : 'Unknown'}`);
+              }
+              break;
+            case 'Cancelled':
+              throw new Error('Inference cancelled');
+            case 'Timeout':
+              throw new Error('Inference timed out');
+          }
+        }
+        
+        return fullOutput;
+        
+      } catch (err: any) {
+        const isExpectedInterrupt = 
+          err.message === 'Inference cancelled' || 
+          err.message === 'Inference cancelled by user signal' || 
+          err.message === 'Inference timed out' || 
+          err.message.startsWith('Inference failed:');
+
+        if (isExpectedInterrupt || attempt >= maxRetries) {
+          // إذا كان انهياراً غير متوقع للشبكة أو المحرك، نقوم بإرسال حدث فشل صريح
+          if (!isExpectedInterrupt) {
+            this.bus.emit({
+              type: 'Failed',
+              error: `انقطاع غير متوقع في محرك الذكاء الاصطناعي بعد ${attempt} محاولات: ${err.message}`,
+              fatal: true,
+              traceId: request.traceId,
+              sessionId: request.sessionId,
+              requestId: request.requestId,
+              timestamp: Date.now()
+            } as unknown as SystemEvent);
+          }
+          throw err;
+        }
+        
+        console.warn(`[InferenceManager] فشل الاتصال بالمزود في المحاولة ${attempt}/${maxRetries}. جاري إعادة المحاولة...`);
+      }
+    }
+    
+    throw new Error('Unexpected end of inference retry loop');
   }
 }
 
