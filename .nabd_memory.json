@@ -1,0 +1,162 @@
+[
+  {
+    "id": "0ceu6lpshps6",
+    "timestamp": 1782774996858,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "vr9njn3ndhe",
+    "timestamp": 1782775364230,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "ekn5hqcw1w8",
+    "timestamp": 1782775448900,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "Can you use the bash tool to list all files in the current directory?"
+  },
+  {
+    "id": "hyynkk0vyie",
+    "timestamp": 1782775828852,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "Use the bash tool to list all files in the current directory, and tell me what you see."
+  },
+  {
+    "id": "x34y5x33uod",
+    "timestamp": 1782776332119,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "ixs70b3wrtf",
+    "timestamp": 1782776382521,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "6ops3dehta",
+    "timestamp": 1782776631874,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "c79ggh4l4rh",
+    "timestamp": 1782776736082,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "Use the bash tool to create a javascript file named \"nabd_test.js\" that prints \"The new minimalist UI is flawless!\". Then use the bash tool again to execute it with node."
+  },
+  {
+    "id": "y5kqntrgl",
+    "timestamp": 1782778087824,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "lrsochfwsep",
+    "timestamp": 1782778953525,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "grgm33cx1ee",
+    "timestamp": 1782779335234,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "ryojplf24t",
+    "timestamp": 1782779889523,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "kmgbzct54m",
+    "timestamp": 1782779930597,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "e9814ngspr6",
+    "timestamp": 1782779949302,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "g3mciivlxbi",
+    "timestamp": 1782780186722,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "lp0ah5c4ims",
+    "timestamp": 1782780241645,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "wvzzl5xi8w",
+    "timestamp": 1782780421355,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "al7wh9bwbqg",
+    "timestamp": 1782780657974,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "rw8cq7zphen",
+    "timestamp": 1782780923397,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  },
+  {
+    "id": "40xoaojxofo",
+    "timestamp": 1782803011997,
+    "tags": [
+      "user-prompt"
+    ],
+    "content": "hi"
+  }
+]

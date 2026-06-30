@@ -22,9 +22,17 @@ export class EventBus<T = SystemEvent> {
   }
 
   emit(event: T): void {
-    // Iterate over a snapshot to allow listeners to unsubscribe during emit safely
-    for (const listener of Array.from(this.listeners)) {
-      listener(event);
+    // التقاط لقطة (Snapshot) للمستمعين لضمان الأمان أثناء تعديل القائمة
+    const snapshot = Array.from(this.listeners);
+    
+    for (const listener of snapshot) {
+      try {
+        // عزل الأخطاء (Fault Isolation): خطأ مستمع واحد لن يسقط الناقل
+        listener(event);
+      } catch (err) {
+        // تسجيل الخطأ دون كسر تدفق الأحداث الحرج للنظام
+        console.warn(`[EventBus] خطأ في أحد مستمعي الأحداث أثناء معالجة الحدث:`, err);
+      }
     }
   }
 

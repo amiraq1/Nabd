@@ -1,9 +1,10 @@
 import { LLMProtocol, type ToolCall } from './LLMProtocol.js';
-import { createHash } from 'node:crypto';
 
 export interface PlannerConfig {
   maxIterations: number;
-  maxRepeatedCalls?: number; // جديد
+  maxRepeatedCalls?: number; 
+  initialIterations?: number;
+  maxConsecutiveErrors?: number; // إضافة سقف مخصص لأخطاء التنسيق
 }
 
 export type PlannerDecision =
@@ -15,60 +16,90 @@ export type PlannerDecision =
 export class Planner {
   private iterations = 0;
   private consecutiveErrors = 0;
-  private lastCallHash: string | null = null;
+  private lastCallSignature: string | null = null;
   private repeatedCallCount = 0;
+  private readonly maxConsecutiveErrors: number;
 
   constructor(
-    private config: PlannerConfig = { maxIterations: 30, maxRepeatedCalls: 2 }
-  ) {}
+    private config: PlannerConfig = { maxIterations: 30, maxRepeatedCalls: 2, maxConsecutiveErrors: 3 }
+  ) {
+    this.iterations = config.initialIterations ?? 0;
+    this.maxConsecutiveErrors = config.maxConsecutiveErrors ?? 3;
+  }
 
-  private hashCall(call: ToolCall): string {
-    return createHash('sha256')
-      .update(call.tool + JSON.stringify(call.arguments))
-      .digest('hex');
+  /**
+   * توليد بصمة سريعة وخفيفة على الذاكرة والمعالج بدلاً من التشفير الثقيل (SHA-256)
+   */
+  private generateSignature(call: ToolCall): string {
+    return `${call.tool}::${JSON.stringify(call.arguments || {})}`;
   }
 
   decide(llmOutput: string): PlannerDecision {
+    // 1. التحقق من الحدود القصوى للمحاولات
     if (this.iterations >= this.config.maxIterations) {
-      return { action: 'STOP', reason: 'Max iterations reached.' };
+      return { action: 'STOP', reason: 'تم الوصول للحد الأقصى من المحاولات المسموحة (Max Iterations).' };
     }
 
-    if (this.consecutiveErrors >= 3) {
-      return { action: 'STOP', reason: 'Stopped due to repeated malformed tool calls.' };
+    // 2. التحقق من تجاوز أخطاء التنسيق
+    if (this.consecutiveErrors >= this.maxConsecutiveErrors) {
+      return { action: 'STOP', reason: 'تم الإيقاف القسري: النموذج مستمر في توليد تنسيق JSON مشوه ولا يستجيب للتصحيح.' };
     }
 
     this.iterations++;
 
-    const parsed = LLMProtocol.parse(llmOutput);
+    let parsed;
+    try {
+      // محاولة تحليل المخرجات بأمان
+      parsed = LLMProtocol.parse(llmOutput);
+    } catch (error: any) {
+      // التقاط الخطأ، زيادة العداد، وتوجيه الوكيل لتصحيح نفسه
+      this.consecutiveErrors++;
+      return { 
+        action: 'RETRY_ERROR', 
+        error: error.message || 'تنسيق الاستجابة غير صالح. يجب استخدام صيغة JSON الصارمة.' 
+      };
+    }
 
+    // إذا كانت الإجابة نهائية
     if (parsed.kind === 'final_answer') {
       return { action: 'FINAL_ANSWER', text: parsed.text };
     }
 
-    // parsed.kind === 'tool_call'
+    // إذا كان طلب أداة (Tool Call)
     const call = parsed.call;
-    const callHash = this.hashCall(call);
-    if (callHash === this.lastCallHash) {
+    const callSignature = this.generateSignature(call);
+
+    // 3. كشف الحلقات المفرغة (Ghost Call Detection)
+    if (callSignature === this.lastCallSignature) {
       this.repeatedCallCount++;
+      
       if (this.repeatedCallCount >= (this.config.maxRepeatedCalls ?? 2)) {
-        return { action: 'STOP', reason: `Ghost call: '${call.tool}' repeated.` };
+        // بدلاً من القتل الفوري، نعتبر التكرار خطأ منطقي ونطلب من الذكاء الاصطناعي تغيير خطته
+        this.consecutiveErrors++;
+        return { 
+          action: 'RETRY_ERROR', 
+          error: `[تحذير النظام] أنت تقوم بتكرار استدعاء الأداة '${call.tool}' بنفس الوسائط تماماً. يبدو أنك عالق في حلقة. يرجى مراجعة السياق واختيار مسار أو أداة مختلفة.` 
+        };
       }
     } else {
+      // إعادة تعيين العدادات عند استخدام أداة جديدة أو وسائط مختلفة
       this.repeatedCallCount = 0;
-      this.lastCallHash = callHash;
+      this.lastCallSignature = callSignature;
     }
 
+    // تصفير أخطاء التنسيق عند النجاح في اتخاذ قرار سليم
     this.consecutiveErrors = 0;
     return { action: 'CONTINUE', call };
   }
 
   recordToolSuccess(): void {
+    // نجاح الأداة يعني أن الخطة تسير بشكل جيد
     this.consecutiveErrors = 0;
   }
 
   recordToolFailure(): void {
-    // فشل التنفيذ لا يُحسب كخطأ تنسيق — لكن لو الأداة تفشل
-    // بنفس الطريقة مراراً، الـ Ghost Call Detection فوق يلتقطه
+    // فشل الأداة لا يعني فشل التنسيق، لذلك لا نزيد consecutiveErrors هنا.
+    // إذا كرر الوكيل استدعاء الأداة الفاشلة، سيتولى "Ghost Call Detection" معاقبته.
   }
 
   getIterations(): number {

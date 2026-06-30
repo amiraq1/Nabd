@@ -1,20 +1,15 @@
 import path from 'node:path';
 import type { ExecutionPolicy, PolicyViolation } from './types.js';
 
-/**
- * Context passed to {@link PolicyEngine.validate} describing the concrete
- * execution request that is being checked against a policy.
- */
 export interface PolicyValidationContext {
-  /** Executable name or path being invoked. */
+  /** اسم الأمر أو المسار الكامل المطلوب تنفيذه. */
   command: string;
-  /** Positional arguments passed to the executable. */
+  /** الوسائط الممررة للأمر. */
   args: string[];
-  /** Working directory override requested by the caller. */
+  /** المجلد النشط المطلوب للتنفيذ. */
   cwd?: string;
 }
 
-/** Default execution policy used when none is supplied explicitly. */
 const DEFAULT_POLICY: ExecutionPolicy = {
   maxExecutionTimeMs: 45000,
   maxOutputBytes: 20 * 1024 * 1024,
@@ -24,117 +19,124 @@ const DEFAULT_POLICY: ExecutionPolicy = {
   allowBackgroundProcess: false,
   workingDirectory: process.cwd(),
   environment: { ...process.env },
-  allowedCommands: [],
+  allowedCommands: [], // فارغة تعني منع كل شيء افتراضياً ما لم يتم تحديد الاستثناء
 };
 
-/** Hard ceiling for `maxExecutionTimeMs` (10 minutes, in milliseconds). */
-const MAX_EXECUTION_TIME_MS = 600000;
+const MAX_EXECUTION_TIME_MS = 600000; // 10 دقائق كحد أقصى
+const MAX_OUTPUT_BYTES = 100 * 1024 * 1024; // 100 ميجابايت
 
-/** Hard ceiling for `maxOutputBytes` (100 MB). */
-const MAX_OUTPUT_BYTES = 100 * 1024 * 1024;
+/** قائمة سوداء بمتغيرات البيئة الخطيرة لمنع حقن المكتبات (Library Injection) */
+const DANGEROUS_ENV_KEYS = ['LD_PRELOAD', 'LD_LIBRARY_PATH', 'PYTHONPATH', 'NODE_OPTIONS'];
 
-/**
- * Validates execution requests against an {@link ExecutionPolicy} and merges
- * tool-specific policy overrides with a process-wide default policy.
- *
- * The engine is stateless across `validate` invocations: each call inspects
- * the supplied policy independently and returns the full set of violations.
- * Use {@link mergePolicy} to combine a tool-supplied partial policy with the
- * default policy prior to validation.
- */
 export class PolicyEngine {
-  private defaultPolicy: ExecutionPolicy;
+  private readonly defaultPolicy: ExecutionPolicy;
 
-  /**
-   * @param defaultPolicy Optional partial policy whose values override the
-   * built-in defaults. Unspecified fields fall back to the built-in defaults.
-   */
-  constructor(defaultPolicy?: Partial<ExecutionPolicy>) {
-    this.defaultPolicy = this.buildPolicy(defaultPolicy ?? {});
+  constructor(customDefaultPolicy?: Partial<ExecutionPolicy>) {
+    // حل مشكلة الترتيب في الباني عبر بناء السياسة مباشرة من الثابت الافتراضي أولاً
+    this.defaultPolicy = {
+      ...DEFAULT_POLICY,
+      ...customDefaultPolicy,
+      environment: { ...DEFAULT_POLICY.environment, ...(customDefaultPolicy?.environment ?? {}) },
+    };
   }
 
   /**
-   * Validates an execution request against the supplied policy.
-   *
-   * @param policy  The fully-resolved policy to validate against. Use
-   *                {@link mergePolicy} to compose it from a tool override.
-   * @param context Description of the execution being requested.
-   * @returns A list of violations. An empty list means the request is allowed.
+   * للتحقق من طلب التنفيذ مقابل السياسة المعتمدة.
    */
-  validate(
-    policy: ExecutionPolicy,
-    context: PolicyValidationContext,
-  ): PolicyViolation[] {
+  validate(policy: ExecutionPolicy, context: PolicyValidationContext): PolicyViolation[] {
     const violations: PolicyViolation[] = [];
 
-    if (
-      !Number.isInteger(policy.maxExecutionTimeMs) ||
-      policy.maxExecutionTimeMs <= 0
-    ) {
+    // 1. التحقق من الحدود الزمنية
+    if (!Number.isInteger(policy.maxExecutionTimeMs) || policy.maxExecutionTimeMs <= 0) {
       violations.push({
         rule: 'maxExecutionTimeMs',
-        message:
-          'maxExecutionTimeMs must be a positive integer (got ' +
-          `${String(policy.maxExecutionTimeMs)}).`,
+        message: `يجب أن يكون الحد الأقصى لوقت التنفيذ رقماً صحيحاً موجباً (تم استقبال: ${policy.maxExecutionTimeMs}).`,
       });
     } else if (policy.maxExecutionTimeMs > MAX_EXECUTION_TIME_MS) {
       violations.push({
         rule: 'maxExecutionTimeMs',
-        message:
-          `maxExecutionTimeMs must be <= ${MAX_EXECUTION_TIME_MS} ` +
-          `(got ${policy.maxExecutionTimeMs}).`,
+        message: `تجاوز الحد الأقصى المسموح به للنظام وهو ${MAX_EXECUTION_TIME_MS} مللي ثانية.`,
       });
     }
 
-    if (
-      !Number.isInteger(policy.maxOutputBytes) ||
-      policy.maxOutputBytes <= 0
-    ) {
+    // 2. التحقق من حجم المخرجات
+    if (!Number.isInteger(policy.maxOutputBytes) || policy.maxOutputBytes <= 0) {
       violations.push({
         rule: 'maxOutputBytes',
-        message:
-          'maxOutputBytes must be a positive integer (got ' +
-          `${String(policy.maxOutputBytes)}).`,
+        message: `يجب أن يكون الحد الأقصى للمخرجات رقماً صحيحاً موجباً (تم استقبال: ${policy.maxOutputBytes}).`,
       });
     } else if (policy.maxOutputBytes > MAX_OUTPUT_BYTES) {
       violations.push({
         rule: 'maxOutputBytes',
-        message:
-          `maxOutputBytes must be <= ${MAX_OUTPUT_BYTES} ` +
-          `(got ${policy.maxOutputBytes}).`,
+        message: `تجاوز الحد الأقصى لحجم المخرجات المسموح به للنظام وهو ${MAX_OUTPUT_BYTES} بايت.`,
       });
     }
 
-    if (
-      typeof policy.workingDirectory !== 'string' ||
-      policy.workingDirectory.length === 0
-    ) {
+    // 3. التحقق من المجلد النشط (Context CWD Validation)
+    if (typeof policy.workingDirectory !== 'string' || policy.workingDirectory.length === 0) {
       violations.push({
         rule: 'workingDirectory',
-        message: 'workingDirectory must be a non-empty string.',
+        message: 'مسار مجلد العمل (workingDirectory) في السياسة لا يمكن أن يكون فارغاً.',
       });
     }
 
+    if (context.cwd) {
+      const resolvedContextCwd = path.resolve(context.cwd);
+      const resolvedPolicyCwd = path.resolve(policy.workingDirectory);
+      
+      // التأكد من أن المجلد المطلوب لا يخرج عن نطاق المجلد المسموح (منع الـ Path Traversal)
+      if (!resolvedContextCwd.startsWith(resolvedPolicyCwd)) {
+        violations.push({
+          rule: 'workingDirectory',
+          message: `المجلد النشط المطلوب (${resolvedContextCwd}) يقع خارج نطاق مجلد العمل المسموح به (${resolvedPolicyCwd}).`,
+        });
+      }
+    }
+
+    // 4. التحقق الصارم من الأوامر المسموحة (Strict Whitelisting)
     const allowed = policy.allowedCommands;
-    if (Array.isArray(allowed) && allowed.length > 0) {
-      const requested = context.command;
-      const requestedBase = path.basename(requested);
-      const matched = allowed.some((entry) => {
-        if (typeof entry !== 'string' || entry.length === 0) {
-          return false;
+    const requested = context.command;
+
+    if (!Array.isArray(allowed) || allowed.length === 0) {
+      violations.push({
+        rule: 'allowedCommands',
+        message: `تم رفض الأمر "${requested}". قائمة الأوامر المسموح بها فارغة (Default Deny).`,
+      });
+    } else {
+      // التحقق الصارم: يجب أن يتطابق المسار بالكامل أو يتطابق الأمر إذا كان أمراً نظامياً مباشراً بدون تلاعب بالمسارات
+      const isMatched = allowed.some((entry) => {
+        if (typeof entry !== 'string' || entry.length === 0) return false;
+        
+        // إذا تم تحديد مسار مطلق في السياسة، نقوم بحل المسارات ومقارنتها بشكل صارم
+        if (path.isAbsolute(entry) || entry.startsWith('.')) {
+          return path.resolve(entry) === path.resolve(requested);
         }
+        
+        // إذا كان اسم أمر مباشر مثل (git) والأمر المطلوب يحاول استدعاء مسار محلي لنفس الاسم، نرفضه
         if (entry === requested) {
           return true;
         }
-        return path.basename(entry) === requestedBase;
+        
+        return false;
       });
-      if (!matched) {
+
+      if (!isMatched) {
         violations.push({
           rule: 'allowedCommands',
-          message:
-            `command "${requested}" is not in the allowedCommands list ` +
-            `[${allowed.join(', ')}].`,
+          message: `الأمر "${requested}" غير مدرج في قائمة الأوامر المصرح بها [${allowed.join(', ')}].`,
         });
+      }
+    }
+
+    // 5. فحص حقن البيئة الخطيرة
+    if (policy.environment) {
+      for (const key of DANGEROUS_ENV_KEYS) {
+        if (policy.environment[key] !== undefined) {
+          violations.push({
+            rule: 'environment',
+            message: `محاولة محظورة لحقن متغير البيئة الحساس والخطير: (${key}).`,
+          });
+        }
       }
     }
 
@@ -142,49 +144,26 @@ export class PolicyEngine {
   }
 
   /**
-   * Merges a tool-specific policy with the default policy.
-   *
-   * Primitives and arrays supplied by the tool override the defaults; objects
-   * are shallow-merged (defaults remain for keys not present in the tool
-   * policy). Unspecified tool fields fall back to the defaults.
-   *
-   * @param toolPolicy Partial policy supplied by a tool implementation.
-   * @returns A fully-resolved {@link ExecutionPolicy}.
+   * دمج السياسة الخاصة بالأداة مع السياسة الافتراضية للنظام.
    */
   mergePolicy(toolPolicy: Partial<ExecutionPolicy>): ExecutionPolicy {
-    return this.buildPolicy(toolPolicy);
-  }
-
-  /**
-   * Builds a complete {@link ExecutionPolicy} by applying the supplied
-   * overrides on top of the instance's default policy.
-   */
-  private buildPolicy(overrides: Partial<ExecutionPolicy>): ExecutionPolicy {
-    // `this.defaultPolicy` is not yet assigned during the constructor's
-    // initial `buildPolicy` call, so fall back to the module-level defaults
-    // when the instance field is undefined.
-    const base: ExecutionPolicy = this.defaultPolicy ?? DEFAULT_POLICY;
-    const mergedEnvironment: Record<string, string | undefined> = {
-      ...base.environment,
-      ...(overrides.environment ?? {}),
+    const mergedEnvironment = {
+      ...this.defaultPolicy.environment,
+      ...(toolPolicy.environment ?? {}),
     };
 
     return {
-      maxExecutionTimeMs:
-        overrides.maxExecutionTimeMs ?? base.maxExecutionTimeMs,
-      maxOutputBytes: overrides.maxOutputBytes ?? base.maxOutputBytes,
-      allowNetwork: overrides.allowNetwork ?? base.allowNetwork,
-      allowFilesystemWrite:
-        overrides.allowFilesystemWrite ?? base.allowFilesystemWrite,
-      allowDelete: overrides.allowDelete ?? base.allowDelete,
-      allowBackgroundProcess:
-        overrides.allowBackgroundProcess ?? base.allowBackgroundProcess,
-      workingDirectory: overrides.workingDirectory ?? base.workingDirectory,
+      maxExecutionTimeMs: toolPolicy.maxExecutionTimeMs ?? this.defaultPolicy.maxExecutionTimeMs,
+      maxOutputBytes: toolPolicy.maxOutputBytes ?? this.defaultPolicy.maxOutputBytes,
+      allowNetwork: toolPolicy.allowNetwork ?? this.defaultPolicy.allowNetwork,
+      allowFilesystemWrite: toolPolicy.allowFilesystemWrite ?? this.defaultPolicy.allowFilesystemWrite,
+      allowDelete: toolPolicy.allowDelete ?? this.defaultPolicy.allowDelete,
+      allowBackgroundProcess: toolPolicy.allowBackgroundProcess ?? this.defaultPolicy.allowBackgroundProcess,
+      workingDirectory: toolPolicy.workingDirectory ?? this.defaultPolicy.workingDirectory,
       environment: mergedEnvironment,
-      allowedCommands: overrides.allowedCommands ?? base.allowedCommands,
+      allowedCommands: toolPolicy.allowedCommands ?? this.defaultPolicy.allowedCommands,
     };
   }
 }
 
-/** Process-wide singleton instance of {@link PolicyEngine}. */
 export const policyEngine = new PolicyEngine();

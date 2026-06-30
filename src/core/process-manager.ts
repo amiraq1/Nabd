@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import type { ToolExecutionResult, ProcessOptions } from './types.js';
 import './telemetry/ExecutionLogger.js';
 import './telemetry/MetricsCollector.js';
@@ -20,8 +21,6 @@ export interface RuntimeOptions {
 }
 
 export class ProcessManager {
-  private counter = 0;
-
   async run(options: RuntimeOptions): Promise<ProcessSession> {
     const {
       command,
@@ -33,8 +32,9 @@ export class ProcessManager {
       signal,
     } = options;
 
-    const executionId = `exec-${Date.now()}-${this.counter++}`;
+    const executionId = `exec-${randomUUID()}`;
     let child: ChildProcess | undefined;
+    
     const session = new ProcessSession({
       executionId,
       command: options.command,
@@ -42,23 +42,23 @@ export class ProcessManager {
       cwd: options.cwd || process.cwd(),
       env: options.env,
       pauseStreams: () => {
-        if (child?.stdout) child.stdout.pause();
-        if (child?.stderr) child.stderr.pause();
+        if (child?.stdout && !child.stdout.isPaused()) child.stdout.pause();
+        if (child?.stderr && !child.stderr.isPaused()) child.stderr.pause();
       },
       resumeStreams: () => {
-        if (child?.stdout) child.stdout.resume();
-        if (child?.stderr) child.stderr.resume();
+        if (child?.stdout && child.stdout.isPaused()) child.stdout.resume();
+        if (child?.stderr && child.stderr.isPaused()) child.stderr.resume();
       },
       traceId: options.traceId,
       sessionId: options.sessionId,
       parentExecutionId: options.parentExecutionId,
     });
-    // ExecutionRegistry is now decoupled and listens to globalEventBus
 
     return new Promise((resolve, reject) => {
       let timeoutId: NodeJS.Timeout | undefined;
       let sigtermTimeout: NodeJS.Timeout | undefined;
       let sigkillTimeout: NodeJS.Timeout | undefined;
+      
       let outputByteCount = 0;
       let killedByTimeout = false;
       let killedByTruncation = false;
@@ -82,16 +82,30 @@ export class ProcessManager {
       const killSequence = (reason: 'timeout' | 'truncation' | 'abort') => {
         if (reason === 'timeout') killedByTimeout = true;
         if (reason === 'truncation') killedByTruncation = true;
+        
         if (processExited || session.isTerminal()) return;
 
-        child?.kill('SIGINT');
+        // الإيقاف الفوري لتدفق البيانات لحماية الذاكرة (Memory Shield)
+        if (child?.stdout && !child.stdout.isPaused()) child.stdout.pause();
+        if (child?.stderr && !child.stderr.isPaused()) child.stderr.pause();
+
+        // تجنب إرسال إشارات لعملية ماتت بالفعل لتفادي أخطاء (ESRCH)
+        if (child && !child.killed) {
+          try {
+            child.kill('SIGINT');
+          } catch (e) { /* التجاهل الآمن */ }
+        }
 
         sigtermTimeout = setTimeout(() => {
-          if (!processExited && !session.isTerminal()) child?.kill('SIGTERM');
+          if (!processExited && !session.isTerminal() && child && !child.killed) {
+            try { child.kill('SIGTERM'); } catch (e) {}
+          }
         }, 2000);
 
         sigkillTimeout = setTimeout(() => {
-          if (!processExited && !session.isTerminal()) child?.kill('SIGKILL');
+          if (!processExited && !session.isTerminal() && child && !child.killed) {
+            try { child.kill('SIGKILL'); } catch (e) {}
+          }
         }, 4000);
       };
 
@@ -124,23 +138,27 @@ export class ProcessManager {
       signal?.addEventListener('abort', abortHandler, { once: true });
       if (signal?.aborted) abortHandler();
 
-      const handleChunk = (chunk: string) => {
+      const handleChunk = (chunk: string, isStderr: boolean) => {
+        // حارس الذاكرة: منع استهلاك أي بيانات جديدة إذا بدأنا تسلسل الإعدام
+        if (killedByTruncation || killedByTimeout || session.isTerminal()) return;
+
         outputByteCount += Buffer.byteLength(chunk, 'utf8');
-        if (outputByteCount >= maxOutputBytes && !killedByTruncation) {
+        
+        if (outputByteCount >= maxOutputBytes) {
           killedByTruncation = true;
           killSequence('truncation');
+          return; // الخروج الفوري لمنع الإلحاق
+        }
+
+        if (isStderr) {
+          session.appendStderr(chunk);
+        } else {
+          session.appendStdout(chunk);
         }
       };
 
-      child.stdout!.on('data', (chunk: string) => {
-        handleChunk(chunk);
-        session.appendStdout(chunk);
-      });
-
-      child.stderr!.on('data', (chunk: string) => {
-        handleChunk(chunk);
-        session.appendStderr(chunk);
-      });
+      child.stdout!.on('data', (chunk: string) => handleChunk(chunk, false));
+      child.stderr!.on('data', (chunk: string) => handleChunk(chunk, true));
 
       child.once('close', (code, signalName) => {
         processExited = true;
@@ -148,10 +166,6 @@ export class ProcessManager {
           if (killedByTimeout) {
             session.timeout(signalName ?? null);
           } else {
-            // markTruncated() must run while the session is still in a
-            // non-terminal status (it is a no-op once the session has been
-            // finished/cancelled/timed-out). Setting the truncation flag
-            // before finish() preserves it in the final snapshot.
             if (killedByTruncation) {
               session.markTruncated();
             }
@@ -172,19 +186,22 @@ export class ProcessManager {
 
 export const processManager = new ProcessManager();
 
-/**
- * Backward-compatible helper: run a process and wait for the final result.
- */
-export async function runToCompletion(options: RuntimeOptions, onStream?: (chunk: string, isStderr: boolean) => void): Promise<ToolExecutionResult> {
+export async function runToCompletion(
+  options: RuntimeOptions, 
+  onStream?: (chunk: string, isStderr: boolean) => void
+): Promise<ToolExecutionResult> {
   const session = await processManager.run(options);
 
-  // Drain the stream to ensure events flow and session reaches terminal state.
   for await (const event of session.stream()) {
     if (onStream) {
-      if (event.type === 'StdoutChunk') {
-        onStream(event.chunk, false);
-      } else if (event.type === 'StderrChunk') {
-        onStream(event.chunk, true);
+      if (event.type === 'StdoutChunk' && 'chunk' in event) {
+        onStream(event.chunk as string, false);
+      } else if (event.type === 'StderrChunk' && 'chunk' in event) {
+        onStream(event.chunk as string, true);
+      } else if (event.type === 'StdoutBatch' && 'chunks' in event) {
+        for (const chunk of (event.chunks as string[])) onStream(chunk, false);
+      } else if (event.type === 'StderrBatch' && 'chunks' in event) {
+        for (const chunk of (event.chunks as string[])) onStream(chunk, true);
       }
     }
   }

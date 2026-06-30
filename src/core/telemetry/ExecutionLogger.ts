@@ -11,33 +11,65 @@ interface LoggerState {
 }
 
 export class ExecutionLogger {
-  private readonly stream: fs.WriteStream;
+  private stream: fs.WriteStream;
   private readonly states = new Map<string, LoggerState>();
+  
+  // الحد الأقصى لحجم ملف السجلات (مثلاً 5 ميجابايت) قبل التدوير
+  private readonly MAX_LOG_SIZE = 5 * 1024 * 1024;
+  private bytesWritten = 0;
 
   constructor(
     private readonly logFilePath: string,
     private readonly bus = globalEventBus,
     private readonly registry = executionRegistry
   ) {
-    const dir = path.dirname(logFilePath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    this.stream = fs.createWriteStream(this.logFilePath, { flags: 'a', encoding: 'utf8' });
-    this.bus.subscribe((event) => this.handleEvent(event));
+    this.ensureDirectory();
+    this.stream = this.openStream();
+    this.checkInitialSize();
     
-    // Attempt graceful shutdown
-    const onShutdown = () => {
-      this.stream.end();
-    };
+    this.bus.subscribe((event) => this.handleEvent(event));
+
+    const onShutdown = () => this.stream.end();
     process.on('beforeExit', onShutdown);
     process.on('SIGINT', onShutdown);
     process.on('SIGTERM', onShutdown);
   }
 
+  private ensureDirectory(): void {
+    const dir = path.dirname(this.logFilePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  }
+
+  private openStream(): fs.WriteStream {
+    return fs.createWriteStream(this.logFilePath, { flags: 'a', encoding: 'utf8' });
+  }
+
+  private checkInitialSize(): void {
+    if (fs.existsSync(this.logFilePath)) {
+      this.bytesWritten = fs.statSync(this.logFilePath).size;
+      this.rotateLogIfNeeded();
+    }
+  }
+
+  /**
+   * تدوير السجلات (Log Rotation) لمنع استنزاف مساحة تخزين الهاتف
+   */
+  private rotateLogIfNeeded(): void {
+    if (this.bytesWritten >= this.MAX_LOG_SIZE) {
+      this.stream.end();
+      const backupPath = `${this.logFilePath}.${Date.now()}.bak`;
+      fs.renameSync(this.logFilePath, backupPath);
+      
+      this.stream = this.openStream();
+      this.bytesWritten = 0;
+      
+      // اختياري: يمكن إضافة كود هنا لحذف النسخ الاحتياطية الأقدم من 3 أيام مثلاً
+    }
+  }
+
   private handleEvent(event: SystemEvent): void {
     if (!isExecutionEvent(event)) return;
-    
+
     if (event.type === 'SessionQueued') {
       this.states.set(event.executionId, {
         stdoutHash: crypto.createHash('sha256'),
@@ -49,19 +81,11 @@ export class ExecutionLogger {
     const state = this.states.get(event.executionId);
     if (!state) return;
 
-    if (event.type === 'StdoutChunk') {
-      state.stdoutHash.update(event.chunk);
-    } else if (event.type === 'StderrChunk') {
-      state.stderrHash.update(event.chunk);
-    } else if (event.type === 'StdoutBatch') {
-      for (const chunk of event.chunks) {
-        state.stdoutHash.update(chunk);
-      }
-    } else if (event.type === 'StderrBatch') {
-      for (const chunk of event.chunks) {
-        state.stderrHash.update(chunk);
-      }
-    } else if (['Completed', 'Failed', 'Cancelled'].includes(event.type)) {
+    if (event.type === 'StdoutChunk') state.stdoutHash.update(event.chunk);
+    else if (event.type === 'StderrChunk') state.stderrHash.update(event.chunk);
+    else if (event.type === 'StdoutBatch') event.chunks.forEach(c => state.stdoutHash.update(c));
+    else if (event.type === 'StderrBatch') event.chunks.forEach(c => state.stderrHash.update(c));
+    else if (['Completed', 'Failed', 'Cancelled'].includes(event.type)) {
       this.writeTerminalLog(event);
       this.states.delete(event.executionId);
     }
@@ -72,32 +96,19 @@ export class ExecutionLogger {
     const snapshot = this.registry.getById(event.executionId);
     if (!state || !snapshot) return;
 
-    let exitCode = snapshot.exitCode;
-    let signal = snapshot.signal;
-    let durationMs = snapshot.durationMs ?? 0;
-    
-    const record = {
+    const record = JSON.stringify({
       sessionId: event.executionId,
-      sequence: event.sequenceNumber,
-      timestamp: event.timestamp,
       command: snapshot.command,
-      exitCode,
-      durationMs,
-      status: snapshot.status,
-      signal,
+      exitCode: snapshot.exitCode,
+      durationMs: snapshot.durationMs ?? 0,
       outputBytes: snapshot.totalBytes,
-      stdoutBytes: snapshot.stdoutBytes,
-      stderrBytes: snapshot.stderrBytes,
-      policyId: 'default', // placeholder, policies not strictly IDed yet
-      queueWaitMs: snapshot.metrics.queueWaitMs ?? 0,
-      executionTimeMs: snapshot.metrics.executionMs ?? 0,
       stdoutHash: state.stdoutHash.digest('hex'),
-      stderrHash: state.stderrHash.digest('hex'),
-    };
+    }) + '\n';
 
-    // Fast, append-only write
-    this.stream.write(JSON.stringify(record) + '\n');
+    this.stream.write(record);
+    this.bytesWritten += Buffer.byteLength(record, 'utf8');
+    
+    // فحص حجم الملف بعد الكتابة لتدويره إذا لزم الأمر
+    this.rotateLogIfNeeded();
   }
 }
-
-export const executionLogger = new ExecutionLogger(path.join(process.cwd(), 'logs', 'executions.jsonl'));
