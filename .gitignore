@@ -1,4 +1,4 @@
-ag
+/ag
 *.tmp
 test_*.go
 *.local.*

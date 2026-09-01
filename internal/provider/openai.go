@@ -50,6 +50,27 @@ func NewNVIDIA() (*OpenAICompat, error) {
 	}, nil
 }
 
+func env(key, fallback string) string {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func NewOpenRouter() (*OpenAICompat, error) {
+	k := os.Getenv("OPENROUTER_API_KEY")
+	if k == "" {
+		return nil, errors.New("OPENROUTER_API_KEY غير مضبوط")
+	}
+	return &OpenAICompat{
+		Key:     k,
+		Label:   "openrouter",
+		Model:   env("NABD_MODEL", "anthropic/claude-3.5-haiku"),
+		BaseURL: env("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
+		Client:  &http.Client{},
+	}, nil
+}
+
 func (o *OpenAICompat) Name() string { return o.Label + "/" + shortModel(o.Model) }
 
 func shortModel(m string) string {
