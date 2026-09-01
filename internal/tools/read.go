@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"nabd/internal/agent"
 	"nabd/internal/provider"
 )
 
@@ -15,6 +16,15 @@ const (
 	maxOutBytes  = 48 * 1024 // what one tool result may cost in context
 	maxLines     = 1200
 	maxLineRunes = 300 // a minified bundle must not eat the whole budget
+	// maxBytes caps a single read in bytes so a large file cannot fill the
+	// context budget by itself (the Groq TPM ceiling is 8000 tokens).
+	// DESIGN_ASSUMPTION, calibrated by live tests:
+	//   - 16 KiB read → 413 (Requested 8016)
+	//   - 8 KiB read, model read twice → 413 (Requested 9725)
+	// Two reads plus system+conversation must stay under 8000, so a single
+	// read is capped at 3 KiB ≈ ~1.5k tokens. Truncation is at a line
+	// boundary. Lower this when the key's TPM ceiling rises.
+	maxBytes = 3 * 1024
 )
 
 type readFile struct {
@@ -23,6 +33,17 @@ type readFile struct {
 }
 
 func (readFile) Name() string { return "read_file" }
+
+// RunDetailed lets read_file report truncation through the Outcome, so the
+// loop can journal a read_record event when the byte cap cut the file.
+func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.Outcome, error) {
+	text, ok, err := t.Run(ctx, raw)
+	trunc := false
+	if t.reg != nil {
+		trunc = t.reg.ConsumeTruncated()
+	}
+	return agent.Outcome{Text: text, OK: ok, Truncated: trunc}, err
+}
 
 func (readFile) Spec() provider.ToolSpec {
 	return spec("read_file",
@@ -83,6 +104,20 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 	}
 
 	var b strings.Builder
+
+	// Count the file's real line count up front: the truncation tail must
+	// say "stopped at line N of M" with the true M, not the number of lines
+	// the loop managed to read before the cap.
+	total := 0
+	tc := bufio.NewScanner(f)
+	tc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+	for tc.Scan() {
+		total++
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return "", false, err
+	}
+
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 
@@ -98,6 +133,17 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 		}
 		if b.Len() > maxOutBytes {
 			capped = fmt.Sprintf("… توقّف عند السطر %d · بلغ حدّ الحجم", line-1)
+			break
+		}
+		// Byte cap: only emit the line if it still fits under maxBytes,
+		// so truncation always lands on a line boundary, never mid-line.
+		if b.Len()+len(sc.Bytes())+8 > maxBytes {
+			capped = fmt.Sprintf(
+				"[TRUNCATED: stopped at line %d of %d; use offset=%d to continue]",
+				line-1, total, line)
+			if t.reg != nil {
+				t.reg.SetTruncated()
+			}
 			break
 		}
 		fmt.Fprintf(&b, "%d|%s\n", line, clip(sc.Text(), maxLineRunes))

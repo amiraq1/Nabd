@@ -29,6 +29,7 @@ type Registry struct {
 	list      []Tool
 	byName    map[string]Tool
 	linesRead int // set by read_file, consumed by the next commit()
+	truncated bool // set by read_file, consumed by RunDetailed
 }
 
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
@@ -44,6 +45,16 @@ func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 // next commit() stamps that number on the EditRecord: a blind write (no
 // read before it) carries ReadLines=0.
 func (r *Registry) SetLinesRead(n int) { r.linesRead = n }
+
+// SetTruncated records that the last read_file call hit the byte cap.
+func (r *Registry) SetTruncated() { r.truncated = true }
+
+// ConsumeTruncated returns and clears the truncation flag.
+func (r *Registry) ConsumeTruncated() bool {
+	t := r.truncated
+	r.truncated = false
+	return t
+}
 
 // LastEdit returns the persisted record of the newest mutation, or nil if
 // nothing has been written yet.

@@ -28,7 +28,7 @@ func (l loopTools) Record(tool string, d agent.Decision)              {}
 func (l loopTools) Ask(ctx context.Context, c agent.ToolCall) agent.Decision {
 	return agent.AllowOnce
 }
-func (l loopTools) RunDetailed(ctx context.Context, name string, raw []byte) (agent.Outcome, error) {
+func (l loopTools) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
 	return l.reg.RunDetailed(ctx, name, raw)
 }
 

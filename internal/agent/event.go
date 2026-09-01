@@ -31,6 +31,7 @@ const (
 	Compact     EventType = "compact"
 	Rewind      EventType = "rewind"
 	EventEdit   EventType = "edit_record"
+	EventRead   EventType = "read_record"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.
@@ -50,9 +51,18 @@ type Event struct {
 	Decision  Decision    `json:"decision,omitempty"`
 	Err       string      `json:"err,omitempty"`
 	Edit      *EditRecord `json:"edit,omitempty"`
+	Read      *ReadRecord `json:"read,omitempty"`
 
 	// FirstKept is set on Compact only: the oldest Seq that survives.
 	FirstKept int `json:"first_kept,omitempty"`
+}
+
+// ReadRecord describes one read_file call. Truncated is true only when the
+// byte cap cut the file short — the model must be able to tell "full read"
+// from "partial read" from the event itself.
+type ReadRecord struct {
+	Path      string `json:"path"`
+	Truncated bool   `json:"truncated"`
 }
 
 // EditRecord is the persisted fingerprint of one file mutation. It is the
@@ -186,8 +196,9 @@ func Live(events []Event) []Event {
 // fields; a process cannot, because "failed" and "killed at 120s" are
 // different facts and the model must be able to tell them apart.
 type Outcome struct {
-	Text   string
-	OK     bool
-	Exit   int
-	Signal string
+	Text      string
+	OK        bool
+	Exit      int
+	Signal    string
+	Truncated bool // read_file set this: the byte cap cut the file short
 }

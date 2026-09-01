@@ -83,6 +83,17 @@ func RenderEvent(e agent.Event, width int) string {
 		}
 		return dim.Render(s)
 
+	case agent.EventRead:
+		// Summary only: the truncation tail is in the tool_result the model
+		// already saw; the screen just marks the fact.
+		if e.Read == nil {
+			return ""
+		}
+		if e.Read.Truncated {
+			return warn.Render("✂ " + e.Read.Path + " · مقروء جزئيًا")
+		}
+		return ""
+
 	case agent.TurnStart, agent.TurnEnd:
 		return ""
 	}

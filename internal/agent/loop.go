@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -231,6 +232,17 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 				}
 			}
 		}
+
+		// A truncated read is a fact the journal must carry: the model saw
+		// part of the file, and later replays must know that too.
+		if out.OK && c.Name == "read_file" && out.Truncated {
+			if eerr := l.emit(Event{Type: EventRead, Read: &ReadRecord{
+				Path:      pathOf(c.Input),
+				Truncated: true,
+			}}); eerr != nil {
+				return results, false, eerr
+			}
+		}
 	}
 	return results, false, nil
 }
@@ -248,12 +260,27 @@ func (l *Loop) exec(ctx context.Context, c provider.ToolCall) (out Outcome, err 
 		}
 	}()
 	if d, ok := l.Tools.(interface {
-		RunDetailed(context.Context, string, []byte) (Outcome, error)
+		RunDetailed(context.Context, string, json.RawMessage) (Outcome, error)
 	}); ok {
 		return d.RunDetailed(ctx, c.Name, c.Input)
 	}
 	txt, good, e := l.Tools.Run(ctx, c)
 	return Outcome{Text: txt, OK: good}, e
+}
+
+// pathOf pulls the path argument out of a tool call's raw JSON, for events
+// that want to name the file they touched. Returns "" if unparseable.
+func pathOf(raw []byte) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var a struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(raw, &a); err != nil {
+		return ""
+	}
+	return a.Path
 }
 
 // emit stamps identity and hands the event on. Seq and Parent are

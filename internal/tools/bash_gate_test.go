@@ -133,7 +133,7 @@ func (b bashLoopTools) Specs() []provider.ToolSpec { return b.reg.Specs() }
 func (b bashLoopTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
 	return b.reg.Run(ctx, c)
 }
-func (b bashLoopTools) RunDetailed(ctx context.Context, name string, raw []byte) (agent.Outcome, error) {
+func (b bashLoopTools) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
 	return b.reg.RunDetailed(ctx, name, raw)
 }
 
