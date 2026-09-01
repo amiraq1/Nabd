@@ -7,3 +7,4 @@
 - **Friction 2**: The banner in `main.go` was hardcoded to `nabd v0.2` and was not updated with the releases, causing confusion about the running version.
 قائمة الموديلات من /models هي كتالوج فقط ولا تعني الصلاحية للاستخدام، والصلاحية والقدرة على استدعاء الأدوات لا تُعرفان إلا بطلب فعلي.
 - **Friction 3**: الاستنساخ النظيف في /tmp والبناء منه هو الفحص الوحيد الذي يكشف أعطال غياب الملفات الهامة من المستودع (بسبب أخطاء .gitignore مثل قاعدة ag التي استبعدت مجلد cmd/ag بأكمله). هذا الفحص يستغرق دقيقة واحدة ويجب إجراؤه قبل أي وسم جديد.
+- **Friction 5**: The CLI lacks a -version flag, making it hard to verify the currently installed version.

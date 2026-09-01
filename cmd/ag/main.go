@@ -33,7 +33,13 @@ func main() {
 	speed := flag.Float64("speed", 1, "replay multiplier; 0 is instant")
 	sessDir := flag.String("dir", "", "session directory (default ~/.ag/sessions)")
 	cont := flag.Bool("continue", false, "resume the latest session")
+	showVer := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+
+	if *showVer {
+		fmt.Println(version)
+		return
+	}
 
 	if *replay != "" {
 		if err := doReplay(*replay, *speed); err != nil {
