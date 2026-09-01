@@ -37,9 +37,6 @@ func RenderEvent(e agent.Event, width int) string {
 	case agent.UserMsg:
 		return block("›", e.Text, width, bold)
 
-	case agent.TextDelta:
-		return block(" ", e.Text, width, lipgloss.NewStyle())
-
 	case agent.ToolStart:
 		return block("⚙", callLine(e.Call), width, lipgloss.NewStyle())
 

@@ -9,6 +9,7 @@ import (
 	"nabd/internal/agent"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // Runner is the loop, seen from the UI: one message in, events out.
@@ -26,6 +27,7 @@ type Chat struct {
 	events    <-chan agent.Event
 	width     int
 	input     string
+	buf       string
 	running   bool
 	cancel    context.CancelFunc
 	status    string
@@ -72,15 +74,29 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case evMsg:
 		e := agent.Event(msg)
+		if e.Type == agent.TextDelta {
+			m.buf += e.Text
+			return m, waitEvent(m.events)
+		}
 		switch e.Type {
 		case agent.PermAsk:
 			m.pending = e.Call
 		case agent.PermReply, agent.Interrupted, agent.RunEnd:
 			m.pending = nil
 		}
-		var cmds []tea.Cmd
+		var prints []string
+		if m.buf != "" {
+			prints = append(prints, block(" ", m.buf, m.width, lipgloss.NewStyle()))
+			m.buf = ""
+		}
 		if s := RenderEvent(e, m.width); s != "" {
-			cmds = append(cmds, tea.Println(s))
+			prints = append(prints, s)
+		}
+		var cmds []tea.Cmd
+		if len(prints) > 0 {
+			// One Println per Update: tea.Batch runs commands concurrently,
+			// so two Printlns would race for the terminal.
+			cmds = append(cmds, tea.Println(strings.Join(prints, "\n")))
 		}
 		cmds = append(cmds, waitEvent(m.events))
 		return m, tea.Batch(cmds...)

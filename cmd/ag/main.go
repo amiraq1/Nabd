@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -156,8 +155,12 @@ func doChat(dir string, cont bool) error {
 			fmt.Fprintf(&b, "%s %s — %s\n", mark, r.Rel, r.Note)
 		}
 		s := strings.TrimRight(b.String(), "\n")
-		loop.Note("/undo " + strconv.Itoa(n) + "\n" + s)
-		return s
+		// The journal is the single source of truth: emit the undo as a
+		// Notice so the event survives in session.jsonl and reaches the UI
+		// through the event channel. Returning "" keeps the status line from
+		// duplicating what the Notice renders.
+		loop.Note(fmt.Sprintf("/undo %d — %s", n, s))
+		return ""
 	}
 
 	chat.OnEdits = func() string {
