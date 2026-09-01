@@ -148,11 +148,6 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 
 		case provider.ChunkToolCall:
 			calls = append(calls, *c.Call)
-			if err := l.emit(Event{Type: ToolStart, Call: &ToolCall{
-				ID: c.Call.ID, Name: c.Call.Name, Args: c.Call.Input,
-			}}); err != nil {
-				return nil, "", err
-			}
 
 		case provider.ChunkStop:
 			stop = c.Stop
@@ -203,6 +198,10 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 			l.emit(Event{Type: ToolEnd, Call: &ac})
 			results = append(results, provider.ToolResult{ID: c.ID, Output: msg, IsErr: true})
 			continue
+		}
+
+		if err := l.emit(Event{Type: ToolStart, Call: &ac}); err != nil {
+			return results, false, err
 		}
 
 		start := time.Now()

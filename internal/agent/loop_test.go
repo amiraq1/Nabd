@@ -1,0 +1,109 @@
+package agent
+
+import (
+	"context"
+	"testing"
+	"nabd/internal/provider"
+)
+
+type mockProvider struct {
+	chunks []provider.Chunk
+}
+
+func (m mockProvider) Name() string { return "mock" }
+
+func (m mockProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Chunk, error) {
+	ch := make(chan provider.Chunk, len(m.chunks))
+	for _, c := range m.chunks {
+		ch <- c
+	}
+	close(ch)
+	return ch, nil
+}
+
+type mockTools struct {
+	allowed bool
+}
+
+func (m mockTools) Specs() []provider.ToolSpec { return nil }
+func (m mockTools) Check(tool string) (Verdict, string) {
+	if m.allowed {
+		return VerdictAsk, ""
+	}
+	return VerdictDeny, "mock deny"
+}
+func (m mockTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
+	return "mock output", true, nil
+}
+func (m mockTools) Record(string, Decision) {}
+func (m mockTools) Ask(ctx context.Context, c ToolCall) Decision {
+	if m.allowed {
+		return AllowOnce
+	}
+	return Deny
+}
+
+type mockSink struct {
+	fn func(Event) error
+}
+
+func (m mockSink) Emit(e Event) error {
+	if m.fn != nil {
+		return m.fn(e)
+	}
+	return nil
+}
+
+func TestToolStartEmission(t *testing.T) {
+	tests := []struct {
+		name      string
+		allowed   bool
+		wantStart bool
+	}{
+		{"RejectedTool", false, false},
+		{"AcceptedTool", true, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := &Loop{
+				Provider: mockProvider{
+					chunks: []provider.Chunk{
+						{Kind: provider.ChunkToolCall, Call: &provider.ToolCall{ID: "call_1", Name: "test_tool"}},
+						{Kind: provider.ChunkStop, Stop: "tool_calls"},
+					},
+				},
+				Tools:  mockTools{allowed: tt.allowed},
+				Budget: &Budget{},
+				Gate:   &mockTools{allowed: tt.allowed},
+				Human:  &mockTools{allowed: tt.allowed},
+			}
+
+			var events []Event
+			l.Sink = mockSink{fn: func(e Event) error {
+				events = append(events, e)
+				return nil
+			}}
+
+			_ = l.Run(context.Background(), "test")
+
+			startSeen := false
+			replySeen := false
+			for _, e := range events {
+				if e.Type == PermReply {
+					replySeen = true
+				}
+				if e.Type == ToolStart {
+					startSeen = true
+					if tt.allowed && !replySeen {
+						t.Errorf("ToolStart emitted before PermReply for accepted tool")
+					}
+				}
+			}
+
+			if startSeen != tt.wantStart {
+				t.Errorf("ToolStart emission = %v, want %v", startSeen, tt.wantStart)
+			}
+		})
+	}
+}
