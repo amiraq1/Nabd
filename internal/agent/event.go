@@ -65,6 +65,11 @@ type EditRecord struct {
 	HashAfter  string `json:"hash_after"`
 	Patch      string `json:"patch"`
 	ReadLines  int    `json:"read_lines"`
+	// BlobBefore/BlobAfter are the shadow's content keys (git oid or
+	// s256:…). They are what a restarted /undo needs to pull content back;
+	// the SHA-256 hashes alone cannot address git's object store.
+	BlobBefore string `json:"blob_before,omitempty"`
+	BlobAfter  string `json:"blob_after,omitempty"`
 }
 
 // ToolCall carries both the request and its outcome.

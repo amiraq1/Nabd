@@ -94,9 +94,11 @@ func commit(root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []
 // HashBefore is empty only when the file did not exist before (creation).
 func buildRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLines int) *agent.EditRecord {
 	rec := &agent.EditRecord{
-		Path:      after.Rel,
-		HashAfter: sha256hex(data),
-		ReadLines: readLines,
+		Path:       after.Rel,
+		HashAfter:  sha256hex(data),
+		ReadLines:  readLines,
+		BlobAfter:  after.Blob,
+		BlobBefore: before.Blob,
 	}
 	if !before.Absent {
 		if b, err := sh.Read(before.Blob); err == nil {

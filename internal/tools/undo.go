@@ -4,8 +4,12 @@
 package tools
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"os"
 
+	"nabd/internal/agent"
 	"nabd/internal/snap"
 )
 
@@ -39,6 +43,69 @@ func (e *editLog) count() int {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return len(e.l)
+}
+
+// PersistedUndo rewinds edits recorded in the journal (not the in-memory
+// log). It is what makes /undo survive a process restart: the records come
+// from session history, content comes from the shadow, and the HashAfter
+// check refuses to overwrite a file that changed since the agent wrote it.
+// recs must be the live branch's edit records, newest first.
+func (r *Registry) PersistedUndo(recs []*agent.EditRecord, n int) []UndoResult {
+	var out []UndoResult
+	for i := 0; i < n && i < len(recs); i++ {
+		rec := recs[i]
+		if rec == nil {
+			continue
+		}
+		res := r.rewindRecord(rec)
+		out = append(out, res)
+		if !res.OK {
+			break
+		}
+	}
+	return out
+}
+
+// rewindRecord restores one persisted record: verify the file still matches
+// HashAfter, then put BlobBefore back through the shadow.
+func (r *Registry) rewindRecord(rec *agent.EditRecord) UndoResult {
+	abs, err := r.root.Resolve(rec.Path)
+	if err != nil {
+		return UndoResult{Rel: rec.Path, Note: err.Error()}
+	}
+	now, err := r.sh.Capture(abs)
+	if err != nil {
+		return UndoResult{Rel: rec.Path, Note: err.Error()}
+	}
+	// The file must still be exactly as the agent left it. If a human
+	// touched it since, restoring would silently destroy their work.
+	if rec.HashAfter != "" && sha256hexOf(now.Blob, r.sh) != rec.HashAfter {
+		return UndoResult{Rel: rec.Path, Note: "تغيّر بعد كتابة الوكيل؛ لن أدهس عملك"}
+	}
+	if rec.BlobBefore == "" {
+		// Creation: the "before" was absence.
+		if err := os.Remove(abs); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return UndoResult{Rel: rec.Path, Note: err.Error()}
+		}
+		return UndoResult{Rel: rec.Path, OK: true, Note: "حُذف (write_file)"}
+	}
+	if err := r.sh.Restore(snap.State{Rel: rec.Path, Blob: rec.BlobBefore}); err != nil {
+		return UndoResult{Rel: rec.Path, Note: err.Error()}
+	}
+	return UndoResult{Rel: rec.Path, OK: true, Note: "أُعيد (write_file)"}
+}
+
+// sha256hexOf hashes content behind a shadow blob id, or "" if unreadable.
+func sha256hexOf(blob string, sh *snap.Shadow) string {
+	if blob == "" {
+		return ""
+	}
+	b, err := sh.Read(blob)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
 }
 
 // Undo rewinds up to n edits, newest first, and stops at the first refusal:

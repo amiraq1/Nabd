@@ -70,6 +70,24 @@ func doChat(dir string, cont bool) error {
 		return err
 	}
 
+	// Resolve the previous session BEFORE creating the new journal file:
+	// latestSession() picks the newest *.jsonl, and the new file would
+	// otherwise shadow the one we actually want to continue.
+	var prevEvs []agent.Event
+	if cont {
+		prev, err := latestSession()
+		if err != nil {
+			return err
+		}
+		evs, err := store.Read(prev)
+		if err != nil {
+			return err
+		}
+		prevEvs = agent.Live(evs)
+		fmt.Printf("استأنفتُ %s · %d حدثًا حيًّا من %d\n",
+			filepath.Base(prev), len(prevEvs), len(evs))
+	}
+
 	path, err := sessionPath(dir)
 	if err != nil {
 		return err
@@ -105,18 +123,7 @@ func doChat(dir string, cont bool) error {
 		Human:    ap,
 	}
 	if cont {
-		prev, err := latestSession()
-		if err != nil {
-			return err
-		}
-		evs, err := store.Read(prev)
-		if err != nil {
-			return err
-		}
-		live := agent.Live(evs)
-		loop.Seed(live)
-		fmt.Printf("استأنفتُ %s · %d حدثًا حيًّا من %d\n",
-			filepath.Base(prev), len(live), len(evs))
+		loop.Seed(prevEvs)
 	}
 
 	cwd, _ := os.Getwd()
@@ -142,8 +149,12 @@ func doChat(dir string, cont bool) error {
 	}
 
 	chat.OnUndo = func(n int) string {
+		// The journal is the source of truth, not the in-memory edit log:
+		// after a restart (--continue) the edit log is empty, but the
+		// edit_record events from the seeded session are still there.
+		recs := editRecords(agent.Live(loop.Hist()))
 		var b strings.Builder
-		for _, r := range reg.Undo(n) {
+		for _, r := range reg.PersistedUndo(recs, n) {
 			mark := "✗"
 			if r.OK {
 				mark = "✓"
@@ -316,4 +327,17 @@ func latestSession() (string, error) {
 		return "", fmt.Errorf("لا جلسات سابقة")
 	}
 	return filepath.Join(dir, last), nil
+}
+
+// editRecords pulls the persisted edit fingerprints out of a live branch,
+// newest first. This is what lets /undo work after a restart: the records
+// survive in the journal even though the in-memory edit log is gone.
+func editRecords(evs []agent.Event) []*agent.EditRecord {
+	var out []*agent.EditRecord
+	for i := len(evs) - 1; i >= 0; i-- {
+		if evs[i].Type == agent.EventEdit && evs[i].Edit != nil {
+			out = append(out, evs[i].Edit)
+		}
+	}
+	return out
 }
