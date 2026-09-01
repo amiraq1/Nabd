@@ -190,9 +190,10 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
 	var (
-		stop    string
-		pending = map[int]*pendingCall{}
-		order   []int
+		stop         string
+		promptTokens int
+		pending      = map[int]*pendingCall{}
+		order        []int
 	)
 
 	emit := func(c Chunk) bool {
@@ -224,6 +225,9 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 		}
 		if ev.Error != nil && ev.Error.Message != "" {
 			return 0, errors.New(ev.Error.Message)
+		}
+		if ev.Usage != nil && ev.Usage.PromptTokens > 0 {
+			promptTokens = ev.Usage.PromptTokens
 		}
 		if len(ev.Choices) == 0 {
 			continue
@@ -281,7 +285,7 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 		}
 	}
 
-	emit(Chunk{Kind: ChunkStop, Stop: stop})
+	emit(Chunk{Kind: ChunkStop, Stop: stop, PromptTokens: promptTokens})
 	return 0, nil
 }
 
@@ -318,6 +322,9 @@ type oaiChunk struct {
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
+	Usage *struct {
+		PromptTokens int `json:"prompt_tokens"`
+	} `json:"usage"`
 }
 
 // --- request encoding ---

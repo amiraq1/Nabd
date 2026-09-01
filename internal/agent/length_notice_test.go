@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -11,11 +12,10 @@ import (
 	"nabd/internal/provider"
 )
 
-// TestLengthNoticeEmitted proves that when the provider stops with
-// finish_reason=length (which MaxTok=1024 makes likely for long answers),
-// a Notice reaches the event channel — the user must not get a silently
-// truncated answer.
-func TestLengthNoticeEmitted(t *testing.T) {
+// TestLengthCutMarkedInMessage proves two things: a length-cut answer emits
+// a Notice, AND the stored assistant text carries a visible cut marker —
+// so the next turn cannot build on a truncated answer as if it were whole.
+func TestLengthCutMarkedInMessage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Write([]byte(`data: {"choices":[{"delta":{"content":"نص طويل"},"finish_reason":""}]}` + "\n\n"))
@@ -29,13 +29,22 @@ func TestLengthNoticeEmitted(t *testing.T) {
 
 	var mu sync.Mutex
 	var notices []string
+	var events []agent.Event
 	l := &agent.Loop{
 		Provider: prov,
 		Tools:    noTools{},
 		Budget:   agent.NewBudget(),
 		Gate:     noTools{},
 		Human:    noTools{},
-		Sink:     sinkFn3(func(e agent.Event) error { mu.Lock(); defer mu.Unlock(); if e.Type == agent.Notice { notices = append(notices, e.Text) }; return nil }),
+		Sink: sinkFn3(func(e agent.Event) error {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, e)
+			if e.Type == agent.Notice {
+				notices = append(notices, e.Text)
+			}
+			return nil
+		}),
 	}
 	if err := l.Run(context.Background(), "اكتب طويلاً"); err != nil {
 		t.Fatal(err)
@@ -44,9 +53,20 @@ func TestLengthNoticeEmitted(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(notices) != 1 {
-		t.Fatalf("Notice count = %d, want exactly 1 for length-truncated answer", len(notices))
+		t.Fatalf("Notice count = %d, want exactly 1", len(notices))
+	}
+	// The stored assistant message must contain the cut marker.
+	var assistant string
+	for _, m := range agent.Messages(agent.Live(events)) {
+		if m.Role == provider.Assistant && m.Text != "" {
+			assistant += m.Text
+		}
+	}
+	if !strings.Contains(assistant, "مُقتطَع") {
+		t.Errorf("assistant text lacks the cut marker: %q", assistant)
 	}
 	t.Logf("notice: %q", notices[0])
+	t.Logf("assistant text: %q", assistant)
 }
 
 type sinkFn3 func(agent.Event) error

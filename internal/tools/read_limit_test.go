@@ -136,20 +136,26 @@ func TestEnvMaxReadBounds(t *testing.T) {
 	}
 }
 
-// TestDefaultMaxReadDerivesFromMaxTok: the read cap must move when
+// TestDefaultMaxReadDerivesFromMaxTok: the derived read cap must move when
 // NABD_MAX_TOKENS moves — a single derivation, not two hardcoded numbers.
+// The shipped default stays at the live-calibrated 3072 until the derived
+// value is measured on disk (STEP 1 follow-up).
 func TestDefaultMaxReadDerivesFromMaxTok(t *testing.T) {
-	// NABD_MAX_READ unset; the cap comes from the derivation.
+	// NABD_MAX_READ unset; the derivation recomputes with MaxTok.
 	t.Setenv("NABD_MAX_READ", "")
 	t.Setenv("NABD_MAX_TOKENS", "")
-	at1024 := defaultMaxRead()
+	at1024 := defaultMaxReadDerived()
 
 	t.Setenv("NABD_MAX_TOKENS", "2048")
-	at2048 := defaultMaxRead()
+	at2048 := defaultMaxReadDerived()
 
 	// Higher output reservation → smaller read cap.
 	if at2048 >= at1024 {
 		t.Errorf("derivation must shrink when MaxTok grows: MaxTok=1024→%d, MaxTok=2048→%d", at1024, at2048)
 	}
-	t.Logf("defaultMaxRead at MaxTok=1024: %d bytes; at MaxTok=2048: %d bytes", at1024, at2048)
+	// The shipped default is the conservative live-calibrated value.
+	if got := defaultMaxRead(); got != 3072 {
+		t.Errorf("defaultMaxRead() = %d, want 3072 (live-calibrated)", got)
+	}
+	t.Logf("derived at MaxTok=1024: %d bytes; at 2048: %d; shipped default: %d", at1024, at2048, defaultMaxRead())
 }

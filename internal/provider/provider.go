@@ -65,6 +65,10 @@ type Chunk struct {
 	Stop      string // end_turn, tool_use, max_tokens, ...
 	Err       error
 	Retryable bool
+	// PromptTokens is the provider's measured input count for the request,
+	// from usage.prompt_tokens. Zero when the provider does not report it.
+	// Carried on the final chunk of a turn.
+	PromptTokens int
 }
 
 type Request struct {

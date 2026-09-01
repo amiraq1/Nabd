@@ -153,6 +153,11 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 
 		case provider.ChunkStop:
 			stop = c.Stop
+			if c.PromptTokens > 0 {
+				// Fold the provider's measured input count into the budget
+				// ratio — this is the calibration that was dead until now.
+				l.Budget.Calibrate(c.PromptTokens, l.Budget.Estimate(ms))
+			}
 
 		case provider.ChunkError:
 			// Drain so the provider goroutine is never left blocked.
@@ -165,6 +170,14 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 	// Record the assistant turn even if it was pure tool calls: the next
 	// request must contain the tool_use blocks it is answering.
 	if text != "" || len(calls) > 0 {
+	}
+	// A length-cut answer must carry the marker inside the stored text, not
+	// only in a Notice: the next turn reads the assistant message and would
+	// otherwise build on a truncated answer as if it were complete.
+	if stop == "max_tokens" && text != "" {
+		if err := l.emit(Event{Type: TextDelta, Text: "\n[مُقتطَع: بلغ حدّ الطول — اطلب «أكمل»]" }); err != nil {
+			return nil, "", err
+		}
 	}
 	if err := l.emit(Event{Type: TurnEnd}); err != nil {
 		return nil, "", err

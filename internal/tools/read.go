@@ -51,8 +51,12 @@ func readMaxTokens() int {
 }
 
 // defaultMaxRead derives the read cap from the input budget (D2). It moves
-// when MaxTok moves; it is not a second hardcoded calibration.
-func defaultMaxRead() int {
+// when MaxTok moves. IMPORTANT: the derived value is NOT the default —
+// see defaultMaxReadBelow. The 3072 default below was calibrated on live
+// observation; the derivation (10441 at MaxTok=1024) is a candidate that
+// must be requested explicitly via NABD_MAX_READ until the measured
+// overhead and bytes/token replace the estimates (STEP 1 follow-up).
+func defaultMaxReadDerived() int {
 	safeInput := tpmLimit - readMaxTokens() - readOverhead
 	if safeInput < 0 {
 		safeInput = 0
@@ -62,6 +66,13 @@ func defaultMaxRead() int {
 		return minMaxRead
 	}
 	return n
+}
+
+// defaultMaxRead is what NABD_MAX_READ falls back to when unset. Kept at
+// the live-calibrated 3072: the derived 10441 rests on estimated overhead
+// and bytes/token, and no default ships without a disk measurement.
+func defaultMaxRead() int {
+	return 3072
 }
 
 // maxReadBytes caps a single read_file call. Read once at startup from

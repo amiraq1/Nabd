@@ -8,6 +8,36 @@ import (
 	"testing"
 )
 
+// TestUsagePromptTokensParsed proves the provider surfaces usage.prompt_tokens
+// on the final chunk, so the budget can be calibrated from a measured value
+// instead of an estimate.
+func TestUsagePromptTokensParsed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte(`data: {"choices":[{"delta":{"content":"x"},"finish_reason":""}]}` + "\n\n"))
+		w.Write([]byte(`data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1234}}` + "\n\n"))
+		w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	o := &OpenAICompat{Key: "k", Model: "m", BaseURL: srv.URL, Client: &http.Client{}}
+	ch, err := o.Stream(context.Background(), Request{
+		Messages: []Message{{Role: User, Text: "مرحبا"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int
+	for c := range ch {
+		if c.PromptTokens > 0 {
+			got = c.PromptTokens
+		}
+	}
+	if got != 1234 {
+		t.Errorf("PromptTokens = %d, want 1234", got)
+	}
+}
+
 // TestCaptureRequestMaxTokens captures the actual request body the OpenAI
 // compat provider sends, proving the effective max_tokens value on the
 // wire. Authorization is never logged — the header is dropped.
