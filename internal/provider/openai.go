@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -73,8 +74,28 @@ func (o *OpenAICompat) Stream(ctx context.Context, req Request) (<-chan Chunk, e
 func (o *OpenAICompat) run(ctx context.Context, body []byte, out chan<- Chunk) {
 	defer close(out)
 
+	var sent atomic.Bool
 	for attempt := 1; ; attempt++ {
-		sent, retryAfter, err := o.attempt(ctx, body, out)
+		// A first-byte deadline is safe precisely while sent is false: nothing
+		// reached the reader, so cancelling and retrying cannot duplicate text.
+		// Once the first chunk lands, the stream may idle as long as it likes.
+		firstByte := 25 * time.Second
+		actx, cancel := context.WithCancel(ctx)
+		go func() {
+			t := time.NewTimer(firstByte)
+			defer t.Stop()
+			select {
+			case <-t.C:
+				if !sent.Load() {
+					cancel() // silent retry, then a clear message
+				}
+			case <-actx.Done():
+			}
+		}()
+
+		retryAfter, err := o.attempt(actx, body, out, &sent)
+		cancel()
+
 		if err == nil {
 			return
 		}
@@ -82,8 +103,11 @@ func (o *OpenAICompat) run(ctx context.Context, body []byte, out chan<- Chunk) {
 			out <- Chunk{Kind: ChunkError, Err: ctx.Err()}
 			return
 		}
-		if sent || attempt >= maxAttempts || !transient(err) {
-			out <- Chunk{Kind: ChunkError, Err: err, Retryable: !sent}
+		if sent.Load() || attempt >= maxAttempts || !transient(err) {
+			if attempt >= maxAttempts && !sent.Load() && errors.Is(err, context.Canceled) {
+				err = fmt.Errorf("الخادم لم يبدأ الردّ خلال 25 ثانية — جرّب NABD_MODEL آخر")
+			}
+			out <- Chunk{Kind: ChunkError, Err: err, Retryable: !sent.Load()}
 			return
 		}
 		select {
@@ -95,11 +119,11 @@ func (o *OpenAICompat) run(ctx context.Context, body []byte, out chan<- Chunk) {
 	}
 }
 
-func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chunk) (bool, time.Duration, error) {
+func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chunk, sent *atomic.Bool) (time.Duration, error) {
 	hr, err := http.NewRequestWithContext(ctx, "POST",
 		strings.TrimRight(o.BaseURL, "/")+"/chat/completions", strings.NewReader(string(body)))
 	if err != nil {
-		return false, 0, err
+		return 0, err
 	}
 	hr.Header.Set("authorization", "Bearer "+o.Key)
 	hr.Header.Set("content-type", "application/json")
@@ -107,30 +131,29 @@ func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chun
 
 	resp, err := o.Client.Do(hr)
 	if err != nil {
-		return false, 0, err
+		return 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
-			return false, 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).\nاعرض المتاح:\n  curl -s %s/models -H \"Authorization: Bearer $NVIDIA_API_KEY\" | jq -r '.data[].id'\nثم: export NABD_MODEL=<id>", o.Model, resp.StatusCode, o.BaseURL)
+			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).\nاعرض المتاح:\n  curl -s %s/models -H \"Authorization: Bearer $NVIDIA_API_KEY\" | jq -r '.data[].id'\nثم: export NABD_MODEL=<id>", o.Model, resp.StatusCode, o.BaseURL)
 		}
-		return false, parseRetryAfter(resp.Header.Get("retry-after")),
+		return parseRetryAfter(resp.Header.Get("retry-after")),
 			&httpError{Status: resp.StatusCode, Body: apiMessage(msg)}
 	}
-	return o.readSSE(ctx, resp.Body, out)
+	return o.readSSE(ctx, resp.Body, out, sent)
 }
 
 // readSSE accumulates tool calls by index. Unlike Anthropic there is no
 // block-stop event, so a call is only complete when the stream says the
 // turn finished -- which is why every call is emitted at the end.
-func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chunk) (bool, time.Duration, error) {
+func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chunk, sent *atomic.Bool) (time.Duration, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
 	var (
-		sent    bool
 		stop    string
 		pending = map[int]*pendingCall{}
 		order   []int
@@ -139,7 +162,7 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 	emit := func(c Chunk) bool {
 		select {
 		case out <- c:
-			sent = true
+			sent.Store(true)
 			return true
 		case <-ctx.Done():
 			return false
@@ -161,10 +184,10 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 
 		var ev oaiChunk
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			return sent, 0, fmt.Errorf("bad sse payload: %w", err)
+			return 0, fmt.Errorf("bad sse payload: %w", err)
 		}
 		if ev.Error != nil && ev.Error.Message != "" {
-			return sent, 0, errors.New(ev.Error.Message)
+			return 0, errors.New(ev.Error.Message)
 		}
 		if len(ev.Choices) == 0 {
 			continue
@@ -173,7 +196,7 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 
 		if ch.Delta.Content != "" {
 			if !emit(Chunk{Kind: ChunkText, Text: ch.Delta.Content}) {
-				return sent, 0, ctx.Err()
+				return 0, ctx.Err()
 			}
 		}
 		// Reasoning models stream their scratchpad separately. It is not
@@ -201,7 +224,7 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return sent, 0, err
+		return 0, err
 	}
 
 	for i, idx := range order {
@@ -211,19 +234,19 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 			raw = json.RawMessage("{}")
 		}
 		if !json.Valid(raw) {
-			return sent, 0, fmt.Errorf("tool %s: truncated arguments", p.name)
+			return 0, fmt.Errorf("tool %s: truncated arguments", p.name)
 		}
 		if p.id == "" {
 			p.id = fmt.Sprintf("call_%d", i)
 		}
 		if !emit(Chunk{Kind: ChunkToolCall,
 			Call: &ToolCall{ID: p.id, Name: p.name, Input: raw}}) {
-			return sent, 0, ctx.Err()
+			return 0, ctx.Err()
 		}
 	}
 
 	emit(Chunk{Kind: ChunkStop, Stop: stop})
-	return sent, 0, nil
+	return 0, nil
 }
 
 // normaliseStop maps OpenAI reasons onto the vocabulary the loop already

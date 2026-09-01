@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -63,8 +64,25 @@ func (a *Anthropic) Stream(ctx context.Context, req Request) (<-chan Chunk, erro
 func (a *Anthropic) run(ctx context.Context, body []byte, out chan<- Chunk) {
 	defer close(out)
 
+	var sent atomic.Bool
 	for attempt := 1; ; attempt++ {
-		sent, retryAfter, err := a.attempt(ctx, body, out)
+		firstByte := 25 * time.Second
+		actx, cancel := context.WithCancel(ctx)
+		go func() {
+			t := time.NewTimer(firstByte)
+			defer t.Stop()
+			select {
+			case <-t.C:
+				if !sent.Load() {
+					cancel()
+				}
+			case <-actx.Done():
+			}
+		}()
+
+		retryAfter, err := a.attempt(actx, body, out, &sent)
+		cancel()
+
 		if err == nil {
 			return
 		}
@@ -72,8 +90,11 @@ func (a *Anthropic) run(ctx context.Context, body []byte, out chan<- Chunk) {
 			out <- Chunk{Kind: ChunkError, Err: ctx.Err()}
 			return
 		}
-		if sent || attempt >= maxAttempts || !transient(err) {
-			out <- Chunk{Kind: ChunkError, Err: err, Retryable: !sent}
+		if sent.Load() || attempt >= maxAttempts || !transient(err) {
+			if attempt >= maxAttempts && !sent.Load() && errors.Is(err, context.Canceled) {
+				err = fmt.Errorf("الخادم لم يبدأ الردّ خلال 25 ثانية — جرّب NABD_MODEL آخر")
+			}
+			out <- Chunk{Kind: ChunkError, Err: err, Retryable: !sent.Load()}
 			return
 		}
 		wait := backoff(attempt, retryAfter)
@@ -88,10 +109,10 @@ func (a *Anthropic) run(ctx context.Context, body []byte, out chan<- Chunk) {
 
 // attempt performs one request. sent reports whether any chunk was
 // forwarded, which is what makes the failure unrecoverable.
-func (a *Anthropic) attempt(ctx context.Context, body []byte, out chan<- Chunk) (sent bool, retryAfter time.Duration, err error) {
+func (a *Anthropic) attempt(ctx context.Context, body []byte, out chan<- Chunk, sent *atomic.Bool) (retryAfter time.Duration, err error) {
 	hr, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(body))
 	if err != nil {
-		return false, 0, err
+		return 0, err
 	}
 	hr.Header.Set("x-api-key", a.Key)
 	hr.Header.Set("anthropic-version", apiVersion)
@@ -100,29 +121,28 @@ func (a *Anthropic) attempt(ctx context.Context, body []byte, out chan<- Chunk) 
 
 	resp, err := a.Client.Do(hr)
 	if err != nil {
-		return false, 0, err
+		return 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
-			return false, 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).", a.Model, resp.StatusCode)
+			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).", a.Model, resp.StatusCode)
 		}
 		ra := parseRetryAfter(resp.Header.Get("retry-after"))
-		return false, ra, &httpError{Status: resp.StatusCode, Body: apiMessage(msg)}
+		return ra, &httpError{Status: resp.StatusCode, Body: apiMessage(msg)}
 	}
-	return a.readSSE(ctx, resp.Body, out)
+	return a.readSSE(ctx, resp.Body, out, sent)
 }
 
 // readSSE walks the event stream. Tool inputs arrive as JSON fragments
 // across many deltas, so a call is only emitted once its block closes.
-func (a *Anthropic) readSSE(ctx context.Context, r io.Reader, out chan<- Chunk) (bool, time.Duration, error) {
+func (a *Anthropic) readSSE(ctx context.Context, r io.Reader, out chan<- Chunk, sent *atomic.Bool) (time.Duration, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
 	var (
-		sent    bool
 		pending = map[int]*pendingCall{}
 		stop    string
 	)
@@ -130,7 +150,7 @@ func (a *Anthropic) readSSE(ctx context.Context, r io.Reader, out chan<- Chunk) 
 	emit := func(c Chunk) bool {
 		select {
 		case out <- c:
-			sent = true
+			sent.Store(true)
 			return true
 		case <-ctx.Done():
 			return false
@@ -149,7 +169,7 @@ func (a *Anthropic) readSSE(ctx context.Context, r io.Reader, out chan<- Chunk) 
 
 		var ev sseEvent
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
-			return sent, 0, fmt.Errorf("bad sse payload: %w", err)
+			return 0, fmt.Errorf("bad sse payload: %w", err)
 		}
 
 		switch ev.Type {
@@ -168,7 +188,7 @@ func (a *Anthropic) readSSE(ctx context.Context, r io.Reader, out chan<- Chunk) 
 			switch ev.Delta.Type {
 			case "text_delta":
 				if ev.Delta.Text != "" && !emit(Chunk{Kind: ChunkText, Text: ev.Delta.Text}) {
-					return sent, 0, ctx.Err()
+					return 0, ctx.Err()
 				}
 			case "input_json_delta":
 				if p := pending[ev.Index]; p != nil {
@@ -187,11 +207,11 @@ func (a *Anthropic) readSSE(ctx context.Context, r io.Reader, out chan<- Chunk) 
 				raw = json.RawMessage("{}")
 			}
 			if !json.Valid(raw) {
-				return sent, 0, fmt.Errorf("tool %s: truncated arguments", p.name)
+				return 0, fmt.Errorf("tool %s: truncated arguments", p.name)
 			}
 			c := &ToolCall{ID: p.id, Name: p.name, Input: raw}
 			if !emit(Chunk{Kind: ChunkToolCall, Call: c}) {
-				return sent, 0, ctx.Err()
+				return 0, ctx.Err()
 			}
 
 		case "message_delta":
@@ -201,21 +221,21 @@ func (a *Anthropic) readSSE(ctx context.Context, r io.Reader, out chan<- Chunk) 
 
 		case "message_stop":
 			emit(Chunk{Kind: ChunkStop, Stop: stop})
-			return sent, 0, nil
+			return 0, nil
 
 		case "error":
 			m := "stream error"
 			if ev.Error != nil && ev.Error.Message != "" {
 				m = ev.Error.Message
 			}
-			return sent, 0, errors.New(m)
+			return 0, errors.New(m)
 		}
 	}
 	if err := sc.Err(); err != nil {
-		return sent, 0, err
+		return 0, err
 	}
 	// Stream ended without message_stop: the connection dropped.
-	return sent, 0, io.ErrUnexpectedEOF
+	return 0, io.ErrUnexpectedEOF
 }
 
 type pendingCall struct {
