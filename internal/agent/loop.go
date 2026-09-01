@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -87,6 +89,14 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 				_ = l.emit(Event{Type: Interrupted, Text: "ctrl+c"})
 				return nil // an interruption is an outcome, not a failure
 			}
+			// A 413 on Groq is a per-minute TPM violation, not a final
+			// failure: waiting a minute resolves it. The human must know,
+			// and the requested count N goes into the journal so every
+			// future failure feeds the budget equations.
+			if msg, n, ok := tpmLimitNotice(err); ok {
+				_ = l.emit(Event{Type: Notice, Text: msg})
+				_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf("سقف الدقيقة: 8000 · المطلوب %d · انتظر ثم أعد", n)})
+			}
 			_ = l.emit(Event{Type: RunError, Err: err.Error()})
 			return err
 		}
@@ -156,7 +166,12 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 			if c.PromptTokens > 0 {
 				// Fold the provider's measured input count into the budget
 				// ratio — this is the calibration that was dead until now.
-				l.Budget.Calibrate(c.PromptTokens, l.Budget.Estimate(ms))
+				// The adopted ratio is journaled when it moves: the budget
+				// is session-varying state, and the log must show which
+				// budget the agent worked under.
+				if l.Budget.Calibrate(c.PromptTokens, l.Budget.Estimate(ms)) {
+					_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf("عُدّل معامل السياق إلى %.2f (مقاس: %d رمزًا)", l.Budget.Ratio(), c.PromptTokens)})
+				}
 			}
 
 		case provider.ChunkError:
@@ -173,9 +188,11 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 	}
 	// A length-cut answer must carry the marker inside the stored text, not
 	// only in a Notice: the next turn reads the assistant message and would
-	// otherwise build on a truncated answer as if it were complete.
+	// otherwise build on a truncated answer as if it were complete. The
+	// marker sits on its own line, fenced by blank lines, so it never lands
+	// inside a code block that the cut may have opened.
 	if stop == "max_tokens" && text != "" {
-		if err := l.emit(Event{Type: TextDelta, Text: "\n[مُقتطَع: بلغ حدّ الطول — اطلب «أكمل»]" }); err != nil {
+		if err := l.emit(Event{Type: TextDelta, Text: "\n\n[مُقتطَع: بلغ حدّ الطول — اطلب «أكمل»]\n\n" }); err != nil {
 			return nil, "", err
 		}
 	}
@@ -280,6 +297,28 @@ func (l *Loop) exec(ctx context.Context, c provider.ToolCall) (out Outcome, err 
 	}
 	txt, good, e := l.Tools.Run(ctx, c)
 	return Outcome{Text: txt, OK: good}, e
+}
+
+// tpmLimitNotice detects a per-minute TPM violation (Groq reports it as
+// http 413 with a "Requested N" count) and returns a human Notice plus N.
+// The provider error is unexported, so detection is by message shape — the
+// same shape the journal has recorded across 7 sessions.
+func tpmLimitNotice(err error) (string, int, bool) {
+	msg := err.Error()
+	if !strings.Contains(msg, "tokens per minute (TPM)") && !strings.Contains(msg, "http 413") {
+		return "", 0, false
+	}
+	n := 0
+	if i := strings.Index(msg, "Requested "); i >= 0 {
+		rest := msg[i+len("Requested "):]
+		if j := strings.IndexAny(rest, ", \n"); j >= 0 {
+			rest = rest[:j]
+		}
+		if v, e := strconv.Atoi(rest); e == nil {
+			n = v
+		}
+	}
+	return "بلغ حدّ الرموز في الدقيقة (TPM) — انتظر دقيقة ثم أعد", n, true
 }
 
 // pathOf pulls the path argument out of a tool call's raw JSON, for events

@@ -17,23 +17,28 @@ const (
 	maxOutBytes  = 48 * 1024 // what one tool result may cost in context
 	maxLines     = 1200
 	maxLineRunes = 300 // a minified bundle must not eat the whole budget
-	// Read budget derivation (STEP 1/8, written out):
-	//   tpmLimit      = 8000 tokens/min  (Groq key, measured live)
-	//   maxTok        = NABD_MAX_TOKENS  (output reservation; default 1024)
-	//   overhead      = system + history + tool framing ≈ 450 tokens (estimate)
-	//   safe_input    = tpmLimit − maxTok − overhead
-	//   bytesPerToken ≈ 3.2 (Arabic worst case: 1.6 runes/token × 2 bytes/rune)
-	//   safety        = 0.5 (leave half the budget for conversation growth)
-	//   defaultMaxRead = safe_input × bytesPerToken × safety
-	// Recomputes when NABD_MAX_TOKENS changes; a single source, not two
-	// hardcoded numbers. The 3 KiB legacy value came from the same math at
-	// MaxTok=4096: (8000−4096−450)×3.2×0.5 ≈ 5526 → clamped by live 413s
-	// down to 3072. With MaxTok=1024 the budget frees up accordingly.
-	tpmLimit     = 8000
-	maxTokEnv    = "NABD_MAX_TOKENS"
+	// Read budget derivation (STEP 1/8), written out:
+	//   tpmLimit   = 8000 tokens/min  (Groq key, measured live from 7×413)
+	//   maxTok     = NABD_MAX_TOKENS  (output reservation; default 1024)
+	//   overhead   = 2210 tokens  (MEASURED from two 413 sessions: system
+	//                prompt + tool schemas + message framing; the old 450
+	//                estimate was wrong by 5×)
+	//   bytesPerTok = 2.41  (MEASURED: 4121 read bytes over 1709 tokens
+	//                between sessions 203320 and 203954)
+	//   roundsPerMin = 2  (tool round + answer round per turn; the TPM cap
+	//                is per-minute across all requests, so the per-request
+	//                budget divides by the expected request count)
+	//   safety     = 0.5
+	//   safe_input_per_request = (tpmLimit/maxTok − overhead) / roundsPerMin
+	//   defaultMaxRead = safe_input × bytesPerTok × safety
+	// The shipped default stays 3072 (live-calibrated) until the derived
+	// value passes the disk measurement.
+	tpmLimit      = 8000
+	maxTokEnv     = "NABD_MAX_TOKENS"
 	defaultMaxTok = 1024
-	readOverhead  = 450 // system+history+tools, tokens; NOT_VERIFIED (estimate)
-	bytesPerTok   = 3.2
+	readOverhead  = 2210 // tokens; MEASURED from 413 sessions, not estimated
+	bytesPerTok   = 2.41 // MEASURED from session pair, Arabic-heavy content
+	readRounds    = 2    // requests per turn (tool + answer)
 	readSafety    = 0.5
 )
 
@@ -50,18 +55,20 @@ func readMaxTokens() int {
 	return defaultMaxTok
 }
 
-// defaultMaxRead derives the read cap from the input budget (D2). It moves
-// when MaxTok moves. IMPORTANT: the derived value is NOT the default —
-// see defaultMaxReadBelow. The 3072 default below was calibrated on live
-// observation; the derivation (10441 at MaxTok=1024) is a candidate that
-// must be requested explicitly via NABD_MAX_READ until the measured
-// overhead and bytes/token replace the estimates (STEP 1 follow-up).
+// defaultMaxReadDerived derives the read cap from the measured input
+// budget. IMPORTANT: the derived value is NOT the default — the shipped
+// default is 3072 (live-calibrated) until the derived value passes the
+// disk measurement. The derivation is a candidate reachable via
+// NABD_MAX_READ.
 func defaultMaxReadDerived() int {
-	safeInput := tpmLimit - readMaxTokens() - readOverhead
-	if safeInput < 0 {
-		safeInput = 0
+	// Per-request input budget: the per-minute TPM cap divided by the
+	// expected request count in a turn, minus the measured overhead and the
+	// output reservation.
+	perReq := tpmLimit/readRounds - readMaxTokens() - readOverhead
+	if perReq < 0 {
+		perReq = 0
 	}
-	n := int(float64(safeInput) * bytesPerTok * readSafety)
+	n := int(float64(perReq) * bytesPerTok * readSafety)
 	if n < minMaxRead {
 		return minMaxRead
 	}
@@ -69,8 +76,8 @@ func defaultMaxReadDerived() int {
 }
 
 // defaultMaxRead is what NABD_MAX_READ falls back to when unset. Kept at
-// the live-calibrated 3072: the derived 10441 rests on estimated overhead
-// and bytes/token, and no default ships without a disk measurement.
+// the live-calibrated 3072: the derived value (measured constants) still
+// needs the disk regression gate before it ships as a default.
 func defaultMaxRead() int {
 	return 3072
 }

@@ -93,23 +93,48 @@ func (b *Budget) Estimate(ms []provider.Message) int {
 	return int(float64(EstimateMessages(ms)) * r)
 }
 
+// Ratio exposes the current calibration factor, for journaling.
+func (b *Budget) Ratio() float64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ratio
+}
+
 // Calibrate folds a real input_tokens count back into the ratio, slowly and
-// within bounds, so one odd response cannot make the agent reckless.
-func (b *Budget) Calibrate(actual, estimated int) {
+// within bounds, so one odd response cannot make the agent reckless. It
+// returns true when the ratio actually changed, so the caller can journal
+// the adopted value — the budget is now session-varying state and every
+// state that changes behaviour must be traceable in the log.
+func (b *Budget) Calibrate(actual, estimated int) bool {
 	if actual <= 0 || estimated <= 0 {
-		return
+		return false // a provider that reports no usage must not corrupt the ratio
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	obs := float64(actual) / float64(estimated)
-	b.ratio = b.ratio*0.7 + obs*0.3
-	switch {
-	case b.ratio < 0.6:
-		b.ratio = 0.6
-	case b.ratio > 2:
-		b.ratio = 2
+	// A wild single measurement is clamped before it can move the ratio far:
+	// observations outside [minObsRatio, maxObsRatio] are ignored entirely.
+	if obs < minObsRatio || obs > maxObsRatio {
+		return false
 	}
+	next := b.ratio*0.7 + obs*0.3
+	if next < 0.6 {
+		next = 0.6
+	}
+	if next > 2 {
+		next = 2
+	}
+	if next == b.ratio {
+		return false
+	}
+	b.ratio = next
+	return true
 }
+
+const (
+	minObsRatio = 0.5 // below this the measurement is not credible (e.g. a 0)
+	maxObsRatio = 4.0 // above this the measurement is not credible
+)
 
 func (b *Budget) Pressure(ms []provider.Message) float64 {
 	return float64(b.Estimate(ms)) / float64(b.Usable())
