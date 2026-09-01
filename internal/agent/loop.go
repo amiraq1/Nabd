@@ -268,8 +268,9 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 		// part of the file, and later replays must know that too.
 		if out.OK && c.Name == "read_file" && out.Truncated {
 			if eerr := l.emit(Event{Type: EventRead, Read: &ReadRecord{
-				Path:      pathOf(c.Input),
-				Truncated: true,
+				Path:       pathOf(c.Input),
+				Truncated:  true,
+				NextOffset: out.NextOffset,
 			}}); eerr != nil {
 				return results, false, eerr
 			}

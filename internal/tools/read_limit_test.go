@@ -45,7 +45,7 @@ func TestReadFileSmallFileUntouched(t *testing.T) {
 	if strings.Contains(out, "TRUNCATED") {
 		t.Errorf("small file must not be truncated, got: %q", out)
 	}
-	if r.ConsumeTruncated() {
+	if trunc, _ := r.ConsumeTruncated(); trunc {
 		t.Error("truncation flag set for a small file")
 	}
 	if !strings.Contains(out, "1|سطر واحد") || !strings.Contains(out, "3|سطر ثلاثة") {
@@ -70,18 +70,28 @@ func TestReadFileByteCapTruncates(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("read_file: ok=%v err=%v", ok, err)
 	}
-	if !r.ConsumeTruncated() {
+	trunc, next := r.ConsumeTruncated()
+	if !trunc {
 		t.Fatal("truncation flag not set for an oversized file")
+	}
+	if next <= 0 {
+		t.Errorf("next_offset not recorded: %d", next)
 	}
 	if !strings.Contains(out, "[TRUNCATED:") {
 		t.Fatalf("missing explicit truncation tail in tool_result: %q", out)
 	}
-	if !strings.Contains(out, "use offset=") {
+	if !strings.Contains(out, "استخدم offset=") {
 		t.Errorf("tail must say how to continue (offset): %q", out)
+	}
+	if !strings.Contains(out, "next_offset=") {
+		t.Errorf("tail must carry explicit next_offset=: %q", out)
+	}
+	if !strings.Contains(out, "lines_read=") || !strings.Contains(out, "total_lines=") {
+		t.Errorf("tail must carry lines_read and total_lines: %q", out)
 	}
 	// The cut must be at a line boundary: every emitted line is whole.
 	for _, ln := range strings.Split(out, "\n") {
-		if ln == "" || strings.HasPrefix(ln, "[TRUNCATED") {
+		if ln == "" || strings.HasPrefix(ln, "[TRUNCATED") || strings.Contains(ln, "lines_read=") {
 			continue
 		}
 		if !strings.HasSuffix(ln, "x") && !strings.Contains(ln, "|") {
@@ -89,8 +99,8 @@ func TestReadFileByteCapTruncates(t *testing.T) {
 		}
 	}
 	// The tail carries the stopping line and total line context.
-	if !strings.Contains(out, "of 300") {
-		t.Errorf("tail must say total line context (of 300): %q", out)
+	if !strings.Contains(out, "من 300") {
+		t.Errorf("tail must say total line context (من 300): %q", out)
 	}
 }
 

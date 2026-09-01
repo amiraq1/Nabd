@@ -88,7 +88,7 @@ func TestSqueezeStubsStaleReadResults(t *testing.T) {
 			{ID: "r1", Name: "read_file", Input: json.RawMessage(`{"path":"big.go"}`)},
 		}},
 		{Role: provider.User, ToolResults: []provider.ToolResult{
-			{ID: "r1", Output: "1|line one\n2|line two\n3|line three\n[TRUNCATED: stopped at line 3 of 300; use offset=4 to continue]\n", IsErr: false},
+			{ID: "r1", Output: "1|line one\n2|line two\n3|line three\n[TRUNCATED: قُرئت الأسطر 1-3 من 300؛ للمتابعة استخدم offset=4]\nlines_read=3  total_lines=300  next_offset=4\n", IsErr: false},
 		}},
 		{Role: provider.User, Text: "keep"},
 		{Role: provider.User, Text: "u1"},
@@ -115,7 +115,7 @@ func TestSqueezeStubsStaleReadResults(t *testing.T) {
 
 // TestReadRangeParsesTail: the range comes from the truncation tail.
 func TestReadRangeParsesTail(t *testing.T) {
-	out := "1|a\n2|b\n[TRUNCATED: stopped at line 3 of 300; use offset=4 to continue]\n"
+	out := "1|a\n2|b\n[TRUNCATED: قُرئت الأسطر 1-2 من 300؛ للمتابعة استخدم offset=3]\n"
 	if got := readRange(out); got != "1-2" {
 		t.Errorf("readRange=%q, want 1-2", got)
 	}

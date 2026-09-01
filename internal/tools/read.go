@@ -116,10 +116,11 @@ func (readFile) Name() string { return "read_file" }
 func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.Outcome, error) {
 	text, ok, err := t.Run(ctx, raw)
 	trunc := false
+	next := 0
 	if t.reg != nil {
-		trunc = t.reg.ConsumeTruncated()
+		trunc, next = t.reg.ConsumeTruncated()
 	}
-	return agent.Outcome{Text: text, OK: ok, Truncated: trunc}, err
+	return agent.Outcome{Text: text, OK: ok, Truncated: trunc, NextOffset: next}, err
 }
 
 func (readFile) Spec() provider.ToolSpec {
@@ -205,21 +206,21 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 			continue
 		}
 		if shown >= limit {
-			capped = fmt.Sprintf("… توقّف عند السطر %d · limit=%d", line-1, limit)
+			// Explicit range + next offset, in lines (the unit read_file's
+			// offset param uses), so the model never has to infer it.
+			capped = truncTail(from, line-1, total, line)
 			break
 		}
 		if b.Len() > maxOutBytes {
-			capped = fmt.Sprintf("… توقّف عند السطر %d · بلغ حدّ الحجم", line-1)
+			capped = truncTail(from, line-1, total, line)
 			break
 		}
 		// Byte cap: only emit the line if it still fits under maxReadBytes,
 		// so truncation always lands on a line boundary, never mid-line.
 		if b.Len()+len(sc.Bytes())+8 > maxReadBytes {
-			capped = fmt.Sprintf(
-				"[TRUNCATED: stopped at line %d of %d; use offset=%d to continue]",
-				line-1, total, line)
+			capped = truncTail(from, line-1, total, line)
 			if t.reg != nil {
-				t.reg.SetTruncated()
+				t.reg.SetTruncated(line)
 			}
 			break
 		}
@@ -251,4 +252,20 @@ func clip(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + fmt.Sprintf(" …[+%d]", len(r)-n)
+}
+
+// truncTail is the single formatter for every truncated read tail. It names
+// the range read (start–end), the total, and the exact next offset — all in
+// lines, the unit read_file's offset parameter uses — so the model never
+// has to infer or convert anything. One function, called from every
+// truncation path; a second copy would drift after a month.
+func truncTail(start, end, total, nextOffset int) string {
+	if end < start {
+		end = start
+	}
+	return fmt.Sprintf(
+		"\n[TRUNCATED: قُرئت الأسطر %d-%d من %d؛ للمتابعة استخدم offset=%d]\n"+
+			"lines_read=%d  total_lines=%d  next_offset=%d",
+		start, end, total, nextOffset,
+		end-start+1, total, nextOffset)
 }

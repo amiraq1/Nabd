@@ -30,6 +30,7 @@ type Registry struct {
 	byName    map[string]Tool
 	linesRead int // set by read_file, consumed by the next commit()
 	truncated bool // set by read_file, consumed by RunDetailed
+	nextOffset int // set by read_file on truncation, consumed by RunDetailed
 }
 
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
@@ -46,14 +47,20 @@ func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 // read before it) carries ReadLines=0.
 func (r *Registry) SetLinesRead(n int) { r.linesRead = n }
 
-// SetTruncated records that the last read_file call hit the byte cap.
-func (r *Registry) SetTruncated() { r.truncated = true }
+// SetTruncated records that the last read_file call hit the byte cap, with
+// the exact line to continue from.
+func (r *Registry) SetTruncated(next int) {
+	r.truncated = true
+	r.nextOffset = next
+}
 
-// ConsumeTruncated returns and clears the truncation flag.
-func (r *Registry) ConsumeTruncated() bool {
+// ConsumeTruncated returns and clears the truncation flag plus the offset.
+func (r *Registry) ConsumeTruncated() (bool, int) {
 	t := r.truncated
+	n := r.nextOffset
 	r.truncated = false
-	return t
+	r.nextOffset = 0
+	return t, n
 }
 
 // LastEdit returns the persisted record of the newest mutation, or nil if

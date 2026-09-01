@@ -22,8 +22,9 @@ const (
 // readLineRE matches the leading line number of a read_file result line.
 var readLineRE = regexp.MustCompile(`^(\d+)\|`)
 
-// truncTailRE matches the truncation tail read_file appends.
-var truncTailRE = regexp.MustCompile(`\[TRUNCATED: stopped at line (\d+) of (\d+); use offset=\d+ to continue\]`)
+// truncTailRE matches the truncation tail read_file appends: the range and
+// the explicit next offset, all in lines.
+var truncTailRE = regexp.MustCompile(`\[TRUNCATED: قُرئت الأسطر (\d+)-(\d+) من (\d+)؛ للمتابعة استخدم offset=\d+\]`)
 
 // isReadResult reports whether a tool result came from read_file: its body
 // is line-numbered output (`N|...`) — nothing else in the registry emits
@@ -42,13 +43,15 @@ func isReadResult(out string) bool {
 }
 
 // readRange summarises what a read result covered: "1-29" from the first
-// and last numbered lines, or "1-29" from the truncation tail.
+// and last numbered lines, or the explicit range from the truncation tail.
 func readRange(out string) string {
 	first := -1
 	last := -1
 	if m := truncTailRE.FindStringSubmatch(out); m != nil {
-		if n, err := strconv.Atoi(m[1]); err == nil {
-			last = n - 1 // tail says the stopping line; the range ends before it
+		// The tail names the range explicitly (start-end); prefer it over
+		// re-deriving from numbered lines.
+		if n, err := strconv.Atoi(m[2]); err == nil {
+			last = n
 		}
 	}
 	for _, ln := range strings.Split(out, "\n") {

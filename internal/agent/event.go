@@ -58,10 +58,12 @@ type Event struct {
 
 // ReadRecord describes one read_file call. Truncated is true only when the
 // byte cap cut the file short — the model must be able to tell "full read"
-// from "partial read" from the event itself.
+// from "partial read" from the event itself. NextOffset is the exact line
+// to continue from, in the same unit read_file's offset param accepts.
 type ReadRecord struct {
-	Path      string `json:"path"`
-	Truncated bool   `json:"truncated"`
+	Path       string `json:"path"`
+	Truncated  bool   `json:"truncated"`
+	NextOffset int    `json:"next_offset,omitempty"`
 }
 
 // EditRecord is the persisted fingerprint of one file mutation. It is the
@@ -200,4 +202,6 @@ type Outcome struct {
 	Exit      int
 	Signal    string
 	Truncated bool // read_file set this: the byte cap cut the file short
+	// NextOffset is the exact line to continue from (read_file truncation).
+	NextOffset int
 }
