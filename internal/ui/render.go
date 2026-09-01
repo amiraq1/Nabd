@@ -69,9 +69,6 @@ func RenderEvent(e agent.Event, width int) string {
 	case agent.Compact:
 		return block("≡", e.Text, width, dim)
 
-	case agent.RunEnd:
-		return dim.Render("── " + e.Text)
-
 	case agent.EventEdit:
 		// Summary only: the patch lives in the journal, not on the screen.
 		if e.Edit == nil {

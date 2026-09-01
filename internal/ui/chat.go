@@ -31,7 +31,6 @@ type Chat struct {
 	running   bool
 	cancel    context.CancelFunc
 	status    string
-	quit      bool
 	Approve   *Approver
 	pending   *agent.ToolCall
 	OnUndo    func(n int) string
@@ -81,7 +80,7 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch e.Type {
 		case agent.PermAsk:
 			m.pending = e.Call
-		case agent.PermReply, agent.Interrupted, agent.RunEnd:
+		case agent.PermReply, agent.Interrupted:
 			m.pending = nil
 		}
 		var prints []string
@@ -107,9 +106,6 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		if msg.err != nil {
 			m.status = "خطأ"
-		}
-		if m.quit {
-			return m, tea.Quit
 		}
 		return m, nil
 

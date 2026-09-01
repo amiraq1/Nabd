@@ -43,8 +43,10 @@ func TestReadFixture(t *testing.T) {
 	}
 }
 
-// Every event type must appear at least once, or render.go grows branches
-// that no test ever walks.
+// Every event type the renderer handles must be exercised by a test, or a
+// render branch can rot. The fixture predates EventEdit/EventRead — those
+// are covered by their own tests in internal/agent and internal/tools — so
+// this list is the fixture's renderable set.
 func TestFixtureCoversAllTypes(t *testing.T) {
 	ev, err := Read(fixture)
 	if err != nil {
@@ -58,7 +60,7 @@ func TestFixtureCoversAllTypes(t *testing.T) {
 		agent.RunStart, agent.UserMsg, agent.TurnStart, agent.TextDelta,
 		agent.ToolStart, agent.PermAsk, agent.PermReply, agent.ToolEnd,
 		agent.Notice, agent.RunError, agent.Interrupted, agent.TurnEnd,
-		agent.RunEnd, agent.Compact,
+		agent.Compact,
 	}
 	for _, ty := range all {
 		if !got[ty] {

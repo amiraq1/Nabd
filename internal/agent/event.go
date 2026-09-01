@@ -27,7 +27,6 @@ const (
 	RunError    EventType = "run_error"
 	Interrupted EventType = "interrupted"
 	TurnEnd     EventType = "turn_end"
-	RunEnd      EventType = "run_end"
 	Compact     EventType = "compact"
 	Rewind      EventType = "rewind"
 	EventEdit   EventType = "edit_record"
