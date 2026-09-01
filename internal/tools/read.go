@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"nabd/internal/agent"
@@ -16,16 +17,26 @@ const (
 	maxOutBytes  = 48 * 1024 // what one tool result may cost in context
 	maxLines     = 1200
 	maxLineRunes = 300 // a minified bundle must not eat the whole budget
-	// maxBytes caps a single read in bytes so a large file cannot fill the
-	// context budget by itself (the Groq TPM ceiling is 8000 tokens).
-	// DESIGN_ASSUMPTION, calibrated by live tests:
-	//   - 16 KiB read → 413 (Requested 8016)
-	//   - 8 KiB read, model read twice → 413 (Requested 9725)
-	// Two reads plus system+conversation must stay under 8000, so a single
-	// read is capped at 3 KiB ≈ ~1.5k tokens. Truncation is at a line
-	// boundary. Lower this when the key's TPM ceiling rises.
-	maxBytes = 3 * 1024
+	// defaultMaxRead is the fallback when NABD_MAX_READ is unset. It is a
+	// calibration for the Groq 8000-TPM key, not a contract: provider limits
+	// differ, so the operator overrides it via NABD_MAX_READ. The 3 KiB value
+	// was calibrated by live 413s (16 KiB → 8016, 8 KiB × 2 reads → 9725).
+	defaultMaxRead = 3 * 1024
 )
+
+// maxReadBytes caps a single read_file call. Read once at startup from
+// NABD_MAX_READ so the cap follows the provider's token budget instead of
+// being a hardcoded tool constant.
+var maxReadBytes = envMaxRead()
+
+func envMaxRead() int {
+	if v := os.Getenv("NABD_MAX_READ"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return defaultMaxRead
+}
 
 type readFile struct {
 	root *Root
@@ -135,9 +146,9 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 			capped = fmt.Sprintf("… توقّف عند السطر %d · بلغ حدّ الحجم", line-1)
 			break
 		}
-		// Byte cap: only emit the line if it still fits under maxBytes,
+		// Byte cap: only emit the line if it still fits under maxReadBytes,
 		// so truncation always lands on a line boundary, never mid-line.
-		if b.Len()+len(sc.Bytes())+8 > maxBytes {
+		if b.Len()+len(sc.Bytes())+8 > maxReadBytes {
 			capped = fmt.Sprintf(
 				"[TRUNCATED: stopped at line %d of %d; use offset=%d to continue]",
 				line-1, total, line)

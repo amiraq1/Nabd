@@ -132,6 +132,16 @@ type Detailed interface {
 	RunDetailed(context.Context, json.RawMessage) (agent.Outcome, error)
 }
 
+// Compile-time assertions: these tools must keep implementing Detailed, or
+// the loop's rich path silently falls back to the plain one. That silence
+// is exactly the bug that hid Truncated from read_file for its whole life —
+// the loop asserted on []byte while Registry used json.RawMessage, so the
+// assertion failed quietly and the rich path never ran in production.
+var (
+	_ Detailed = (*readFile)(nil)
+	_ Detailed = (*bashTool)(nil)
+)
+
 func (r *Registry) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
 	t, ok := r.byName[name]
 	if !ok {
