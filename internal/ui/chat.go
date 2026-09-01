@@ -22,19 +22,21 @@ type doneMsg struct{ err error }
 // Chat is a single-line prompt with a scrollback of printed events.
 // Deliberately not a textarea: one line, one hand, one thumb.
 type Chat struct {
-	runner   Runner
-	events   <-chan agent.Event
-	width    int
-	input    string
-	running  bool
-	cancel   context.CancelFunc
-	status   string
-	quit     bool
-	Approve  *Approver
-	pending  *agent.ToolCall
-	OnUndo   func(n int) string
-	OnRewind func(n int) string
-	OnEdits  func() string
+	runner    Runner
+	events    <-chan agent.Event
+	width     int
+	input     string
+	running   bool
+	cancel    context.CancelFunc
+	status    string
+	quit      bool
+	Approve   *Approver
+	pending   *agent.ToolCall
+	OnUndo    func(n int) string
+	OnRewind  func(n int) string
+	OnCtx     func() string
+	OnCompact func() string
+	OnEdits   func() string
 }
 
 func NewChat(r Runner, events <-chan agent.Event) *Chat {
@@ -226,6 +228,16 @@ func (m *Chat) command(line string) string {
 			return "لا رجوع في هذه النسخة"
 		}
 		return m.OnRewind(n)
+	case "/ctx":
+		if m.OnCtx == nil {
+			return "—"
+		}
+		return m.OnCtx()
+	case "/compact":
+		if m.OnCompact == nil {
+			return "—"
+		}
+		return m.OnCompact()
 	case "/undo":
 		n := 1
 		if len(f) > 1 {
@@ -243,7 +255,7 @@ func (m *Chat) command(line string) string {
 		}
 		return m.OnEdits()
 	case "/help":
-		return "/undo [n] · /edits · ctrl+c إيقاف · ctrl+d خروج"
+		return "/undo [n] · /edits · /ctx · /compact · ctrl+c · ctrl+d"
 	}
 	return "أمر غير معروف: " + f[0]
 }

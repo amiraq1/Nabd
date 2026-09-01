@@ -33,6 +33,8 @@ type Loop struct {
 	MaxTurns int
 	Gate     Gate
 	Human    Asker
+	Budget   *Budget
+	warned   bool
 
 	mu     sync.Mutex
 	seq    int
@@ -62,7 +64,22 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 	}
 
 	for turn := 0; turn < maxTurns; turn++ {
-		calls, stop, err := l.streamTurn(ctx)
+		ms := Squeeze(Messages(Live(l.hist)), KeepFullRounds)
+		if p := l.Budget.Pressure(ms); p > 0.75 {
+			if err := l.Compact(ctx, l.Budget.Usable()*4/10); err != nil {
+				l.emit(Event{Type: Notice, Text: "تعذّر الضغط: " + err.Error()})
+			} else {
+				ms = Squeeze(Messages(Live(l.hist)), KeepFullRounds)
+				l.emit(Event{Type: Notice, Text: fmt.Sprintf("ضُغط السياق · %d%% ← %d%%",
+					int(p*100), int(l.Budget.Pressure(ms)*100))})
+				l.warned = false
+			}
+		} else if p > 0.6 && !l.warned {
+			l.warned = true
+			l.emit(Event{Type: Notice, Text: fmt.Sprintf("السياق %d%%", int(p*100))})
+		}
+
+		calls, stop, err := l.streamTurn(ctx, ms)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				_ = l.emit(Event{Type: Interrupted, Text: "ctrl+c"})
@@ -96,7 +113,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 }
 
 // streamTurn consumes exactly one assistant turn.
-func (l *Loop) streamTurn(ctx context.Context) ([]provider.ToolCall, string, error) {
+func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provider.ToolCall, string, error) {
 	if err := l.emit(Event{Type: TurnStart}); err != nil {
 		return nil, "", err
 	}
@@ -108,7 +125,7 @@ func (l *Loop) streamTurn(ctx context.Context) ([]provider.ToolCall, string, err
 
 	ch, err := l.Provider.Stream(ctx, provider.Request{
 		System:   l.System,
-		Messages: Messages(Live(l.hist)),
+		Messages: ms,
 		Tools:    specs,
 	})
 	if err != nil {
@@ -257,4 +274,12 @@ func (l *Loop) Seed(evs []Event) {
 		l.seq = evs[n-1].Seq
 		l.parent = evs[n-1].Seq
 	}
+}
+
+func (l *Loop) Hist() []Event {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	out := make([]Event, len(l.hist))
+	copy(out, l.hist)
+	return out
 }
