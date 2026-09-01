@@ -17,7 +17,10 @@ const (
 	maxLineRunes = 300 // a minified bundle must not eat the whole budget
 )
 
-type readFile struct{ root *Root }
+type readFile struct {
+	root *Root
+	reg  *Registry
+}
 
 func (readFile) Name() string { return "read_file" }
 
@@ -112,6 +115,9 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 	}
 	if capped != "" {
 		b.WriteString(capped + "\n")
+	}
+	if t.reg != nil {
+		t.reg.SetLinesRead(shown)
 	}
 	return b.String(), true, nil
 }

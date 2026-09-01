@@ -218,6 +218,19 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 		}}); eerr != nil {
 			return results, false, eerr
 		}
+
+		// A mutation leaves a persisted fingerprint behind. The loop is the
+		// only writer of Seq/Parent, so the EditRecord event is emitted here
+		// (not from inside tools, which must not reach into the journal).
+		if out.OK && (c.Name == "write_file" || c.Name == "edit_file") {
+			if er, ok := l.Tools.(interface{ LastEdit() *EditRecord }); ok {
+				if rec := er.LastEdit(); rec != nil {
+					if eerr := l.emit(Event{Type: EventEdit, Edit: rec}); eerr != nil {
+						return results, false, eerr
+					}
+				}
+			}
+		}
 	}
 	return results, false, nil
 }

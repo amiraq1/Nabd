@@ -30,6 +30,7 @@ const (
 	RunEnd      EventType = "run_end"
 	Compact     EventType = "compact"
 	Rewind      EventType = "rewind"
+	EventEdit   EventType = "edit_record"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.
@@ -44,13 +45,26 @@ type Event struct {
 	Time   time.Time `json:"t"`
 	Type   EventType `json:"type"`
 
-	Text     string    `json:"text,omitempty"`
-	Call     *ToolCall `json:"call,omitempty"`
-	Decision Decision  `json:"decision,omitempty"`
-	Err      string    `json:"err,omitempty"`
+	Text      string      `json:"text,omitempty"`
+	Call      *ToolCall   `json:"call,omitempty"`
+	Decision  Decision    `json:"decision,omitempty"`
+	Err       string      `json:"err,omitempty"`
+	Edit      *EditRecord `json:"edit,omitempty"`
 
 	// FirstKept is set on Compact only: the oldest Seq that survives.
 	FirstKept int `json:"first_kept,omitempty"`
+}
+
+// EditRecord is the persisted fingerprint of one file mutation. It is the
+// journal side of /undo: hashes let a later process verify the file is
+// untouched before restoring, and the patch is the human-readable proof.
+// Full file copies are never stored here — the shadow holds content.
+type EditRecord struct {
+	Path       string `json:"path"`
+	HashBefore string `json:"hash_before"`
+	HashAfter  string `json:"hash_after"`
+	Patch      string `json:"patch"`
+	ReadLines  int    `json:"read_lines"`
 }
 
 // ToolCall carries both the request and its outcome.

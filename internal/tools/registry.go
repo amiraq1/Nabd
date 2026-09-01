@@ -23,20 +23,36 @@ type Tool interface {
 // here can change a byte on disk, which is why no permission gate exists
 // yet. That gate arrives with write.go, not before.
 type Registry struct {
-	root   *Root
-	sh     *snap.Shadow
-	edits  *editLog
-	list   []Tool
-	byName map[string]Tool
+	root      *Root
+	sh        *snap.Shadow
+	edits     *editLog
+	list      []Tool
+	byName    map[string]Tool
+	linesRead int // set by read_file, consumed by the next commit()
 }
 
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 	log := &editLog{}
 	r := &Registry{root: root, sh: sh, edits: log, byName: map[string]Tool{}}
-	r.add(readFile{root}, globFiles{root}, grepFiles{root})
-	r.add(writeFile{root, sh, log}, editFile{root, sh, log})
+	r.add(readFile{root, r}, globFiles{root}, grepFiles{root})
+	r.add(writeFile{root, sh, log, r}, editFile{root, sh, log, r})
 	r.add(bashTool{root})
 	return r
+}
+
+// SetLinesRead records how many lines read_file just showed the model. The
+// next commit() stamps that number on the EditRecord: a blind write (no
+// read before it) carries ReadLines=0.
+func (r *Registry) SetLinesRead(n int) { r.linesRead = n }
+
+// LastEdit returns the persisted record of the newest mutation, or nil if
+// nothing has been written yet.
+func (r *Registry) LastEdit() *agent.EditRecord {
+	es := r.edits.all()
+	if len(es) == 0 {
+		return nil
+	}
+	return es[len(es)-1].Record
 }
 
 func (r *Registry) Edits() []Edit {

@@ -6,6 +6,8 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	"nabd/internal/agent"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
 )
@@ -30,6 +33,7 @@ type Edit struct {
 	Rel    string
 	Before snap.State
 	After  snap.State
+	Record *agent.EditRecord // persisted fingerprint, emitted as an event
 }
 
 type editLog struct {
@@ -50,7 +54,9 @@ func (e *editLog) all() []Edit {
 }
 
 // commit is the shared tail of both tools: shadow, write, verify, log.
-func commit(root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []byte) (snap.State, snap.State, error) {
+// readLines is the number of lines the model actually read before writing
+// (0 for a blind write), recorded in the persisted EditRecord.
+func commit(root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []byte, readLines int) (snap.State, snap.State, error) {
 	before, err := sh.Capture(abs)
 	if err != nil {
 		return before, snap.State{}, err
@@ -68,7 +74,8 @@ func commit(root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []
 	// From here the disk has already changed. Every exit below must leave a
 	// record behind, or /undo goes blind exactly when it is needed most.
 	after, aerr := sh.Capture(abs)
-	log.add(Edit{Tool: tool, Rel: root.Rel(abs), Before: before, After: after})
+	rec := buildRecord(sh, before, after, data, readLines)
+	log.add(Edit{Tool: tool, Rel: root.Rel(abs), Before: before, After: after, Record: rec})
 	if aerr != nil {
 		return before, after, aerr
 	}
@@ -82,10 +89,146 @@ func commit(root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []
 	return before, after, nil
 }
 
+// buildRecord fingerprints one mutation for the journal: SHA-256 of the
+// content on both sides, a unified diff, and the number of lines read.
+// HashBefore is empty only when the file did not exist before (creation).
+func buildRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLines int) *agent.EditRecord {
+	rec := &agent.EditRecord{
+		Path:      after.Rel,
+		HashAfter: sha256hex(data),
+		ReadLines: readLines,
+	}
+	if !before.Absent {
+		if b, err := sh.Read(before.Blob); err == nil {
+			rec.HashBefore = sha256hex(b)
+			rec.Patch = unifiedDiff(b, data, rec.Path)
+		}
+	} else {
+		rec.Patch = unifiedDiff(nil, data, rec.Path)
+	}
+	return rec
+}
+
+func sha256hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// unifiedDiff renders before→after as a unified diff. It is line-based and
+// minimal: unchanged lines are shared context. A nil before means creation.
+func unifiedDiff(before, after []byte, path string) string {
+	bl := splitLines(before)
+	al := splitLines(after)
+
+	// LCS table for the two line sequences.
+	n, m := len(bl), len(al)
+	lcs := make([][]int, n+1)
+	for i := range lcs {
+		lcs[i] = make([]int, m+1)
+	}
+	for i := n - 1; i >= 0; i-- {
+		for j := m - 1; j >= 0; j-- {
+			if bl[i] == al[j] {
+				lcs[i][j] = lcs[i+1][j+1] + 1
+			} else {
+				if lcs[i+1][j] >= lcs[i][j+1] {
+					lcs[i][j] = lcs[i+1][j]
+				} else {
+					lcs[i][j] = lcs[i][j+1]
+				}
+			}
+		}
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "--- a/%s\n+++ b/%s\n", path, path)
+	i, j := 0, 0
+	var hunk []string
+	hunkStart, hunkOld, hunkNew := 0, 0, 0
+	flush := func() {
+		if len(hunk) == 0 {
+			return
+		}
+		// Count old/new lines in the hunk for the @@ header.
+		old, new := 0, 0
+		for _, l := range hunk {
+			switch l[0] {
+			case '-':
+				old++
+			case '+':
+				new++
+			default:
+				old, new = old+1, new+1
+			}
+		}
+		fmt.Fprintf(&b, "@@ -%d,%d +%d,%d @@\n", hunkStart, old, hunkStart+hunkOld, new)
+		for _, l := range hunk {
+			b.WriteString(l)
+			b.WriteByte('\n')
+		}
+		hunk = nil
+	}
+	for i < n && j < m {
+		switch {
+		case bl[i] == al[j]:
+			if len(hunk) > 0 {
+				if len(hunk) >= 3 { // flush a substantial hunk
+					flush()
+				} else {
+					hunk = append(hunk, " "+bl[i])
+				}
+			}
+			i, j = i+1, j+1
+		case lcs[i+1][j] >= lcs[i][j+1]:
+			if len(hunk) == 0 {
+				hunkStart, hunkOld, hunkNew = i, 0, 0
+			}
+			hunk = append(hunk, "-"+bl[i])
+			hunkOld++
+			i++
+		default:
+			if len(hunk) == 0 {
+				hunkStart, hunkOld, hunkNew = i, 0, 0
+			}
+			hunk = append(hunk, "+"+al[j])
+			hunkNew++
+			j++
+		}
+	}
+	for ; i < n; i++ {
+		if len(hunk) == 0 {
+			hunkStart, hunkOld, hunkNew = i, 0, 0
+		}
+		hunk = append(hunk, "-"+bl[i])
+		hunkOld++
+	}
+	for ; j < m; j++ {
+		if len(hunk) == 0 {
+			hunkStart, hunkOld, hunkNew = i, 0, 0
+		}
+		hunk = append(hunk, "+"+al[j])
+		hunkNew++
+	}
+	flush()
+	return b.String()
+}
+
+func splitLines(b []byte) []string {
+	if len(b) == 0 {
+		return nil
+	}
+	s := strings.TrimSuffix(string(b), "\n")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
+
 type writeFile struct {
 	root *Root
 	sh   *snap.Shadow
 	log  *editLog
+	reg  *Registry
 }
 
 func (writeFile) Name() string { return "write_file" }
@@ -114,7 +257,7 @@ func (w writeFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	if err != nil {
 		return "", false, err
 	}
-	before, after, err := commit(w.root, w.sh, w.log, "write_file", abs, []byte(a.Content))
+	before, after, err := commit(w.root, w.sh, w.log, "write_file", abs, []byte(a.Content), w.reg.linesRead)
 	if err != nil {
 		return "", false, err
 	}
@@ -129,6 +272,7 @@ type editFile struct {
 	root *Root
 	sh   *snap.Shadow
 	log  *editLog
+	reg  *Registry
 }
 
 func (editFile) Name() string { return "edit_file" }
@@ -190,7 +334,7 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 		out = strings.Replace(string(src), a.Old, a.New, 1)
 		reps = 1
 	}
-	if _, _, err := commit(w.root, w.sh, w.log, "edit_file", abs, []byte(out)); err != nil {
+	if _, _, err := commit(w.root, w.sh, w.log, "edit_file", abs, []byte(out), w.reg.linesRead); err != nil {
 		return "", false, err
 	}
 	return fmt.Sprintf("عُدّل %s (%d استبدال، %d سطرًا ← %d)",

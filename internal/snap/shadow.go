@@ -128,6 +128,13 @@ func Unchanged(a, b State) bool {
 	return a.Blob != "" && a.Blob == b.Blob
 }
 
+// Read fetches the content behind a recorded state. It is the hash-to-bytes
+// door: the journal keeps hashes, and a later process (e.g. a restarted
+// /undo) pulls the content back through here.
+func (s *Shadow) Read(id string) ([]byte, error) {
+	return s.get(id)
+}
+
 // Restore puts a file back into a recorded state, atomically.
 func (s *Shadow) Restore(st State) error {
 	abs := filepath.Join(s.root, filepath.FromSlash(st.Rel))

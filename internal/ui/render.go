@@ -72,6 +72,17 @@ func RenderEvent(e agent.Event, width int) string {
 	case agent.RunEnd:
 		return dim.Render("── " + e.Text)
 
+	case agent.EventEdit:
+		// Summary only: the patch lives in the journal, not on the screen.
+		if e.Edit == nil {
+			return ""
+		}
+		s := "✎ " + e.Edit.Path
+		if e.Edit.ReadLines > 0 {
+			s += fmt.Sprintf(" · قرأ %d سطرًا", e.Edit.ReadLines)
+		}
+		return dim.Render(s)
+
 	case agent.TurnStart, agent.TurnEnd:
 		return ""
 	}
