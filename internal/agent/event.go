@@ -29,6 +29,7 @@ const (
 	TurnEnd     EventType = "turn_end"
 	RunEnd      EventType = "run_end"
 	Compact     EventType = "compact"
+	Rewind      EventType = "rewind"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.

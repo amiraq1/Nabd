@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"time"
 
 	"nabd/internal/provider"
 )
@@ -38,7 +37,7 @@ type Loop struct {
 	mu     sync.Mutex
 	seq    int
 	parent int
-	msgs   []provider.Message
+	hist   []Event
 }
 
 // ErrMaxTurns means the model kept calling tools past the ceiling. It is
@@ -56,7 +55,6 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 	if err := l.emit(Event{Type: UserMsg, Text: userText}); err != nil {
 		return err
 	}
-	l.append(provider.Message{Role: provider.User, Text: userText})
 
 	maxTurns := l.MaxTurns
 	if maxTurns <= 0 {
@@ -80,10 +78,9 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			return nil
 		}
 
-		results, interrupted, err := l.runCalls(ctx, calls)
+		_, interrupted, err := l.runCalls(ctx, calls)
 		// Results are appended even when interrupted: the API rejects an
 		// assistant tool_use with no matching tool_result on the next turn.
-		l.append(provider.Message{Role: provider.User, ToolResults: results})
 		if err != nil {
 			_ = l.emit(Event{Type: RunError, Err: err.Error()})
 			return err
@@ -111,7 +108,7 @@ func (l *Loop) streamTurn(ctx context.Context) ([]provider.ToolCall, string, err
 
 	ch, err := l.Provider.Stream(ctx, provider.Request{
 		System:   l.System,
-		Messages: l.snapshot(),
+		Messages: Messages(Live(l.hist)),
 		Tools:    specs,
 	})
 	if err != nil {
@@ -153,9 +150,6 @@ func (l *Loop) streamTurn(ctx context.Context) ([]provider.ToolCall, string, err
 	// Record the assistant turn even if it was pure tool calls: the next
 	// request must contain the tool_use blocks it is answering.
 	if text != "" || len(calls) > 0 {
-		l.append(provider.Message{
-			Role: provider.Assistant, Text: text, ToolCalls: calls,
-		})
 	}
 	if err := l.emit(Event{Type: TurnEnd}); err != nil {
 		return nil, "", err
@@ -226,34 +220,8 @@ func (l *Loop) exec(ctx context.Context, c provider.ToolCall) (out string, ok bo
 // assigned here and nowhere else, which is what makes the journal a
 // tree rather than a pile.
 func (l *Loop) emit(e Event) error {
-	l.mu.Lock()
-	l.seq++
-	e.Seq = l.seq
-	e.Parent = l.parent
-	l.parent = l.seq
-	if e.Time.IsZero() {
-		e.Time = time.Now().UTC()
-	}
-	l.mu.Unlock()
-
-	if l.Sink == nil {
-		return nil
-	}
-	return l.Sink.Emit(e)
-}
-
-func (l *Loop) append(m provider.Message) {
-	l.mu.Lock()
-	l.msgs = append(l.msgs, m)
-	l.mu.Unlock()
-}
-
-func (l *Loop) snapshot() []provider.Message {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	out := make([]provider.Message, len(l.msgs))
-	copy(out, l.msgs)
-	return out
+	l.emitAt(l.parent, e)
+	return nil
 }
 
 // Note lets a human action enter the journal through the same door events
@@ -276,4 +244,17 @@ func (f Fanout) Emit(e Event) error {
 		}
 	}
 	return nil
+}
+
+// Seed adopts a previous branch as this run's history. The new journal
+// starts empty on purpose: sessions stay separate files, the tree lives in
+// memory. Merging files is a v0.8 problem, not a v0.7 one.
+func (l *Loop) Seed(evs []Event) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.hist = append(l.hist, evs...)
+	if n := len(evs); n > 0 {
+		l.seq = evs[n-1].Seq
+		l.parent = evs[n-1].Seq
+	}
 }

@@ -22,25 +22,26 @@ type doneMsg struct{ err error }
 // Chat is a single-line prompt with a scrollback of printed events.
 // Deliberately not a textarea: one line, one hand, one thumb.
 type Chat struct {
-	runner  Runner
-	events  <-chan agent.Event
-	width   int
-	input   string
-	running bool
-	cancel  context.CancelFunc
-	status  string
-	quit    bool
-	Approve *Approver
-	pending *agent.ToolCall
-	OnUndo  func(n int) string
-	OnEdits func() string
+	runner   Runner
+	events   <-chan agent.Event
+	width    int
+	input    string
+	running  bool
+	cancel   context.CancelFunc
+	status   string
+	quit     bool
+	Approve  *Approver
+	pending  *agent.ToolCall
+	OnUndo   func(n int) string
+	OnRewind func(n int) string
+	OnEdits  func() string
 }
 
-func NewChat(r Runner, events <-chan agent.Event) Chat {
-	return Chat{runner: r, events: events, width: DefaultWidth, Approve: NewApprover()}
+func NewChat(r Runner, events <-chan agent.Event) *Chat {
+	return &Chat{runner: r, events: events, width: DefaultWidth, Approve: NewApprover()}
 }
 
-func (m Chat) Init() tea.Cmd { return waitEvent(m.events) }
+func (m *Chat) Init() tea.Cmd { return waitEvent(m.events) }
 
 // waitEvent pumps one event per command: Bubble Tea owns the goroutine,
 // so nothing in the UI touches a channel outside Update.
@@ -54,7 +55,7 @@ func waitEvent(ch <-chan agent.Event) tea.Cmd {
 	}
 }
 
-func (m Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		w := msg.Width
@@ -100,7 +101,7 @@ func (m Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.pending != nil {
 		switch k.String() {
 		case "y", "Y":
@@ -193,7 +194,7 @@ func (m Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // View is the prompt line only. Everything else lives in the scrollback,
 // which is what lets you scroll back with your thumb and grep it later.
-func (m Chat) View() string {
+func (m *Chat) View() string {
 	if m.running && m.pending == nil {
 		s := "· يعمل · ctrl+c للإلغاء"
 		if m.status != "" {
@@ -214,6 +215,17 @@ func (m Chat) View() string {
 func (m *Chat) command(line string) string {
 	f := strings.Fields(line)
 	switch f[0] {
+	case "/rewind":
+		n := 1
+		if len(f) > 1 {
+			if v, err := strconv.Atoi(f[1]); err == nil && v > 0 {
+				n = v
+			}
+		}
+		if m.OnRewind == nil {
+			return "لا رجوع في هذه النسخة"
+		}
+		return m.OnRewind(n)
 	case "/undo":
 		n := 1
 		if len(f) > 1 {
@@ -234,4 +246,8 @@ func (m *Chat) command(line string) string {
 		return "/undo [n] · /edits · ctrl+c إيقاف · ctrl+d خروج"
 	}
 	return "أمر غير معروف: " + f[0]
+}
+
+func (m *Chat) SetInput(s string) {
+	m.input = s
 }
