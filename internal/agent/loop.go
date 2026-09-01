@@ -129,6 +129,7 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 		System:   l.System,
 		Messages: ms,
 		Tools:    specs,
+		MaxTok:   maxOutputTokens(),
 	})
 	if err != nil {
 		return nil, "", err

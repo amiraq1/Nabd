@@ -65,6 +65,25 @@ func NewBudget() *Budget {
 	return b
 }
 
+// maxOutputTokens is the output reservation (max_tokens) sent to the
+// provider. Experimental value: the implicit 4096 ate half the TPM budget
+// on output, starving input. NABD_MAX_TOKENS overrides; values outside
+// [minMaxTokens, maxMaxTokens] or non-numeric fall back to the default.
+const (
+	defaultMaxTokens = 1024
+	minMaxTokens     = 128
+	maxMaxTokens     = 8192
+)
+
+func maxOutputTokens() int {
+	if v := os.Getenv("NABD_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= minMaxTokens && n <= maxMaxTokens {
+			return n
+		}
+	}
+	return defaultMaxTokens
+}
+
 func (b *Budget) Usable() int { return b.Limit - b.Reserve }
 
 func (b *Budget) Estimate(ms []provider.Message) int {

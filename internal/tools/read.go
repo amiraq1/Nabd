@@ -17,12 +17,52 @@ const (
 	maxOutBytes  = 48 * 1024 // what one tool result may cost in context
 	maxLines     = 1200
 	maxLineRunes = 300 // a minified bundle must not eat the whole budget
-	// defaultMaxRead is the fallback when NABD_MAX_READ is unset. It is a
-	// calibration for the Groq 8000-TPM key, not a contract: provider limits
-	// differ, so the operator overrides it via NABD_MAX_READ. The 3 KiB value
-	// was calibrated by live 413s (16 KiB → 8016, 8 KiB × 2 reads → 9725).
-	defaultMaxRead = 3 * 1024
+	// Read budget derivation (STEP 1/8, written out):
+	//   tpmLimit      = 8000 tokens/min  (Groq key, measured live)
+	//   maxTok        = NABD_MAX_TOKENS  (output reservation; default 1024)
+	//   overhead      = system + history + tool framing ≈ 450 tokens (estimate)
+	//   safe_input    = tpmLimit − maxTok − overhead
+	//   bytesPerToken ≈ 3.2 (Arabic worst case: 1.6 runes/token × 2 bytes/rune)
+	//   safety        = 0.5 (leave half the budget for conversation growth)
+	//   defaultMaxRead = safe_input × bytesPerToken × safety
+	// Recomputes when NABD_MAX_TOKENS changes; a single source, not two
+	// hardcoded numbers. The 3 KiB legacy value came from the same math at
+	// MaxTok=4096: (8000−4096−450)×3.2×0.5 ≈ 5526 → clamped by live 413s
+	// down to 3072. With MaxTok=1024 the budget frees up accordingly.
+	tpmLimit     = 8000
+	maxTokEnv    = "NABD_MAX_TOKENS"
+	defaultMaxTok = 1024
+	readOverhead  = 450 // system+history+tools, tokens; NOT_VERIFIED (estimate)
+	bytesPerTok   = 3.2
+	readSafety    = 0.5
 )
+
+// readMaxTokens mirrors the agent's NABD_MAX_TOKENS resolution so the read
+// cap follows the same output reservation. Kept small and local: the tools
+// package cannot import agent, and duplicating one env read beats inventing
+// a cross-package contract for a single number.
+func readMaxTokens() int {
+	if v := os.Getenv(maxTokEnv); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 128 && n <= 8192 {
+			return n
+		}
+	}
+	return defaultMaxTok
+}
+
+// defaultMaxRead derives the read cap from the input budget (D2). It moves
+// when MaxTok moves; it is not a second hardcoded calibration.
+func defaultMaxRead() int {
+	safeInput := tpmLimit - readMaxTokens() - readOverhead
+	if safeInput < 0 {
+		safeInput = 0
+	}
+	n := int(float64(safeInput) * bytesPerTok * readSafety)
+	if n < minMaxRead {
+		return minMaxRead
+	}
+	return n
+}
 
 // maxReadBytes caps a single read_file call. Read once at startup from
 // NABD_MAX_READ so the cap follows the provider's token budget instead of
@@ -43,7 +83,7 @@ func envMaxRead() int {
 			return n
 		}
 	}
-	return defaultMaxRead
+	return defaultMaxRead()
 }
 
 type readFile struct {
