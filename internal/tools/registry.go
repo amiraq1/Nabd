@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"nabd/internal/perm"
 	"nabd/internal/provider"
+	"nabd/internal/snap"
 )
 
 // Tool is one capability. Args arrive as the model wrote them: unvalidated
@@ -21,14 +23,33 @@ type Tool interface {
 // yet. That gate arrives with write.go, not before.
 type Registry struct {
 	root   *Root
+	sh     *snap.Shadow
+	edits  *editLog
 	list   []Tool
 	byName map[string]Tool
 }
 
-func NewRegistry(root *Root) *Registry {
-	r := &Registry{root: root, byName: map[string]Tool{}}
+func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
+	log := &editLog{}
+	r := &Registry{root: root, sh: sh, edits: log, byName: map[string]Tool{}}
 	r.add(readFile{root}, globFiles{root}, grepFiles{root})
+	r.add(writeFile{root, sh, log}, editFile{root, sh, log})
 	return r
+}
+
+func (r *Registry) Edits() []Edit {
+	return r.edits.all()
+}
+
+func (r *Registry) Class(tool string) (perm.Class, bool) {
+	switch tool {
+	case "write_file", "edit_file":
+		return perm.Mutating, true
+	case "read_file", "glob", "grep":
+		return perm.ReadOnly, true
+	default:
+		return 0, false
+	}
 }
 
 func (r *Registry) add(ts ...Tool) {

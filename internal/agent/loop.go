@@ -32,6 +32,8 @@ type Loop struct {
 	Sink     Sink
 	System   string
 	MaxTurns int
+	Gate     Gate
+	Human    Asker
 
 	mu     sync.Mutex
 	seq    int
@@ -176,6 +178,19 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 				})
 			}
 			return results, true, nil
+		}
+
+		ac := ToolCall{ID: c.ID, Name: c.Name, Args: c.Input}
+		d, why := l.decide(ctx, ac, l.emit)
+		if d == Deny {
+			msg := "رُفض تنفيذ " + c.Name
+			if why != "" {
+				msg += ": " + why
+			}
+			ac.OK, ac.Output = false, msg
+			l.emit(Event{Type: ToolEnd, Call: &ac})
+			results = append(results, provider.ToolResult{ID: c.ID, Output: msg, IsErr: true})
+			continue
 		}
 
 		out, ok, err := l.exec(ctx, c)

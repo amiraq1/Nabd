@@ -29,10 +29,12 @@ type Chat struct {
 	cancel  context.CancelFunc
 	status  string
 	quit    bool
+	Approve *Approver
+	pending *agent.ToolCall
 }
 
 func NewChat(r Runner, events <-chan agent.Event) Chat {
-	return Chat{runner: r, events: events, width: DefaultWidth}
+	return Chat{runner: r, events: events, width: DefaultWidth, Approve: NewApprover()}
 }
 
 func (m Chat) Init() tea.Cmd { return waitEvent(m.events) }
@@ -64,6 +66,12 @@ func (m Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case evMsg:
 		e := agent.Event(msg)
+		switch e.Type {
+		case agent.PermAsk:
+			m.pending = e.Call
+		case agent.PermReply, agent.Interrupted, agent.RunEnd:
+			m.pending = nil
+		}
 		var cmds []tea.Cmd
 		if s := RenderEvent(e, m.width); s != "" {
 			cmds = append(cmds, tea.Println(s))
@@ -90,6 +98,30 @@ func (m Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.pending != nil {
+		switch k.String() {
+		case "y", "Y":
+			m.pending = nil
+			m.Approve.Reply(agent.AllowOnce)
+			return m, nil
+		case "a", "A":
+			m.pending = nil
+			m.Approve.Reply(agent.AllowSession)
+			return m, nil
+		case "n", "N", "esc":
+			m.pending = nil
+			m.Approve.Reply(agent.Deny)
+			return m, nil
+		case "ctrl+c":
+			if m.running && m.cancel != nil {
+				m.cancel()
+				m.status = "يُلغى…"
+			}
+			return m, nil
+		default:
+			return m, nil // لا كتابة أثناء السؤال
+		}
+	}
 	switch k.Type {
 	case tea.KeyCtrlC:
 		// First ctrl+c cancels the turn; it never quits mid-flight,
@@ -146,7 +178,7 @@ func (m Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // View is the prompt line only. Everything else lives in the scrollback,
 // which is what lets you scroll back with your thumb and grep it later.
 func (m Chat) View() string {
-	if m.running {
+	if m.running && m.pending == nil {
 		s := "· يعمل · ctrl+c للإلغاء"
 		if m.status != "" {
 			s = "· " + m.status
@@ -156,6 +188,9 @@ func (m Chat) View() string {
 	line := "› " + m.input + "▌"
 	if m.status != "" {
 		line = dim.Render("· "+m.status) + "\n" + line
+	}
+	if m.pending != nil {
+		return line + "\n" + warn.Render("y سماح مرة · a سماح للجلسة · n رفض")
 	}
 	return fmt.Sprint(line)
 }
