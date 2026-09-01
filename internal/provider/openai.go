@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -22,7 +23,6 @@ type OpenAICompat struct {
 	Key     string
 	Model   string
 	BaseURL string
-	Label   string
 	Client  *http.Client
 }
 
@@ -45,7 +45,7 @@ func NewNVIDIA() (*OpenAICompat, error) {
 		base = nvidiaBase
 	}
 	return &OpenAICompat{
-		Key: k, Model: m, BaseURL: base, Label: "nvidia",
+		Key: k, Model: m, BaseURL: base,
 		Client: &http.Client{},
 	}, nil
 }
@@ -64,14 +64,29 @@ func NewOpenRouter() (*OpenAICompat, error) {
 	}
 	return &OpenAICompat{
 		Key:     k,
-		Label:   "openrouter",
 		Model:   env("NABD_MODEL", "anthropic/claude-3.5-haiku"),
 		BaseURL: env("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
 		Client:  &http.Client{},
 	}, nil
 }
 
-func (o *OpenAICompat) Name() string { return o.Label + "/" + shortModel(o.Model) }
+func NewGroq() *OpenAICompat {
+	return &OpenAICompat{
+		Key:     os.Getenv("GROQ_API_KEY"),
+		Model:   env("NABD_MODEL", "qwen/qwen3.8-27b"),
+		BaseURL: "https://api.groq.com/openai/v1",
+		Client:  &http.Client{},
+	}
+}
+
+func (c *OpenAICompat) Label() string {
+	if u, err := url.Parse(c.BaseURL); err == nil {
+		return strings.TrimPrefix(u.Hostname(), "api.")
+	}
+	return "unknown"
+}
+
+func (o *OpenAICompat) Name() string { return o.Label() + "/" + shortModel(o.Model) }
 
 func shortModel(m string) string {
 	if i := strings.LastIndexByte(m, '/'); i >= 0 {

@@ -230,6 +230,11 @@ func pickProvider() (provider.Provider, error) {
 		return provider.NewAnthropic()
 	case "openrouter":
 		return provider.NewOpenRouter()
+	case "groq":
+		return provider.NewGroq(), nil
+	}
+	if os.Getenv("GROQ_API_KEY") != "" {
+		return provider.NewGroq(), nil
 	}
 	if os.Getenv("OPENROUTER_API_KEY") != "" {
 		return provider.NewOpenRouter()
