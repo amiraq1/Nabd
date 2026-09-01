@@ -1,1 +1,3 @@
-# Ideas\n- **TOCTOU in Resolve**: The gap between Resolve and os.Open is a TOCTOU window. If a symlink is created right after Resolve, it escapes. The real fix is openat2 with RESOLVE_BENEATH (Linux specific, syscall). Since this is a single user phone environment, it is mostly theoretical.
+# Ideas and Future Work
+
+- **Secure API Key Storage**: Extract the provider API keys (`NVIDIA_API_KEY`, `ANTHROPIC_API_KEY`, etc.) from the environment variables into a separate config file located outside the project root (e.g., `~/.ag/config`). This ensures that `scrubEnv` doesn't have to perfectly filter the environment, and a rogue command like `cat ~/.bashrc` cannot accidentally leak credentials.
