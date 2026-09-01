@@ -45,6 +45,7 @@ func (l *Loop) Rewind(n int) (string, error) {
 // It is the whole mechanism: seq still grows, parent walks back.
 func (l *Loop) emitAt(parent int, e Event) {
 	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.seq++
 	e.Seq, e.Parent = l.seq, parent
 	if e.Time.IsZero() {
@@ -52,7 +53,6 @@ func (l *Loop) emitAt(parent int, e Event) {
 	}
 	l.parent = e.Seq
 	l.hist = append(l.hist, e)
-	l.mu.Unlock()
 	if l.Sink != nil {
 		l.Sink.Emit(e)
 	}
