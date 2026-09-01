@@ -26,12 +26,20 @@ const (
 
 // maxReadBytes caps a single read_file call. Read once at startup from
 // NABD_MAX_READ so the cap follows the provider's token budget instead of
-// being a hardcoded tool constant.
+// being a hardcoded tool constant. Values outside [minMaxRead, maxMaxRead]
+// (or non-numeric) are ignored and the default is used: a zero or absurd
+// value would otherwise produce an empty read that the model answers with
+// false confidence.
+const (
+	minMaxRead = 512
+	maxMaxRead = 1 << 20
+)
+
 var maxReadBytes = envMaxRead()
 
 func envMaxRead() int {
 	if v := os.Getenv("NABD_MAX_READ"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		if n, err := strconv.Atoi(v); err == nil && n >= minMaxRead && n <= maxMaxRead {
 			return n
 		}
 	}

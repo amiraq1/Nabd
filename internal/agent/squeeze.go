@@ -132,7 +132,11 @@ func Squeeze(ms []provider.Message, keepRounds int) []provider.Message {
 				rng := readRange(r.Output)
 				p := paths[r.ID]
 				if p != "" && rng != "" && (strings.Contains(r.Output, "[TRUNCATED") || len(r.Output) >= stubOver) {
-					rs[j].Output = fmt.Sprintf("«قرأتُ الأسطر %s من %s؛ أعد القراءة بـ offset إن احتجت التفاصيل»", rng, p)
+					// The stub records the range and explicitly tells the
+					// model not to re-read it: the content is gone from
+					// context, and re-reading would only re-truncate and
+					// re-accumulate. Preventing the loop beats inviting it.
+					rs[j].Output = fmt.Sprintf("«قرأتُ الأسطر %s من %s (المحتوى مضغوط؛ لا تعد قراءة هذا النطاق)»", rng, p)
 					out[i].ToolResults = rs
 					continue
 				}

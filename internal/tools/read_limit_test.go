@@ -114,3 +114,24 @@ func TestReadFileOffsetContinues(t *testing.T) {
 		t.Errorf("offset read must start at line 200: %q", strings.SplitN(out, "\n", 2)[0])
 	}
 }
+
+// TestEnvMaxReadBounds: out-of-range NABD_MAX_READ values fall back to the
+// default; a zero value must never produce an empty read.
+func TestEnvMaxReadBounds(t *testing.T) {
+	t.Setenv("NABD_MAX_READ", "0")
+	if got := envMaxRead(); got != defaultMaxRead {
+		t.Errorf("NABD_MAX_READ=0 → %d, want default %d", got, defaultMaxRead)
+	}
+	t.Setenv("NABD_MAX_READ", "not-a-number")
+	if got := envMaxRead(); got != defaultMaxRead {
+		t.Errorf("NABD_MAX_READ=text → %d, want default %d", got, defaultMaxRead)
+	}
+	t.Setenv("NABD_MAX_READ", "999999999")
+	if got := envMaxRead(); got != defaultMaxRead {
+		t.Errorf("NABD_MAX_READ=huge → %d, want default %d", got, defaultMaxRead)
+	}
+	t.Setenv("NABD_MAX_READ", "2048")
+	if got := envMaxRead(); got != 2048 {
+		t.Errorf("NABD_MAX_READ=2048 → %d, want 2048", got)
+	}
+}

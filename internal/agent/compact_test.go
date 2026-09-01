@@ -104,6 +104,9 @@ func TestSqueezeStubsStaleReadResults(t *testing.T) {
 	if !strings.Contains(got, "قرأتُ الأسطر 1-3 من big.go") {
 		t.Errorf("read stub must name range and path, got: %q", got)
 	}
+	if !strings.Contains(got, "لا تعد قراءة هذا النطاق") {
+		t.Errorf("read stub must forbid re-reading (no loop), got: %q", got)
+	}
 	// The tool_use (assistant message 0) keeps its call and path.
 	if len(sq[0].ToolCalls) != 1 || sq[0].ToolCalls[0].ID != "r1" {
 		t.Errorf("tool_use pairing lost: %+v", sq[0].ToolCalls)

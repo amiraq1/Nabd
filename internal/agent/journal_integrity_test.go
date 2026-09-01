@@ -103,3 +103,49 @@ func TestJournalIntegrity(t *testing.T) {
 		}
 	}
 }
+
+// TestExactlyOneEndMarkerPerTurn pins the invariant that replaced RunEnd:
+// between two user turns (and from RunStart onward), every turn emits
+// exactly one of TurnEnd / RunError / Interrupted — never zero (a turn
+// that never settles would let the next request be rejected) and never two
+// (a double marker would lie about the turn's outcome).
+func TestExactlyOneEndMarkerPerTurn(t *testing.T) {
+	l := &Loop{Budget: NewBudget()}
+	l.emit(Event{Type: RunStart, Text: "x"})
+	l.emit(Event{Type: UserMsg, Text: "دور أول"})
+	l.emit(Event{Type: TurnStart})
+	l.emit(Event{Type: TextDelta, Text: "جواب"})
+	l.emit(Event{Type: TurnEnd}) // settled normally
+
+	l.emit(Event{Type: UserMsg, Text: "دور ثانٍ"})
+	l.emit(Event{Type: TurnStart})
+	l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: "t", Name: "read_file"}})
+	l.emit(Event{Type: Interrupted, Text: "ctrl+c"}) // interrupted
+
+	l.emit(Event{Type: UserMsg, Text: "دور ثالث"})
+	l.emit(Event{Type: TurnStart})
+	l.emit(Event{Type: TextDelta, Text: "نص"})
+	l.emit(Event{Type: RunError, Err: "فشل"}) // errored
+
+	evs := l.hist
+	markers := 0
+	first := true
+	for _, e := range evs {
+		switch e.Type {
+		case TurnEnd, RunError, Interrupted:
+			markers++
+		case UserMsg:
+			// A new turn: the previous one must have closed with exactly one
+			// marker before a new user message is allowed. The first UserMsg
+			// is the start of the first turn — no previous turn to check.
+			if !first && markers != 1 {
+				t.Fatalf("turn ended with %d end markers, want exactly 1 (before %q)", markers, e.Text)
+			}
+			first = false
+			markers = 0
+		}
+	}
+	if markers != 1 {
+		t.Fatalf("final turn ended with %d end markers, want exactly 1", markers)
+	}
+}
