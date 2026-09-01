@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"nabd/internal/agent"
@@ -31,6 +32,8 @@ type Chat struct {
 	quit    bool
 	Approve *Approver
 	pending *agent.ToolCall
+	OnUndo  func(n int) string
+	OnEdits func() string
 }
 
 func NewChat(r Runner, events <-chan agent.Event) Chat {
@@ -140,10 +143,23 @@ func (m Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyEnter:
-		text := strings.TrimSpace(m.input)
-		if text == "" || m.running {
+		line := strings.TrimSpace(m.input)
+		if line == "" {
 			return m, nil
 		}
+		if strings.HasPrefix(line, "/") {
+			if m.running {
+				m.status = "انتظر انتهاء الدور"
+				return m, nil
+			}
+			m.input = ""
+			m.status = m.command(line)
+			return m, nil
+		}
+		if m.running {
+			return m, nil
+		}
+		text := line
 		m.input = ""
 		m.running = true
 		ctx, cancel := context.WithCancel(context.Background())
@@ -193,4 +209,29 @@ func (m Chat) View() string {
 		return line + "\n" + warn.Render("y سماح مرة · a سماح للجلسة · n رفض")
 	}
 	return fmt.Sprint(line)
+}
+
+func (m *Chat) command(line string) string {
+	f := strings.Fields(line)
+	switch f[0] {
+	case "/undo":
+		n := 1
+		if len(f) > 1 {
+			if v, err := strconv.Atoi(f[1]); err == nil && v > 0 {
+				n = v
+			}
+		}
+		if m.OnUndo == nil {
+			return "لا تراجع في هذه النسخة"
+		}
+		return m.OnUndo(n)
+	case "/edits":
+		if m.OnEdits == nil {
+			return "—"
+		}
+		return m.OnEdits()
+	case "/help":
+		return "/undo [n] · /edits · ctrl+c إيقاف · ctrl+d خروج"
+	}
+	return "أمر غير معروف: " + f[0]
 }

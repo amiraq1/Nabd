@@ -256,6 +256,12 @@ func (l *Loop) snapshot() []provider.Message {
 	return out
 }
 
+// Note lets a human action enter the journal through the same door events
+// use, so seq and parent stay the single tree they were designed to be.
+func (l *Loop) Note(text string) {
+	l.emit(Event{Type: Notice, Text: text})
+}
+
 // Fanout sends each event to several sinks, stopping at the first error:
 // if the journal cannot be written, the UI should not pretend otherwise.
 type Fanout []Sink

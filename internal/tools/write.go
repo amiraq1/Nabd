@@ -65,18 +65,20 @@ func commit(root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []
 	if err := snap.WriteAtomic(abs, data, mode); err != nil {
 		return before, snap.State{}, err
 	}
-	want, err := sh.CaptureBytes(abs, data, mode)
-	if err != nil {
-		return before, snap.State{}, err
+	// From here the disk has already changed. Every exit below must leave a
+	// record behind, or /undo goes blind exactly when it is needed most.
+	after, aerr := sh.Capture(abs)
+	log.add(Edit{Tool: tool, Rel: root.Rel(abs), Before: before, After: after})
+	if aerr != nil {
+		return before, after, aerr
 	}
-	after, err := sh.Capture(abs)
+	want, err := sh.CaptureBytes(abs, data, mode)
 	if err != nil {
 		return before, after, err
 	}
 	if !snap.Unchanged(want, after) {
 		return before, after, errors.New("الكتابة لم تثبت على القرص كما هي")
 	}
-	log.add(Edit{Tool: tool, Rel: root.Rel(abs), Before: before, After: after})
 	return before, after, nil
 }
 
