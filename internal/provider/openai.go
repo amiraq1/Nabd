@@ -113,6 +113,9 @@ func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chun
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == 404 || resp.StatusCode == 410 {
+			return false, 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).\nاعرض المتاح:\n  curl -s %s/models -H \"Authorization: Bearer $NVIDIA_API_KEY\" | jq -r '.data[].id'\nثم: export NABD_MODEL=<id>", o.Model, resp.StatusCode, o.BaseURL)
+		}
 		return false, parseRetryAfter(resp.Header.Get("retry-after")),
 			&httpError{Status: resp.StatusCode, Body: apiMessage(msg)}
 	}

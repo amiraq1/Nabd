@@ -106,6 +106,9 @@ func (a *Anthropic) attempt(ctx context.Context, body []byte, out chan<- Chunk) 
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		if resp.StatusCode == 404 || resp.StatusCode == 410 {
+			return false, 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).", a.Model, resp.StatusCode)
+		}
 		ra := parseRetryAfter(resp.Header.Get("retry-after"))
 		return false, ra, &httpError{Status: resp.StatusCode, Body: apiMessage(msg)}
 	}
@@ -320,6 +323,9 @@ func transient(err error) bool {
 	var he *httpError
 	if errors.As(err, &he) {
 		return he.Status == 408 || he.Status == 409 || he.Status == 429 || he.Status >= 500
+	}
+	if strings.Contains(err.Error(), "غير متاح على هذا الخادم") {
+		return false
 	}
 	return true // network and EOF failures are worth one more try
 }
