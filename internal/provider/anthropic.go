@@ -340,6 +340,10 @@ func (e *httpError) Error() string {
 // transient decides whether trying again could plausibly help. A 401 or
 // a 400 will fail identically forever; retrying them only wastes battery.
 func transient(err error) bool {
+	var tpm *TPMError
+	if errors.As(err, &tpm) {
+		return false
+	}
 	var he *httpError
 	if errors.As(err, &he) {
 		return he.Status == 408 || he.Status == 409 || he.Status == 429 || he.Status >= 500

@@ -44,12 +44,19 @@ func isReadResult(out string) bool {
 
 // readRange summarises what a read result covered: "1-29" from the first
 // and last numbered lines, or the explicit range from the truncation tail.
+// ReadRange exposes the truncation-range extractor for its cross-package
+// contract test; parsing remains implemented by readRange.
+func ReadRange(out string) string { return readRange(out) }
+
 func readRange(out string) string {
 	first := -1
 	last := -1
 	if m := truncTailRE.FindStringSubmatch(out); m != nil {
 		// The tail names the range explicitly (start-end); prefer it over
 		// re-deriving from numbered lines.
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			first = n
+		}
 		if n, err := strconv.Atoi(m[2]); err == nil {
 			last = n
 		}

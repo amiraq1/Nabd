@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -24,6 +25,45 @@ type OpenAICompat struct {
 	Model   string
 	BaseURL string
 	Client  *http.Client
+}
+
+// TPMError is Groq's per-minute token ceiling response. It is deliberately
+// distinct from retryable transport/server errors: waiting is required, but
+// the provider must not issue an automatic retry.
+type TPMError struct {
+	Limit     int
+	Requested int
+	Body      string
+}
+
+func (e *TPMError) Error() string {
+	if e.Body != "" {
+		return fmt.Sprintf("http 413: %s", e.Body)
+	}
+	return "http 413"
+}
+
+func parseTPMCounts(s string) (limit, requested int) {
+	value := func(label string) int {
+		i := strings.Index(s, label)
+		if i < 0 {
+			return 0
+		}
+		s = s[i+len(label):]
+		j := 0
+		for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+			j++
+		}
+		if j == 0 {
+			return 0
+		}
+		n, err := strconv.Atoi(s[:j])
+		if err != nil {
+			return 0
+		}
+		return n
+	}
+	return value("Limit "), value("Requested ")
 }
 
 const nvidiaBase = "https://integrate.api.nvidia.com/v1"
@@ -175,6 +215,17 @@ func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chun
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
 			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).\nاعرض المتاح:\n  curl -s %s/models -H \"Authorization: Bearer $NVIDIA_API_KEY\" | jq -r '.data[].id'\nثم: export NABD_MODEL=<id>", o.Model, resp.StatusCode, o.BaseURL)
+		}
+		// Groq reports per-minute TPM violations as http 413 with a body
+		// naming "Limit N" and "Requested M". It is a rate ceiling, not a
+		// permanent failure, and must not be auto-retried — the caller
+		// decides (a human is told to wait).
+		if resp.StatusCode == http.StatusRequestEntityTooLarge {
+			body := apiMessage(msg)
+			limit, requested := parseTPMCounts(body)
+			if limit > 0 || requested > 0 {
+				return 0, &TPMError{Limit: limit, Requested: requested, Body: body}
+			}
 		}
 		return parseRetryAfter(resp.Header.Get("retry-after")),
 			&httpError{Status: resp.StatusCode, Body: apiMessage(msg)}

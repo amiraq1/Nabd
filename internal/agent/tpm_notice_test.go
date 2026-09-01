@@ -12,43 +12,52 @@ import (
 	"nabd/internal/provider"
 )
 
-// TestTPMLimitNoticeEmitted: a provider 413 (Groq's per-minute TPM
-// violation) must produce a human Notice naming the requested count, so a
-// transient rate hit does not look like a final failure.
+// TestTPMLimitNoticeEmitted: a provider 413 with the real Groq body shape
+// (from the recorded sessions) must produce a Notice carrying both Limit
+// and Requested, and emit them as event fields.
 func TestTPMLimitNoticeEmitted(t *testing.T) {
+	// Real body shape from session 20260901-133251.jsonl.
+	groqBody := "Request too large for model `openai/gpt-oss-20b` in organization `org_x` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Requested 8968, please reduce your message size and try again."
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusTooManyRequests)
-		// NOTE: Groq returns 413 for TPM violations; the status line here is
-		// incidental — the detection is by message shape, matching the
-		// journal's recorded errors.
-		w.Write([]byte(`{"error":{"message":"Request too large for model on tokens per minute (TPM): Limit 8000, Requested 8123, please reduce"}}`))
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusRequestEntityTooLarge) // 413 — what Groq sends
+		w.Write([]byte(`{"error":{"message":"` + groqBody + `"}}`))
 	}))
 	defer srv.Close()
 
 	prov := &provider.OpenAICompat{Key: "test", Model: "m", BaseURL: srv.URL, Client: &http.Client{}}
 
 	var mu sync.Mutex
-	var notices []string
+	var notices []agent.Event
 	l := &agent.Loop{
 		Provider: prov,
 		Tools:    noTools{},
 		Budget:   agent.NewBudget(),
 		Gate:     noTools{},
 		Human:    noTools{},
-		Sink:     sinkFn3(func(e agent.Event) error { mu.Lock(); defer mu.Unlock(); if e.Type == agent.Notice { notices = append(notices, e.Text) }; return nil }),
+		Sink: sinkFn3(func(e agent.Event) error {
+			mu.Lock()
+			defer mu.Unlock()
+			if e.Type == agent.Notice {
+				notices = append(notices, e)
+			}
+			return nil
+		}),
 	}
-	_ = l.Run(context.Background(), "سؤال")
+	if err := l.Run(context.Background(), "سؤال"); err == nil {
+		t.Fatal("expected a run error after the 413")
+	}
 
 	mu.Lock()
 	defer mu.Unlock()
-	var foundN bool
-	for _, n := range notices {
-		if strings.Contains(n, "8123") {
-			foundN = true
-		}
+	if len(notices) != 1 {
+		t.Fatalf("Notice count = %d, want exactly 1", len(notices))
 	}
-	if !foundN {
-		t.Errorf("no Notice carried the requested count 8123; notices=%v", notices)
+	n := notices[0]
+	if !strings.Contains(n.Text, "8000") || !strings.Contains(n.Text, "8968") {
+		t.Errorf("Notice must carry Limit and Requested, got %q", n.Text)
+	}
+	if n.Limit != 8000 || n.Requested != 8968 {
+		t.Errorf("event fields: Limit=%d Requested=%d, want 8000 and 8968", n.Limit, n.Requested)
 	}
 }

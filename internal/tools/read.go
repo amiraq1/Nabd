@@ -208,17 +208,26 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 		if shown >= limit {
 			// Explicit range + next offset, in lines (the unit read_file's
 			// offset param uses), so the model never has to infer it.
-			capped = truncTail(from, line-1, total, line)
+			capped = TruncTail(from, line-1, total, line)
 			break
 		}
 		if b.Len() > maxOutBytes {
-			capped = truncTail(from, line-1, total, line)
+			capped = TruncTail(from, line-1, total, line)
 			break
 		}
 		// Byte cap: only emit the line if it still fits under maxReadBytes,
 		// so truncation always lands on a line boundary, never mid-line.
 		if b.Len()+len(sc.Bytes())+8 > maxReadBytes {
-			capped = truncTail(from, line-1, total, line)
+			if shown == 0 && line == from {
+				fmt.Fprintf(&b, "%d|%s [LINE_TRUNCATED: تجاوز السطر maxReadBytes=%d]\n", line, clip(sc.Text(), maxLineRunes), maxReadBytes)
+				shown++
+				capped = TruncTail(from, line, total, line+1)
+				if t.reg != nil {
+					t.reg.SetTruncated(line + 1)
+				}
+				break
+			}
+			capped = TruncTail(from, line-1, total, line)
 			if t.reg != nil {
 				t.reg.SetTruncated(line)
 			}
@@ -254,12 +263,12 @@ func clip(s string, n int) string {
 	return string(r[:n]) + fmt.Sprintf(" …[+%d]", len(r)-n)
 }
 
-// truncTail is the single formatter for every truncated read tail. It names
+// TruncTail is the single formatter for every truncated read tail. It names
 // the range read (start–end), the total, and the exact next offset — all in
 // lines, the unit read_file's offset parameter uses — so the model never
 // has to infer or convert anything. One function, called from every
 // truncation path; a second copy would drift after a month.
-func truncTail(start, end, total, nextOffset int) string {
+func TruncTail(start, end, total, nextOffset int) string {
 	if end < start {
 		end = start
 	}

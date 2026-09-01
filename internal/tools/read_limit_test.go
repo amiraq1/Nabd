@@ -125,7 +125,38 @@ func TestReadFileOffsetContinues(t *testing.T) {
 	}
 }
 
-// TestEnvMaxReadBounds: out-of-range NABD_MAX_READ values fall back to the
+// TestRunDetailedConsumesTruncationOnce: the rich read path must consume
+// the registry flag exactly once; a later read cannot lose or duplicate it.
+func TestRunDetailedConsumesTruncationOnce(t *testing.T) {
+	r, dir := newReg(t)
+	path := filepath.Join(dir, "detailed.go")
+	var b strings.Builder
+	for i := 0; i < 300; i++ {
+		b.WriteString(strings.Repeat("d", 120) + "\n")
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := json.Marshal(map[string]any{"path": "detailed.go"})
+	out, err := r.RunDetailed(context.Background(), "read_file", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.OK || !out.Truncated {
+		t.Fatalf("RunDetailed outcome=%+v, want successful truncation", out)
+	}
+	if out.NextOffset <= 1 {
+		t.Fatalf("RunDetailed next_offset=%d, want progress", out.NextOffset)
+	}
+	if !strings.Contains(out.Text, "[TRUNCATED:") {
+		t.Fatalf("RunDetailed text lacks truncation tail: %q", out.Text)
+	}
+	if trunc, next := r.ConsumeTruncated(); trunc || next != 0 {
+		t.Fatalf("second truncation consume returned flag=%v offset=%d", trunc, next)
+	}
+}
+
 // default; a zero value must never produce an empty read.
 func TestEnvMaxReadBounds(t *testing.T) {
 	t.Setenv("NABD_MAX_READ", "0")

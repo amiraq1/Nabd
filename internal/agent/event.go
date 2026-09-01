@@ -49,6 +49,8 @@ type Event struct {
 	Call      *ToolCall   `json:"call,omitempty"`
 	Decision  Decision    `json:"decision,omitempty"`
 	Err       string      `json:"err,omitempty"`
+	Limit     int         `json:"limit,omitempty"`
+	Requested int         `json:"requested,omitempty"`
 	Edit      *EditRecord `json:"edit,omitempty"`
 	Read      *ReadRecord `json:"read,omitempty"`
 
