@@ -29,6 +29,7 @@ const system = `أنت nabd، وكيل برمجة يعمل داخل طرفية �
 var version = "dev"
 
 func main() {
+	loadEnv()
 	replay := flag.String("replay", "", "replay a session.jsonl and exit")
 	speed := flag.Float64("speed", 1, "replay multiplier; 0 is instant")
 	sessDir := flag.String("dir", "", "session directory (default ~/.ag/sessions)")
@@ -219,6 +220,32 @@ func sessionPath(dir string) (string, error) {
 func die(err error) {
 	fmt.Fprintln(os.Stderr, "ag:", err)
 	os.Exit(1)
+}
+
+// loadEnv reads ~/.ag/env and populates missing environment variables.
+func loadEnv() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	b, err := os.ReadFile(filepath.Join(home, ".ag", "env"))
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if idx := strings.IndexByte(line, '='); idx > 0 {
+			k := strings.TrimSpace(line[:idx])
+			v := strings.TrimSpace(line[idx+1:])
+			v = strings.Trim(v, `"'`)
+			if os.Getenv(k) == "" {
+				os.Setenv(k, v)
+			}
+		}
+	}
 }
 
 // pickProvider prefers whatever key is present. NABD_PROVIDER forces one.
