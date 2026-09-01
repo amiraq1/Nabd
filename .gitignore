@@ -3,3 +3,7 @@
 test_*.go
 *.local.*
 fix_*.py
+
+test_*.py
+probe_*.sh
+input.txt
