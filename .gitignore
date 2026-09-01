@@ -8,3 +8,4 @@ test_*.py
 test_*.sh
 probe_*.sh
 input.txt
+.commandcode/
