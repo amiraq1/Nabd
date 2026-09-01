@@ -42,6 +42,9 @@ func TestLongSingleLineAdvancesOffset(t *testing.T) {
 			if !strings.Contains(out, "LINE_TRUNCATED") {
 				t.Fatalf("long line must carry an explicit line-truncation marker: %q", out)
 			}
+			if !strings.Contains(out, "بقية هذا السطر غير قابلة للقراءة") {
+				t.Fatalf("marker must state the remainder is unreachable: %q", out)
+			}
 		})
 	}
 }

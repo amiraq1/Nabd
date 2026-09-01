@@ -219,7 +219,12 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 		// so truncation always lands on a line boundary, never mid-line.
 		if b.Len()+len(sc.Bytes())+8 > maxReadBytes {
 			if shown == 0 && line == from {
-				fmt.Fprintf(&b, "%d|%s [LINE_TRUNCATED: تجاوز السطر maxReadBytes=%d]\n", line, clip(sc.Text(), maxLineRunes), maxReadBytes)
+				// The line itself exceeds the cap. It is emitted clipped and
+				// marked, and next_offset skips past it — the remainder of
+				// this line is NOT reachable (the tool has no byte offset),
+				// so the marker says so explicitly rather than let the model
+				// believe it saw the whole file.
+				fmt.Fprintf(&b, "%d|%s [LINE_TRUNCATED: السطر أطول من maxReadBytes=%d؛ بقية هذا السطر غير قابلة للقراءة بهذه الأداة]\n", line, clip(sc.Text(), maxLineRunes), maxReadBytes)
 				shown++
 				capped = TruncTail(from, line, total, line+1)
 				if t.reg != nil {
