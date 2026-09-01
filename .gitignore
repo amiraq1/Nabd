@@ -1,2 +1,5 @@
 ag
 *.tmp
+test_*.go
+*.local.*
+fix_*.py
