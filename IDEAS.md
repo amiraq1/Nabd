@@ -1,0 +1,1 @@
+# Ideas\n- **TOCTOU in Resolve**: The gap between Resolve and os.Open is a TOCTOU window. If a symlink is created right after Resolve, it escapes. The real fix is openat2 with RESOLVE_BENEATH (Linux specific, syscall). Since this is a single user phone environment, it is mostly theoretical.
