@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"nabd/internal/agent"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
@@ -34,6 +35,7 @@ func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 	r := &Registry{root: root, sh: sh, edits: log, byName: map[string]Tool{}}
 	r.add(readFile{root}, globFiles{root}, grepFiles{root})
 	r.add(writeFile{root, sh, log}, editFile{root, sh, log})
+	r.add(bashTool{root})
 	return r
 }
 
@@ -97,4 +99,20 @@ func skipDir(name string) bool {
 		return true
 	}
 	return false
+}
+
+type Detailed interface {
+	RunDetailed(context.Context, json.RawMessage) (agent.Outcome, error)
+}
+
+func (r *Registry) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
+	t, ok := r.byName[name]
+	if !ok {
+		return agent.Outcome{}, fmt.Errorf("أداة غير معروفة: %s", name)
+	}
+	if d, ok := t.(Detailed); ok {
+		return d.RunDetailed(ctx, raw)
+	}
+	txt, good, err := t.Run(ctx, raw)
+	return agent.Outcome{Text: txt, OK: good}, err
 }

@@ -209,7 +209,11 @@ func (m *Chat) View() string {
 		line = dim.Render("· "+m.status) + "\n" + line
 	}
 	if m.pending != nil {
-		return line + "\n" + warn.Render("y سماح مرة · a سماح للجلسة · n رفض")
+		keys := "y سماح مرة · a سماح للجلسة · n رفض"
+		if m.pending.Name == "bash" {
+			keys = "y سماح مرة · n رفض · (لا تصريح جلسة للأوامر)"
+		}
+		return line + "\n" + warn.Render(keys)
 	}
 	return fmt.Sprint(line)
 }

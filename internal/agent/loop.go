@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"nabd/internal/provider"
 )
@@ -204,14 +205,17 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 			continue
 		}
 
-		out, ok, err := l.exec(ctx, c)
+		start := time.Now()
+		out, err := l.exec(ctx, c)
 		if err != nil {
-			out, ok = err.Error(), false
+			out.Text, out.OK = err.Error(), false
 		}
+		ms := time.Since(start).Milliseconds()
 
-		results = append(results, provider.ToolResult{ID: c.ID, Output: out, IsErr: !ok})
+		results = append(results, provider.ToolResult{ID: c.ID, Output: out.Text, IsErr: !out.OK})
 		if eerr := l.emit(Event{Type: ToolEnd, Call: &ToolCall{
-			ID: c.ID, Name: c.Name, Output: out, OK: ok,
+			ID: c.ID, Name: c.Name, Output: out.Text, OK: out.OK,
+			Exit: out.Exit, Signal: out.Signal, MS: ms,
 		}}); eerr != nil {
 			return results, false, eerr
 		}
@@ -221,16 +225,23 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 
 // exec isolates the tool from the loop: a panicking tool must not take
 // the conversation down with it.
-func (l *Loop) exec(ctx context.Context, c provider.ToolCall) (out string, ok bool, err error) {
+func (l *Loop) exec(ctx context.Context, c provider.ToolCall) (out Outcome, err error) {
 	if l.Tools == nil {
-		return "", false, fmt.Errorf("لا أدوات في هذه النسخة: %s", c.Name)
+		return Outcome{OK: false}, fmt.Errorf("لا أدوات في هذه النسخة: %s", c.Name)
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			out, ok, err = "", false, fmt.Errorf("panic في %s: %v", c.Name, r)
+			out = Outcome{OK: false}
+			err = fmt.Errorf("panic في %s: %v", c.Name, r)
 		}
 	}()
-	return l.Tools.Run(ctx, c)
+	if d, ok := l.Tools.(interface {
+		RunDetailed(context.Context, string, []byte) (Outcome, error)
+	}); ok {
+		return d.RunDetailed(ctx, c.Name, c.Input)
+	}
+	txt, good, e := l.Tools.Run(ctx, c)
+	return Outcome{Text: txt, OK: good}, e
 }
 
 // emit stamps identity and hands the event on. Seq and Parent are

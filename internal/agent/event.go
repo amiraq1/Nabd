@@ -162,3 +162,13 @@ func Live(events []Event) []Event {
 	}
 	return live
 }
+
+// Outcome is what a tool run produced. Text-only tools ignore the extra
+// fields; a process cannot, because "failed" and "killed at 120s" are
+// different facts and the model must be able to tell them apart.
+type Outcome struct {
+	Text   string
+	OK     bool
+	Exit   int
+	Signal string
+}
