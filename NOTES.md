@@ -29,5 +29,22 @@
 - **v1.1 dead-code cleanup (OBSERVED)**: حُذف `RunEnd` (ثابت + فرع عرض + فرع تنظيف pending — لم يُبثّ قط من الحلقة) وحقل `m.quit` (يُقرأ ولا يُعيَّن أبدًا؛ الخروج الحقيقي عبر معالجات المفاتيح). الاختبارات التي كانت تستخدمهما كـ fixtures حُدّثت إلى أحداث حقيقية (`RunError`).
 - **v1.1 read-loop probe (OBSERVED, unlit)**: محاولة إشعال حلقة القراءة (ملف 300 سطر، `NABD_CTX` 20000 و24000) لم تُشعل الضاغط أبدًا (`HAS_COMPACT: False`) — والسبب المكتشف: `encode` يضع `max_tokens: 4096` عندما لا يُضبط `req.MaxTok` (وهو لا يُضبط في loop أبدًا)، وTPM عند Groq يحسب max_tokens ضمن الطلب، فكل طلب يستهلك ~4096 من سقف 8000 — القراءة الثانية تصطدم بـ 413 قبل أن يبلغ الضغط 75%. لاحظنا أيضًا أن الموديل أعاد `offset:1` بدل متابعة 30 في محاولة (ارتداد حقيقي لكنه غير مرتبط بالضاغط). لم نُصلح max_tokens — خارج النطاق الحالي، سُجّل فقط. الإصلاح المباشر للارتداد طُبّق في نص الكعب.
 - **v1.1 stub anti-loop (OBSERVED)**: كعب الضاغط لنتائج القراءة تغيّر من «أعد القراءة بـ offset إن احتجت التفاصيل» (دعوة صريحة لإعادة القراءة) إلى «(المحتوى مضغوط؛ لا تعد قراءة هذا النطاق)» — يسجّل النطاق ويمنع التكرار بدل تحريضه. القاعدة «المقتصة تُستبدل دائمًا» بقيت.
-- **v1.1 ctrl+c handler verified at UI layer (OBSERVED)**: معالج المفتاح (سطر 144-152 في chat.go) للضغطة الأولى أثناء التشغيل يستدعي `m.cancel()` فقط ويعيد `m, nil` — **لا `tea.Quit`**. `tea.Quit` يأتي فقط في ضغطة ثانية بعد `m.running=false` (الذي يحدث في `doneMsg` بعد استنزاف القناة). التسلسل مضمون: ctrl+c → إلغاء ctx → الحلقة تبثّ `Interrupted` → القناة → `evMsg` يفرّغ المخزن → `doneMsg`. أُضيف `TestCtrlCHandlerCancelsNotQuits` و`TestCtrlCSecondPressQuits` — البند 2 مغلق لا PARTIAL.
+- ~~**v1.1 ctrl+c handler verified at UI layer (OBSERVED)**: معالج المفتاح (سطر 144-152 في chat.go) للضغطة الأولى أثناء التشغيل يستدعي `m.cancel()` فقط ويعيد `m, nil` — **لا `tea.Quit`**. `tea.Quit` يأتي فقط في ضغطة ثانية بعد `m.running=false` (الذي يحدث في `doneMsg` بعد استنزاف القناة). التسلسل مضمون: ctrl+c → إلغاء ctx → الحلقة تبثّ `Interrupted` → القناة → `evMsg` يفرّغ المخزن → `doneMsg`. أُضيف `TestCtrlCHandlerCancelsNotQuits` و`TestCtrlCSecondPressQuits` — البند 2 مغلق لا PARTIAL.~~ — **مشطوب (struck through)**: الادعاء "بعد استنزاف القناة" و"التسلسل مضمون" غير مثبتين تشغيلياً؛ `doneMsg` مسار مستقل بلا Seq ولا ضمان ترتيب مقابل `evMsg` في قناة `p.msgs`. راجع بند STEP 0 أدناه.
+- **STEP 0 — interruption diagnosis correction (OBSERVED, code-level)**: العلاقة الفعلية بين `doneMsg` و`waitEvent` و`Update` وقناة الأحداث و`Seq` و`tea.Quit` كما يثبتها الكود فقط:
+  - `type doneMsg struct{ err error }` (chat.go:21) — **لا يحمل `Seq`**، بينما `evMsg` يغلّف `agent.Event` الذي يحمله.
+  - `doneMsg` يُنتَج في goroutine الـ runner (chat.go:182-185: closure يعيد `doneMsg{err}` بعد `Run`)، بينما `waitEvent` يقرأ قناة الأحداث في goroutine منفصل (chat.go:52-60) — كلاهما يرسل إلى قناة `p.msgs` الوحيدة في Bubble Tea **بلا ضمان ترتيب**.
+  - `doneMsg` في Update (chat.go:103-110) يضبط `m.running = false` فوراً — **قبل** أن يُستهلك بالضرورة آخر `evMsg` (الذي قد يحمل دلتا متراكمة في `m.buf`).
+  - `tea.Quit` في معالج المفتاح (chat.go:152) يُرجع عند `m.running == false` — أي في ضغطة ثانية تقع داخل نافذة "running=false لكن دلتا معلّقة".
+
+  Known limitation (نص حرفي):
+  > m.running may become false while an event delta is still pending.
+  > A second Ctrl+C during that window may trigger tea.Quit before
+  > the pending delta is rendered.
+
+  ثلاث نقاط يلتزمها الدفتر نصاً:
+  - [x] cancellation itself does not prove output loss
+  - [x] doneMsg is not equivalent to event-stream exhaustion
+  - [x] pending-delta race = known limitation unless runtime-tested
+
+  لم تُعلن النافذة مغلقة: لا يوجد اختبار تشغيلي يثبت الإغلاق. (اختبار `TestCtrlCHandlerCancelsNotQuits` يثبت أن الضغطة الأولى تُلغي ولا تُنهي، لكنه **لا** يثبت أن الضغطة الثانية داخل النافذة لن تسبق دلتا معلّقة.)
 - **v1.1 write/edit and Detailed (OBSERVED)**: `editFile` و`writeFile` **لا يحقّقان `Detailed`** — وهذا مقصود وسليم: سجلات `Edit` تصل للحلقة عبر `LastEdit()` (assertion مستقلة في runCalls) لا عبر `Outcome`. التأكيدات وقت-الترجمة تغطي `readFile` و`bashTool` (الوحيدان المحتاجان لـ `Outcome` الغني). لو احتاج write لاحقًا تمرير حالة عبر Outcome، يجب أن يضاف لكتلة التأكيدات.
