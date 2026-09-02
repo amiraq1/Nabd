@@ -138,13 +138,22 @@
       - Operational Range: `MEASURED (range: 3.3–3.9 bytes/token; overall OLS slope 0.2808 tokens/byte = 3.56 bytes/token)`.
       - Structural Intercept: 1060.73 tokens vs baseline 1020 tokens (messages=1) -> **~41 tokens** full round-trip scaffolding overhead (user msg + tool_use framing + tool_result wrapper + `lines_read/total_lines/next_offset` header).
       - Residuals curvature: P1 = +7.30 tokens, P2 = -13.14 tokens, P3 = +5.84 tokens, reflecting content heterogeneity (prose, markdown, commands, code blocks).
-    - **FILE_CONTENT_RATIO (Two-point read_file measurement on pure_ar.txt - Homogeneous)**:
+    - **FILE_CONTENT_RATIO (Three-point read_file measurement on pure_ar.txt - Homogeneous)**:
       - User message (held constant): "اقرأ pure_ar.txt"
-      - P1: Session `20260902-175334.jsonl`, NABD_MAX_READ=768, lines 1-1, sent_bytes=500, sent_runes=323, prompt_tokens=1169 (tool result seq 10, messages=3). Truncation header: `[TRUNCATED: read lines 1-1 of 40; continue with offset=2] lines_read=1  total_lines=40  next_offset=2`.
-      - P2: Session `20260902-175403.jsonl`, NABD_MAX_READ=1536, lines 1-3, sent_bytes=1294, sent_runes=763, prompt_tokens=1297 (tool result seq 10, messages=3). Truncation header: `[TRUNCATED: read lines 1-3 of 40; continue with offset=4] lines_read=3  total_lines=40  next_offset=4`.
-      - Delta: Δtokens = 128, Δbytes = 794, Δrunes = 440.
-      - Net slope: slope = 0.1612 tokens/byte -> **6.20 bytes/token** (or **3.44 runes/token**).
-      - Structural Intercept: 1088.40 tokens vs baseline 1023 tokens (messages=1) -> **~65 tokens** full round-trip scaffolding overhead.
+      - P1: Session `20260902-184129.jsonl`, NABD_MAX_READ=768, lines 1-1, sent_bytes=500, sent_runes=323, prompt_tokens=1169 (messages=3, baseline=1023). Header: `[TRUNCATED: read lines 1-1 of 40; continue with offset=2] lines_read=1  total_lines=40  next_offset=2`. UI display: `✂ pure_ar.txt · partially read`.
+      - P2: Session `20260902-184148.jsonl`, NABD_MAX_READ=1536, lines 1-3, sent_bytes=1294, sent_runes=763, prompt_tokens=1297 (messages=3, baseline=1023). Header: `[TRUNCATED: read lines 1-3 of 40; continue with offset=4] lines_read=3  total_lines=40  next_offset=4`. UI display: `✂ pure_ar.txt · partially read`.
+      - P3: Session `20260902-184516.jsonl`, NABD_MAX_READ=2304, lines 1-5, sent_bytes=2088, sent_runes=1203, prompt_tokens=1425 (messages=3, baseline=1023). Header: `[TRUNCATED: read lines 1-5 of 40; continue with offset=6] lines_read=5  total_lines=40  next_offset=6`. UI display: `✂ pure_ar.txt · partially read`.
+      - Pairwise Deltas:
+        - Delta 1->2: Δtokens = 128, Δbytes = 794, Δrunes = 440 (0.161209 tokens/byte, 3.4375 runes/token).
+        - Delta 2->3: Δtokens = 128, Δbytes = 794, Δrunes = 440 (0.161209 tokens/byte, 3.4375 runes/token).
+      - OLS Linear Model (3 points):
+        - tokens = 0.16120907 * bytes + 1088.40 (slope = 0.161209 tokens/byte -> 6.20 bytes/token).
+        - tokens = 0.29090909 * runes + 1075.04 (slope = 0.290909 tokens/rune -> 3.44 runes/token).
+        - Intercept = 1088.40 tokens -> Scaffolding overhead = 65.40 tokens (baseline 1023 tokens).
+        - Residuals across all 3 points: P1 = 0.00, P2 = 0.00, P3 = 0.00 tokens (residual = ±0.0 tokens).
+      - Verified Definition: `FILE_CONTENT_RATIO = 3.44 runes/token (pure AR, in tool_result) · SCAFFOLD = 65 ± 0.0 tokens · [3 points]`.
+      - Alignment: 3.44 runes/token sits cleanly inside the [2.90, 3.47] bounds established for direct raw prose (measured 3.47–3.56). This proves that structural tool framing and line numbering do NOT alter the per-rune token density of the file content, and the entire structural cost is concentrated in the intercept (~65 tokens).
+      - Baseline Shift: `CONTENT_SLOPE reproduced exactly (128/794/440); BASELINE shifted 1020→1023 (root-name candidate, unverified)`. User prompt was "اقرأ pure_ar.txt" (16 runes, 22 bytes, ~4-5 tokens) vs "ok" (2 runes, 2 bytes, 1 token) in Task 3 baseline.
     - **PURE_ARABIC Sample (D3-compliant isolated prose measurement)**:
       - Verbatim text: "هذا نص عربي خالص لا يحتوي على أي حرف لاتيني ولا أي رقم غربي ولا علامات تشكيل. كتب هذا النص ليكون مقياسا دقيقا لكثافة الرموز في النماذج اللغوية الحديثة عند التعامل مع اللغة العربية في سياقات البرمجة والأنظمة الحاسوبية."
       - D3 Validation: NFC normalized = True, diacritics = 0, Latin letters = 0, Western digits = 0, path/code syntax = 0.
@@ -159,9 +168,21 @@
     - Architectural pathology: Repository documentation became unreadable by the repository tool itself due to byte-cap slicing on long Arabic prose lines.
     - Calibration event completeness: All 13 turns wrote calibration events to the session JSONL (Fanout confirmed intact). An 8-turn regression across the sliced read_file sequence (prompt_tokens 2222 to 2970, encoded_bytes 7802 to 10055) shows slope = 0.3390 tokens/byte (~2.95 bytes/token, net delta 748 tokens over 2253 bytes = 3.01 bytes/token), confirming live end-to-end multi-turn payload density.
     - Scaffold deficit unmasked: At Turn 4 (prompt_tokens=2908), adopted ratchet ratio jumped to 1.45 because heuristic estimate was ~2006 tokens (deficit of ~902 tokens). This proves the heuristic severely underestimates the fixed structural scaffold (JSON tool schemas + role framing). The ~2x overestimate on Arabic prose was masking the scaffold deficit. Changing `runesPerTokOther` from 1.6 to ~3.5 in isolation would drop Arabic prose estimates, unmasking the scaffold deficit during early turns and causing true tokens to exceed heuristic estimates, directly creating 413 rejections.
-    - UI ordering anomaly noted: In chat.go / render.go, `EventRead` ("✂ NOTES.md · مقروء جزئيًا") is emitted immediately upon truncation detection before `ToolEnd` ("✓ read_file · 4ms"), confirming event display order fragility.
+    - UI ordering anomaly noted: In chat.go / render.go, `EventRead` ("✂ NOTES.md · partially read") is emitted immediately upon truncation detection before `ToolEnd` ("✓ read_file · 4ms"), confirming event display order fragility.
     - Root cleanup noted: Loose non-test file `test_gate.go` and scratch scripts `fix_*.py` exist in repository root; `test_gate.go` without `_test.go` suffix compiles into root package in `go build ./...` unless ignored.
-  - **UI Display Fingerprint (ATTRIBUTED_TO=8483859)**:
-    - Attribution: ATTRIBUTED_TO=8483859, BINARY_SHA256=`deafcd233438fcec698e6e72b4810c9b8ce81eb052e9c602c9fe5a066c1752d0`, Banner: `nabd v1.0.1-44-g8483859 · 8483859e200b0a472e8895eb0189b53673be6b96 · groq.com/qwen/qwen3.8-27b · nabd`.
-    - Attribution Rule: All prior language delta figures and prompt_tokens measurements remain permanently attributed to `92643c6`. Commit `8483859` touches `internal/ui` only and leaves `const system` and all agent request payloads completely untouched.
-    - Policy: Enforced ASCII on string literals across `internal/ui` with an explicit whitelist of allowed UI glyphs (`⚙ ✓ ✗ ✂ ⚑ › ─ ⊘ ≡ ✎ · … — ▌ →`), replacing `مقروء جزئيًا` with `partially read` and `خطأ` with `error: <err>`, guarded by `TestUIStringLiteralsEnforceASCIISymbolWhitelist`.
+  - **UI Display Fingerprint & Attribution Chain**:
+    - Measurement Attribution: ATTRIBUTED_TO=92643c6 remains the permanent, unalterable attribution for all language delta ratios and prompt_tokens measurements. Commit `92643c6` built binary `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5` (nabd v1.0.1-40-g92643c6).
+    - UI Display Refactor: ATTRIBUTED_TO=8483859 (hardened in 9592463, built binary `8e577debbbe5e75c280caa657f57630578264b49920da7f2156628e410238404`, banner `nabd v1.0.1-46-g9592463`).
+    - Commit Chain (6 commits above v1.0.1-40):
+      1. `b0b6e51`: notes: add forensic Arabic vs English token ratio measurement
+      2. `74922ab`: docs(notes): close editorial measurement corrections
+      3. `c617139`: docs(notes): document turn ceiling exhaustion by slicing and session forensic findings
+      4. `8483859`: refactor(ui): enforce ascii and allowed ui symbol whitelist for ui string literals
+      5. `80e5c97`: docs(notes): document UI display fingerprint and attribution
+      6. `9592463`: refactor(ui): sanitize runtime error display to prevent backdoor non-ascii leak
+    - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `git diff --stat 92643c6..c617139` confirms only `NOTES.md` was touched (80 insertions).
+    - Policy: Strict ASCII enforcement across `internal/ui` string literals with explicit whitelist `AllowedUISymbols` (`⚙ ✓ ✗ ✂ ⚑ › ─ ⊘ ≡ ✎ · … — ▌ →`). The runtime backdoor leak via `error: + msg.err.Error()` is closed via `errSummary` in `chat.go`, intercepting any non-ASCII error from backend packages to `error: execution failed`.
+    - Non-ASCII Inventory Classification across packages:
+      - Model-facing (FROZEN inside prompt_tokens): `const system` (`cmd/ag/main.go`), fold stubs `«read lines ...»` and `«notice»` (`internal/agent/squeeze.go`, `messages.go`), compact summary prompt (`internal/agent/compact.go`).
+      - Display-facing: slash command strings in `cmd/ag/main.go` (`/rewind`, `/ctx`, `/edits`).
+      - Internal/State: `internal/perm/policy.go:93` ("مسموح لهذه الجلسة", internal reason on Allow).
