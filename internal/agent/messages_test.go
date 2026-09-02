@@ -196,12 +196,44 @@ func TestPendingNoticesBoundedCap(t *testing.T) {
 	ms := Messages(evs)
 	// user, assistant, tool_results, followed by at most maxPendingNotices notices
 	noticeCount := 0
+	var lastNotice string
 	for _, m := range ms {
 		if strings.HasPrefix(m.Text, "«notice» ") {
 			noticeCount++
+			lastNotice = m.Text
 		}
 	}
 	if noticeCount != maxPendingNotices {
 		t.Fatalf("expected notice count capped at %d, got %d", maxPendingNotices, noticeCount)
+	}
+	if lastNotice != "«notice» (notices truncated: cap reached)" {
+		t.Fatalf("expected last notice to record truncation event, got %q", lastNotice)
+	}
+}
+
+func TestReplayNoticeDuringToolCallSerializesToValidOpenAIOrder(t *testing.T) {
+	// Reconstruct the exact sequence from live session where a notice was emitted
+	// during a tool turn.
+	evs := []Event{
+		{Seq: 1, Type: UserMsg, Text: "run inspection"},
+		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "call_1", Name: "read_file"}},
+		{Seq: 3, Parent: 2, Type: ToolStart, Call: &ToolCall{ID: "call_2", Name: "read_file"}},
+		{Seq: 4, Parent: 3, Type: Notice, Text: "calibration: token ratio adopted 1.45"},
+		{Seq: 5, Parent: 4, Type: ToolEnd, Call: &ToolCall{ID: "call_1", Name: "read_file", Output: "notes content", OK: true}},
+		{Seq: 6, Parent: 5, Type: ToolEnd, Call: &ToolCall{ID: "call_2", Name: "read_file", Output: "readme content", OK: true}},
+		{Seq: 7, Parent: 6, Type: TurnEnd},
+	}
+	ms := Messages(evs)
+	if len(ms) != 4 {
+		t.Fatalf("expected 4 messages (user, assistant, tool_results, notice), got %d", len(ms))
+	}
+	if ms[1].Role != "assistant" || len(ms[1].ToolCalls) != 2 {
+		t.Fatalf("expected assistant with 2 calls, got %v", ms[1])
+	}
+	if ms[2].Role != "user" || len(ms[2].ToolResults) != 2 {
+		t.Fatalf("expected user with 2 tool results, got %v", ms[2])
+	}
+	if ms[3].Role != "user" || ms[3].Text != "«notice» calibration: token ratio adopted 1.45" {
+		t.Fatalf("expected user notice after tool results, got %v", ms[3])
 	}
 }

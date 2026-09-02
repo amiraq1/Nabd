@@ -70,6 +70,8 @@ func Messages(evs []Event) []provider.Message {
 			if len(open) > 0 || len(calls) > 0 {
 				if len(pendingNotices) < maxPendingNotices {
 					pendingNotices = append(pendingNotices, e.Text)
+				} else {
+					pendingNotices[maxPendingNotices-1] = "(notices truncated: cap reached)"
 				}
 				continue
 			}
