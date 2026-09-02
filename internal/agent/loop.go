@@ -27,21 +27,56 @@ type Tools interface {
 // Loop turns one user message into a settled conversation: it streams a
 // turn, runs whatever tools the model asked for, and streams again, until
 // the model stops asking. Every observable step becomes an Event.
+type MessageEstimator func([]provider.Message) int
+
 type Loop struct {
-	Provider provider.Provider
-	Tools    Tools
-	Sink     Sink
-	System   string
-	MaxTurns int
-	Gate     Gate
-	Human    Asker
-	Budget   *Budget
-	warned   bool
+	Provider         provider.Provider
+	Tools            Tools
+	Sink             Sink
+	System           string
+	MaxTurns         int
+	Gate             Gate
+	Human            Asker
+	Budget           *Budget
+	EstimateMessages MessageEstimator
+	CompactBudget    int
+	KeepFullRounds   int
+	warned           bool
 
 	mu     sync.Mutex
 	seq    int
 	parent int
 	hist   []Event
+}
+
+func (l *Loop) estimateMessages(ms []provider.Message) int {
+	if l.EstimateMessages != nil {
+		return l.EstimateMessages(ms)
+	}
+	return EstimateMessages(ms)
+}
+
+func (l *Loop) keepFullRounds() int {
+	if l.KeepFullRounds > 0 {
+		return l.KeepFullRounds
+	}
+	return KeepFullRounds
+}
+
+func (l *Loop) compactTarget() int {
+	if l.CompactBudget > 0 {
+		return l.CompactBudget
+	}
+	return l.Budget.Usable() * 4 / 10
+}
+
+func (l *Loop) pressure(ms []provider.Message) float64 {
+	usable := l.Budget.Usable()
+	if usable <= 0 {
+		return 1
+	}
+	estimated := int(float64(l.estimateMessages(ms)) * l.Budget.Ratio())
+	return float64(estimated) / float64(usable)
 }
 
 // ErrMaxTurns means the model kept calling tools past the ceiling. It is
@@ -66,12 +101,12 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 	}
 
 	for turn := 0; turn < maxTurns; turn++ {
-		ms := Squeeze(Messages(Live(l.hist)), KeepFullRounds)
-		if p := l.Budget.Pressure(ms); p > 0.75 {
-			if err := l.Compact(ctx, l.Budget.Usable()*4/10); err != nil {
+		ms := Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
+		if p := l.pressure(ms); p > 0.75 {
+			if err := l.Compact(ctx, l.compactTarget()); err != nil {
 				l.emit(Event{Type: Notice, Text: "compact failed: " + err.Error()})
 			} else {
-				ms = Squeeze(Messages(Live(l.hist)), KeepFullRounds)
+				ms = Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
 				l.emit(Event{Type: Notice, Text: fmt.Sprintf("context compacted · %d%% → %d%%",
 					int(p*100), int(l.Budget.Pressure(ms)*100))})
 				l.warned = false

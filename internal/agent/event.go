@@ -46,18 +46,28 @@ type Event struct {
 	Time   time.Time `json:"t"`
 	Type   EventType `json:"type"`
 
-	Text      string      `json:"text,omitempty"`
-	Call      *ToolCall   `json:"call,omitempty"`
-	Decision  Decision    `json:"decision,omitempty"`
-	Err       string      `json:"err,omitempty"`
-	Limit     int         `json:"limit,omitempty"`
-	Requested int         `json:"requested,omitempty"`
-	Edit      *EditRecord `json:"edit,omitempty"`
-	Read      *ReadRecord `json:"read,omitempty"`
+	Text      string       `json:"text,omitempty"`
+	Call      *ToolCall    `json:"call,omitempty"`
+	Decision  Decision     `json:"decision,omitempty"`
+	Err       string       `json:"err,omitempty"`
+	Limit     int          `json:"limit,omitempty"`
+	Requested int          `json:"requested,omitempty"`
+	Edit      *EditRecord  `json:"edit,omitempty"`
+	Read      *ReadRecord  `json:"read,omitempty"`
 	Calib     *Calibration `json:"calib,omitempty"`
 
-	// FirstKept is set on Compact only: the oldest Seq that survives.
-	FirstKept int `json:"first_kept,omitempty"`
+	FirstKept int              `json:"first_kept,omitempty"`
+	Compact   *CompactionStats `json:"compact,omitempty"`
+}
+
+// CompactionStats records the context measurements at each actual compaction.
+type CompactionStats struct {
+	MessagesBefore int `json:"messages_before"`
+	MessagesAfter  int `json:"messages_after"`
+	TokensBefore   int `json:"tokens_before"`
+	TokensAfter    int `json:"tokens_after"`
+	BoundaryIndex  int `json:"boundary_index"`
+	Stubs          int `json:"stubs"`
 }
 
 // Calibration is one measurement point for the budget regression: the
