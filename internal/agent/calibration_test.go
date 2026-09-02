@@ -11,10 +11,18 @@ import (
 	"nabd/internal/provider"
 )
 
-// TestCalibrationEventPerTurn: every successful turn must emit exactly one
-// calibration event carrying encoded_bytes, prompt_tokens, and message
-// count — the D regression points. It must NOT be a Notice (no model/human
-// inflation) and Messages() must ignore it.
+// TestCalibrationEventPerRequest: every provider request (one per turn)
+// must emit exactly one calibration event carrying encoded_bytes,
+// prompt_tokens, and message count — the D regression points. It must
+// NOT be a Notice: calibration is journal-only (Messages ignores it),
+// so it cannot inflate the history that caused a 413.
+//
+// NOTE on scope: in this architecture one turn = one Stream() call =
+// one provider request (tool execution is local in runCalls, it does
+// not re-stream). So "per turn" == "per request"; there is no
+// many-request-per-turn case to disambiguate. If that changes, the
+// calibration must move inside Stream so each request, not each turn,
+// produces its own (encoded_bytes, prompt_tokens) pair.
 func TestCalibrationEventPerTurn(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")

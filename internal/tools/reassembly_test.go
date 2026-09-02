@@ -86,6 +86,107 @@ func TestTruncationReassemblyExact(t *testing.T) {
 	t.Logf("read1 covered through %d, next=%d, read2 covers %d..%d", lastSeen, next, next, maxSeen)
 }
 
+// TestThreeSegmentOffsetProgression: on a 300-line fixture, four consecutive
+// reads (the first three truncated, the last complete) must produce a strictly
+// monotonic next_offset chain with no overlap and no gap. This is the
+// TRUNCATION_OFFSET_TEST gate: it proves the absolute-offset contract across
+// three segments, not just two.
+func TestThreeSegmentOffsetProgression(t *testing.T) {
+	r, dir := newReg(t)
+	path := filepath.Join(dir, "three.go")
+	// Lines must be long enough that the byte cap (3072) reads only
+	// ~10-15 lines per segment, forcing 3+ truncation rounds on a
+	// 300-line fixture. Each line is ~200 chars ("line-NNN|" + padding).
+	var want strings.Builder
+	for i := 1; i <= 300; i++ {
+		prefix := "line-" + strconv.Itoa(i) + "|"
+		pad := strings.Repeat("x", 200-len(prefix))
+		want.WriteString(prefix + pad + "\n")
+	}
+	os.WriteFile(path, []byte(want.String()), 0o644)
+
+	type seg struct {
+		start, end int
+		nextOffset int
+		truncated  bool
+	}
+	var segs []seg
+	offset := 1
+
+	for round := 0; round < 6; round++ {
+		args := map[string]any{"path": "three.go"}
+		if offset > 1 {
+			args["offset"] = offset
+		}
+		raw, _ := json.Marshal(args)
+		out, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw))
+		if err != nil || !ok {
+			t.Fatalf("round %d: ok=%v err=%v", round+1, ok, err)
+		}
+		trunc, next := r.ConsumeTruncated()
+
+		// Parse first and last numbered content lines.
+		first, last := -1, -1
+		for _, ln := range strings.Split(out, "\n") {
+			if i := strings.Index(ln, "|"); i >= 0 {
+				if n, e := strconv.Atoi(ln[:i]); e == nil {
+					if first < 0 || n < first {
+						first = n
+					}
+					if n > last {
+						last = n
+					}
+				}
+			}
+		}
+		if first < 0 {
+			t.Fatalf("round %d: no numbered lines in output", round+1)
+		}
+		segs = append(segs, seg{start: first, end: last, nextOffset: next, truncated: trunc})
+		t.Logf("round %d: lines %d-%d, next_offset=%d, truncated=%v", round+1, first, last, next, trunc)
+		if !trunc {
+			break
+		}
+		offset = next
+	}
+
+	// Gate: must have at least 3 truncated segments.
+	if len(segs) < 3 {
+		t.Fatalf("need >= 3 segments, got %d (byte cap may not trigger enough)", len(segs))
+	}
+
+	// Gate: next_offset strictly increases across truncated segments.
+	for i := 1; i < len(segs); i++ {
+		if segs[i].start <= segs[i-1].start {
+			t.Errorf("segment %d start (%d) <= segment %d start (%d): not monotonic",
+				i+1, segs[i].start, i, segs[i-1].start)
+		}
+	}
+
+	// Gate: no gap or overlap — each segment starts where the previous
+	// one's next_offset said it would.
+	for i := 1; i < len(segs); i++ {
+		if segs[i].start != segs[i-1].nextOffset {
+			t.Errorf("segment %d start (%d) != segment %d next_offset (%d): gap or overlap",
+				i+1, segs[i].start, i, segs[i-1].nextOffset)
+		}
+	}
+
+	// Gate: no duplicate ranges.
+	type rng struct{ a, b int }
+	seen := map[rng]bool{}
+	for i, s := range segs {
+		r := rng{s.start, s.end}
+		if seen[r] {
+			t.Errorf("segment %d duplicate range %d-%d", i+1, r.a, r.b)
+		}
+		seen[r] = true
+	}
+
+	t.Logf("RESULT: %d segments, progression %d → %d → %d → %d",
+		len(segs), segs[0].start, segs[1].start, segs[2].start, segs[len(segs)-1].start)
+}
+
 // TestNonTruncatedNoNextOffset: a small file read fully must not carry a
 // truncation tail nor set the flag/offset.
 func TestNonTruncatedNoNextOffset(t *testing.T) {
