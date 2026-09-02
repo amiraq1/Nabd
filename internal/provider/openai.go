@@ -382,7 +382,11 @@ func (o *OpenAICompat) encode(req Request) ([]byte, error) {
 	if maxTok <= 0 {
 		maxTok = 4096
 	}
-	w := oaiWire{Model: o.Model, MaxTok: maxTok, Stream: true, Temperature: 0.2}
+	w := oaiWire{Model: o.Model, MaxTok: maxTok, Stream: true, Temperature: 0.2,
+		// Groq/OpenAI omit usage in a streaming response unless asked.
+		// The loop's calibration reads prompt_tokens from the final chunk;
+		// without include_usage the ratio is never measured.
+		StreamOptions: &oaiStreamOptions{IncludeUsage: true}}
 
 	if s := strings.TrimSpace(req.System); s != "" {
 		w.Messages = append(w.Messages, oaiMsg{Role: "system", Content: req.System})
@@ -444,12 +448,17 @@ func (o *OpenAICompat) encode(req Request) ([]byte, error) {
 }
 
 type oaiWire struct {
-	Model       string    `json:"model"`
-	MaxTok      int       `json:"max_tokens"`
-	Stream      bool      `json:"stream"`
-	Temperature float64   `json:"temperature"`
-	Messages    []oaiMsg  `json:"messages"`
-	Tools       []oaiTool `json:"tools,omitempty"`
+	Model         string            `json:"model"`
+	MaxTok        int               `json:"max_tokens"`
+	Stream        bool              `json:"stream"`
+	Temperature   float64           `json:"temperature"`
+	StreamOptions *oaiStreamOptions `json:"stream_options,omitempty"`
+	Messages      []oaiMsg          `json:"messages"`
+	Tools         []oaiTool         `json:"tools,omitempty"`
+}
+
+type oaiStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
 }
 
 type oaiMsg struct {
