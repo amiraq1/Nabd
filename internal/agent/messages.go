@@ -54,10 +54,14 @@ func Messages(evs []Event) []provider.Message {
 			})
 
 		case Notice:
-			// A human command that changed the world. The model must hear it,
-			// or it will keep reasoning about an edit that no longer exists.
+			// A human command or system event that changed the world. The
+			// model must hear it, or it will keep reasoning about an edit
+			// that no longer exists. Framed as an event notice, NOT as a
+			// system directive: this is a user-role message on every
+			// provider, and pretending it is "system" would mislead the
+			// model into treating a notice as an instruction.
 			flush()
-			out = append(out, provider.Message{Role: provider.User, Text: "«system» " + e.Text})
+			out = append(out, provider.Message{Role: provider.User, Text: "«notice» " + e.Text})
 
 		case TextDelta:
 			if len(results) > 0 { // results closed the previous round
