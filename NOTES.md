@@ -172,11 +172,17 @@
     - Scaffold deficit unmasked: At Turn 4 (prompt_tokens=2908), adopted ratchet ratio jumped to 1.45 because heuristic estimate was ~2006 tokens (deficit of ~902 tokens). This proves the heuristic severely underestimates the fixed structural scaffold (JSON tool schemas + role framing). The ~2x overestimate on Arabic prose was masking the scaffold deficit. Changing `runesPerTokOther` from 1.6 to ~3.5 in isolation would drop Arabic prose estimates, unmasking the scaffold deficit during early turns and causing true tokens to exceed heuristic estimates, directly creating 413 rejections.
     - UI ordering anomaly noted: In chat.go / render.go, `EventRead` ("✂ NOTES.md · partially read") is emitted immediately upon truncation detection before `ToolEnd` ("✓ read_file · 4ms"), confirming event display order fragility.
     - Root cleanup noted: Loose non-test file `test_gate.go` and scratch scripts `fix_*.py` exist in repository root; `test_gate.go` without `_test.go` suffix compiles into root package in `go build ./...` unless ignored.
+  - **OPERATIONAL_CAP_MEASUREMENT (NABD_MAX_READ=8192 & TPM Rate Exhaustion, session 20260902-191007)**:
+    - Attribution: ATTRIBUTED_TO=6e58195, BINARY_SHA256=`25532b3ea69581f7d9e488dc0fcb7fae7ed2609724d19dc66e55cc9f68046971`, Banner: `nabd v1.0.1-50-g6e58195 · 6e58195919a25edcb41e9221cc754877ad518681 · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Multi-call Dynamics: With NABD_MAX_READ=8192 on repository inspection ("فحص مستودع: اقرأ NOTES.md و README.md"), the model dispatched 2 parallel read_file calls per turn. Turn 1 read NOTES.md lines 1-27 (8192 bytes capped) and README.md lines 1-109 (7784 bytes), injecting 15976 bytes of tool results into context and jumping Turn 2 prompt_tokens from 1031 to 5179 (74.2% usable budget). Turn 2 completed README.md entirely (lines 110-175, 4145 bytes) and read NOTES.md lines 28-56 (8192 bytes capped).
+    - Unmasked Terminal Failure Event: On Turn 3, payload reached 6778 prompt tokens. Groq returned HTTP 429 TPM exhaustion: `Limit 8000, Used 1859, Requested 6778. Please try again in 4.7775s` (sum = 8637 > 8000 TPM rolling limit).
+    - Disk Persistence Clipping: In `internal/agent/event.go`, `MaxPersistedOutput = 4096`. Tool outputs of 8192 bytes were clipped on disk by `ForStore()` with `...[truncated 3618 bytes]`, stripping the pagination tail from session.jsonl.
+    - Architectural Recommendation: Standardize on `NABD_MAX_READ=4096`. It aligns 1:1 with `MaxPersistedOutput=4096` (preventing journal clipping), increases Arabic throughput to ~16 lines/call (allowing 155-line files to complete in ~10 calls, within MaxTurns=12), and caps parallel tool calls under Groq's 8000 TPM limit.
   - **UI Display Fingerprint & Attribution Chain**:
     - Measurement Attribution: ATTRIBUTED_TO=92643c6 remains the permanent, unalterable attribution for all language delta ratios and prompt_tokens measurements. Commit `92643c6` built binary `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5` (nabd v1.0.1-40-g92643c6).
-    - UI Display Refactor: ATTRIBUTED_TO=8483859 (hardened in 9592463, finalized in 5945ec9, current binary SHA256=`4389e2903049b3aefa98f444b5d51def055556d9b9796e44bb392cc86e48cfc7`, banner `nabd v1.0.1-48-g5945ec9`).
+    - UI Display Refactor: ATTRIBUTED_TO=8483859 (hardened in 9592463, finalized in 5945ec9, decoupled in 6e58195, current binary SHA256=`25532b3ea69581f7d9e488dc0fcb7fae7ed2609724d19dc66e55cc9f68046971`, banner `nabd v1.0.1-50-g6e58195`).
     - const system integrity: SHA256=`ab1b3997a4209679d37d368999cd57653d200dbdaed9bf09f902d14d86dafca2` (verified byte-for-byte unchanged across all UI translations).
-    - Commit Chain (8 commits above v1.0.1-40):
+    - Commit Chain (10 commits above v1.0.1-40):
       1. `b0b6e51`: notes: add forensic Arabic vs English token ratio measurement
       2. `74922ab`: docs(notes): close editorial measurement corrections
       3. `c617139`: docs(notes): document turn ceiling exhaustion by slicing and session forensic findings
@@ -185,6 +191,8 @@
       6. `9592463`: refactor(ui): sanitize runtime error display to prevent backdoor non-ascii leak
       7. `87fcd76`: docs(notes): update 3-point regression and fingerprint chain documentation
       8. `5945ec9`: refactor(cmd/ag): translate terminal display strings and extend ascii guardian test
+      9. `a928420`: docs(notes): update measurement characteristics and reconcile fingerprint chain
+      10. `6e58195`: refactor(guardian): decouple guardian tests into cmd/ag and internal/ui and document scope boundary
     - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `git diff --stat 92643c6..c617139` confirms only `NOTES.md` was touched (80 insertions).
     - Policy: Strict ASCII enforcement across `internal/ui` and `cmd/ag` string literals with explicit whitelist `AllowedUISymbols` (`⚙ ✓ ✗ ✂ ⚑ › ─ ⊘ ≡ ✎ · … — ▌ →`). The runtime backdoor leak via `error: + msg.err.Error()` is closed via `errSummary` in `chat.go`, intercepting any non-ASCII error from backend packages to `error: execution failed`.
     - Guardian Scope Boundary: The automated ASCII guardian covers `internal/ui` and `cmd/ag` ONLY (each package runs its own native, decoupled test suite). String literals in `internal/agent` (e.g. fold stubs `«read lines ...»`, `«notice»`, compaction templates) are FROZEN BY DESIGN CONTRACT AND INTENT, NOT BY AN AUTOMATED SCANNER.
