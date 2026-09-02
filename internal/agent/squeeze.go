@@ -22,9 +22,9 @@ const (
 // readLineRE matches the leading line number of a read_file result line.
 var readLineRE = regexp.MustCompile(`^(\d+)\|`)
 
-// truncTailRE matches the truncation tail read_file appends: the range and
-// the explicit next offset, all in lines.
-var truncTailRE = regexp.MustCompile(`\[TRUNCATED: read lines (\d+)-(\d+) of (\d+); continue with offset=\d+\]`)
+// truncTailRE matches the truncation tail read_file appends: the range, the
+// total, and the explicit next offset, all in lines.
+var truncTailRE = regexp.MustCompile(`\[TRUNCATED: read lines (\d+)-(\d+) of (\d+); continue with offset=(\d+)\]`)
 
 // isReadResult reports whether a tool result came from read_file: its body
 // is line-numbered output (`N|...`) — nothing else in the registry emits
@@ -218,4 +218,72 @@ func DedupeReadTails(ms []provider.Message) []provider.Message {
 		}
 	}
 	return out
+}
+
+// OfferedOffset is one live "continue with offset=N" directive in a
+// request-ready history: the file it points at, the offset it offers, and
+// the range the read covered.
+type OfferedOffset struct {
+	Path   string
+	Offset int
+	Start  int
+	End    int
+}
+
+// OfferedOffsets extracts every live truncation tail from a message list,
+// oldest first. This is the structural counterpart of "what could the
+// model still follow": a count over the actual bytes a request carries,
+// not a guess about model behavior.
+func OfferedOffsets(ms []provider.Message) []OfferedOffset {
+	var out []OfferedOffset
+	for i, m := range ms {
+		if len(m.ToolResults) == 0 {
+			continue
+		}
+		paths := map[string]string{}
+		if i > 0 {
+			for _, tc := range ms[i-1].ToolCalls {
+				if tc.Name == "read_file" {
+					paths[tc.ID] = pathOfArgs(tc.Input)
+				}
+			}
+		}
+		for _, r := range m.ToolResults {
+			if r.IsErr || !isReadResult(r.Output) {
+				continue
+			}
+			mm := truncTailRE.FindStringSubmatch(r.Output)
+			if mm == nil {
+				continue
+			}
+			p := paths[r.ID]
+			if p == "" {
+				continue
+			}
+			o := OfferedOffset{Path: p}
+			o.Start, _ = strconv.Atoi(mm[1])
+			o.End, _ = strconv.Atoi(mm[2])
+			o.Offset, _ = strconv.Atoi(mm[4])
+			out = append(out, o)
+		}
+	}
+	return out
+}
+
+// StaleOffsetsOffered returns the offered offsets that point into territory
+// a newer tail of the same path already covers — the structural defect
+// behind the offset-repetition loop. A correctly folded request offers
+// none: the newest offset is the only one a model can follow.
+func StaleOffsetsOffered(ms []provider.Message) []OfferedOffset {
+	offered := OfferedOffsets(ms)
+	var stale []OfferedOffset
+	for i, t := range offered {
+		for _, u := range offered[i+1:] {
+			if u.Path == t.Path && u.End >= t.Offset {
+				stale = append(stale, t)
+				break
+			}
+		}
+	}
+	return stale
 }

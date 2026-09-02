@@ -215,6 +215,15 @@ func TestCompactionReplayOffsetProgression(t *testing.T) {
 		t.Errorf("squeezed stubs must include range 1-29, got: %v", stubRanges)
 	}
 
-	t.Logf("COMPACTION_REPLAY=NOT_OBSERVED (squeezed stubs carry range, anti-loop active)")
+	// STALE_OFFSET_OFFERED replaces COMPACTION_REPLAY as the metric here:
+	// FakeLLM behavior is deterministic and cannot represent real model
+	// choice, so "would the model re-read" is not measurable in a unit
+	// test. What IS measurable is what the request offers: a folded
+	// history must carry zero offset directives pointing into territory a
+	// newer read of the same path already covers.
+	if stale := agent.StaleOffsetsOffered(sq); len(stale) != 0 {
+		t.Fatalf("STALE_OFFSET_OFFERED=%d: %+v", len(stale), stale)
+	}
+	t.Logf("STALE_OFFSET_OFFERED=0 (structural metric; COMPACTION_REPLAY retired as a model-behavior metric)")
 	t.Logf("OFFSET_PROGRESSION=MONOTONIC (1→30→59→88)")
 }
