@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -101,3 +102,68 @@ func TestLoopEmitsRateLimitEventToJournal(t *testing.T) {
 		}
 	}
 }
+
+type breakerProvider struct {
+	emitted int
+}
+
+func (b *breakerProvider) Name() string { return "breaker" }
+
+func (b *breakerProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Chunk, error) {
+	ch := make(chan provider.Chunk, 10)
+	go func() {
+		defer close(ch)
+		for i := 0; i < 3; i++ {
+			b.emitted++
+			ch <- provider.Chunk{
+				Kind: provider.ChunkRateLimit,
+				RateLimit: &provider.RateLimitInfo{
+					Code:      429,
+					Limit:     8000,
+					Used:      8000,
+					Requested: 1000,
+					WaitSec:   1.0,
+					Attempt:   b.emitted,
+					Err:       "http 429: rate limit",
+				},
+			}
+		}
+		ch <- provider.Chunk{Kind: provider.ChunkText, Text: "never reached"}
+		ch <- provider.Chunk{Kind: provider.ChunkStop, Stop: "end_turn"}
+	}()
+	return ch, nil
+}
+
+func TestCircuitBreaker(t *testing.T) {
+	sink := &recordSink{}
+	p := &breakerProvider{}
+	l := &Loop{
+		Provider:        p,
+		Sink:            sink,
+		System:          "test",
+		Budget:          NewBudget(),
+		RateLimitBudget: 3,
+	}
+
+	err := l.Run(context.Background(), "hi")
+	if !errors.Is(err, ErrRateLimitBudget) {
+		t.Fatalf("expected ErrRateLimitBudget, got: %v", err)
+	}
+
+	var hasNotice, hasRunError bool
+	for _, e := range sink.evs {
+		if e.Type == Notice && strings.Contains(e.Text, "rate limit budget exhausted") {
+			hasNotice = true
+		}
+		if e.Type == RunError && e.Err == ErrRateLimitBudget.Error() {
+			hasRunError = true
+		}
+	}
+	if !hasNotice {
+		t.Errorf("expected notice with 'rate limit budget exhausted'")
+	}
+	if !hasRunError {
+		t.Errorf("expected RunError with ErrRateLimitBudget")
+	}
+}
+

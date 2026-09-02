@@ -237,3 +237,33 @@ func TestReplayNoticeDuringToolCallSerializesToValidOpenAIOrder(t *testing.T) {
 		t.Fatalf("expected user notice after tool results, got %v", ms[3])
 	}
 }
+
+func TestDedupReads(t *testing.T) {
+	// Verify that 4 consecutive read_file results for the same path collapse to 1 message.
+	evs := []Event{
+		{Seq: 1, Type: UserMsg, Text: "read file repeatedly"},
+		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "c1", Name: "read_file", Args: json.RawMessage(`{"path":"main.go"}`)}},
+		{Seq: 3, Parent: 2, Type: ToolStart, Call: &ToolCall{ID: "c2", Name: "read_file", Args: json.RawMessage(`{"path":"main.go"}`)}},
+		{Seq: 4, Parent: 3, Type: ToolStart, Call: &ToolCall{ID: "c3", Name: "read_file", Args: json.RawMessage(`{"path":"main.go"}`)}},
+		{Seq: 5, Parent: 4, Type: ToolStart, Call: &ToolCall{ID: "c4", Name: "read_file", Args: json.RawMessage(`{"path":"main.go"}`)}},
+		{Seq: 6, Parent: 5, Type: ToolEnd, Call: &ToolCall{ID: "c1", Name: "read_file", Output: "chunk 1", OK: true}},
+		{Seq: 7, Parent: 6, Type: ToolEnd, Call: &ToolCall{ID: "c2", Name: "read_file", Output: "chunk 2", OK: true}},
+		{Seq: 8, Parent: 7, Type: ToolEnd, Call: &ToolCall{ID: "c3", Name: "read_file", Output: "chunk 3", OK: true}},
+		{Seq: 9, Parent: 8, Type: ToolEnd, Call: &ToolCall{ID: "c4", Name: "read_file", Output: "final content", OK: true}},
+		{Seq: 10, Parent: 9, Type: TurnEnd},
+	}
+
+	ms := Messages(evs)
+	if len(ms) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(ms))
+	}
+
+	resultMsg := ms[2]
+	if len(resultMsg.ToolResults) != 1 {
+		t.Fatalf("expected 4 consecutive read_file results to collapse to 1, got %d", len(resultMsg.ToolResults))
+	}
+	if resultMsg.ToolResults[0].ID != "c4" || resultMsg.ToolResults[0].Output != "final content" {
+		t.Fatalf("expected last result 'final content' (c4), got %v", resultMsg.ToolResults[0])
+	}
+}
+

@@ -83,15 +83,25 @@ func runBash(t *testing.T, verdict agent.Verdict, cmd string) ([]agent.Event, st
 	return events, dir
 }
 
-// TestBashDeniedRunsNoSubprocess: a denied bash call must produce no
-// tool_start and no filesystem side effect.
+// TestBashDeniedRunsNoSubprocess: a denied bash call must produce a paired
+// ToolStart/ToolEnd and no filesystem side effect.
 func TestBashDeniedRunsNoSubprocess(t *testing.T) {
 	events, dir := runBash(t, agent.VerdictDeny, "touch denied.txt")
 
+	startSeen, endSeen := false, false
 	for _, e := range events {
 		if e.Type == agent.ToolStart {
-			t.Fatalf("denied bash call produced ToolStart: %+v", e)
+			startSeen = true
 		}
+		if e.Type == agent.ToolEnd {
+			endSeen = true
+			if e.Call == nil || e.Call.OK {
+				t.Fatalf("denied bash call must have OK=false in ToolEnd")
+			}
+		}
+	}
+	if !startSeen || !endSeen {
+		t.Fatalf("expected paired ToolStart/ToolEnd, got start=%v end=%v", startSeen, endSeen)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "denied.txt")); !os.IsNotExist(err) {
 		t.Fatalf("denied bash call created a side effect file")

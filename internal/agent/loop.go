@@ -42,12 +42,16 @@ type Loop struct {
 	EstimateMessages MessageEstimator
 	CompactBudget    int
 	KeepFullRounds   int
+	// RateLimitBudget is the max 429 events allowed per Run(); 0 means 3.
+	RateLimitBudget int
 	warned           bool
 
-	mu     sync.Mutex
-	seq    int
-	parent int
-	hist   []Event
+	mu                sync.Mutex
+	seq               int
+	parent            int
+	hist              []Event
+	rateLimitHits     int       // resets at the start of each Run()
+	lastRateLimitTime time.Time // for cooldown calculation
 }
 
 func (l *Loop) estimateMessages(ms []provider.Message) int {
@@ -84,6 +88,17 @@ func (l *Loop) pressure(ms []provider.Message) float64 {
 // a bug guard, not a normal ending: a loop that never settles is a loop.
 var ErrMaxTurns = errors.New("turn ceiling reached")
 
+// ErrRateLimitBudget means too many 429s arrived in a single Run(). The
+// session is intact; the caller should wait before retrying.
+var ErrRateLimitBudget = errors.New("rate limit budget exhausted")
+
+func (l *Loop) rateLimitCeiling() int {
+	if l.RateLimitBudget > 0 {
+		return l.RateLimitBudget
+	}
+	return 3
+}
+
 func (l *Loop) Start(banner string) error {
 	return l.emit(Event{Type: RunStart, Text: banner})
 }
@@ -96,12 +111,45 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		return err
 	}
 
+	// Reset rate-limit counters so each Run() gets its own budget.
+	l.mu.Lock()
+	l.rateLimitHits = 0
+	l.lastRateLimitTime = time.Time{}
+	l.mu.Unlock()
+
 	maxTurns := l.MaxTurns
 	if maxTurns <= 0 {
 		maxTurns = 12
 	}
 
 	for turn := 0; turn < maxTurns; turn++ {
+		// CHECK A: circuit breaker before doing any more work.
+		l.mu.Lock()
+		hits := l.rateLimitHits
+		last := l.lastRateLimitTime
+		l.mu.Unlock()
+		if hits >= l.rateLimitCeiling() {
+			_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
+				"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits)})
+			_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})
+			return ErrRateLimitBudget
+		}
+
+		// Cooldown: if we already absorbed some 429s, wait before firing
+		// the next turn so we don't immediately hit the ceiling again.
+		if hits > 0 && !last.IsZero() {
+			cooldown := time.Duration(hits) * 3 * time.Second
+			if elapsed := time.Since(last); elapsed < cooldown {
+				remaining := cooldown - elapsed
+				select {
+				case <-ctx.Done():
+					_ = l.emit(Event{Type: Interrupted, Text: "ctrl+c"})
+					return nil
+				case <-time.After(remaining):
+				}
+			}
+		}
+
 		ms := Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
 		if p := l.pressure(ms); p > 0.75 {
 			if err := l.Compact(ctx, l.compactTarget()); err != nil {
@@ -122,6 +170,16 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			if errors.Is(err, context.Canceled) {
 				_ = l.emit(Event{Type: Interrupted, Text: "ctrl+c"})
 				return nil // an interruption is an outcome, not a failure
+			}
+			if errors.Is(err, ErrRateLimitBudget) {
+				// CHECK B: mid-stream ceiling hit; emit and surface.
+				l.mu.Lock()
+				hits2 := l.rateLimitHits
+				l.mu.Unlock()
+				_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
+					"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits2)})
+				_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})
+				return ErrRateLimitBudget
 			}
 			// A 413 on Groq is a per-minute TPM violation, not a final
 			// failure: waiting a minute resolves it. The human must know,
@@ -235,6 +293,18 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 				})
 			}
 
+			l.mu.Lock()
+			l.rateLimitHits++
+			l.lastRateLimitTime = time.Now()
+			hits := l.rateLimitHits
+			l.mu.Unlock()
+
+			if hits >= l.rateLimitCeiling() {
+				for range ch {
+				} // drain so provider goroutine isn't blocked
+				return nil, "", ErrRateLimitBudget
+			}
+
 		case provider.ChunkError:
 			// Drain so the provider goroutine is never left blocked.
 			for range ch {
@@ -311,6 +381,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 		if !l.knownTool(c.Name) {
 			msg := fmt.Sprintf("unknown tool %q · available: %s", c.Name, strings.Join(l.toolNames(), ", "))
 			ac.OK, ac.Output = false, msg
+			l.emit(Event{Type: ToolStart, Call: &ac})
 			l.emit(Event{Type: ToolEnd, Call: &ac})
 			results = append(results, provider.ToolResult{ID: c.ID, Output: msg, IsErr: true})
 			continue
@@ -321,6 +392,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 			if why != "" {
 				msg += ": " + why
 			}
+			l.emit(Event{Type: ToolStart, Call: &ac})
 			ac.OK, ac.Output = false, msg
 			l.emit(Event{Type: ToolEnd, Call: &ac})
 			results = append(results, provider.ToolResult{ID: c.ID, Output: msg, IsErr: true})

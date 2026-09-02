@@ -64,7 +64,7 @@ func TestToolStartEmission(t *testing.T) {
 		allowed   bool
 		wantStart bool
 	}{
-		{"RejectedTool", false, false},
+		{"RejectedTool", false, true},
 		{"AcceptedTool", true, true},
 	}
 
@@ -111,3 +111,56 @@ func TestToolStartEmission(t *testing.T) {
 		})
 	}
 }
+
+func TestToolPairing(t *testing.T) {
+	cases := []struct {
+		name     string
+		toolName string
+		allowed  bool
+	}{
+		{"UnknownTool", "unknown_tool", true},
+		{"DeniedTool", "test_tool", false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			l := &Loop{
+				Provider: mockProvider{
+					chunks: []provider.Chunk{
+						{Kind: provider.ChunkToolCall, Call: &provider.ToolCall{ID: "call_pair", Name: tc.toolName}},
+						{Kind: provider.ChunkStop, Stop: "tool_calls"},
+					},
+				},
+				Tools:  mockTools{allowed: tc.allowed},
+				Budget: &Budget{},
+				Gate:   &mockTools{allowed: tc.allowed},
+				Human:  &mockTools{allowed: tc.allowed},
+			}
+
+			var events []Event
+			l.Sink = mockSink{fn: func(e Event) error {
+				events = append(events, e)
+				return nil
+			}}
+
+			_ = l.Run(context.Background(), "test")
+
+			var endFound bool
+			for i, e := range events {
+				if e.Type == ToolEnd {
+					endFound = true
+					if i == 0 || events[i-1].Type != ToolStart {
+						t.Errorf("ToolEnd at index %d has no preceding ToolStart", i)
+					}
+					if events[i-1].Call == nil || events[i].Call == nil || events[i-1].Call.ID != events[i].Call.ID {
+						t.Errorf("ToolStart and ToolEnd call ID mismatch: start=%v end=%v", events[i-1].Call, events[i].Call)
+					}
+				}
+			}
+			if !endFound {
+				t.Fatalf("expected ToolEnd event for %s, got none", tc.name)
+			}
+		})
+	}
+}
+
