@@ -189,24 +189,42 @@
         - Exact wait reported by Groq: `Please try again in 4.7775s.`
     - Methodological Evidence Constraint:
       Any measurement relying on raw byte counts from JSONL is invalid if it exceeded 4096 bytes under legacy commits, because `MaxPersistedOutput=4096` clipped persisted tool outputs at that threshold. Legacy measurements under `NABD_MAX_READ=3072` remain valid under this constraint.
-    - **TPM_WINDOW_MODEL**:
+    - **TPM_WINDOW_MODEL & Charging Dynamics**:
       $$\text{prompt\_tokens} + \text{max\_tokens} + \text{used\_in\_60s\_window} \le 8000$$
       - Definition: TPM is an API rate limit, NOT a context capacity limit.
-      - Mechanism: Continuous leaky bucket with capacity `Limit = 8000 tokens` and drain rate $R = \frac{8000}{60} = 133.333\dots \text{ tokens/second}$.
-      - Token accumulation: At turn $t$, $\text{Used}(t) = \max(0, \text{Used}(t_{\text{prev}}) + \text{Tokens}_{\text{prev}} - R \cdot \Delta t)$.
-      - Rejection condition: $\text{Used} + \text{Requested} > \text{Limit}$.
-      - Wait duration derivation: $\text{wait\_s} = \frac{\text{overflow}}{R} = \frac{637}{133.333\dots} = \frac{637 \times 60}{8000} = \mathbf{4.7775\text{ s}}$, exactly matching Groq's output to 4 decimal places.
-      - Resolution of Multi-turn Non-429: In session `20260902-175810.jsonl`, 13 turns executed over 196 seconds (~18–25s between turns). At 133.33 tokens/s drain rate, each 20s turn drained ~2667 tokens, balancing the ~2300–2900 tokens injected under `NABD_MAX_READ=3072`, keeping `Used` around ~2500 and total load $\approx 6424 < 8000$.
-      - Confidence: EXACT (mathematically proven from live session data).
-    - **PACING_POLICY (Proposal Only — Not Implemented)**:
-      - Hybrid pacing policy:
-        1. Turnaround pacing: if $\text{Used}(t) + \text{Requested} > \text{Limit}$, delay before request: $\Delta t_{\text{wait}} \ge \frac{\text{overflow}}{133.33}$.
-        2. Per-turn prompt budgeting: cap single-turn tool injection so that single-turn prompt tokens remain $\le 3500$, allowing ordinary 20s turn latency to naturally drain the token bucket beneath 8000 TPM without stalling.
+      - Fixed Parameter: Drain rate $R = \frac{8000}{60} = 133.333\dots \text{ tokens/second}$ [PROVEN by 4.7775s exact match].
+      - Full Residual Charging Equation:
+        $$\text{charge}_2 = 1859 + R \cdot \Delta t(2 \to 3) - \text{residual}_1$$
+        $$\text{residual}_1 = \max(0, \text{charge}_1 - R \cdot \Delta t(1 \to 2))$$
+        Numerical Proof of Residual: At $R = 133.333\dots \text{ t/s}$, $\text{charge}_1 \approx 1031$ requires $\Delta t > 7.7325\text{s}$ ($1031 / 133.333$) to drain to zero. Measured send-to-send timestamps show $\Delta t(1 \to 2) = 1.058\text{s}$ (Request 1 send: `19:10:51.405Z`, Request 2 send: `19:10:52.463Z`, Request 3 send: `19:10:53.484Z`), yielding $\text{residual}_1 \approx 1031 - (1.058 \times 133.333) \approx 890 \text{ tokens}$. Thus $\text{residual}_1 \ne 0$.
+      - Schema Separation (Observed vs Derived):
+        - `OBSERVED`: `Used = 1859` (single observed data point from HTTP 429 response body at `19:11:25.821Z`).
+        - `DERIVED`: `used_before`, `used_after` (simulator outputs; not proof of themselves).
+        - `UNRECOVERABLE`: `completion_tokens` was not persisted in legacy session event journals.
+      - Parameter Space & Missing Axes:
+        - `charge_basis ∈ {prompt_only (refund=true), prompt_plus_max_tokens (refund=false)}`
+        - `rejected_request_charge ∈ {0, prompt}` (whether the 429-rejected request charges the bucket)
+        - `window_semantics ∈ {leaky_bucket, sliding_log_60s, fixed_window_60s}`
+      - Acceptance Criteria for Model Verification:
+        1. Consistency with HTTP 429 rejection at Turn 3 of `run-maxread-8192-full`.
+        2. Consistency with non-rejection across all 13 turns of `20260902-175810.jsonl`.
+        3. **Uniqueness**: `CONFIRMED` requires survival of exactly one model combination; otherwise `CHARGE_MODEL ∈ {...}` with all surviving candidates published.
+      - Definitive Dual-Probe Empirical Resolution Method (Direct Bucket State Probing):
+        Rather than archaeology over incomplete archives, probe the bucket state directly via HTTP 429:
+        1. Send known request $P_1$ with `max_tokens=64`, wait elapsed time $t$.
+        2. Send an oversized request guaranteed to trigger 429 $\to$ inspect `Used` directly.
+        3. $\text{charge}_1 = \text{Used} + R \cdot t$.
+        4. Repeat with `max_tokens=1024`. If charge changes by 960 tokens, reservation is non-refunded; if unchanged, reservation is refunded.
+      - Formal Consensus Formulation:
+        $$\mathbf{R = 133.333\ t/s\ [PROVEN]}$$
+        $$\mathbf{CHARGE\_MODEL,\ RESERVATION\_REFUND,\ ACCUMULATION\_UNIT,\ WINDOW\_SEMANTICS = UNKNOWN}$$
+        $$\mathbf{PACING\_CEILING \approx 2400\ [PROVISIONAL,\ conditional\ on\ refund=true]}$$
+        *(Caveat: If non-refund is proven, each turn charges prompt + 1024, leaving only ~1376 tokens for prompt history, rendering pacing infeasible; this fact itself serves as strong circumstantial evidence supporting the refund hypothesis, as non-refund would have predicted 429 at Event #05 of session 20260902-175810, which did not occur).*
   - **UI Display Fingerprint & Attribution Chain**:
     - Measurement Attribution: ATTRIBUTED_TO=92643c6 remains the permanent, unalterable attribution for all language delta ratios and prompt_tokens measurements. Commit `92643c6` built binary `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5` (nabd v1.0.1-40-g92643c6).
-    - UI Display Refactor: ATTRIBUTED_TO=8483859 (hardened in 9592463, finalized in 5945ec9, decoupled in 6e58195, bounded 429 resume in 9ba2014, current binary SHA256=`8c7f9255647e4ea3691f4ed53d107ae36058c106e4c1a71ebce062f6fb2b9f1b`, banner `nabd v1.0.1-52-g9ba2014`).
-    - const system integrity: SHA256=`ab1b3997a4209679d37d368999cd57653d200dbdaed9bf09f902d14d86dafca2` (verified byte-for-byte unchanged across all UI translations and pacing fixes).
-    - Commit Chain (11 commits above v1.0.1-40):
+    - UI Display Refactor: ATTRIBUTED_TO=8483859 (hardened in 9592463, finalized in 5945ec9, decoupled in 6e58195, bounded 429 resume in 9ba2014, notice ordering fix in 462566c, current binary SHA256=`3f844b51ceded70451506af75a1496eaa922a7d811219aa9b1c1431f5b77b908`, banner `nabd v1.0.1-54-g462566c`).
+    - const system integrity: SHA256=`ab1b3997a4209679d37d368999cd57653d200dbdaed9bf09f902d14d86dafca2` (verified byte-for-byte unchanged across all UI translations, pacing fixes, and notice ordering fixes).
+    - Commit Chain (12 commits above v1.0.1-40):
       1. `b0b6e51`: notes: add forensic Arabic vs English token ratio measurement
       2. `74922ab`: docs(notes): close editorial measurement corrections
       3. `c617139`: docs(notes): document turn ceiling exhaustion by slicing and session forensic findings
@@ -218,7 +236,8 @@
       9. `a928420`: docs(notes): update measurement characteristics and reconcile fingerprint chain
       10. `6e58195`: refactor(guardian): decouple guardian tests into cmd/ag and internal/ui and document scope boundary
       11. `9ba2014`: feat(pacing): raise MaxPersistedOutput to 16384 and implement bounded HTTP 429 resume
-    - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `git diff --stat 92643c6..c617139` confirms only `NOTES.md` was touched (80 insertions).
+      12. `462566c`: fix(agent): defer notices during in-flight tool calls to ensure valid message ordering
+    - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `e0ae295` is an unmerged amended commit (`git cat-file -t e0ae295` exists, but `git merge-base --is-ancestor e0ae295 HEAD` returns 1); its canonical, living branch ancestor in HEAD is `c617139` (`git merge-base --is-ancestor c617139 HEAD` returns 0).
     - Policy: Strict ASCII enforcement across `internal/ui` and `cmd/ag` string literals with explicit whitelist `AllowedUISymbols` (`⚙ ✓ ✗ ✂ ⚑ › ─ ⊘ ≡ ✎ · … — ▌ →`). The runtime backdoor leak via `error: + msg.err.Error()` is closed via `errSummary` in `chat.go`, intercepting any non-ASCII error from backend packages to `error: execution failed`.
     - Guardian Scope Boundary: The automated ASCII guardian covers `internal/ui` and `cmd/ag` ONLY (each package runs its own native, decoupled test suite). String literals in `internal/agent` (e.g. fold stubs `«read lines ...»`, `«notice»`, compaction templates) are FROZEN BY DESIGN CONTRACT AND INTENT, NOT BY AN AUTOMATED SCANNER.
     - Non-ASCII Inventory Classification across packages:
