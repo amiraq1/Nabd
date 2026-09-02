@@ -182,7 +182,7 @@
       - HTTP 413: Seven historical sessions on 2026-09-01 rejected with `http 413: Request too large` on a single oversized HTTP request.
       - HTTP 429: Session `run-maxread-8192-full` was rejected on Turn 3 with `http 429: Rate limit reached on tokens per minute (TPM)`.
       - Parsing Breakdown:
-        - `Requested = 6778` breakdown: `Requested = 6778` is the prompt_tokens itself (not 5754 + 1024; reservation is excluded from the admission basis, as proven by the session-1 #06 false-429 test where $5431 + 2222 + 1024 = 8677 > 8000$ did not trigger 429).
+        - `Requested = 6778` breakdown: `Requested = 6778` is the prompt_tokens itself (not 5754 + 1024; reservation is excluded from the admission basis, as proven by the session-1 #06 false-429 test where $5431 + 2222 + 1024 = 8677 > 8000$ did not trigger 429). Raw linear accumulation of Turn 1 tool outputs (15976 B) and Turn 2 tool outputs (12337 B) would have yielded ~8383 tokens; `DedupeReadTails` in `internal/agent/squeeze.go` stripped stale truncation tails from Turn 1 upon Turn 2 reads, reducing the live context prompt to 6778 tokens.
         - `Used = 1859`, `Limit = 8000`.
         - Total load = $1859 + 6778 = 8637 > 8000$.
         - Overflow = $8637 - 8000 = \mathbf{637 \text{ tokens}}$ (robustly derived from $\text{Used} + \text{Requested} - \text{Limit}$, regardless of internal composition).
@@ -197,14 +197,16 @@
         $$\text{charge}_2 = 1859 + R \cdot \Delta t(2 \to 3) - \text{residual}_1$$
         $$\text{residual}_1 = \max(0, \text{charge}_1 - R \cdot \Delta t(1 \to 2))$$
         Numerical Proof of Residual: At $R = 133.333\dots \text{ t/s}$, $\text{charge}_1 \approx 1031$ requires $\Delta t > 7.7325\text{s}$ ($1031 / 133.333$) to drain to zero. Measured send-to-send timestamps show $\Delta t(1 \to 2) = 1.058\text{s}$ (Request 1 send: `19:10:51.405Z`, Request 2 send: `19:10:52.463Z`, Request 3 send: `19:10:53.484Z`), yielding $\text{residual}_1 \approx 1031 - (1.058 \times 133.333) \approx 890 \text{ tokens}$. Thus $\text{residual}_1 \ne 0$.
+      - Attempt Boundaries & 4.05s Gap:
+        Turn 3 attempt 1 started at `19:10:53.484` with `firstByte = 25s`, timing out at `19:11:18.484`. In legacy binary `6e58195`, silent retries did not emit journal events for individual retry boundaries. The 4.05s gap between nominal backoff and the 429 response at `19:11:25.821Z` remains raw unrecorded time, keeping `CHARGE_MODEL` strictly pending raw wire instrumentation.
       - Schema Separation (Observed vs Derived):
         - `OBSERVED`: `Used = 1859` (single observed data point from HTTP 429 response body at `19:11:25.821Z`).
         - `DERIVED`: `used_before`, `used_after` (simulator outputs; not proof of themselves).
         - `UNRECOVERABLE`: `completion_tokens` was not persisted in legacy session event journals.
       - Parameter Space & Causal Exclusions:
         - `charge_basis ∈ {prompt_only (refund=true), prompt_plus_max_tokens (refund=false)}`
-        - Non-refund hypothesis causal exclusion: If non-refund held, $\text{charge}_1=2055 \implies \text{residual}_1=1914$, $\text{charge}_2=6203 \implies X = (8117 - 1859)/133.333 = 46.94\text{s}$, requiring Request 3 send at `19:11:39.40` (13.6 seconds after the 429 error was received), which is causally impossible. Hence `RESERVATION_REFUND = true`.
-        - `rejected_request_charge ∈ {0, prompt}` (whether the 429-rejected request charges the bucket).
+        - Non-refund hypothesis causal exclusion: If non-refund held, $\text{charge}_1=2055 \implies \text{residual}_1=1914$, $\text{charge}_2=6203 \implies X = (8117 - 1859)/133.333 = 46.94\text{s}$, requiring Request 3 send at `19:11:39.40` (13.6 seconds after the 429 error was received), which is causally impossible. This exclusion is robust to any $t_3 < 19:11:25.821$. Hence `RESERVATION_REFUND = true`.
+        - `rejected_request_charge ∈ {0, prompt}`: Abandoned/cancelled attempt 1 did not charge the bucket (otherwise Used at t3 would have reached ~8637 instead of 1859), yielding `ABANDONED_REQUEST_CHARGE = 0 [DERIVED]`.
         - `window_semantics ∈ {leaky_bucket}`: A 60s sliding log would give `Used = 6210` at $t_3$, and a fixed window would give 0 or 6210; observed 1859 leaves `leaky_bucket` as the sole surviving model.
       - Acceptance Criteria for Model Verification:
         1. Consistency with HTTP 429 rejection at Turn 3 of `run-maxread-8192-full`.
@@ -217,17 +219,18 @@
         3. Repeat with forced short vs long output to directly isolate completion token charging.
       - Formal Consensus Formulation:
         - `R = 133.333 t/s` [PROVEN]
-        - `RESERVATION_REFUND = true` [DERIVED — causal exclusion of 46.94s]
+        - `RESERVATION_REFUND = true` [DERIVED — causal exclusion, robust to t3]
         - `WINDOW_SEMANTICS = leaky_bucket` [DERIVED — sole survivor]
-        - `ACCEPTANCE_BASIS = prompt_only` [DERIVED — session-1 #06 false-429 test]
-        - `CHARGE_MODEL = prompt (+completion ≤ 100)` [PENDING t3_send]
-        - `ACCUMULATION_UNIT = UNKNOWN`
-        - `PACING_CEILING ≈ 2400` [PROVISIONAL]
+        - `ACCEPTANCE_BASIS = prompt_only` [DERIVED — consistency test]
+        - `ACCUMULATION_UNIT = per_accepted_http_request` [DERIVED — new]
+        - `ABANDONED_REQUEST_CHARGE = 0` [DERIVED — new]
+        - `CHARGE_MODEL = prompt (+completion ≤ 100)` [PENDING raw t3_send; 4.05s unaccounted]
+        - `PACING_POLICY = sleep ≥ prompt/R` [DERIVED, unimplemented]
   - **UI Display Fingerprint & Attribution Chain**:
     - Measurement Attribution: ATTRIBUTED_TO=92643c6 remains the permanent, unalterable attribution for all language delta ratios and prompt_tokens measurements. Commit `92643c6` built binary `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5` (nabd v1.0.1-40-g92643c6).
-    - Notice Reordering Impact: Deferral of notices during in-flight tool calls changes message sequence ordering. Consequently, all subsequent measurements are attributed to `8dc1d605ccc5447e2d805e8826b9d2d7d15bcfe18911f3dadfb38a9ced76959d` (banner `nabd v1.0.1-56-g73ccedf`).
+    - Notice Reordering Impact: Deferral of notices during in-flight tool calls changes message sequence ordering. Consequently, all subsequent measurements are attributed to `7a08f68fc5c95a64bf3ba3d4201f7cdc9a2d87dc2199e910e265120cf8e7c9dd` (banner `nabd v1.0.1-58-g76d0347`).
     - const system integrity: SHA256=`ab1b3997a4209679d37d368999cd57653d200dbdaed9bf09f902d14d86dafca2` (verified byte-for-byte unchanged across all UI translations, pacing fixes, and notice ordering fixes).
-    - Commit Chain (14 commits above v1.0.1-40):
+    - Commit Chain (15 commits above v1.0.1-40):
       1. `b0b6e51`: notes: add forensic Arabic vs English token ratio measurement
       2. `74922ab`: docs(notes): close editorial measurement corrections
       3. `c617139`: docs(notes): document turn ceiling exhaustion by slicing and session forensic findings
@@ -242,8 +245,9 @@
       12. `462566c`: fix(agent): defer notices during in-flight tool calls to ensure valid message ordering
       13. `fb24626`: docs(notes): incorporate 7 mathematical corrections, formal consensus, and direct probe method
       14. `73ccedf`: test(agent): add tests for notice preservation, parallel tool call ordering, and pending bound
-    - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `git tag archive/e0ae295 e0ae295` permanently pins the object against gc. `git diff --stat e0ae295 c617139` shows only 10 lines in NOTES.md (`9 insertions(+), 1 deletion(-)`), proving `c617139` is the direct lineage superset of `e0ae295`, and `git merge-base --is-ancestor c617139 HEAD` returns 0.
-    - Notice Ordering Invariant: Notices must never intervene between an assistant's `tool_calls` and their corresponding user `ToolResults`.
+      15. `76d0347`: feat(agent): record explicit truncation notice on cap overflow and add replay ordering test
+    - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `git tag archive/e0ae295 e0ae295` permanently pins the object against gc. Both `e0ae295` and `c617139` share the exact same parent `74922ab31756d878a5f9b8e707f302128e89d3ab` (`git show -s --format='%H %P' e0ae295 c617139`). `git diff --stat e0ae295 c617139` shows only 10 lines in NOTES.md (`9 insertions(+), 1 deletion(-)`), proving `c617139` is the direct lineage superset of `e0ae295`, and `git merge-base --is-ancestor c617139 HEAD` returns 0.
+    - Notice Ordering Invariant: Notices must never intervene between an assistant's `tool_calls` and their corresponding user `ToolResults`. When pending notices exceed `maxPendingNotices=32`, an explicit truncation notice is recorded to preserve auditability without memory leak.
     - Policy: Strict ASCII enforcement across `internal/ui` and `cmd/ag` string literals with explicit whitelist `AllowedUISymbols` (`⚙ ✓ ✗ ✂ ⚑ › ─ ⊘ ≡ ✎ · … — ▌ →`). The runtime backdoor leak via `error: + msg.err.Error()` is closed via `errSummary` in `chat.go`, intercepting any non-ASCII error from backend packages to `error: execution failed`.
     - Guardian Scope Boundary: The automated ASCII guardian covers `internal/ui` and `cmd/ag` ONLY (each package runs its own native, decoupled test suite). String literals in `internal/agent` (e.g. fold stubs `«read lines ...»`, `«notice»`, compaction templates) are FROZEN BY DESIGN CONTRACT AND INTENT, NOT BY AN AUTOMATED SCANNER.
     - Non-ASCII Inventory Classification across packages:
