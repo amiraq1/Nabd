@@ -212,6 +212,12 @@
         1. Consistency with HTTP 429 rejection at Turn 3 of `run-maxread-8192-full`.
         2. Consistency with non-rejection across all 13 turns of `20260902-175810.jsonl`.
         3. **Uniqueness**: Confirmed model requirements satisfied by causal and forensic elimination.
+      - Forensic Evidence Registry & Derived Constraints:
+        - `SQUEEZE_EVENT`: Recorded in `20260902-175810.jsonl` seq=44 (calib prompt_tokens dropped from 2974 to 2222, $\Delta = 752\text{ tokens}$; encoded_bytes dropped from 10917 to 7802, $\Delta = 3115\text{ bytes}$). All content density measurements from Turn 3 onward are qualified as influenced by context squeezing rather than uncompressed linear accumulation.
+        - `ORDERING_400`: `ORDERING_400 = INFERRED (never observed raw)` — historical session logs show 400 errors only for decommissioned model or missing tool name, never for notice-ordering.
+        - `HTTP_413`: Confirmed raw in all 7 historical sessions on 2026-09-01 (e.g. `20260901-133251.jsonl:8`: `http 413: Request too large ... Limit 8000, Requested 8968`).
+        - `TRUNCATION_CAP`: `maxPendingNotices = 32`, drops newest notice upon overflow and replaces slot 32 with explicit audit record `«notice» (notices truncated: cap reached)`.
+        - `BACKOFF_SOURCE`: `BACKOFF_6e58195 = 1.0s [PROVEN from source]` (`minBackoff = time.Second << 0` in `internal/provider/anthropic.go:24`). Because 1.0s falls strictly outside the admissable domain $[5.554, 7.337]$, the assumption of instantaneous send at backoff end without queuing/network delay is falsified.
       - Definitive Dual-Probe Empirical Resolution Method (Direct Bucket State Probing):
         Rather than archaeology over incomplete archives, probe the bucket state directly via HTTP 429:
         1. Send known request $P_1$ with `max_tokens=64`, wait elapsed time $t$.
@@ -219,18 +225,22 @@
         3. Repeat with forced short vs long output to directly isolate completion token charging.
       - Formal Consensus Formulation:
         - `R = 133.333 t/s` [PROVEN]
-        - `RESERVATION_REFUND = true` [DERIVED — causal exclusion, robust to t3]
-        - `WINDOW_SEMANTICS = leaky_bucket` [DERIVED — sole survivor]
+        - `RESERVATION_REFUND = true` [DERIVED — robust to t3]
+        - `WINDOW_SEMANTICS = leaky_bucket` [DERIVED — falsifiable]
         - `ACCEPTANCE_BASIS = prompt_only` [DERIVED — consistency test]
-        - `ACCUMULATION_UNIT = per_accepted_http_request` [DERIVED — new]
-        - `ABANDONED_REQUEST_CHARGE = 0` [DERIVED — new]
-        - `CHARGE_MODEL = prompt (+completion ≤ 100)` [PENDING raw t3_send; 4.05s unaccounted]
-        - `PACING_POLICY = sleep ≥ prompt/R` [DERIVED, unimplemented]
+        - `ABANDONED_REQUEST_CHARGE = 0` [DERIVED]
+        - `ACCUMULATION_UNIT = per_accepted_http_request` [UNDERDETERMINED — 1:1 in archive]
+        - `CHARGE_MODEL = prompt + c`
+        - `c = 133.333 × backoff − 740.6` [BOUNDED: 0..238]
+        - `BACKOFF_6e58195 = 1.0s` [PROVEN from source]
+        - `PACING_POLICY = local bucket sim` [DERIVED — implemented after validation]
+        - `LINEAGE(e0ae295↔c617139) = sibling` [PROVEN]
   - **UI Display Fingerprint & Attribution Chain**:
     - Measurement Attribution: ATTRIBUTED_TO=92643c6 remains the permanent, unalterable attribution for all language delta ratios and prompt_tokens measurements. Commit `92643c6` built binary `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5` (nabd v1.0.1-40-g92643c6).
-    - Notice Reordering Impact: Deferral of notices during in-flight tool calls changes message sequence ordering. Consequently, all subsequent measurements are attributed to `7a08f68fc5c95a64bf3ba3d4201f7cdc9a2d87dc2199e910e265120cf8e7c9dd` (banner `nabd v1.0.1-58-g76d0347`).
+    - Notice Reordering Impact: Deferral of notices during in-flight tool calls changes message sequence ordering. Consequently, all subsequent measurements are attributed to `bb31cd9a57fb32bf1ff3bc4cd9e50b04b2b3768c8b77b03988efed6512e030b7` (banner `nabd v1.0.1-60-g7473836`).
     - const system integrity: SHA256=`ab1b3997a4209679d37d368999cd57653d200dbdaed9bf09f902d14d86dafca2` (verified byte-for-byte unchanged across all UI translations, pacing fixes, and notice ordering fixes).
-    - Commit Chain (15 commits above v1.0.1-40):
+    - Test Suite Regression Progress: Consistent upward progression from 117 to 120, 121, and 125 tests (all passing).
+    - Commit Chain (16 commits above v1.0.1-40):
       1. `b0b6e51`: notes: add forensic Arabic vs English token ratio measurement
       2. `74922ab`: docs(notes): close editorial measurement corrections
       3. `c617139`: docs(notes): document turn ceiling exhaustion by slicing and session forensic findings
@@ -246,7 +256,8 @@
       13. `fb24626`: docs(notes): incorporate 7 mathematical corrections, formal consensus, and direct probe method
       14. `73ccedf`: test(agent): add tests for notice preservation, parallel tool call ordering, and pending bound
       15. `76d0347`: feat(agent): record explicit truncation notice on cap overflow and add replay ordering test
-    - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `git tag archive/e0ae295 e0ae295` permanently pins the object against gc. Both `e0ae295` and `c617139` share the exact same parent `74922ab31756d878a5f9b8e707f302128e89d3ab` (`git show -s --format='%H %P' e0ae295 c617139`). `git diff --stat e0ae295 c617139` shows only 10 lines in NOTES.md (`9 insertions(+), 1 deletion(-)`), proving `c617139` is the direct lineage superset of `e0ae295`, and `git merge-base --is-ancestor c617139 HEAD` returns 0.
+      16. `7473836`: test(agent): implement four falsification tests for backoff domain, charge floor, bucket wait, and silent attempts
+    - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `git tag archive/e0ae295 e0ae295` permanently pins the object against gc. Both `e0ae295` and `c617139` share the exact same parent `74922ab31756d878a5f9b8e707f302128e89d3ab` (`git show -s --format='%H %P' e0ae295 c617139`), establishing `LINEAGE = sibling-of-same-parent [PROVEN]`. The `EVIDENCE_BROKEN` warning is dropped as `74922ab` is an accessible ancestor in HEAD (rank 42).
     - Notice Ordering Invariant: Notices must never intervene between an assistant's `tool_calls` and their corresponding user `ToolResults`. When pending notices exceed `maxPendingNotices=32`, an explicit truncation notice is recorded to preserve auditability without memory leak.
     - Policy: Strict ASCII enforcement across `internal/ui` and `cmd/ag` string literals with explicit whitelist `AllowedUISymbols` (`⚙ ✓ ✗ ✂ ⚑ › ─ ⊘ ≡ ✎ · … — ▌ →`). The runtime backdoor leak via `error: + msg.err.Error()` is closed via `errSummary` in `chat.go`, intercepting any non-ASCII error from backend packages to `error: execution failed`.
     - Guardian Scope Boundary: The automated ASCII guardian covers `internal/ui` and `cmd/ag` ONLY (each package runs its own native, decoupled test suite). String literals in `internal/agent` (e.g. fold stubs `«read lines ...»`, `«notice»`, compaction templates) are FROZEN BY DESIGN CONTRACT AND INTENT, NOT BY AN AUTOMATED SCANNER.
