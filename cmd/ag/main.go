@@ -25,7 +25,10 @@ const system = `أنت nabd، وكيل برمجة يعمل داخل طرفية �
 أجب بإيجاز شديد. لا تكرر السؤال، لا تعتذر، لا تسرد قوائم بلا داعٍ.
 سطران يكفيان حين يكفيان.`
 
-var version = "dev"
+var (
+	version = "dev"
+	commit  = "none" // full SHA injected at build time; "none" means a plain `go build`
+)
 
 func main() {
 	loadEnv()
@@ -37,7 +40,7 @@ func main() {
 	flag.Parse()
 
 	if *showVer {
-		fmt.Println(version)
+		fmt.Println(version + " · " + commit)
 		return
 	}
 
@@ -127,8 +130,8 @@ func doChat(dir string, cont bool) error {
 	}
 
 	cwd, _ := os.Getwd()
-	if err := loop.Start(fmt.Sprintf("nabd "+version+" · %s · %s",
-		prov.Name(), filepath.Base(cwd))); err != nil {
+	if err := loop.Start(fmt.Sprintf("nabd %s · %s · %s · %s",
+		version, commit, prov.Name(), filepath.Base(cwd))); err != nil {
 		return err
 	}
 

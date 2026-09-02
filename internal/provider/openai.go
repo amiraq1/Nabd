@@ -126,14 +126,11 @@ func (c *OpenAICompat) Label() string {
 	return "unknown"
 }
 
-func (o *OpenAICompat) Name() string { return o.Label() + "/" + shortModel(o.Model) }
-
-func shortModel(m string) string {
-	if i := strings.LastIndexByte(m, '/'); i >= 0 {
-		return m[i+1:]
-	}
-	return m
-}
+// Name carries the full model ID exactly as it is sent on the wire. The
+// truncated form once displayed "qwen3.8-27b" with its namespace cut off,
+// which read like a malformed model name — what the banner shows must be
+// what was sent.
+func (o *OpenAICompat) Name() string { return o.Label() + "/" + o.Model }
 
 func (o *OpenAICompat) Stream(ctx context.Context, req Request) (<-chan Chunk, error) {
 	body, err := o.encode(req)
