@@ -182,15 +182,15 @@
       - HTTP 413: Seven historical sessions on 2026-09-01 rejected with `http 413: Request too large` on a single oversized HTTP request.
       - HTTP 429: Session `run-maxread-8192-full` was rejected on Turn 3 with `http 429: Rate limit reached on tokens per minute (TPM)`.
       - Parsing Breakdown:
-        - `Requested = 6778` consists of: `prompt_tokens ≈ 5754` + `max_tokens = 1024`.
+        - `Requested = 6778` breakdown: `Requested = 6778` is the prompt_tokens itself (not 5754 + 1024; reservation is excluded from the admission basis, as proven by the session-1 #06 false-429 test where $5431 + 2222 + 1024 = 8677 > 8000$ did not trigger 429).
         - `Used = 1859`, `Limit = 8000`.
         - Total load = $1859 + 6778 = 8637 > 8000$.
-        - Overflow = $8637 - 8000 = \mathbf{637 \text{ tokens}}$.
-        - Exact wait reported by Groq: `Please try again in 4.7775s.`
+        - Overflow = $8637 - 8000 = \mathbf{637 \text{ tokens}}$ (robustly derived from $\text{Used} + \text{Requested} - \text{Limit}$, regardless of internal composition).
+        - Exact wait reported by Groq: $637 \times 0.0075 = \mathbf{4.7775\text{ s}}$.
     - Methodological Evidence Constraint:
       Any measurement relying on raw byte counts from JSONL is invalid if it exceeded 4096 bytes under legacy commits, because `MaxPersistedOutput=4096` clipped persisted tool outputs at that threshold. Legacy measurements under `NABD_MAX_READ=3072` remain valid under this constraint.
     - **TPM_WINDOW_MODEL & Charging Dynamics**:
-      $$\text{prompt\_tokens} + \text{max\_tokens} + \text{used\_in\_60s\_window} \le 8000$$
+      $$\text{prompt\_tokens} + \text{used\_in\_60s\_window} \le 8000$$
       - Definition: TPM is an API rate limit, NOT a context capacity limit.
       - Fixed Parameter: Drain rate $R = \frac{8000}{60} = 133.333\dots \text{ tokens/second}$ [PROVEN by 4.7775s exact match].
       - Full Residual Charging Equation:
@@ -201,30 +201,33 @@
         - `OBSERVED`: `Used = 1859` (single observed data point from HTTP 429 response body at `19:11:25.821Z`).
         - `DERIVED`: `used_before`, `used_after` (simulator outputs; not proof of themselves).
         - `UNRECOVERABLE`: `completion_tokens` was not persisted in legacy session event journals.
-      - Parameter Space & Missing Axes:
+      - Parameter Space & Causal Exclusions:
         - `charge_basis ∈ {prompt_only (refund=true), prompt_plus_max_tokens (refund=false)}`
-        - `rejected_request_charge ∈ {0, prompt}` (whether the 429-rejected request charges the bucket)
-        - `window_semantics ∈ {leaky_bucket, sliding_log_60s, fixed_window_60s}`
+        - Non-refund hypothesis causal exclusion: If non-refund held, $\text{charge}_1=2055 \implies \text{residual}_1=1914$, $\text{charge}_2=6203 \implies X = (8117 - 1859)/133.333 = 46.94\text{s}$, requiring Request 3 send at `19:11:39.40` (13.6 seconds after the 429 error was received), which is causally impossible. Hence `RESERVATION_REFUND = true`.
+        - `rejected_request_charge ∈ {0, prompt}` (whether the 429-rejected request charges the bucket).
+        - `window_semantics ∈ {leaky_bucket}`: A 60s sliding log would give `Used = 6210` at $t_3$, and a fixed window would give 0 or 6210; observed 1859 leaves `leaky_bucket` as the sole surviving model.
       - Acceptance Criteria for Model Verification:
         1. Consistency with HTTP 429 rejection at Turn 3 of `run-maxread-8192-full`.
         2. Consistency with non-rejection across all 13 turns of `20260902-175810.jsonl`.
-        3. **Uniqueness**: `CONFIRMED` requires survival of exactly one model combination; otherwise `CHARGE_MODEL ∈ {...}` with all surviving candidates published.
+        3. **Uniqueness**: Confirmed model requirements satisfied by causal and forensic elimination.
       - Definitive Dual-Probe Empirical Resolution Method (Direct Bucket State Probing):
         Rather than archaeology over incomplete archives, probe the bucket state directly via HTTP 429:
         1. Send known request $P_1$ with `max_tokens=64`, wait elapsed time $t$.
-        2. Send an oversized request guaranteed to trigger 429 $\to$ inspect `Used` directly.
-        3. $\text{charge}_1 = \text{Used} + R \cdot t$.
-        4. Repeat with `max_tokens=1024`. If charge changes by 960 tokens, reservation is non-refunded; if unchanged, reservation is refunded.
+        2. Send an oversized request guaranteed to trigger 429 $\to$ inspect `Used` directly: $\text{charge}_1 = \text{Used} + R \cdot t$.
+        3. Repeat with forced short vs long output to directly isolate completion token charging.
       - Formal Consensus Formulation:
-        $$\mathbf{R = 133.333\ t/s\ [PROVEN]}$$
-        $$\mathbf{CHARGE\_MODEL,\ RESERVATION\_REFUND,\ ACCUMULATION\_UNIT,\ WINDOW\_SEMANTICS = UNKNOWN}$$
-        $$\mathbf{PACING\_CEILING \approx 2400\ [PROVISIONAL,\ conditional\ on\ refund=true]}$$
-        *(Caveat: If non-refund is proven, each turn charges prompt + 1024, leaving only ~1376 tokens for prompt history, rendering pacing infeasible; this fact itself serves as strong circumstantial evidence supporting the refund hypothesis, as non-refund would have predicted 429 at Event #05 of session 20260902-175810, which did not occur).*
+        - `R = 133.333 t/s` [PROVEN]
+        - `RESERVATION_REFUND = true` [DERIVED — causal exclusion of 46.94s]
+        - `WINDOW_SEMANTICS = leaky_bucket` [DERIVED — sole survivor]
+        - `ACCEPTANCE_BASIS = prompt_only` [DERIVED — session-1 #06 false-429 test]
+        - `CHARGE_MODEL = prompt (+completion ≤ 100)` [PENDING t3_send]
+        - `ACCUMULATION_UNIT = UNKNOWN`
+        - `PACING_CEILING ≈ 2400` [PROVISIONAL]
   - **UI Display Fingerprint & Attribution Chain**:
     - Measurement Attribution: ATTRIBUTED_TO=92643c6 remains the permanent, unalterable attribution for all language delta ratios and prompt_tokens measurements. Commit `92643c6` built binary `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5` (nabd v1.0.1-40-g92643c6).
-    - UI Display Refactor: ATTRIBUTED_TO=8483859 (hardened in 9592463, finalized in 5945ec9, decoupled in 6e58195, bounded 429 resume in 9ba2014, notice ordering fix in 462566c, current binary SHA256=`3f844b51ceded70451506af75a1496eaa922a7d811219aa9b1c1431f5b77b908`, banner `nabd v1.0.1-54-g462566c`).
+    - Notice Reordering Impact: Deferral of notices during in-flight tool calls changes message sequence ordering. Consequently, all subsequent measurements are attributed to `8dc1d605ccc5447e2d805e8826b9d2d7d15bcfe18911f3dadfb38a9ced76959d` (banner `nabd v1.0.1-56-g73ccedf`).
     - const system integrity: SHA256=`ab1b3997a4209679d37d368999cd57653d200dbdaed9bf09f902d14d86dafca2` (verified byte-for-byte unchanged across all UI translations, pacing fixes, and notice ordering fixes).
-    - Commit Chain (12 commits above v1.0.1-40):
+    - Commit Chain (14 commits above v1.0.1-40):
       1. `b0b6e51`: notes: add forensic Arabic vs English token ratio measurement
       2. `74922ab`: docs(notes): close editorial measurement corrections
       3. `c617139`: docs(notes): document turn ceiling exhaustion by slicing and session forensic findings
@@ -237,7 +240,10 @@
       10. `6e58195`: refactor(guardian): decouple guardian tests into cmd/ag and internal/ui and document scope boundary
       11. `9ba2014`: feat(pacing): raise MaxPersistedOutput to 16384 and implement bounded HTTP 429 resume
       12. `462566c`: fix(agent): defer notices during in-flight tool calls to ensure valid message ordering
-    - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `e0ae295` is an unmerged amended commit (`git cat-file -t e0ae295` exists, but `git merge-base --is-ancestor e0ae295 HEAD` returns 1); its canonical, living branch ancestor in HEAD is `c617139` (`git merge-base --is-ancestor c617139 HEAD` returns 0).
+      13. `fb24626`: docs(notes): incorporate 7 mathematical corrections, formal consensus, and direct probe method
+      14. `73ccedf`: test(agent): add tests for notice preservation, parallel tool call ordering, and pending bound
+    - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `git tag archive/e0ae295 e0ae295` permanently pins the object against gc. `git diff --stat e0ae295 c617139` shows only 10 lines in NOTES.md (`9 insertions(+), 1 deletion(-)`), proving `c617139` is the direct lineage superset of `e0ae295`, and `git merge-base --is-ancestor c617139 HEAD` returns 0.
+    - Notice Ordering Invariant: Notices must never intervene between an assistant's `tool_calls` and their corresponding user `ToolResults`.
     - Policy: Strict ASCII enforcement across `internal/ui` and `cmd/ag` string literals with explicit whitelist `AllowedUISymbols` (`⚙ ✓ ✗ ✂ ⚑ › ─ ⊘ ≡ ✎ · … — ▌ →`). The runtime backdoor leak via `error: + msg.err.Error()` is closed via `errSummary` in `chat.go`, intercepting any non-ASCII error from backend packages to `error: execution failed`.
     - Guardian Scope Boundary: The automated ASCII guardian covers `internal/ui` and `cmd/ag` ONLY (each package runs its own native, decoupled test suite). String literals in `internal/agent` (e.g. fold stubs `«read lines ...»`, `«notice»`, compaction templates) are FROZEN BY DESIGN CONTRACT AND INTENT, NOT BY AN AUTOMATED SCANNER.
     - Non-ASCII Inventory Classification across packages:
