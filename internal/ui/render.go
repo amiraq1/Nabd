@@ -149,16 +149,29 @@ func toolEnd(c *agent.ToolCall, width int) string {
 	return out
 }
 
-// tail keeps the last line of output: the verdict is at the bottom.
+// maxTailLines is how many trailing lines of a tool result the phone screen
+// keeps: enough to read a short glob/read result whole, shallow enough that
+// long shell logs still end at the verdict. A one-line tail collapses a 5-row
+// glob listing to a single file — that is the "glob * → one line" defect,
+// because the result set itself vanishes and only the bottom line survives.
+const maxTailLines = 8
+
+// tail keeps the trailing lines of output. The verdict is at the bottom, but a
+// single-line tail hides every completed line above it — fatal for list
+// producers like glob, where the rows ARE the answer. Showing the last few
+// lines preserves the bottom verdict/tail while keeping the listing readable.
 func tail(s string) string {
 	s = strings.TrimRight(s, "\n")
 	if s == "" {
 		return ""
 	}
-	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
-		return s[i+1:]
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxTailLines {
+		return s
 	}
-	return s
+	kept := lines[len(lines)-maxTailLines:]
+	kept[0] = "… " + kept[0]
+	return strings.Join(kept, "\n")
 }
 
 func dur(ms int64) string {
