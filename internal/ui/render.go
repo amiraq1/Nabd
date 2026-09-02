@@ -91,7 +91,8 @@ func RenderEvent(e agent.Event, width int) string {
 		}
 		return ""
 
-	case agent.TurnStart, agent.TurnEnd:
+	case agent.TurnStart, agent.TurnEnd, agent.EventCalib:
+		// TurnEnd and calibration are structure, not content: nothing to show.
 		return ""
 	}
 	// Unknown type: show it rather than hide it. A newer nabd wrote this.

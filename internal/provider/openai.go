@@ -230,13 +230,13 @@ func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chun
 		return parseRetryAfter(resp.Header.Get("retry-after")),
 			&httpError{Status: resp.StatusCode, Body: apiMessage(msg)}
 	}
-	return o.readSSE(ctx, resp.Body, out, sent)
+	return o.readSSE(ctx, resp.Body, out, sent, len(body))
 }
 
 // readSSE accumulates tool calls by index. Unlike Anthropic there is no
 // block-stop event, so a call is only complete when the stream says the
 // turn finished -- which is why every call is emitted at the end.
-func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chunk, sent *atomic.Bool) (time.Duration, error) {
+func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chunk, sent *atomic.Bool, encodedBytes int) (time.Duration, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
@@ -336,7 +336,7 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 		}
 	}
 
-	emit(Chunk{Kind: ChunkStop, Stop: stop, PromptTokens: promptTokens})
+	emit(Chunk{Kind: ChunkStop, Stop: stop, PromptTokens: promptTokens, EncodedBytes: encodedBytes})
 	return 0, nil
 }
 

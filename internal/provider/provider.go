@@ -69,6 +69,9 @@ type Chunk struct {
 	// from usage.prompt_tokens. Zero when the provider does not report it.
 	// Carried on the final chunk of a turn.
 	PromptTokens int
+	// EncodedBytes is the size of the JSON request body actually sent.
+	// Carried on the final chunk of a turn, for budget calibration.
+	EncodedBytes int
 }
 
 type Request struct {

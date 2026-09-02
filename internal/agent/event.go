@@ -31,6 +31,7 @@ const (
 	Rewind      EventType = "rewind"
 	EventEdit   EventType = "edit_record"
 	EventRead   EventType = "read_record"
+	EventCalib  EventType = "calibration"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.
@@ -53,9 +54,21 @@ type Event struct {
 	Requested int         `json:"requested,omitempty"`
 	Edit      *EditRecord `json:"edit,omitempty"`
 	Read      *ReadRecord `json:"read,omitempty"`
+	Calib     *Calibration `json:"calib,omitempty"`
 
 	// FirstKept is set on Compact only: the oldest Seq that survives.
 	FirstKept int `json:"first_kept,omitempty"`
+}
+
+// Calibration is one measurement point for the budget regression: the
+// encoded request bytes, the provider's measured prompt tokens, and the
+// message count sent. Two such points solve ratio and overhead by
+// regression. It is journal-only — Messages() ignores it, so it never
+// reaches the model or the human screen.
+type Calibration struct {
+	EncodedBytes int `json:"encoded_bytes"`
+	PromptTokens int `json:"prompt_tokens"`
+	Messages     int `json:"messages"`
 }
 
 // ReadRecord describes one read_file call. Truncated is true only when the

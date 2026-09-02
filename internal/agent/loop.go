@@ -160,6 +160,20 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 
 		case provider.ChunkStop:
 			stop = c.Stop
+			// One calibration record per successful turn: the encoded request
+			// bytes, the provider's measured prompt tokens, and the message
+			// count. Two such points solve ratio and overhead by regression
+			// (bytes ≈ overhead + prompt_tokens/ratio·n_msgs) — no failed
+			// request or captured body needed. Journal-only: Messages()
+			// ignores the type, so it never reaches the model or the screen
+			// and cannot inflate the history that caused a 413.
+			if c.EncodedBytes > 0 {
+				_ = l.emit(Event{Type: EventCalib, Calib: &Calibration{
+					EncodedBytes: c.EncodedBytes,
+					PromptTokens: c.PromptTokens,
+					Messages:     len(ms),
+				}})
+			}
 			if c.PromptTokens > 0 {
 				// Fold the provider's measured input count into the budget
 				// ratio — this is the calibration that was dead until now.
