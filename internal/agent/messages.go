@@ -26,7 +26,7 @@ func Messages(evs []Event) []provider.Message {
 		// provider. If the branch was cut mid-turn, answer for the dead call.
 		for id, name := range open {
 			results = append(results, provider.ToolResult{
-				ID: id, Output: "أُلغي: " + name, IsErr: true,
+				ID: id, Output: "cancelled: " + name, IsErr: true,
 			})
 			delete(open, id)
 		}
@@ -50,14 +50,14 @@ func Messages(evs []Event) []provider.Message {
 		case Compact:
 			flush()
 			out = append(out, provider.Message{
-				Role: provider.User, Text: "ملخّص ما سبق من الجلسة:\n" + e.Text,
+				Role: provider.User, Text: "Session summary of what came before:\n" + e.Text,
 			})
 
 		case Notice:
 			// A human command that changed the world. The model must hear it,
 			// or it will keep reasoning about an edit that no longer exists.
 			flush()
-			out = append(out, provider.Message{Role: provider.User, Text: "«نظام» " + e.Text})
+			out = append(out, provider.Message{Role: provider.User, Text: "«system» " + e.Text})
 
 		case TextDelta:
 			if len(results) > 0 { // results closed the previous round

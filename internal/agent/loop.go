@@ -69,16 +69,16 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		ms := Squeeze(Messages(Live(l.hist)), KeepFullRounds)
 		if p := l.Budget.Pressure(ms); p > 0.75 {
 			if err := l.Compact(ctx, l.Budget.Usable()*4/10); err != nil {
-				l.emit(Event{Type: Notice, Text: "تعذّر الضغط: " + err.Error()})
+				l.emit(Event{Type: Notice, Text: "compact failed: " + err.Error()})
 			} else {
 				ms = Squeeze(Messages(Live(l.hist)), KeepFullRounds)
-				l.emit(Event{Type: Notice, Text: fmt.Sprintf("ضُغط السياق · %d%% ← %d%%",
+				l.emit(Event{Type: Notice, Text: fmt.Sprintf("context compacted · %d%% → %d%%",
 					int(p*100), int(l.Budget.Pressure(ms)*100))})
 				l.warned = false
 			}
 		} else if p > 0.6 && !l.warned {
 			l.warned = true
-			l.emit(Event{Type: Notice, Text: fmt.Sprintf("السياق %d%%", int(p*100))})
+			l.emit(Event{Type: Notice, Text: fmt.Sprintf("context %d%%", int(p*100))})
 		}
 
 		calls, stop, err := l.streamTurn(ctx, ms)
@@ -99,7 +99,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		}
 		if len(calls) == 0 {
 			if stop == "max_tokens" {
-				_ = l.emit(Event{Type: Notice, Text: "بلغ حدّ الطول · اطلب المتابعة"})
+				_ = l.emit(Event{Type: Notice, Text: "reached length limit · say \"continue\""})
 			}
 			return nil
 		}
@@ -167,7 +167,7 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 				// is session-varying state, and the log must show which
 				// budget the agent worked under.
 				if l.Budget.Calibrate(c.PromptTokens, l.Budget.Estimate(ms)) {
-					_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf("عُدّل معامل السياق إلى %.2f (مقاس: %d رمزًا)", l.Budget.Ratio(), c.PromptTokens)})
+					_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf("context ratio adjusted to %.2f (measured: %d tokens)", l.Budget.Ratio(), c.PromptTokens)})
 				}
 			}
 
@@ -189,7 +189,7 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 	// marker sits on its own line, fenced by blank lines, so it never lands
 	// inside a code block that the cut may have opened.
 	if stop == "max_tokens" && text != "" {
-		if err := l.emit(Event{Type: TextDelta, Text: "\n\n[مُقتطَع: بلغ حدّ الطول — اطلب «أكمل»]\n\n"}); err != nil {
+		if err := l.emit(Event{Type: TextDelta, Text: "\n\n[CUT: reached length limit — say \"continue\" to resume]\n\n"}); err != nil {
 			return nil, "", err
 		}
 	}
@@ -210,7 +210,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 			// Every remaining call still needs a result block.
 			for _, rest := range calls[i:] {
 				results = append(results, provider.ToolResult{
-					ID: rest.ID, Output: "أُلغي", IsErr: true,
+					ID: rest.ID, Output: "cancelled", IsErr: true,
 				})
 			}
 			return results, true, nil
@@ -219,7 +219,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 		ac := ToolCall{ID: c.ID, Name: c.Name, Args: c.Input}
 		d, why := l.decide(ctx, ac, l.emit)
 		if d == Deny {
-			msg := "رُفض تنفيذ " + c.Name
+			msg := "refused to run " + c.Name
 			if why != "" {
 				msg += ": " + why
 			}
@@ -280,12 +280,12 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 // the conversation down with it.
 func (l *Loop) exec(ctx context.Context, c provider.ToolCall) (out Outcome, err error) {
 	if l.Tools == nil {
-		return Outcome{OK: false}, fmt.Errorf("لا أدوات في هذه النسخة: %s", c.Name)
+		return Outcome{OK: false}, fmt.Errorf("no tools in this build: %s", c.Name)
 	}
 	defer func() {
 		if r := recover(); r != nil {
 			out = Outcome{OK: false}
-			err = fmt.Errorf("panic في %s: %v", c.Name, r)
+			err = fmt.Errorf("panic in %s: %v", c.Name, r)
 		}
 	}()
 	if d, ok := l.Tools.(interface {
@@ -313,7 +313,7 @@ func tpmLimitNotice(err error) (tpmNotice, bool) {
 		limit = 8000
 	}
 	return tpmNotice{
-		Text:      fmt.Sprintf("سقف الدقيقة: %d · المطلوب %d · انتظر ثم أعد", limit, tpm.Requested),
+		Text:      fmt.Sprintf("per-minute limit: %d · requested %d · wait then retry", limit, tpm.Requested),
 		Limit:     limit,
 		Requested: tpm.Requested,
 	}, true

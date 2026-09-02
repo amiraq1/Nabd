@@ -30,7 +30,7 @@ type Asker interface {
 // shows not only what ran but what was permitted, and by whom.
 func (l *Loop) decide(ctx context.Context, c ToolCall, emit func(Event) error) (Decision, string) {
 	if l.Gate == nil {
-		return Deny, "لا بوابة أذونات مركّبة"
+		return Deny, "no permission gate installed"
 	}
 	v, why := l.Gate.Check(c.Name)
 	switch v {
@@ -38,14 +38,14 @@ func (l *Loop) decide(ctx context.Context, c ToolCall, emit func(Event) error) (
 		return AllowOnce, ""
 	case VerdictDeny:
 		if why == "" {
-			why = "أداة غير معروفة أو ممنوعة"
+			why = "unknown or forbidden tool"
 		}
 		emit(Event{Type: PermReply, Call: &c, Decision: Deny, Text: why})
 		return Deny, why
 	}
 	if l.Human == nil {
-		emit(Event{Type: PermReply, Call: &c, Decision: Deny, Text: "لا واجهة للسؤال"})
-		return Deny, "لا واجهة للسؤال"
+		emit(Event{Type: PermReply, Call: &c, Decision: Deny, Text: "no prompt interface"})
+		return Deny, "no prompt interface"
 	}
 	emit(Event{Type: PermAsk, Call: &c, Text: why})
 	d := l.Human.Ask(ctx, c)

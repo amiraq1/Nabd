@@ -24,7 +24,7 @@ var readLineRE = regexp.MustCompile(`^(\d+)\|`)
 
 // truncTailRE matches the truncation tail read_file appends: the range and
 // the explicit next offset, all in lines.
-var truncTailRE = regexp.MustCompile(`\[TRUNCATED: قُرئت الأسطر (\d+)-(\d+) من (\d+)؛ للمتابعة استخدم offset=\d+\]`)
+var truncTailRE = regexp.MustCompile(`\[TRUNCATED: read lines (\d+)-(\d+) of (\d+); continue with offset=\d+\]`)
 
 // isReadResult reports whether a tool result came from read_file: its body
 // is line-numbered output (`N|...`) — nothing else in the registry emits
@@ -146,7 +146,7 @@ func Squeeze(ms []provider.Message, keepRounds int) []provider.Message {
 					// model not to re-read it: the content is gone from
 					// context, and re-reading would only re-truncate and
 					// re-accumulate. Preventing the loop beats inviting it.
-					rs[j].Output = fmt.Sprintf("«قرأتُ الأسطر %s من %s (المحتوى مضغوط؛ لا تعد قراءة هذا النطاق)»", rng, p)
+					rs[j].Output = fmt.Sprintf("«read lines %s of %s (content squeezed; do not re-read this range)»", rng, p)
 					out[i].ToolResults = rs
 					continue
 				}
@@ -154,7 +154,7 @@ func Squeeze(ms []provider.Message, keepRounds int) []provider.Message {
 			if len(r.Output) < stubOver {
 				continue
 			}
-			rs[j].Output = fmt.Sprintf("«%d بايت من المخرَج أُزيلت لتوفير السياق؛ أعد النداء إن احتجتها»", len(r.Output))
+			rs[j].Output = fmt.Sprintf("«%d bytes of output removed to save context; re-run the call if needed»", len(r.Output))
 		}
 		out[i].ToolResults = rs
 	}

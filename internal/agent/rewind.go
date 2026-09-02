@@ -26,7 +26,7 @@ func (l *Loop) Rewind(n int) (string, error) {
 		}
 	}
 	if len(idx) == 0 {
-		return "", errors.New("لا أدوار للتراجع عنها")
+		return "", errors.New("no turns to rewind")
 	}
 	if n > len(idx) {
 		n = len(idx)
@@ -36,7 +36,7 @@ func (l *Loop) Rewind(n int) (string, error) {
 
 	l.emitAt(cut.Parent, Event{
 		Type: Rewind,
-		Text: fmt.Sprintf("رجوع %d دور (%d حدثًا)", n, dropped),
+		Text: fmt.Sprintf("rewound %d turns (%d events)", n, dropped),
 	})
 	return cut.Text, nil
 }

@@ -12,9 +12,9 @@ import (
 	"nabd/internal/provider"
 )
 
-const summaryPrompt = `أنت تُلخّص جلسة برمجة لتستكملها بعد قصّ السياق.
-اكتب ملخّصًا موجزًا يذكر: ما طلبه المستخدم، ما أُنجز فعلًا، الملفات التي قُرئت أو عُدّلت بأسمائها، القرارات المتّخذة وأسبابها، وما بقي معلّقًا.
-لا تعتذر، لا تُحيّي، لا تخترع ما لم يحدث. النقاط التي لا تعرفها اتركها.`
+const summaryPrompt = `You are summarising a coding session so it can continue after context compaction.
+Write a brief summary mentioning: what the user asked, what was actually done, files read or modified by name, decisions taken and why, and what remains pending.
+Do not apologise, do not greet, do not invent what did not happen. Leave out points you do not know.`
 
 // Compact cuts history at the newest user turn whose tail fits in target,
 // summarises everything before it, and appends one Compact entry.
@@ -25,7 +25,7 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 
 	firstKept, dropped, ok := chooseBoundary(live, target)
 	if !ok {
-		return fmt.Errorf("لا حدّ صالح للضغط (%d حدثًا حيًّا)", len(live))
+		return fmt.Errorf("no valid boundary (%d live events)", len(live))
 	}
 	sum := l.summarise(ctx, dropped)
 	l.emit(Event{Type: Compact, FirstKept: firstKept, Text: sum})
@@ -67,7 +67,7 @@ func (l *Loop) summarise(ctx context.Context, dropped []Event) string {
 	}
 	ms := append(Messages(dropped), provider.Message{
 		Role: provider.User,
-		Text: "لخّص ما سبق حسب التعليمات.",
+		Text: "Summarise what came before per the instructions.",
 	})
 	ch, err := l.Provider.Stream(ctx, provider.Request{
 		Messages: ms,
@@ -132,17 +132,17 @@ func mechanicalSummary(evs []Event) string {
 		}
 	}
 	var b strings.Builder
-	b.WriteString("«سجل مختصر»\nطلبات المستخدم:\n")
+	b.WriteString("«brief log»\nUser requests:\n")
 	b.WriteString(strings.Join(asks, "\n"))
 	if len(files) > 0 {
 		var fs []string
 		for f := range files {
 			fs = append(fs, f)
 		}
-		fmt.Fprintf(&b, "\nملفات مسّتها الأدوات: %s", strings.Join(fs, "، "))
+		fmt.Fprintf(&b, "\nFiles touched by tools: %s", strings.Join(fs, ", "))
 	}
 	if errs > 0 {
-		fmt.Fprintf(&b, "\nأخطاء أدوات: %d", errs)
+		fmt.Fprintf(&b, "\nTool errors: %d", errs)
 	}
 	return b.String()
 }
