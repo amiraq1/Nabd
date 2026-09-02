@@ -146,14 +146,16 @@
       - Pairwise Deltas:
         - Delta 1->2: Δtokens = 128, Δbytes = 794, Δrunes = 440 (0.161209 tokens/byte, 3.4375 runes/token).
         - Delta 2->3: Δtokens = 128, Δbytes = 794, Δrunes = 440 (0.161209 tokens/byte, 3.4375 runes/token).
-      - OLS Linear Model (3 points):
+      - Measurement Characteristics & Linearity Limits:
+        - REPRODUCIBILITY = exact (identical slices); N_DISTINCT_LINES = 1. The ±0.0 token delta is an artifact of construction because the repeated lines produce identical slices; it is not an empirical proof of general linearity (contrast with README.md heterogeneous prose/code residuals of ±13 tokens).
         - tokens = 0.16120907 * bytes + 1088.40 (slope = 0.161209 tokens/byte -> 6.20 bytes/token).
         - tokens = 0.29090909 * runes + 1075.04 (slope = 0.290909 tokens/rune -> 3.44 runes/token).
-        - Intercept = 1088.40 tokens -> Scaffolding overhead = 65.40 tokens (baseline 1023 tokens).
-        - Residuals across all 3 points: P1 = 0.00, P2 = 0.00, P3 = 0.00 tokens (residual = ±0.0 tokens).
-      - Verified Definition: `FILE_CONTENT_RATIO = 3.44 runes/token (pure AR, in tool_result) · SCAFFOLD = 65 ± 0.0 tokens · [3 points]`.
-      - Alignment: 3.44 runes/token sits cleanly inside the [2.90, 3.47] bounds established for direct raw prose (measured 3.47–3.56). This proves that structural tool framing and line numbering do NOT alter the per-rune token density of the file content, and the entire structural cost is concentrated in the intercept (~65 tokens).
-      - Baseline Shift: `CONTENT_SLOPE reproduced exactly (128/794/440); BASELINE shifted 1020→1023 (root-name candidate, unverified)`. User prompt was "اقرأ pure_ar.txt" (16 runes, 22 bytes, ~4-5 tokens) vs "ok" (2 runes, 2 bytes, 1 token) in Task 3 baseline.
+        - SCAFFOLD ≈ 65 [extrapolated to bytes=0, outside measured domain 500–2088; structural framing bounds 41–65 remain active].
+      - Verified Definition: `FILE_CONTENT_RATIO = 3.44 runes/token (pure AR, in tool_result) · SCAFFOLD ≈ 65 [extrapolated to bytes=0] · [3 points]`.
+      - Density Driver: The ASCII line numbering share is submerged because each delta spans only 2 lines. **المحرّك هو عدد الأسطر لا عدد البايتات** — evidenced by README (59 bytes/line -> 3.56 bytes/token) vs pure Arabic (259 bytes/line -> 6.20 bytes/token).
+      - Baseline Shift Resolution: `CONTENT_SLOPE reproduced exactly (128/794/440); BASELINE shifted 1020→1023 [RESOLVED: root name not in prompt; verified in workspace_ar with user_msg="ok" yielding prompt_tokens=1020; delta +3 is caused by user_msg="اقرأ pure_ar.txt" (16 runes / 20 bytes)]`.
+      - Point Attribution (Uniform):
+        - P1, P2, P3 all measured under uniform binary: BINARY_SHA256=`8d25cd21b963157aca74a752baa7647f8a62b6bb81ccd7f5baba4df7e42fe183`, Banner: `nabd v1.0.1-45-g80e5c97 · 80e5c97ad8fca7d21451da7ba0e014befc33b068 · groq.com/qwen/qwen3.8-27b · workspace_ar`.
     - **PURE_ARABIC Sample (D3-compliant isolated prose measurement)**:
       - Verbatim text: "هذا نص عربي خالص لا يحتوي على أي حرف لاتيني ولا أي رقم غربي ولا علامات تشكيل. كتب هذا النص ليكون مقياسا دقيقا لكثافة الرموز في النماذج اللغوية الحديثة عند التعامل مع اللغة العربية في سياقات البرمجة والأنظمة الحاسوبية."
       - D3 Validation: NFC normalized = True, diacritics = 0, Latin letters = 0, Western digits = 0, path/code syntax = 0.
@@ -172,17 +174,20 @@
     - Root cleanup noted: Loose non-test file `test_gate.go` and scratch scripts `fix_*.py` exist in repository root; `test_gate.go` without `_test.go` suffix compiles into root package in `go build ./...` unless ignored.
   - **UI Display Fingerprint & Attribution Chain**:
     - Measurement Attribution: ATTRIBUTED_TO=92643c6 remains the permanent, unalterable attribution for all language delta ratios and prompt_tokens measurements. Commit `92643c6` built binary `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5` (nabd v1.0.1-40-g92643c6).
-    - UI Display Refactor: ATTRIBUTED_TO=8483859 (hardened in 9592463, built binary `8e577debbbe5e75c280caa657f57630578264b49920da7f2156628e410238404`, banner `nabd v1.0.1-46-g9592463`).
-    - Commit Chain (6 commits above v1.0.1-40):
+    - UI Display Refactor: ATTRIBUTED_TO=8483859 (hardened in 9592463, finalized in 5945ec9, current binary SHA256=`4389e2903049b3aefa98f444b5d51def055556d9b9796e44bb392cc86e48cfc7`, banner `nabd v1.0.1-48-g5945ec9`).
+    - const system integrity: SHA256=`ab1b3997a4209679d37d368999cd57653d200dbdaed9bf09f902d14d86dafca2` (verified byte-for-byte unchanged across all UI translations).
+    - Commit Chain (8 commits above v1.0.1-40):
       1. `b0b6e51`: notes: add forensic Arabic vs English token ratio measurement
       2. `74922ab`: docs(notes): close editorial measurement corrections
       3. `c617139`: docs(notes): document turn ceiling exhaustion by slicing and session forensic findings
       4. `8483859`: refactor(ui): enforce ascii and allowed ui symbol whitelist for ui string literals
       5. `80e5c97`: docs(notes): document UI display fingerprint and attribution
       6. `9592463`: refactor(ui): sanitize runtime error display to prevent backdoor non-ascii leak
+      7. `87fcd76`: docs(notes): update 3-point regression and fingerprint chain documentation
+      8. `5945ec9`: refactor(cmd/ag): translate terminal display strings and extend ascii guardian test
     - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `git diff --stat 92643c6..c617139` confirms only `NOTES.md` was touched (80 insertions).
-    - Policy: Strict ASCII enforcement across `internal/ui` string literals with explicit whitelist `AllowedUISymbols` (`⚙ ✓ ✗ ✂ ⚑ › ─ ⊘ ≡ ✎ · … — ▌ →`). The runtime backdoor leak via `error: + msg.err.Error()` is closed via `errSummary` in `chat.go`, intercepting any non-ASCII error from backend packages to `error: execution failed`.
+    - Policy: Strict ASCII enforcement across `internal/ui` and `cmd/ag` string literals with explicit whitelist `AllowedUISymbols` (`⚙ ✓ ✗ ✂ ⚑ › ─ ⊘ ≡ ✎ · … — ▌ →`). The runtime backdoor leak via `error: + msg.err.Error()` is closed via `errSummary` in `chat.go`, intercepting any non-ASCII error from backend packages to `error: execution failed`.
     - Non-ASCII Inventory Classification across packages:
       - Model-facing (FROZEN inside prompt_tokens): `const system` (`cmd/ag/main.go`), fold stubs `«read lines ...»` and `«notice»` (`internal/agent/squeeze.go`, `messages.go`), compact summary prompt (`internal/agent/compact.go`).
-      - Display-facing: slash command strings in `cmd/ag/main.go` (`/rewind`, `/ctx`, `/edits`).
-      - Internal/State: `internal/perm/policy.go:93` ("مسموح لهذه الجلسة", internal reason on Allow).
+      - Display-facing (translated to ASCII in cmd/ag): `/rewind`, `/ctx`, `/edits`, `/compact`, `-continue`.
+      - Internal/State: `internal/perm/policy.go:93` ("مسموح لهذه الجلسة", internal reason on Allow; proven never to reach UI or model).
