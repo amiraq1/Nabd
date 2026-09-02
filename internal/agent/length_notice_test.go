@@ -62,7 +62,7 @@ func TestLengthCutMarkedInMessage(t *testing.T) {
 			assistant += m.Text
 		}
 	}
-	if !strings.Contains(assistant, "مُقتطَع") {
+	if !strings.Contains(assistant, "CUT") {
 		t.Errorf("assistant text lacks the cut marker: %q", assistant)
 	}
 	t.Logf("notice: %q", notices[0])

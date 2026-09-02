@@ -109,7 +109,7 @@ func TestLoopEmitsReadRecordWhenTruncated(t *testing.T) {
 	if !strings.Contains(toolResult, "[TRUNCATED:") {
 		t.Errorf("tool_result must carry the truncation tail, got %q", toolResult)
 	}
-	if !strings.Contains(toolResult, "استخدم offset=") {
+	if !strings.Contains(toolResult, "continue with offset=") {
 		t.Errorf("tail must say how to continue, got %q", toolResult)
 	}
 }

@@ -90,7 +90,7 @@ func TestContinueAfterLengthCut(t *testing.T) {
 	}
 	found := false
 	for _, m := range req.Messages {
-		if m.Role == "assistant" && strings.Contains(m.Content, "مُقتطَع") {
+		if m.Role == "assistant" && strings.Contains(m.Content, "CUT") {
 			found = true
 		}
 	}

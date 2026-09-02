@@ -80,7 +80,7 @@ func TestReadFileByteCapTruncates(t *testing.T) {
 	if !strings.Contains(out, "[TRUNCATED:") {
 		t.Fatalf("missing explicit truncation tail in tool_result: %q", out)
 	}
-	if !strings.Contains(out, "استخدم offset=") {
+	if !strings.Contains(out, "continue with offset=") {
 		t.Errorf("tail must say how to continue (offset): %q", out)
 	}
 	if !strings.Contains(out, "next_offset=") {
@@ -99,8 +99,8 @@ func TestReadFileByteCapTruncates(t *testing.T) {
 		}
 	}
 	// The tail carries the stopping line and total line context.
-	if !strings.Contains(out, "من 300") {
-		t.Errorf("tail must say total line context (من 300): %q", out)
+	if !strings.Contains(out, "of 300") {
+		t.Errorf("tail must say total line context (of 300): %q", out)
 	}
 }
 

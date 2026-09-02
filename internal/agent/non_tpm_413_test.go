@@ -12,7 +12,7 @@ import (
 )
 
 // TestNonTPM413NoFalseNotice: a 413 whose body is NOT a TPM violation
-// (no "Limit"/"Requested") must not emit a "سقف الدقيقة: 0 · المطلوب 0"
+// (no "Limit"/"Requested") must not emit a "per-minute limit: 0 · requested 0"
 // Notice — a lie is worse than silence. It falls through to the generic
 // httpError path.
 func TestNonTPM413NoFalseNotice(t *testing.T) {
@@ -40,7 +40,7 @@ func TestNonTPM413NoFalseNotice(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	for _, n := range notices {
-		if n == "سقف الدقيقة: 0 · المطلوب 0 · انتظر ثم أعد" {
+		if n == "per-minute limit: 0 · requested 0 · wait then retry" {
 			t.Fatalf("false TPM notice emitted for a non-TPM 413: %q", n)
 		}
 	}
