@@ -105,7 +105,7 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancel = nil
 		m.status = ""
 		if msg.err != nil {
-			m.status = "error: " + msg.err.Error()
+			m.status = "error: " + errSummary(msg.err)
 		}
 		return m, nil
 
@@ -278,4 +278,19 @@ func (m *Chat) command(line string) string {
 
 func (m *Chat) SetInput(s string) {
 	m.input = s
+}
+
+// errSummary formats a runtime error for the UI status bar while ensuring no
+// non-ASCII runes outside AllowedUISymbols leak into the interface.
+func errSummary(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	for _, r := range s {
+		if r >= 128 && !AllowedUISymbols[r] {
+			return "execution failed"
+		}
+	}
+	return s
 }

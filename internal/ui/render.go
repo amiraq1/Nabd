@@ -23,6 +23,26 @@ var (
 	warn = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 )
 
+// AllowedUISymbols is the strict whitelist of non-ASCII glyphs permitted in UI string literals
+// and UI error displays. These are UI boundary, status, and decoration symbols, neither Arabic nor Latin.
+var AllowedUISymbols = map[rune]bool{
+	'⚙': true, // U+2699 ToolStart icon
+	'✓': true, // U+2713 Tool success / PermReply allow
+	'✗': true, // U+2717 Tool failure / RunError
+	'✂': true, // U+2702 Truncation cut icon
+	'⚑': true, // U+2691 Notice icon
+	'›': true, // U+203A User prompt prefix
+	'─': true, // U+2500 RunStart separator bar
+	'⊘': true, // U+2298 Interrupted icon
+	'≡': true, // U+2261 Compact icon
+	'✎': true, // U+270E Edit record icon
+	'·': true, // U+00B7 Middle dot separator
+	'…': true, // U+2026 Ellipsis
+	'—': true, // U+2014 Em dash
+	'▌': true, // U+258C Prompt cursor block
+	'→': true, // U+2192 Arrow
+}
+
 // RenderEvent returns the visible form of one event, or "" for events that
 // are structure rather than content. Turn boundaries are deliberately
 // invisible: they matter to the loop, not to the reader.
