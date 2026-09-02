@@ -187,6 +187,7 @@
       8. `5945ec9`: refactor(cmd/ag): translate terminal display strings and extend ascii guardian test
     - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `git diff --stat 92643c6..c617139` confirms only `NOTES.md` was touched (80 insertions).
     - Policy: Strict ASCII enforcement across `internal/ui` and `cmd/ag` string literals with explicit whitelist `AllowedUISymbols` (`⚙ ✓ ✗ ✂ ⚑ › ─ ⊘ ≡ ✎ · … — ▌ →`). The runtime backdoor leak via `error: + msg.err.Error()` is closed via `errSummary` in `chat.go`, intercepting any non-ASCII error from backend packages to `error: execution failed`.
+    - Guardian Scope Boundary: The automated ASCII guardian covers `internal/ui` and `cmd/ag` ONLY (each package runs its own native, decoupled test suite). String literals in `internal/agent` (e.g. fold stubs `«read lines ...»`, `«notice»`, compaction templates) are FROZEN BY DESIGN CONTRACT AND INTENT, NOT BY AN AUTOMATED SCANNER.
     - Non-ASCII Inventory Classification across packages:
       - Model-facing (FROZEN inside prompt_tokens): `const system` (`cmd/ag/main.go`), fold stubs `«read lines ...»` and `«notice»` (`internal/agent/squeeze.go`, `messages.go`), compact summary prompt (`internal/agent/compact.go`).
       - Display-facing (translated to ASCII in cmd/ag): `/rewind`, `/ctx`, `/edits`, `/compact`, `-continue`.

@@ -19,20 +19,13 @@ import (
 // in internal/ui and asserts that string literals contain no runes >= 128
 // other than the explicit AllowedUISymbols whitelist.
 func TestUIStringLiteralsEnforceASCIISymbolWhitelist(t *testing.T) {
-	// Scan both internal/ui and cmd/ag packages
-	uiFiles, err := filepath.Glob("*.go")
+	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatalf("glob *.go: %v", err)
 	}
-	cmdFiles, err := filepath.Glob("../../cmd/ag/*.go")
-	if err != nil {
-		t.Fatalf("glob ../../cmd/ag/*.go: %v", err)
-	}
-
-	allFiles := append(uiFiles, cmdFiles...)
 
 	fset := token.NewFileSet()
-	for _, fpath := range allFiles {
+	for _, fpath := range files {
 		if strings.HasSuffix(fpath, "_test.go") {
 			continue
 		}
@@ -54,12 +47,6 @@ func TestUIStringLiteralsEnforceASCIISymbolWhitelist(t *testing.T) {
 			}
 
 			pos := fset.Position(lit.Pos())
-
-			// Explicit, narrow whitelist of model-facing system prompt / stubs:
-			// 1. cmd/ag/main.go: const system (prompt_tokens payload)
-			if strings.HasSuffix(fpath, "cmd/ag/main.go") && strings.Contains(lit.Value, "أنت nabd") {
-				return true
-			}
 
 			val, err := strconv.Unquote(lit.Value)
 			if err != nil {
