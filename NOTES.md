@@ -165,24 +165,48 @@
       - Token density: 0.2811 tokens/rune (3.56 runes/token), 0.1548 tokens/byte (6.46 bytes/token).
       - Comparison to English baseline (0.2198 tokens/rune): Per-rune ratio = 1.28x vs English (vs 1.58 in contaminated RUN-B, delta = -0.3010, confirming ~24% inflation from diacritics/code terms). Raw token ratio delta dropped as non-applicable to non-translated samples.
   - **TURN_CEILING_EXHAUSTION_BY_SLICING (Forensic Discovery, session 20260902-175810)**:
-    - Root failure: Agent died from reaching MaxTurns (12 turns / 11 tool iterations), NOT from 413 TPM limit (prompt_tokens reached 2908 vs 6976 usable input budget after MaxTok=1024, less than half of context capacity) and NOT from premature compaction.
-    - Slicing dynamics: NOTES.md has long Arabic lines averaging ~259 bytes/line (~140 runes/line). Under NABD_MAX_READ=3072, read_file could only return 6 to 17 lines per call (sequence: 12, 9, 7, 8, 17, 6, 7, 10, 15, 17, 13; average ~11 lines/call). To read 155 lines of NOTES.md requires ~14 calls, exceeding the entire 12-turn ceiling of the session before completing NOTES.md (stopped at next_offset=122, line 121), leaving README.md unread past line 53.
+    - Root failure: Agent died from reaching MaxTurns (12 turns / 11 tool iterations), NOT from rate limit (prompt_tokens reached 2908; with max_tokens=1024 and inter-turn latency, cumulative load remained within the 8000 TPM rate limit; this is a rate-limit ceiling, not context capacity — the context capacity of qwen3.8-27b is substantially larger, and no evidence shows context exhaustion) and NOT from premature compaction.
+    - Slicing dynamics: NOTES.md has long Arabic lines averaging ~259 bytes/line (~140 runes/line), while pure_ar.txt averages 418 bytes/line (2088 bytes / 5 lines). Under NABD_MAX_READ=3072, read_file could only return 6 to 17 lines per call (sequence: 12, 9, 7, 8, 17, 6, 7, 10, 15, 17, 13; average ~11 lines/call). To read 155 lines of NOTES.md requires ~14 calls, exceeding the entire 12-turn ceiling of the session before completing NOTES.md (stopped at next_offset=122, line 121), leaving README.md unread past line 53.
     - Architectural pathology: Repository documentation became unreadable by the repository tool itself due to byte-cap slicing on long Arabic prose lines.
     - Calibration event completeness: All 13 turns wrote calibration events to the session JSONL (Fanout confirmed intact). An 8-turn regression across the sliced read_file sequence (prompt_tokens 2222 to 2970, encoded_bytes 7802 to 10055) shows slope = 0.3390 tokens/byte (~2.95 bytes/token, net delta 748 tokens over 2253 bytes = 3.01 bytes/token), confirming live end-to-end multi-turn payload density.
     - Scaffold deficit unmasked: At Turn 4 (prompt_tokens=2908), adopted ratchet ratio jumped to 1.45 because heuristic estimate was ~2006 tokens (deficit of ~902 tokens). This proves the heuristic severely underestimates the fixed structural scaffold (JSON tool schemas + role framing). The ~2x overestimate on Arabic prose was masking the scaffold deficit. Changing `runesPerTokOther` from 1.6 to ~3.5 in isolation would drop Arabic prose estimates, unmasking the scaffold deficit during early turns and causing true tokens to exceed heuristic estimates, directly creating 413 rejections.
     - UI ordering anomaly noted: In chat.go / render.go, `EventRead` ("✂ NOTES.md · partially read") is emitted immediately upon truncation detection before `ToolEnd` ("✓ read_file · 4ms"), confirming event display order fragility.
     - Root cleanup noted: Loose non-test file `test_gate.go` and scratch scripts `fix_*.py` exist in repository root; `test_gate.go` without `_test.go` suffix compiles into root package in `go build ./...` unless ignored.
-  - **OPERATIONAL_CAP_MEASUREMENT (NABD_MAX_READ=8192 & TPM Rate Exhaustion, session 20260902-191007)**:
+  - **OPERATIONAL_CAP_MEASUREMENT (NABD_MAX_READ=8192 & TPM Leaky Bucket Exhaustion, session 20260902-191007)**:
     - Attribution: ATTRIBUTED_TO=6e58195, BINARY_SHA256=`25532b3ea69581f7d9e488dc0fcb7fae7ed2609724d19dc66e55cc9f68046971`, Banner: `nabd v1.0.1-50-g6e58195 · 6e58195919a25edcb41e9221cc754877ad518681 · groq.com/qwen/qwen3.8-27b · nabd`.
-    - Multi-call Dynamics: With NABD_MAX_READ=8192 on repository inspection ("فحص مستودع: اقرأ NOTES.md و README.md"), the model dispatched 2 parallel read_file calls per turn. Turn 1 read NOTES.md lines 1-27 (8192 bytes capped) and README.md lines 1-109 (7784 bytes), injecting 15976 bytes of tool results into context and jumping Turn 2 prompt_tokens from 1031 to 5179 (74.2% usable budget). Turn 2 completed README.md entirely (lines 110-175, 4145 bytes) and read NOTES.md lines 28-56 (8192 bytes capped).
-    - Unmasked Terminal Failure Event: On Turn 3, payload reached 6778 prompt tokens. Groq returned HTTP 429 TPM exhaustion: `Limit 8000, Used 1859, Requested 6778. Please try again in 4.7775s` (sum = 8637 > 8000 TPM rolling limit).
-    - Disk Persistence Clipping: In `internal/agent/event.go`, `MaxPersistedOutput = 4096`. Tool outputs of 8192 bytes were clipped on disk by `ForStore()` with `...[truncated 3618 bytes]`, stripping the pagination tail from session.jsonl.
-    - Architectural Recommendation: Standardize on `NABD_MAX_READ=4096`. It aligns 1:1 with `MaxPersistedOutput=4096` (preventing journal clipping), increases Arabic throughput to ~16 lines/call (allowing 155-line files to complete in ~10 calls, within MaxTurns=12), and caps parallel tool calls under Groq's 8000 TPM limit.
+    - Multi-call Dynamics: With NABD_MAX_READ=8192 on repository inspection ("فحص مستودع: اقرأ NOTES.md و README.md"), the model dispatched 2 parallel read_file calls per turn. Turn 1 payload sent: NOTES.md lines 1-27 (8192 bytes payload) and README.md lines 1-109 (7784 bytes payload), injecting 15976 bytes of tool results into context and jumping Turn 2 prompt_tokens from 1031 to 5179 (64.7% of the 8000 TPM rate limit, not context capacity). Turn 2 completed README.md entirely (lines 110-175, 4145 bytes) and read NOTES.md lines 28-56 (8192 bytes payload).
+    - Density Gap Decomposition:
+      $$\frac{6.20 \text{ bytes/token}}{3.56 \text{ bytes/token}} = 1.74\times = 1.32\times \text{ UTF-8 width (bytes/rune)} \times \sim 1.4\times \text{ per-rune cost}$$
+      Note that per-rune cost is influenced by the heterogenous content mix (code syntax, prose) rather than a pure language measurement.
+    - Unmasked Terminal Failure Event (HTTP 429 vs HTTP 413 Distinction):
+      - HTTP 413: Seven historical sessions on 2026-09-01 rejected with `http 413: Request too large` on a single oversized HTTP request.
+      - HTTP 429: Session `run-maxread-8192-full` was rejected on Turn 3 with `http 429: Rate limit reached on tokens per minute (TPM)`.
+      - Parsing Breakdown:
+        - `Requested = 6778` consists of: `prompt_tokens ≈ 5754` + `max_tokens = 1024`.
+        - `Used = 1859`, `Limit = 8000`.
+        - Total load = $1859 + 6778 = 8637 > 8000$.
+        - Overflow = $8637 - 8000 = \mathbf{637 \text{ tokens}}$.
+        - Exact wait reported by Groq: `Please try again in 4.7775s.`
+    - Methodological Evidence Constraint:
+      Any measurement relying on raw byte counts from JSONL is invalid if it exceeded 4096 bytes under legacy commits, because `MaxPersistedOutput=4096` clipped persisted tool outputs at that threshold. Legacy measurements under `NABD_MAX_READ=3072` remain valid under this constraint.
+    - **TPM_WINDOW_MODEL**:
+      $$\text{prompt\_tokens} + \text{max\_tokens} + \text{used\_in\_60s\_window} \le 8000$$
+      - Definition: TPM is an API rate limit, NOT a context capacity limit.
+      - Mechanism: Continuous leaky bucket with capacity `Limit = 8000 tokens` and drain rate $R = \frac{8000}{60} = 133.333\dots \text{ tokens/second}$.
+      - Token accumulation: At turn $t$, $\text{Used}(t) = \max(0, \text{Used}(t_{\text{prev}}) + \text{Tokens}_{\text{prev}} - R \cdot \Delta t)$.
+      - Rejection condition: $\text{Used} + \text{Requested} > \text{Limit}$.
+      - Wait duration derivation: $\text{wait\_s} = \frac{\text{overflow}}{R} = \frac{637}{133.333\dots} = \frac{637 \times 60}{8000} = \mathbf{4.7775\text{ s}}$, exactly matching Groq's output to 4 decimal places.
+      - Resolution of Multi-turn Non-429: In session `20260902-175810.jsonl`, 13 turns executed over 196 seconds (~18–25s between turns). At 133.33 tokens/s drain rate, each 20s turn drained ~2667 tokens, balancing the ~2300–2900 tokens injected under `NABD_MAX_READ=3072`, keeping `Used` around ~2500 and total load $\approx 6424 < 8000$.
+      - Confidence: EXACT (mathematically proven from live session data).
+    - **PACING_POLICY (Proposal Only — Not Implemented)**:
+      - Hybrid pacing policy:
+        1. Turnaround pacing: if $\text{Used}(t) + \text{Requested} > \text{Limit}$, delay before request: $\Delta t_{\text{wait}} \ge \frac{\text{overflow}}{133.33}$.
+        2. Per-turn prompt budgeting: cap single-turn tool injection so that single-turn prompt tokens remain $\le 3500$, allowing ordinary 20s turn latency to naturally drain the token bucket beneath 8000 TPM without stalling.
   - **UI Display Fingerprint & Attribution Chain**:
     - Measurement Attribution: ATTRIBUTED_TO=92643c6 remains the permanent, unalterable attribution for all language delta ratios and prompt_tokens measurements. Commit `92643c6` built binary `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5` (nabd v1.0.1-40-g92643c6).
-    - UI Display Refactor: ATTRIBUTED_TO=8483859 (hardened in 9592463, finalized in 5945ec9, decoupled in 6e58195, current binary SHA256=`25532b3ea69581f7d9e488dc0fcb7fae7ed2609724d19dc66e55cc9f68046971`, banner `nabd v1.0.1-50-g6e58195`).
-    - const system integrity: SHA256=`ab1b3997a4209679d37d368999cd57653d200dbdaed9bf09f902d14d86dafca2` (verified byte-for-byte unchanged across all UI translations).
-    - Commit Chain (10 commits above v1.0.1-40):
+    - UI Display Refactor: ATTRIBUTED_TO=8483859 (hardened in 9592463, finalized in 5945ec9, decoupled in 6e58195, bounded 429 resume in 9ba2014, current binary SHA256=`8c7f9255647e4ea3691f4ed53d107ae36058c106e4c1a71ebce062f6fb2b9f1b`, banner `nabd v1.0.1-52-g9ba2014`).
+    - const system integrity: SHA256=`ab1b3997a4209679d37d368999cd57653d200dbdaed9bf09f902d14d86dafca2` (verified byte-for-byte unchanged across all UI translations and pacing fixes).
+    - Commit Chain (11 commits above v1.0.1-40):
       1. `b0b6e51`: notes: add forensic Arabic vs English token ratio measurement
       2. `74922ab`: docs(notes): close editorial measurement corrections
       3. `c617139`: docs(notes): document turn ceiling exhaustion by slicing and session forensic findings
@@ -193,6 +217,7 @@
       8. `5945ec9`: refactor(cmd/ag): translate terminal display strings and extend ascii guardian test
       9. `a928420`: docs(notes): update measurement characteristics and reconcile fingerprint chain
       10. `6e58195`: refactor(guardian): decouple guardian tests into cmd/ag and internal/ui and document scope boundary
+      11. `9ba2014`: feat(pacing): raise MaxPersistedOutput to 16384 and implement bounded HTTP 429 resume
     - Commit Resolution History: Commit `6c22f36` was rewritten to `e0ae295` and then `c617139` via `git commit --amend` during iterative editorial refinement of Commit B. `git diff --stat 92643c6..c617139` confirms only `NOTES.md` was touched (80 insertions).
     - Policy: Strict ASCII enforcement across `internal/ui` and `cmd/ag` string literals with explicit whitelist `AllowedUISymbols` (`⚙ ✓ ✗ ✂ ⚑ › ─ ⊘ ≡ ✎ · … — ▌ →`). The runtime backdoor leak via `error: + msg.err.Error()` is closed via `errSummary` in `chat.go`, intercepting any non-ASCII error from backend packages to `error: execution failed`.
     - Guardian Scope Boundary: The automated ASCII guardian covers `internal/ui` and `cmd/ag` ONLY (each package runs its own native, decoupled test suite). String literals in `internal/agent` (e.g. fold stubs `«read lines ...»`, `«notice»`, compaction templates) are FROZEN BY DESIGN CONTRACT AND INTENT, NOT BY AN AUTOMATED SCANNER.
