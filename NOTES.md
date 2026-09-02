@@ -83,30 +83,50 @@
 - **Attribution closure**: the old points 1564/3124 (recorded by stale binary g81e5281, Arabic system, no include_usage, /ctx-derived) are now SUPERCEDED, not corrected. New first-request measurements at 3e22744: Step1 probe=1026, Step2 system-delta AR=1035/EN=1026, Step3 prose-delta base=1020/ar=1074/en=1061, Step4 observation=1024. Each tagged with its build fingerprint.
 - **Forensic Token Ratio Measurement & Hypothesis Correction (MEASURED, delta method, Groq qwen3.8-27b)**:
   - **Model ID verified**: `qwen/qwen3.8-27b` verified directly against Groq API `/models` endpoint as an official model ID.
-  - **Diff purity ("لا ملف يدخل الطلب")**: Diff `12e57ef..9ca7377` touches `cmd/ag/main.go` (`const system` only) and `cmd/ag/main_test.go` (test code only; not compiled into binary or request payload).
+  - **Diff purity ("لا ملف يدخل الطلب")**: Diff `12e57ef..9ca7377` touches `cmd/ag/main.go` (`const system` only) and `cmd/ag/main_test.go`. Note: `_test.go` files may be compiled during `go test`, but they are not linked into the `./ag` binary and do not participate in the production request path.
   - **Retraction of 2041 characters claim**: Historical claim of "2041 runes -> 124 saving ~210 tokens" belonged to all model-facing strings across tools/errors/notices (`ca05cab/da3a007/861765e`). System prompt at `12e57ef` measured only 149 runes / 263 bytes vs English 233 runes / 233 bytes, yielding a translation delta of only +9 tokens (1035 -> 1026). Conflating the two is formally retracted.
-  - **Verbatim texts & baseline pollution**:
+  - **SEMANTIC_RATIO**: `SEMANTIC_RATIO=1.375 [B ASSUMED=1] [PROVISIONAL · INTERPRETIVE_ONLY · NOT_OPERATIONAL]`
+    - رموز/محرف = 1.58 ± 0.02 [B ASSUMED=1] [INTERPRETIVE_ONLY · NOT_OPERATIONAL]
+    - رموز/بايت = 0.91 [INTERPRETIVE_ONLY · NOT_OPERATIONAL]
+    - Derived with baseline message "ok" assumed at B=1 token: Arabic tokens = 54 + 1 = 55; English tokens = 39 + 1 = 40 (55 / 40 = 1.375). Per-rune ratio: (55/158) / (40/182) = 0.3481 / 0.2198 = 1.5839. Per-byte ratio: (55/277) / (40/182) = 0.1986 / 0.2198 = 0.903.
+    - Phrasing "سقف لا قيمة" removed with B=1 assumed (range across B in [0, 2] is 1.573 to 1.595, landing at 1.58 ± 0.02).
+    - Marked PROVISIONAL: Single sample with code terms (CGO, Go, cat) and diacritics; subject to re-measurement on a pure Arabic sample in TASK 5. Must not be used for runtime budget decisions.
+  - **Verbatim texts & baseline grounding**:
     - RUN-A Baseline: `"ok"` (2 runes, 2 bytes). Prompt tokens = 1020.
     - RUN-B Arabic: `"وكيل برمجة طرفي، يُكتب ويُشغَّل من هاتف. بلا حاويات، بلا قاعدة بيانات، بلا CGO. سبعة آلاف سطر Go تقريبًا، ملف تنفيذي واحد، وسجلّ جلسة واحد يمكن قراءته بـ cat."` (158 runes, 277 bytes). Prompt tokens = 1074.
     - RUN-C English: `"A terminal coding agent, written and run from a phone. No containers, no database, no CGO. Seven thousand lines of Go, one executable file, and one session journal readable with cat."` (182 runes, 182 bytes). Prompt tokens = 1059.
-    - Baseline message cost $B \ge 0$: $\Delta_{AR} = 54+B$, $\Delta_{EN} = 39+B$. As $B$ increases, the ratio $((54+B)/158) / ((39+B)/182)$ decreases monotonically ($B=0 \to 1.595$, $B=1 \to 1.584$, $B=20 \to 1.44$). Thus, **1.60 is an upper bound (`سقف لا قيمة`)**.
-  - **Language ratios vs Heuristic correction**:
-    - Per-rune: Arabic $54/158 = 0.3418$ tok/rune vs English $39/182 = 0.2143$ tok/rune $\implies$ **Arabic is 1.60x more expensive per rune**.
-    - Per-byte: Arabic $54/277 = 0.1949$ tok/byte ($5.13$ B/tok) vs English $39/182 = 0.2143$ tok/byte ($4.67$ B/tok) $\implies$ **Arabic is 0.91x English (cheaper per byte due to multi-byte UTF-8)**.
-    - Heuristic correction (`token_delta / heuristic_units`): Arabic $= 54/84 = 0.6429$; English $= 39/45 = 0.8667$.
-  - **Surprising finding (Hypothesis correction)**:
-    - Entire request baseline: $3286\text{ bytes} / 1026\text{ tokens} = 3.20\text{ bytes/token}$.
-    - Arabic prose: $5.13\text{ B/tok}$; English prose: $4.67\text{ B/tok}$.
-    - Both prose passages are cheaper per byte than the overall request average ($5.13, 4.67 > 3.20$).
-    - Token density resides primarily in the fixed structural scaffold (tool schemas + framing JSON), not in Arabic prose.
-    - Heuristic correction for prose is $< 1.0$ ($0.64$ and $0.87$), meaning the heuristic already overestimates prose. The ratchet (starting at 1.50 or 1.0, rising only on $>1.0$) will never rise from prose. The hypothesis that "the first long Arabic file will trigger a 413" is falsified for prose; pressure is structural.
+  - **Structural Scaffolding vs Prose Density (SURPRISING FINDING)**:
+    - Entire request baseline: 3286 bytes / 1026 tokens = 3.20 bytes/token.
+    - Arabic prose: 277 bytes / 54 tokens = 5.13 bytes/token (5.04 with B=1).
+    - English prose: 182 bytes / 39 tokens = 4.67 bytes/token (4.55 with B=1).
+    - Both prose passages are cheaper per byte than the overall request average (5.13 and 4.67 > 3.20 bytes/token). Token density resides primarily in the fixed structural scaffold (JSON tool specifications, role framing, headers), NOT in Arabic prose.
+    - Heuristic correction for prose is < 1.0 (Arabic: 0.64, English: 0.87), meaning the heuristic already overestimates prose. The ratchet (starting at 1.50 or 1.0, rising only when actual/estimated > 1.0) will never be triggered by prose alone.
+    - Strategic implication: FILE_CONTENT_RATIO is now the only valuable slot left to measure, because read_file output is raw file text plus structural framing wrapper, and structure is where token density is concentrated.
+  - **Heuristic documentation & source branch inspection**:
+    - Formula: ASCII runes weighted at runes/4.0 (0.25 tokens/rune) plus non-ASCII runes weighted at runes/1.6 (0.625 tokens/rune).
+    - Evidence: English RUN-C estimate: 45 = 182 / 4.0. Arabic RUN-B estimate: 84 != 277/4 = 69 (actual: 39 ASCII / 4.0 + 119 non-ASCII / 1.6 = 9.75 + 74.375 = 84.125 -> 84).
+    - Source branch verification: `EstimateText` in `internal/agent/budget.go:24-34`. Activation condition is `if r < unicode.MaxASCII` (line 27). In English (RUN-C), all 182 runes satisfy `r < unicode.MaxASCII`, so `o == 0` and the non-ASCII branch never triggers. In Arabic (RUN-B), 119 runes have `r >= 128`, triggering line 31 `o++` and entering the `float64(o)/runesPerTokOther` (1.6) term.
+    - Heuristic correction factors: Arabic `HEURISTIC_CORRECTION = 0.64` (54 / 84); English `HEURISTIC_CORRECTION = 0.87` (39 / 45). Incomparable directly because they originate from structurally distinct formulas (ASCII-only 4.0 vs mixed ASCII/Other 1.6).
+    - Architectural localization of error: Arabic actual density = 158 runes / 55 tokens = 2.87 runes/token. Separating 39 ASCII runes / 4.0 (~9.75 tokens, ~8.5 effective), non-ASCII runes = ~119 runes / ~46.5 tokens = ~2.5 runes/token vs 1.6 in code. The constant `runesPerTokOther` is low by ~1.6x, representing the sole source of the 1.53x overestimate.
+    - Derived recommendation: `runesPerTokOther: 1.6 -> ~2.5, pending TASK 5` (derived recommendation only, no production code change in this round).
+  - **HYPOTHESIS_CORRECTION**:
+    - For Arabic prose, heuristic estimate = 84 vs actual tokens = 55 (overestimate of 1.53x, 84/55 = 1.527).
+    - Operational risk: The real failure mode from this misestimation is early compaction / context loss (premature compaction caused by overcounting), NOT that "413 cannot occur".
+    - Invalidation scope: The invalidation strictly targets the "Arabic misestimation causes 413" path. It does NOT negate the reality of absolute-context 413 when total payload exceeds provider limits (`prompt_tokens + max_tokens > provider_context_limit`).
   - **Full binary attribution & banner strings**:
-    - Task 0 Calibration Gate: Session `20260902-165648`, SHA256 `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
-    - Task 2 AR System: Session `20260902-170016`, SHA256 `1a4d0757d18af3b0ff73eecb849b9adde9fd3ec7f0790c21325ddc6253e7f718`, Banner: `nabd v1.0.1-37-g12e57ef · 12e57efa7f3d5ddb33caf2434f2a64f0bca1ec67 · groq.com/qwen/qwen3.8-27b · nabd`.
-    - Task 2 EN System: Session `20260902-170033`, SHA256 `992420350d20dd33355994cd3b6f28469a3caab1b4bbca9bebccdfd0b924216f`, Banner: `nabd v1.0.1-38-g9ca7377 · 9ca7377c0c924699f945a5c5e3e8df068fe63635 · groq.com/qwen/qwen3.8-27b · nabd`.
-    - Task 3 RUN-A Baseline: Session `20260902-170526`, SHA256 `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
-    - Task 3 RUN-B Arabic: Session `20260902-170550`, SHA256 `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
-    - Task 3 RUN-C English: Session `20260902-170644`, SHA256 `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
-    - Task 4 Free Session: Session `20260902-170746`, SHA256 `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 0 Calibration Gate: Session `20260902-165648`, ATTRIBUTED_TO=92643c6, BINARY_SHA256=`a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 2 AR System: Session `20260902-170016`, ATTRIBUTED_TO=92643c6, BINARY_SHA256=`1a4d0757d18af3b0ff73eecb849b9adde9fd3ec7f0790c21325ddc6253e7f718`, Banner: `nabd v1.0.1-37-g12e57ef · 12e57efa7f3d5ddb33caf2434f2a64f0bca1ec67 · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 2 EN System: Session `20260902-170033`, ATTRIBUTED_TO=92643c6, BINARY_SHA256=`992420350d20dd33355994cd3b6f28469a3caab1b4bbca9bebccdfd0b924216f`, Banner: `nabd v1.0.1-38-g9ca7377 · 9ca7377c0c924699f945a5c5e3e8df068fe63635 · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 3 RUN-A Baseline: Session `20260902-170526`, ATTRIBUTED_TO=92643c6, BINARY_SHA256=`a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 3 RUN-B Arabic: Session `20260902-170550`, ATTRIBUTED_TO=92643c6, BINARY_SHA256=`a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 3 RUN-C English: Session `20260902-170644`, ATTRIBUTED_TO=92643c6, BINARY_SHA256=`a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 4 Free Session: Session `20260902-170746`, ATTRIBUTED_TO=92643c6, BINARY_SHA256=`a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
   - **Governing budget rule confirmed**: `prompt_tokens + max_tokens <= provider_context_limit`.
+  - **OUT_OF_SCOPE (Normalized to 5 items)**:
+    1. EventCalib لكل طلب
+    2. موضع حقن notice قبل tool_result
+    3. apiURL القابل للتهيئة
+    4. حاجز نطاق القراءة مع re_read=true
+    5. تخزين النسبة عبر الجلسات
+    القاعدة الحاكمة: تفاصيل التنفيذ الداخلية ليست بنود نطاق بحد ذاتها.
   - **Known limitations**: `FILE_CONTENT_RATIO` (mixed code/comments via `read_file`) remains a separate unfilled slot; tool wrapper/line numbers/lines_read headers prevent extracting prose-only token density from `read_file` output.
