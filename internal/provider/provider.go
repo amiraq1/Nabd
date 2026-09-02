@@ -50,7 +50,19 @@ const (
 	ChunkToolCall
 	ChunkStop
 	ChunkError
+	ChunkRateLimit
 )
+
+// RateLimitInfo describes an HTTP 429 rate limit encounter and the wait before retrying.
+type RateLimitInfo struct {
+	Code      int
+	Limit     int
+	Used      int
+	Requested int
+	WaitSec   float64
+	Attempt   int
+	Err       string
+}
 
 // Chunk is one thing that happened during a turn.
 //
@@ -65,6 +77,7 @@ type Chunk struct {
 	Stop      string // end_turn, tool_use, max_tokens, ...
 	Err       error
 	Retryable bool
+	RateLimit *RateLimitInfo
 	// PromptTokens is the provider's measured input count for the request,
 	// from usage.prompt_tokens. Zero when the provider does not report it.
 	// Carried on the final chunk of a turn.

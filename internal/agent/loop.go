@@ -221,6 +221,20 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 				}
 			}
 
+		case provider.ChunkRateLimit:
+			if c.RateLimit != nil {
+				_ = l.emit(Event{
+					Type:      EventRateLimit,
+					Code:      c.RateLimit.Code,
+					Limit:     c.RateLimit.Limit,
+					Used:      c.RateLimit.Used,
+					Requested: c.RateLimit.Requested,
+					WaitSec:   c.RateLimit.WaitSec,
+					Attempt:   c.RateLimit.Attempt,
+					Err:       c.RateLimit.Err,
+				})
+			}
+
 		case provider.ChunkError:
 			// Drain so the provider goroutine is never left blocked.
 			for range ch {

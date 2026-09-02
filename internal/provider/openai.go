@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -142,12 +143,66 @@ func (o *OpenAICompat) Stream(ctx context.Context, req Request) (<-chan Chunk, e
 	return out, nil
 }
 
-// run mirrors the Anthropic retry policy exactly: silent while nothing
-// has been forwarded, final afterwards.
+// RateLimitError represents an HTTP 429 response from an upstream provider.
+type RateLimitError struct {
+	Status    int
+	Body      string
+	Limit     int
+	Used      int
+	Requested int
+	WaitSec   float64
+}
+
+func (e *RateLimitError) Error() string {
+	return fmt.Sprintf("http %d: %s", e.Status, e.Body)
+}
+
+var (
+	reBodyWait = regexp.MustCompile(`(?i)try again in\s+([0-9]+(?:\.[0-9]+)?)s?`)
+	reTPMFull  = regexp.MustCompile(`Limit\s+(\d+),\s*Used\s+(\d+),\s*Requested\s+(\d+)`)
+)
+
+func parseWaitDuration(retryAfterHeader, body string) (time.Duration, float64) {
+	// 1. Retry-After header
+	if s := strings.TrimSpace(retryAfterHeader); s != "" {
+		if sec, err := strconv.ParseFloat(s, 64); err == nil && sec > 0 {
+			return time.Duration(sec * float64(time.Second)), sec
+		}
+	}
+	// 2. Provider body text, e.g. "try again in 4.7775s"
+	if m := reBodyWait.FindStringSubmatch(body); len(m) > 1 {
+		if sec, err := strconv.ParseFloat(m[1], 64); err == nil && sec > 0 {
+			return time.Duration(sec * float64(time.Second)), sec
+		}
+	}
+	return 0, 0
+}
+
+func parseTPMFullCounts(body string) (limit, used, requested int) {
+	if m := reTPMFull.FindStringSubmatch(body); len(m) == 4 {
+		limit, _ = strconv.Atoi(m[1])
+		used, _ = strconv.Atoi(m[2])
+		requested, _ = strconv.Atoi(m[3])
+		return
+	}
+	l, r := parseTPMCounts(body)
+	return l, 0, r
+}
+
+// run mirrors the Anthropic retry policy: silent while nothing
+// has been forwarded, final afterwards, with bounded HTTP 429 resume.
 func (o *OpenAICompat) run(ctx context.Context, body []byte, out chan<- Chunk) {
 	defer close(out)
 
-	var sent atomic.Bool
+	var (
+		sent      atomic.Bool
+		totalWait time.Duration
+	)
+	const (
+		max429Attempts = 3
+		maxTotalWait   = 30 * time.Second
+	)
+
 	for attempt := 1; ; attempt++ {
 		// A first-byte deadline is safe precisely while sent is false: nothing
 		// reached the reader, so cancelling and retrying cannot duplicate text.
@@ -176,6 +231,49 @@ func (o *OpenAICompat) run(ctx context.Context, body []byte, out chan<- Chunk) {
 			out <- Chunk{Kind: ChunkError, Err: ctx.Err()}
 			return
 		}
+
+		var rle *RateLimitError
+		if errors.As(err, &rle) {
+			waitDur := retryAfter
+			waitSec := rle.WaitSec
+			if waitDur <= 0 {
+				waitDur = minBackoff << (attempt - 1)
+				if waitDur > maxBackoff {
+					waitDur = maxBackoff
+				}
+				waitSec = waitDur.Seconds()
+			}
+
+			if sent.Load() || attempt >= max429Attempts || totalWait+waitDur > maxTotalWait {
+				out <- Chunk{Kind: ChunkError, Err: err, Retryable: !sent.Load()}
+				return
+			}
+
+			totalWait += waitDur
+
+			// Emit exactly one ChunkRateLimit per wait
+			out <- Chunk{
+				Kind: ChunkRateLimit,
+				RateLimit: &RateLimitInfo{
+					Code:      rle.Status,
+					Limit:     rle.Limit,
+					Used:      rle.Used,
+					Requested: rle.Requested,
+					WaitSec:   waitSec,
+					Attempt:   attempt,
+					Err:       err.Error(),
+				},
+			}
+
+			select {
+			case <-ctx.Done():
+				out <- Chunk{Kind: ChunkError, Err: ctx.Err()}
+				return
+			case <-time.After(waitDur):
+			}
+			continue
+		}
+
 		if sent.Load() || attempt >= maxAttempts || !transient(err) {
 			if attempt >= maxAttempts && !sent.Load() && errors.Is(err, context.Canceled) {
 				err = fmt.Errorf("الخادم لم يبدأ الردّ خلال 25 ثانية — جرّب NABD_MODEL آخر")
@@ -222,6 +320,19 @@ func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chun
 			limit, requested := parseTPMCounts(body)
 			if limit > 0 || requested > 0 {
 				return 0, &TPMError{Limit: limit, Requested: requested, Body: body}
+			}
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			body := apiMessage(msg)
+			waitDur, waitSec := parseWaitDuration(resp.Header.Get("retry-after"), body)
+			lim, usd, req := parseTPMFullCounts(body)
+			return waitDur, &RateLimitError{
+				Status:    resp.StatusCode,
+				Body:      body,
+				Limit:     lim,
+				Used:      usd,
+				Requested: req,
+				WaitSec:   waitSec,
 			}
 		}
 		return parseRetryAfter(resp.Header.Get("retry-after")),

@@ -344,6 +344,10 @@ func transient(err error) bool {
 	if errors.As(err, &tpm) {
 		return false
 	}
+	var rle *RateLimitError
+	if errors.As(err, &rle) {
+		return true
+	}
 	var he *httpError
 	if errors.As(err, &he) {
 		return he.Status == 408 || he.Status == 409 || he.Status == 429 || he.Status >= 500

@@ -10,7 +10,7 @@ import (
 )
 
 // MaxPersistedOutput caps tool output on disk, not on screen.
-const MaxPersistedOutput = 4096
+const MaxPersistedOutput = 16384
 
 type EventType string
 
@@ -31,7 +31,8 @@ const (
 	Rewind      EventType = "rewind"
 	EventEdit   EventType = "edit_record"
 	EventRead   EventType = "read_record"
-	EventCalib  EventType = "calibration"
+	EventCalib     EventType = "calibration"
+	EventRateLimit EventType = "rate_limit"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.
@@ -50,8 +51,12 @@ type Event struct {
 	Call      *ToolCall    `json:"call,omitempty"`
 	Decision  Decision     `json:"decision,omitempty"`
 	Err       string       `json:"err,omitempty"`
+	Code      int          `json:"code,omitempty"`
 	Limit     int          `json:"limit,omitempty"`
+	Used      int          `json:"used,omitempty"`
 	Requested int          `json:"requested,omitempty"`
+	WaitSec   float64      `json:"wait_s,omitempty"`
+	Attempt   int          `json:"attempt,omitempty"`
 	Edit      *EditRecord  `json:"edit,omitempty"`
 	Read      *ReadRecord  `json:"read,omitempty"`
 	Calib     *Calibration `json:"calib,omitempty"`

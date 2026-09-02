@@ -109,7 +109,8 @@ func RenderEvent(e agent.Event, width int) string {
 		if e.Read.Truncated {
 			return warn.Render("✂ " + e.Read.Path + " · partially read")
 		}
-		return ""
+	case agent.EventRateLimit:
+		return warn.Render(fmt.Sprintf("⚑ rate limit %d · retry in %.1fs (attempt %d)", e.Code, e.WaitSec, e.Attempt))
 
 	case agent.TurnStart, agent.TurnEnd, agent.EventCalib:
 		// TurnEnd and calibration are structure, not content: nothing to show.

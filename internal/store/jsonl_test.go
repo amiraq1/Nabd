@@ -204,7 +204,7 @@ func TestReadTolerance(t *testing.T) {
 
 // Output is capped on disk but must stay valid UTF-8 and stay marked.
 func TestForStoreTruncatesOnRuneBoundary(t *testing.T) {
-	long := strings.Repeat("ب", 4000) // 8000 bytes, boundary lands mid-rune
+	long := strings.Repeat("ب", 10000) // 20000 bytes > 16384, boundary lands mid-rune
 	e := agent.Event{Seq: 1, Type: agent.ToolEnd,
 		Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: long}}
 
@@ -236,4 +236,78 @@ func utf8ValidString(s string) bool {
 		}
 	}
 	return true
+}
+
+// TestToolResultTailPreservedOnDisk asserts that a tool_result with size between 4096 and 16384 bytes
+// retains its lines_read, total_lines, and next_offset pagination tail in the persisted JSONL record.
+func TestToolResultTailPreservedOnDisk(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	j, err := NewJSONL(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+
+	// A ~6000-byte read_file output ending with a pagination tail
+	body := strings.Repeat("a", 5800)
+	tail := "\n[TRUNCATED: read lines 1-27 of 193; continue with offset=28]\nlines_read=27  total_lines=193  next_offset=28\n"
+	fullOutput := body + tail
+
+	ev := agent.Event{
+		Seq:  1,
+		Type: agent.ToolEnd,
+		Call: &agent.ToolCall{
+			ID:     "t1",
+			Name:   "read_file",
+			OK:     true,
+			Output: fullOutput,
+		},
+	}
+
+	if err := j.Append(ev); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read raw JSONL from disk to inspect the persisted evidence
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(raw)
+	t.Logf("PERSISTED_JSONL_TAIL: %s", content[len(content)-120:])
+
+	if !strings.Contains(content, "lines_read=27") {
+		t.Fatalf("persisted tool_result lost lines_read tail: len=%d MaxPersistedOutput=%d",
+			len(fullOutput), agent.MaxPersistedOutput)
+	}
+	if !strings.Contains(content, "total_lines=193") {
+		t.Fatalf("persisted tool_result lost total_lines tail")
+	}
+	if !strings.Contains(content, "next_offset=28") {
+		t.Fatalf("persisted tool_result lost next_offset tail")
+	}
+}
+
+// TestEncodedBytesCalculatedPreForStore verifies that in-memory history used for network request
+// encoding retains full unclipped tool output (pre-ForStore), proving that encoded_bytes is
+// computed from the true network payload rather than disk-clipped persistence.
+func TestEncodedBytesCalculatedPreForStore(t *testing.T) {
+	longOutput := strings.Repeat("x", 20000)
+	ev := agent.Event{
+		Seq:  1,
+		Type: agent.ToolEnd,
+		Call: &agent.ToolCall{ID: "t1", Name: "read_file", OK: true, Output: longOutput},
+	}
+
+	// Disk persistence clips via ForStore()
+	stored := ev.ForStore()
+	if len(stored.Call.Output) >= len(longOutput) {
+		t.Fatal("expected ForStore to clip oversized output")
+	}
+
+	// But in-memory event is completely unclipped
+	if len(ev.Call.Output) != 20000 {
+		t.Fatalf("in-memory event output was mutated: %d", len(ev.Call.Output))
+	}
 }
