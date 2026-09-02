@@ -222,6 +222,7 @@ func TestThreeSegmentOffsetProgression(t *testing.T) {
 	type rng struct{ a, b int }
 	seen := map[rng]bool{}
 	covered := 0
+	maxEnd := 0
 	for i, s := range segs {
 		r := rng{s.start, s.end}
 		if seen[r] {
@@ -229,6 +230,13 @@ func TestThreeSegmentOffsetProgression(t *testing.T) {
 		}
 		seen[r] = true
 		covered += s.end - s.start + 1
+		maxEnd = s.end
+		// Gate: an offered offset must never point into already-read
+		// territory — such an offer is an invitation to re-read.
+		if s.truncated && s.nextOffset <= maxEnd {
+			t.Errorf("segment %d offers offset=%d but lines up to %d are already read",
+				i+1, s.nextOffset, maxEnd)
+		}
 		if i > 0 && s.start != segs[i-1].nextOffset {
 			t.Errorf("segment %d start (%d) != previous next_offset (%d): gap or overlap",
 				i+1, s.start, segs[i-1].nextOffset)
