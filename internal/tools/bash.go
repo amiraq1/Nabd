@@ -35,8 +35,8 @@ func (bashTool) Name() string { return "bash" }
 
 func (bashTool) Spec() provider.ToolSpec {
 	return spec("bash",
-		"ينفّذ أمر صدفة داخل مجلد المشروع. لا مدخلات تفاعلية: أي أمر ينتظر إدخالًا سيرى نهاية ملف فورًا، فمرّر الأعلام غير التفاعلية (-y، --no-input). الأوامر التي تُبقي عمليات في الخلفية تُقتل عند انتهاء الأمر.",
-		`{"type":"object","properties":{"cmd":{"type":"string","description":"الأمر كما يُكتب في الصدفة"},"timeout_s":{"type":"integer","description":"مهلة بالثواني (افتراضي 120، أقصى 600)"}},"required":["cmd"]}`)
+		"Run a shell command inside the project directory. No interactive input: any command waiting for input sees EOF immediately, so pass non-interactive flags (-y, --no-input). Commands that keep background processes alive are killed when the command ends.",
+		`{"type":"object","properties":{"cmd":{"type":"string","description":"the command as typed in the shell"},"timeout_s":{"type":"integer","description":"timeout in seconds (default 120, max 600)"}},"required":["cmd"]}`)
 }
 
 func (b bashTool) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
@@ -50,10 +50,10 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		T   int    `json:"timeout_s"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return agent.Outcome{}, fmt.Errorf("وسائط غير صالحة: %w", err)
+		return agent.Outcome{}, fmt.Errorf("invalid args: %w", err)
 	}
 	if strings.TrimSpace(a.Cmd) == "" {
-		return agent.Outcome{}, errors.New("أمر فارغ")
+		return agent.Outcome{}, errors.New("empty command")
 	}
 	to := bashDefaultTimeout
 	if a.T > 0 {
@@ -108,11 +108,11 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	select {
 	case werr = <-wait:
 	case <-timer.C:
-		note = fmt.Sprintf("قُتل بعد %s", to)
+		note = fmt.Sprintf("killed after %s", to)
 		killGroup(pgid)
 		werr = <-wait
 	case <-ctx.Done():
-		note = "أُلغي"
+		note = "cancelled"
 		killGroup(pgid)
 		werr = <-wait
 	}
@@ -148,7 +148,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		out.OK = false
 	}
 	if out.Text == "" {
-		out.Text = "(لا مخرَج)"
+		out.Text = "(no output)"
 	}
 	out.Text = head + "\n" + out.Text
 	return out, nil
@@ -223,7 +223,7 @@ func (h *headTail) String() string {
 		return string(h.head)
 	}
 	cut := h.total - len(h.head) - len(h.tail)
-	return fmt.Sprintf("%s\n… حُذف %d بايت من الوسط …\n%s",
+	return fmt.Sprintf("%s\n… %d bytes cut from the middle …\n%s",
 		h.head, cut, trimToRune(h.tail))
 }
 

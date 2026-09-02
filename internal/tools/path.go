@@ -12,9 +12,9 @@ import (
 )
 
 var (
-	ErrOutside  = errors.New("المسار خارج جذر المشروع")
-	ErrAbsolute = errors.New("المسارات المطلقة مرفوضة")
-	ErrEmpty    = errors.New("مسار فارغ")
+	ErrOutside  = errors.New("path escapes the project root")
+	ErrAbsolute = errors.New("absolute paths are refused")
+	ErrEmpty    = errors.New("empty path")
 )
 
 // Root is a resolved project directory. Construct it once, at startup,
@@ -38,14 +38,14 @@ func NewRoot(dir string) (*Root, error) {
 	// the real path would look like an escape.
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return nil, fmt.Errorf("جذر غير صالح %q: %w", dir, err)
+		return nil, fmt.Errorf("invalid root %q: %w", dir, err)
 	}
 	fi, err := os.Stat(real)
 	if err != nil {
 		return nil, err
 	}
 	if !fi.IsDir() {
-		return nil, fmt.Errorf("الجذر ليس مجلدًا: %s", real)
+		return nil, fmt.Errorf("root is not a directory: %s", real)
 	}
 	return &Root{dir: real}, nil
 }
@@ -69,7 +69,7 @@ func (r *Root) Resolve(p string) (string, error) {
 		return "", ErrEmpty
 	}
 	if strings.ContainsRune(p, 0) {
-		return "", fmt.Errorf("%w: بايت صفري", ErrOutside)
+		return "", fmt.Errorf("%w: NUL byte", ErrOutside)
 	}
 
 	// Absolute input is allowed only if it is already inside the root:
@@ -113,7 +113,7 @@ func resolveDeepest(p string) (string, error) {
 		}
 		parent, base := filepath.Dir(p), filepath.Base(p)
 		if parent == p || base == "." || base == string(filepath.Separator) {
-			return "", fmt.Errorf("%w: لا سلف موجود", ErrOutside)
+			return "", fmt.Errorf("%w: no existing ancestor", ErrOutside)
 		}
 		rest = filepath.Join(base, rest)
 		p = parent

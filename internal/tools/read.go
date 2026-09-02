@@ -125,11 +125,11 @@ func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 
 func (readFile) Spec() provider.ToolSpec {
 	return spec("read_file",
-		"اقرأ ملفًا نصيًا. الأسطر مرقّمة. استخدم offset وlimit للملفات الطويلة.",
+		"Read a text file. Lines are numbered. Use offset and limit for long files.",
 		`{"type":"object","properties":{
-			"path":{"type":"string","description":"مسار نسبي من جذر المشروع"},
-			"offset":{"type":"integer","description":"أول سطر (يبدأ من ١)"},
-			"limit":{"type":"integer","description":"عدد الأسطر"}},
+			"path":{"type":"string","description":"relative path from the project root"},
+			"offset":{"type":"integer","description":"first line (starts at 1)"},
+			"limit":{"type":"integer","description":"number of lines"}},
 		 "required":["path"]}`)
 }
 
@@ -140,7 +140,7 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 		Limit  int    `json:"limit"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", false, fmt.Errorf("وسائط غير صالحة: %w", err)
+		return "", false, fmt.Errorf("invalid args: %w", err)
 	}
 
 	p, err := t.root.Resolve(a.Path)
@@ -152,7 +152,7 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 		return "", false, err
 	}
 	if fi.IsDir() {
-		return "", false, fmt.Errorf("%s مجلد · استخدم glob", t.root.Rel(p))
+		return "", false, fmt.Errorf("%s is a directory · use glob", t.root.Rel(p))
 	}
 
 	f, err := os.Open(p)
@@ -166,7 +166,7 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 	head := make([]byte, 8192)
 	n, _ := f.Read(head)
 	if strings.IndexByte(string(head[:n]), 0) >= 0 {
-		return "", false, fmt.Errorf("%s ملف ثنائي (%d بايت)", t.root.Rel(p), fi.Size())
+		return "", false, fmt.Errorf("%s is binary (%d bytes)", t.root.Rel(p), fi.Size())
 	}
 	if _, err := f.Seek(0, 0); err != nil {
 		return "", false, err
@@ -224,7 +224,7 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 				// this line is NOT reachable (the tool has no byte offset),
 				// so the marker says so explicitly rather than let the model
 				// believe it saw the whole file.
-				fmt.Fprintf(&b, "%d|%s [LINE_TRUNCATED: السطر أطول من maxReadBytes=%d؛ بقية هذا السطر غير قابلة للقراءة بهذه الأداة]\n", line, clip(sc.Text(), maxLineRunes), maxReadBytes)
+				fmt.Fprintf(&b, "%d|%s [LINE_TRUNCATED: line longer than maxReadBytes=%d; remainder of this line is not readable with this tool]\n", line, clip(sc.Text(), maxLineRunes), maxReadBytes)
 				shown++
 				capped = TruncTail(from, line, total, line+1)
 				if t.reg != nil {
@@ -247,9 +247,9 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 
 	if shown == 0 {
 		if line == 0 {
-			return fmt.Sprintf("%s فارغ", t.root.Rel(p)), true, nil
+			return fmt.Sprintf("%s is empty", t.root.Rel(p)), true, nil
 		}
-		return fmt.Sprintf("لا سطر عند offset=%d · الملف %d سطرًا", from, line), true, nil
+		return fmt.Sprintf("no lines at offset=%d · file has %d lines", from, line), true, nil
 	}
 	if capped != "" {
 		b.WriteString(capped + "\n")
@@ -278,7 +278,7 @@ func TruncTail(start, end, total, nextOffset int) string {
 		end = start
 	}
 	return fmt.Sprintf(
-		"\n[TRUNCATED: قُرئت الأسطر %d-%d من %d؛ للمتابعة استخدم offset=%d]\n"+
+		"\n[TRUNCATED: read lines %d-%d of %d; continue with offset=%d]\n"+
 			"lines_read=%d  total_lines=%d  next_offset=%d",
 		start, end, total, nextOffset,
 		end-start+1, total, nextOffset)

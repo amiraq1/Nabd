@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -21,7 +22,7 @@ func (globFiles) Name() string { return "glob" }
 
 func (globFiles) Spec() provider.ToolSpec {
 	return spec("glob",
-		"ابحث عن ملفات بنمط مثل **/*.go أو internal/*/*_test.go. الأحدث أولًا.",
+		"Find files by pattern like **/*.go or internal/*/*_test.go. Newest first.",
 		`{"type":"object","properties":{
 			"pattern":{"type":"string"},
 			"limit":{"type":"integer"}},
@@ -34,11 +35,11 @@ func (t globFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 		Limit   int    `json:"limit"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", false, fmt.Errorf("وسائط غير صالحة: %w", err)
+		return "", false, fmt.Errorf("invalid args: %w", err)
 	}
 	pat := strings.TrimSpace(a.Pattern)
 	if pat == "" {
-		return "", false, fmt.Errorf("نمط فارغ")
+		return "", false, errors.New("empty pattern")
 	}
 	if filepath.IsAbs(pat) {
 		return "", false, ErrAbsolute
@@ -91,7 +92,7 @@ func (t globFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	sort.Slice(hits, func(i, j int) bool { return hits[i].mod.After(hits[j].mod) })
 
 	if len(hits) == 0 {
-		return fmt.Sprintf("لا نتائج · %s", pat), true, nil
+		return fmt.Sprintf("no results · %s", pat), true, nil
 	}
 	total := len(hits)
 	if total > limit {
@@ -102,7 +103,7 @@ func (t globFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 		b.WriteString(h.rel + "\n")
 	}
 	if total > limit {
-		fmt.Fprintf(&b, "… %d من %d\n", limit, total)
+		fmt.Fprintf(&b, "… %d of %d\n", limit, total)
 	}
 	return b.String(), true, nil
 }

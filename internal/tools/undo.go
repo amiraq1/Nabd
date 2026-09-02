@@ -80,19 +80,19 @@ func (r *Registry) rewindRecord(rec *agent.EditRecord) UndoResult {
 	// The file must still be exactly as the agent left it. If a human
 	// touched it since, restoring would silently destroy their work.
 	if rec.HashAfter != "" && sha256hexOf(now.Blob, r.sh) != rec.HashAfter {
-		return UndoResult{Rel: rec.Path, Note: "تغيّر بعد كتابة الوكيل؛ لن أدهس عملك"}
+		return UndoResult{Rel: rec.Path, Note: "changed after the agent wrote it; will not overwrite your work"}
 	}
 	if rec.BlobBefore == "" {
 		// Creation: the "before" was absence.
 		if err := os.Remove(abs); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return UndoResult{Rel: rec.Path, Note: err.Error()}
 		}
-		return UndoResult{Rel: rec.Path, OK: true, Note: "حُذف (write_file)"}
+		return UndoResult{Rel: rec.Path, OK: true, Note: "deleted (write_file)"}
 	}
 	if err := r.sh.Restore(snap.State{Rel: rec.Path, Blob: rec.BlobBefore}); err != nil {
 		return UndoResult{Rel: rec.Path, Note: err.Error()}
 	}
-	return UndoResult{Rel: rec.Path, OK: true, Note: "أُعيد (write_file)"}
+	return UndoResult{Rel: rec.Path, OK: true, Note: "restored (write_file)"}
 }
 
 // sha256hexOf hashes content behind a shadow blob id, or "" if unreadable.
@@ -116,7 +116,7 @@ func (r *Registry) Undo(n int) []UndoResult {
 	for i := 0; i < n; i++ {
 		e, ok := r.edits.last()
 		if !ok {
-			out = append(out, UndoResult{Note: "لا تعديلات للتراجع عنها"})
+			out = append(out, UndoResult{Note: "no edits to undo"})
 			break
 		}
 		res := r.rewind(e)
@@ -142,14 +142,14 @@ func (r *Registry) rewind(e Edit) UndoResult {
 	// it since, restoring would silently destroy their work, which is a worse
 	// failure than refusing to undo at all.
 	if !snap.Unchanged(now, e.After) {
-		return UndoResult{Rel: e.Rel, Note: "تغيّر بعد كتابة الوكيل؛ لن أدهس عملك"}
+		return UndoResult{Rel: e.Rel, Note: "changed after the agent wrote it; will not overwrite your work"}
 	}
 	if err := r.sh.Restore(e.Before); err != nil {
 		return UndoResult{Rel: e.Rel, Note: err.Error()}
 	}
-	verb := "أُعيد"
+	verb := "restored"
 	if e.Before.Absent {
-		verb = "حُذف"
+		verb = "deleted"
 	}
 	return UndoResult{Rel: e.Rel, OK: true, Note: verb + " (" + e.Tool + ")"}
 }
@@ -164,4 +164,4 @@ func (r *Registry) Pending() []Edit {
 	return rev
 }
 
-var ErrNoEdits = errors.New("لا تعديلات")
+var ErrNoEdits = errors.New("no edits")

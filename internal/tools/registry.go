@@ -108,7 +108,7 @@ func (r *Registry) Specs() []provider.ToolSpec {
 func (r *Registry) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
 	t, found := r.byName[c.Name]
 	if !found {
-		return "", false, fmt.Errorf("أداة مجهولة: %s", c.Name)
+		return "", false, fmt.Errorf("unknown tool: %s", c.Name)
 	}
 	args := c.Input
 	if len(args) == 0 {
@@ -152,7 +152,7 @@ var (
 func (r *Registry) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
 	t, ok := r.byName[name]
 	if !ok {
-		return agent.Outcome{}, fmt.Errorf("أداة غير معروفة: %s", name)
+		return agent.Outcome{}, fmt.Errorf("unknown tool: %s", name)
 	}
 	if d, ok := t.(Detailed); ok {
 		return d.RunDetailed(ctx, raw)
