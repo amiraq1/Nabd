@@ -25,7 +25,11 @@ type mockTools struct {
 	allowed bool
 }
 
-func (m mockTools) Specs() []provider.ToolSpec { return nil }
+func (m mockTools) Specs() []provider.ToolSpec {
+	// The gate tests model a KNOWN tool going through the permission
+	// ladder; the loop intercepts unknown tools before the gate.
+	return []provider.ToolSpec{{Name: "test_tool"}}
+}
 func (m mockTools) Check(tool string) (Verdict, string) {
 	if m.allowed {
 		return VerdictAsk, ""
