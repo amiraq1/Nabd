@@ -94,3 +94,30 @@ func TestRewindDropsBranch(t *testing.T) {
 		t.Fatal("القصّ حذف من الملف بدل أن يضيف إليه")
 	}
 }
+
+func TestNoticeInjectedDuringToolCallDoesNotCancelOrPrecedeToolResult(t *testing.T) {
+	evs := []Event{
+		{Seq: 1, Type: UserMsg, Text: "start"},
+		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "read_file"}},
+		{Seq: 3, Parent: 2, Type: Notice, Text: "calibrated"},
+		{Seq: 4, Parent: 3, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "read_file", Output: "file_data", OK: true}},
+		{Seq: 5, Parent: 4, Type: TurnEnd},
+	}
+	ms := Messages(evs)
+	for _, m := range ms {
+		for _, tr := range m.ToolResults {
+			if tr.ID == "t1" && tr.Output != "file_data" {
+				t.Fatalf("tool call t1 has bad result (cancelled or corrupted): %q", tr.Output)
+			}
+		}
+	}
+	if len(ms) != 4 {
+		t.Fatalf("expected 4 messages (user, assistant, user-results, user-notice), got %d: %v", len(ms), ms)
+	}
+	if len(ms[2].ToolResults) != 1 || ms[2].ToolResults[0].Output != "file_data" {
+		t.Fatalf("expected ms[2] to be tool result, got: %v", ms[2])
+	}
+	if ms[3].Text != "«notice» calibrated" {
+		t.Fatalf("expected ms[3] to be notice, got: %v", ms[3])
+	}
+}

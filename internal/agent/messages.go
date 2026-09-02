@@ -17,8 +17,9 @@ func Messages(evs []Event) []provider.Message {
 		out     []provider.Message
 		text    strings.Builder
 		calls   []provider.ToolCall
-		results []provider.ToolResult
-		open    = map[string]string{} // id -> name, still awaiting a result
+		results        []provider.ToolResult
+		open           = map[string]string{} // id -> name, still awaiting a result
+		pendingNotices []string
 	)
 
 	flush := func() {
@@ -37,6 +38,10 @@ func Messages(evs []Event) []provider.Message {
 		if len(results) > 0 {
 			out = append(out, provider.Message{Role: provider.User, ToolResults: results})
 		}
+		for _, n := range pendingNotices {
+			out = append(out, provider.Message{Role: provider.User, Text: "«notice» " + n})
+		}
+		pendingNotices = nil
 		text.Reset()
 		calls, results = nil, nil
 	}
@@ -60,6 +65,10 @@ func Messages(evs []Event) []provider.Message {
 			// system directive: this is a user-role message on every
 			// provider, and pretending it is "system" would mislead the
 			// model into treating a notice as an instruction.
+			if len(open) > 0 || len(calls) > 0 {
+				pendingNotices = append(pendingNotices, e.Text)
+				continue
+			}
 			flush()
 			out = append(out, provider.Message{Role: provider.User, Text: "«notice» " + e.Text})
 
