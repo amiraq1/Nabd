@@ -41,7 +41,7 @@ func RenderEvent(e agent.Event, width int) string {
 		return block("⚙", callLine(e.Call), width, lipgloss.NewStyle())
 
 	case agent.PermAsk:
-		return block("?", callLine(e.Call)+" — يسمح؟", width, warn)
+		return block("?", callLine(e.Call)+" — allow?", width, warn)
 
 	case agent.PermReply:
 		st, mark := bad, "✗"
@@ -62,7 +62,7 @@ func RenderEvent(e agent.Event, width int) string {
 	case agent.Interrupted:
 		s := e.Text
 		if s == "" {
-			s = "توقّف"
+			s = "stopped"
 		}
 		return dim.Render("⊘ " + s)
 
@@ -76,7 +76,7 @@ func RenderEvent(e agent.Event, width int) string {
 		}
 		s := "✎ " + e.Edit.Path
 		if e.Edit.ReadLines > 0 {
-			s += fmt.Sprintf(" · قرأ %d سطرًا", e.Edit.ReadLines)
+			s += fmt.Sprintf(" · read %d lines", e.Edit.ReadLines)
 		}
 		return dim.Render(s)
 
@@ -87,7 +87,7 @@ func RenderEvent(e agent.Event, width int) string {
 			return ""
 		}
 		if e.Read.Truncated {
-			return warn.Render("✂ " + e.Read.Path + " · مقروء جزئيًا")
+			return warn.Render("✂ " + e.Read.Path + " · partially read")
 		}
 		return ""
 

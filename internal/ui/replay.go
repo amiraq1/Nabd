@@ -97,7 +97,7 @@ func (m Replay) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// and quitting are different intents and deserve two keys.
 			if !m.done {
 				m.done = true
-				return m, tea.Println(dim.Render("⊘ توقّفت · مرة أخرى للخروج"))
+				return m, tea.Println(dim.Render("⊘ stopped · press again to exit"))
 			}
 			return m, tea.Quit
 
@@ -155,7 +155,7 @@ func (m Replay) View() string {
 	case m.done:
 		s += " · q"
 	case m.paused:
-		s += " · موقوف · مسافة/→"
+		s += " · paused · space/→"
 	}
 	return dim.Render(s)
 }

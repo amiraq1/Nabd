@@ -105,7 +105,7 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancel = nil
 		m.status = ""
 		if msg.err != nil {
-			m.status = "خطأ"
+			m.status = "error: " + msg.err.Error()
 		}
 		return m, nil
 
@@ -133,11 +133,11 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			if m.running && m.cancel != nil {
 				m.cancel()
-				m.status = "يُلغى…"
+				m.status = "canceling…"
 			}
 			return m, nil
 		default:
-			return m, nil // لا كتابة أثناء السؤال
+			return m, nil // no typing while prompt is pending
 		}
 	}
 	switch k.Type {
@@ -146,7 +146,7 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// because losing a half-finished answer to a fat thumb is cruel.
 		if m.running && m.cancel != nil {
 			m.cancel()
-			m.status = "يُلغى…"
+			m.status = "canceling…"
 			return m, nil
 		}
 		return m, tea.Quit
@@ -164,7 +164,7 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if strings.HasPrefix(line, "/") {
 			if m.running {
-				m.status = "انتظر انتهاء الدور"
+				m.status = "wait for turn to finish"
 				return m, nil
 			}
 			m.input = ""
@@ -210,7 +210,7 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // which is what lets you scroll back with your thumb and grep it later.
 func (m *Chat) View() string {
 	if m.running && m.pending == nil {
-		s := "· يعمل · ctrl+c للإلغاء"
+		s := "· working · ctrl+c to cancel"
 		if m.status != "" {
 			s = "· " + m.status
 		}
@@ -221,9 +221,9 @@ func (m *Chat) View() string {
 		line = dim.Render("· "+m.status) + "\n" + line
 	}
 	if m.pending != nil {
-		keys := "y سماح مرة · a سماح للجلسة · n رفض"
+		keys := "y allow once · a allow session · n deny"
 		if m.pending.Name == "bash" {
-			keys = "y سماح مرة · n رفض · (لا تصريح جلسة للأوامر)"
+			keys = "y allow once · n deny · (no session allow for commands)"
 		}
 		return line + "\n" + warn.Render(keys)
 	}
@@ -241,7 +241,7 @@ func (m *Chat) command(line string) string {
 			}
 		}
 		if m.OnRewind == nil {
-			return "لا رجوع في هذه النسخة"
+			return "rewind not supported in this version"
 		}
 		return m.OnRewind(n)
 	case "/ctx":
@@ -262,7 +262,7 @@ func (m *Chat) command(line string) string {
 			}
 		}
 		if m.OnUndo == nil {
-			return "لا تراجع في هذه النسخة"
+			return "undo not supported in this version"
 		}
 		return m.OnUndo(n)
 	case "/edits":
@@ -273,7 +273,7 @@ func (m *Chat) command(line string) string {
 	case "/help":
 		return "/undo [n] · /edits · /ctx · /compact · ctrl+c · ctrl+d"
 	}
-	return "أمر غير معروف: " + f[0]
+	return "unknown command: " + f[0]
 }
 
 func (m *Chat) SetInput(s string) {
