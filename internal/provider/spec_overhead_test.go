@@ -39,6 +39,9 @@ func TestEncodeSpecOverheadDifference(t *testing.T) {
 	if diff <= 0 {
 		t.Errorf("expected Arabic specs to cost more bytes, got arabic=%d english=%d", len(arBytes), len(enBytes))
 	}
-	// At the measured 2.41 bytes/token this is the token saving per request.
-	t.Logf("at 2.41 bytes/token: ≈ %d tokens saved per request (fixed overhead difference)", int(float64(diff)/2.41))
+	// The byte saving is real; converting it to tokens requires the LATIN
+	// bytes/token (~4.0, measured from the spec row), not the mixed 2.41.
+	// NOTE: this fixture holds only 2 of the 6 specs, so its saving is a
+	// subset of the full-spec estimate (210 tokens via char ratio).
+	t.Logf("at 4.0 latin bytes/token: ≈ %d tokens saved per request (2-spec fixture only)", int(float64(diff)/4.0))
 }
