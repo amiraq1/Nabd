@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -216,7 +217,7 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 				// is session-varying state, and the log must show which
 				// budget the agent worked under.
 				if l.Budget.Calibrate(c.PromptTokens, l.Budget.Estimate(ms)) {
-					_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf("context ratio adjusted to %.2f (measured: %d tokens)", l.Budget.Ratio(), c.PromptTokens)})
+					_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf("calibration: token ratio (observed prompt_tokens ÷ heuristic estimate) adopted %.2f · conservative ratchet, rises only (measured prompt_tokens=%d)", l.Budget.Ratio(), c.PromptTokens)})
 				}
 			}
 
@@ -248,6 +249,28 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 	return calls, stop, nil
 }
 
+// toolNames lists the registered tool names, for error messages that let
+// the model correct itself instead of guessing again.
+func (l *Loop) toolNames() []string {
+	if l.Tools == nil {
+		return nil
+	}
+	var names []string
+	for _, s := range l.Tools.Specs() {
+		names = append(names, s.Name)
+	}
+	return names
+}
+
+func (l *Loop) knownTool(name string) bool {
+	for _, n := range l.toolNames() {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 // runCalls executes the batch in order. Order matters: the model asked
 // for read-then-write for a reason, and parallelism would gain a phone
 // nothing but a race.
@@ -266,6 +289,18 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 		}
 
 		ac := ToolCall{ID: c.ID, Name: c.Name, Args: c.Input}
+		// An unknown tool is not a permission question: the registry has
+		// no such tool, so asking the gate would misfile an existence
+		// error under deny and corrupt the evidence. Answer with the
+		// tools that DO exist, so the model can correct its next call
+		// instead of repeating the same one.
+		if !l.knownTool(c.Name) {
+			msg := fmt.Sprintf("unknown tool %q · available: %s", c.Name, strings.Join(l.toolNames(), ", "))
+			ac.OK, ac.Output = false, msg
+			l.emit(Event{Type: ToolEnd, Call: &ac})
+			results = append(results, provider.ToolResult{ID: c.ID, Output: msg, IsErr: true})
+			continue
+		}
 		d, why := l.decide(ctx, ac, l.emit)
 		if d == Deny {
 			msg := "refused to run " + c.Name

@@ -5,6 +5,7 @@
 package agent
 
 import (
+	"math"
 	"os"
 	"strconv"
 	"sync"
@@ -100,29 +101,52 @@ func (b *Budget) Ratio() float64 {
 	return b.ratio
 }
 
-// Calibrate folds a real input_tokens count back into the ratio, slowly and
-// within bounds, so one odd response cannot make the agent reckless. It
-// returns true when the ratio actually changed, so the caller can journal
-// the adopted value — the budget is now session-varying state and every
-// state that changes behaviour must be traceable in the log.
+// Calibrate folds a real input_tokens count back into the ratio. Two rules
+// make it conservative by construction:
+//
+//  1. Take the worst seen this session, not a smoothed average. A blend
+//     (ratio*0.7 + obs*0.3) drags a strong upward reading down to 30% of
+//     headroom: a 1.80 observation against a 1.0 base lands at 1.24 — still
+//     31% under the truth that tripped a mid-sentence 413. A downward blend
+//     leaks worst-case upward the other way. There is no safe smoothing
+//     direction, so adopt the observation whole on a rise and pin on a fall.
+//  2. The ratchet: within a session the ratio may only rise. A low reading
+//     (Latin text underestimates) is ignored, so the next long Arabic file
+//     still meets the worst-case bound that was already in force.
+//
+// Returns true when the ratio moved, so the caller can journal the adopted
+// value. Unit: ratio = observed prompt_tokens ÷ heuristic estimate (a
+// dimensionless correction factor on the chars/4 heuristic — NOT bytes per
+// token; the 3.56/4.00 figures in NOTES are the latter, a different axis).
 func (b *Budget) Calibrate(actual, estimated int) bool {
 	if actual <= 0 || estimated <= 0 {
 		return false // a provider that reports no usage must not corrupt the ratio
 	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	obs := float64(actual) / float64(estimated)
+	if math.IsNaN(obs) || math.IsInf(obs, 0) {
+		return false // defensive: never pin +Inf on the high-water mark
+	}
 	// A wild single measurement is clamped before it can move the ratio far:
 	// observations outside [minObsRatio, maxObsRatio] are ignored entirely.
 	if obs < minObsRatio || obs > maxObsRatio {
 		return false
 	}
-	next := b.ratio*0.7 + obs*0.3
-	if next < 0.6 {
-		next = 0.6
+	// Take the worst, not the average: a blend on the rise only invites a
+	// mid-sentence 413 later in the same session.
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	next := obs
+	if next < minRatio {
+		next = minRatio
 	}
-	if next > 2 {
-		next = 2
+	if next > maxRatio {
+		next = maxRatio
+	}
+	// Conservative ratchet: downward drift is the observed failure mode
+	// (1.50 -> 1.42); pin to the session high-water mark instead of
+	// accepting the lower reading.
+	if next < b.ratio {
+		next = b.ratio
 	}
 	if next == b.ratio {
 		return false
@@ -134,6 +158,8 @@ func (b *Budget) Calibrate(actual, estimated int) bool {
 const (
 	minObsRatio = 0.5 // below this the measurement is not credible (e.g. a 0)
 	maxObsRatio = 4.0 // above this the measurement is not credible
+	minRatio    = 0.6 // floor: the heuristic must never be trusted below 0.6x reality
+	maxRatio    = 2.0 // ceiling: one credible-but-sparse reading cannot hoist the cap; clamped values are logged with a notice
 )
 
 func (b *Budget) Pressure(ms []provider.Message) float64 {
