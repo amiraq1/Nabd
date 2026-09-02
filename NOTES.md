@@ -81,3 +81,32 @@
   This slot measures PROSE DELIVERED AS A USER MESSAGE, not read_file output (tool output adds wrapping/line numbers/lines_read header — kept as a separate unfilled slot). Arabic prose denser per rune than English, but rune counts differ so the comparison is indicative, not controlled.
 - **Step4 free-session observation (OBSERVATION, not a ratio basis, commit=3e22744-dirty, Groq qwen3.8-27b, cwd=opencode)**: replayed the old workload ("فحص مستودع") in a real session. The model chose bash 12x (its own path, not glob/read_file). First calibration (messages=1): prompt_tokens=1024, encoded_bytes=3260. Each subsequent turn added +14 tokens / +16 bytes / +1 message — a clean per-turn marginal cost. This is the live-session analogue of the old 1564/3124 points: it shows real first-request cost (1024) under the new English system + include_usage, but as an observation (model-chosen tool path), not a controlled delta.
 - **Attribution closure**: the old points 1564/3124 (recorded by stale binary g81e5281, Arabic system, no include_usage, /ctx-derived) are now SUPERCEDED, not corrected. New first-request measurements at 3e22744: Step1 probe=1026, Step2 system-delta AR=1035/EN=1026, Step3 prose-delta base=1020/ar=1074/en=1061, Step4 observation=1024. Each tagged with its build fingerprint.
+- **Forensic Token Ratio Measurement & Hypothesis Correction (MEASURED, delta method, Groq qwen3.8-27b)**:
+  - **Model ID verified**: `qwen/qwen3.8-27b` verified directly against Groq API `/models` endpoint as an official model ID.
+  - **Diff purity ("لا ملف يدخل الطلب")**: Diff `12e57ef..9ca7377` touches `cmd/ag/main.go` (`const system` only) and `cmd/ag/main_test.go` (test code only; not compiled into binary or request payload).
+  - **Retraction of 2041 characters claim**: Historical claim of "2041 runes -> 124 saving ~210 tokens" belonged to all model-facing strings across tools/errors/notices (`ca05cab/da3a007/861765e`). System prompt at `12e57ef` measured only 149 runes / 263 bytes vs English 233 runes / 233 bytes, yielding a translation delta of only +9 tokens (1035 -> 1026). Conflating the two is formally retracted.
+  - **Verbatim texts & baseline pollution**:
+    - RUN-A Baseline: `"ok"` (2 runes, 2 bytes). Prompt tokens = 1020.
+    - RUN-B Arabic: `"وكيل برمجة طرفي، يُكتب ويُشغَّل من هاتف. بلا حاويات، بلا قاعدة بيانات، بلا CGO. سبعة آلاف سطر Go تقريبًا، ملف تنفيذي واحد، وسجلّ جلسة واحد يمكن قراءته بـ cat."` (158 runes, 277 bytes). Prompt tokens = 1074.
+    - RUN-C English: `"A terminal coding agent, written and run from a phone. No containers, no database, no CGO. Seven thousand lines of Go, one executable file, and one session journal readable with cat."` (182 runes, 182 bytes). Prompt tokens = 1059.
+    - Baseline message cost $B \ge 0$: $\Delta_{AR} = 54+B$, $\Delta_{EN} = 39+B$. As $B$ increases, the ratio $((54+B)/158) / ((39+B)/182)$ decreases monotonically ($B=0 \to 1.595$, $B=1 \to 1.584$, $B=20 \to 1.44$). Thus, **1.60 is an upper bound (`سقف لا قيمة`)**.
+  - **Language ratios vs Heuristic correction**:
+    - Per-rune: Arabic $54/158 = 0.3418$ tok/rune vs English $39/182 = 0.2143$ tok/rune $\implies$ **Arabic is 1.60x more expensive per rune**.
+    - Per-byte: Arabic $54/277 = 0.1949$ tok/byte ($5.13$ B/tok) vs English $39/182 = 0.2143$ tok/byte ($4.67$ B/tok) $\implies$ **Arabic is 0.91x English (cheaper per byte due to multi-byte UTF-8)**.
+    - Heuristic correction (`token_delta / heuristic_units`): Arabic $= 54/84 = 0.6429$; English $= 39/45 = 0.8667$.
+  - **Surprising finding (Hypothesis correction)**:
+    - Entire request baseline: $3286\text{ bytes} / 1026\text{ tokens} = 3.20\text{ bytes/token}$.
+    - Arabic prose: $5.13\text{ B/tok}$; English prose: $4.67\text{ B/tok}$.
+    - Both prose passages are cheaper per byte than the overall request average ($5.13, 4.67 > 3.20$).
+    - Token density resides primarily in the fixed structural scaffold (tool schemas + framing JSON), not in Arabic prose.
+    - Heuristic correction for prose is $< 1.0$ ($0.64$ and $0.87$), meaning the heuristic already overestimates prose. The ratchet (starting at 1.50 or 1.0, rising only on $>1.0$) will never rise from prose. The hypothesis that "the first long Arabic file will trigger a 413" is falsified for prose; pressure is structural.
+  - **Full binary attribution & banner strings**:
+    - Task 0 Calibration Gate: Session `20260902-165648`, SHA256 `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 2 AR System: Session `20260902-170016`, SHA256 `1a4d0757d18af3b0ff73eecb849b9adde9fd3ec7f0790c21325ddc6253e7f718`, Banner: `nabd v1.0.1-37-g12e57ef · 12e57efa7f3d5ddb33caf2434f2a64f0bca1ec67 · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 2 EN System: Session `20260902-170033`, SHA256 `992420350d20dd33355994cd3b6f28469a3caab1b4bbca9bebccdfd0b924216f`, Banner: `nabd v1.0.1-38-g9ca7377 · 9ca7377c0c924699f945a5c5e3e8df068fe63635 · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 3 RUN-A Baseline: Session `20260902-170526`, SHA256 `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 3 RUN-B Arabic: Session `20260902-170550`, SHA256 `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 3 RUN-C English: Session `20260902-170644`, SHA256 `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
+    - Task 4 Free Session: Session `20260902-170746`, SHA256 `a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
+  - **Governing budget rule confirmed**: `prompt_tokens + max_tokens <= provider_context_limit`.
+  - **Known limitations**: `FILE_CONTENT_RATIO` (mixed code/comments via `read_file`) remains a separate unfilled slot; tool wrapper/line numbers/lines_read headers prevent extracting prose-only token density from `read_file` output.
