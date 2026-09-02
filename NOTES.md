@@ -107,8 +107,7 @@
     - Evidence: English RUN-C estimate: 45 = 182 / 4.0. Arabic RUN-B estimate: 84 != 277/4 = 69 (actual: 39 ASCII / 4.0 + 119 non-ASCII / 1.6 = 9.75 + 74.375 = 84.125 -> 84).
     - Source branch verification: `EstimateText` in `internal/agent/budget.go:24-34`. Activation condition is `if r < unicode.MaxASCII` (line 27). In English (RUN-C), all 182 runes satisfy `r < unicode.MaxASCII`, so `o == 0` and the non-ASCII branch never triggers. In Arabic (RUN-B), 119 runes have `r >= 128`, triggering line 31 `o++` and entering the `float64(o)/runesPerTokOther` (1.6) term.
     - Heuristic correction factors: Arabic `HEURISTIC_CORRECTION = 0.64` (54 / 84); English `HEURISTIC_CORRECTION = 0.87` (39 / 45). Incomparable directly because they originate from structurally distinct formulas (ASCII-only 4.0 vs mixed ASCII/Other 1.6).
-    - Architectural localization of error: Arabic actual density = 158 runes / 55 tokens = 2.87 runes/token. Separating 39 ASCII runes / 4.0 (~9.75 tokens, ~8.5 effective), non-ASCII runes = ~119 runes / ~46.5 tokens = ~2.5 runes/token vs 1.6 in code. The constant `runesPerTokOther` is low by ~1.6x, representing the sole source of the 1.53x overestimate.
-    - Derived recommendation: `runesPerTokOther: 1.6 -> ~2.5, pending TASK 5` (derived recommendation only, no production code change in this round).
+    - Derived recommendation (FROZEN at 1.6): Clean measurement yields 3.47–3.56 runes/token (~2.2x overestimate on Arabic prose in isolation). However, changing `runesPerTokOther` from 1.6 to ~3.5 in isolation is FROZEN: the 2x overestimate on Arabic prose currently compensates for underestimating the structural scaffolding (tool schemas + wrappers). Changing the constant alone would lower the raw estimate by ~2x, forcing the ratchet to jump to ~2.9, during which turn climbing the estimate would severely underestimate true tokens and trigger hard 413 rejections. Constant 1.6 remains untouched until scaffolding estimation is calibrated or both ends are changed simultaneously with an initial ratio floor.
   - **HYPOTHESIS_CORRECTION**:
     - For Arabic prose, heuristic estimate = 84 vs actual tokens = 55 (overestimate of 1.53x, 84/55 = 1.527).
     - Operational risk: The real failure mode from this misestimation is early compaction / context loss (premature compaction caused by overcounting), NOT that "413 cannot occur".
@@ -128,5 +127,37 @@
     3. apiURL القابل للتهيئة
     4. حاجز نطاق القراءة مع re_read=true
     5. تخزين النسبة عبر الجلسات
-    القاعدة الحاكمة: تفاصيل التنفيذ الداخلية ليست بنود نطاق بحد ذاتها.
-  - **Known limitations**: `FILE_CONTENT_RATIO` (mixed code/comments via `read_file`) remains a separate unfilled slot; tool wrapper/line numbers/lines_read headers prevent extracting prose-only token density from `read_file` output.
+  - **FILE_CONTENT_RATIO & Pure Arabic Measurement (MEASURED, Groq qwen3.8-27b)**:
+    - **Attribution**: ATTRIBUTED_TO=92643c6, BINARY_SHA256=`a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`, Banner: `nabd v1.0.1-40-g92643c6 · 92643c6b848fd05ffd30999388ec1821f35a17bc · groq.com/qwen/qwen3.8-27b · nabd`.
+    - **FILE_CONTENT_RATIO (Three-point read_file measurement on README.md - Heterogeneous)**:
+      - User message (held constant): "اقرأ README.md"
+      - P1: Session `20260902-174527.jsonl`, NABD_MAX_READ=768, lines 1-14, sent_bytes=769, sent_runes=588, prompt_tokens=1284 (tool result seq 10, messages=3). Truncation header: `[TRUNCATED: read lines 1-14 of 175; continue with offset=15] lines_read=14  total_lines=175  next_offset=15`.
+      - P2: Session `20260902-174554.jsonl`, NABD_MAX_READ=1536, lines 1-30, sent_bytes=1586, sent_runes=1128, prompt_tokens=1493 (tool result seq 10, messages=3). Truncation header: `[TRUNCATED: read lines 1-30 of 175; continue with offset=31] lines_read=30  total_lines=175  next_offset=31`.
+      - P3: Session `20260902-174638.jsonl`, NABD_MAX_READ=2560, lines 1-47, sent_bytes=2608, sent_runes=1835, prompt_tokens=1799 (tool result seq 10, messages=3). Truncation header: `[TRUNCATED: read lines 1-47 of 175; continue with offset=48] lines_read=47  total_lines=175  next_offset=48`.
+      - Pairwise slopes: Delta 1->2: slope = 0.2558 tokens/byte (3.91 bytes/token); Delta 2->3: slope = 0.2994 tokens/byte (3.34 bytes/token).
+      - Operational Range: `MEASURED (range: 3.3–3.9 bytes/token; overall OLS slope 0.2808 tokens/byte = 3.56 bytes/token)`.
+      - Structural Intercept: 1060.73 tokens vs baseline 1020 tokens (messages=1) -> **~41 tokens** full round-trip scaffolding overhead (user msg + tool_use framing + tool_result wrapper + `lines_read/total_lines/next_offset` header).
+      - Residuals curvature: P1 = +7.30 tokens, P2 = -13.14 tokens, P3 = +5.84 tokens, reflecting content heterogeneity (prose, markdown, commands, code blocks).
+    - **FILE_CONTENT_RATIO (Two-point read_file measurement on pure_ar.txt - Homogeneous)**:
+      - User message (held constant): "اقرأ pure_ar.txt"
+      - P1: Session `20260902-175334.jsonl`, NABD_MAX_READ=768, lines 1-1, sent_bytes=500, sent_runes=323, prompt_tokens=1169 (tool result seq 10, messages=3). Truncation header: `[TRUNCATED: read lines 1-1 of 40; continue with offset=2] lines_read=1  total_lines=40  next_offset=2`.
+      - P2: Session `20260902-175403.jsonl`, NABD_MAX_READ=1536, lines 1-3, sent_bytes=1294, sent_runes=763, prompt_tokens=1297 (tool result seq 10, messages=3). Truncation header: `[TRUNCATED: read lines 1-3 of 40; continue with offset=4] lines_read=3  total_lines=40  next_offset=4`.
+      - Delta: Δtokens = 128, Δbytes = 794, Δrunes = 440.
+      - Net slope: slope = 0.1612 tokens/byte -> **6.20 bytes/token** (or **3.44 runes/token**).
+      - Structural Intercept: 1088.40 tokens vs baseline 1023 tokens (messages=1) -> **~65 tokens** full round-trip scaffolding overhead.
+    - **PURE_ARABIC Sample (D3-compliant isolated prose measurement)**:
+      - Verbatim text: "هذا نص عربي خالص لا يحتوي على أي حرف لاتيني ولا أي رقم غربي ولا علامات تشكيل. كتب هذا النص ليكون مقياسا دقيقا لكثافة الرموز في النماذج اللغوية الحديثة عند التعامل مع اللغة العربية في سياقات البرمجة والأنظمة الحاسوبية."
+      - D3 Validation: NFC normalized = True, diacritics = 0, Latin letters = 0, Western digits = 0, path/code syntax = 0.
+      - Measured Run: Session `20260902-174820.jsonl`, ATTRIBUTED_TO=92643c6, BINARY_SHA256=`a08a7ddd1bc7aa2c398954311990f4b124ace073007cdac0854b0680440d7cc5`.
+      - Character breakdown: 217 total runes (394 bytes): ASCII spaces/periods a=40 runes, non-ASCII Arabic letters o=177 runes.
+      - Estimator comparison: `EstimateText` calculates 40/4.0 + 177/1.6 = 10.0 + 110.625 = 120 tokens vs 61 actual tokens -> **~2.0x overall overestimate** (and non-ASCII portion 177 / (61-10) = 3.47 runes/token vs 1.6 -> **~2.2x overestimate on Arabic**).
+      - Token density: 0.2811 tokens/rune (3.56 runes/token), 0.1548 tokens/byte (6.46 bytes/token).
+      - Comparison to English baseline (0.2198 tokens/rune): Per-rune ratio = 1.28x vs English (vs 1.58 in contaminated RUN-B, delta = -0.3010, confirming ~24% inflation from diacritics/code terms). Raw token ratio delta dropped as non-applicable to non-translated samples.
+  - **TURN_CEILING_EXHAUSTION_BY_SLICING (Forensic Discovery, session 20260902-175810)**:
+    - Root failure: Agent died from reaching MaxTurns (12 turns / 11 tool iterations), NOT from 413 TPM limit (prompt_tokens reached 2908 vs 6976 usable input budget after MaxTok=1024, less than half of context capacity) and NOT from premature compaction.
+    - Slicing dynamics: NOTES.md has long Arabic lines averaging ~259 bytes/line (~140 runes/line). Under NABD_MAX_READ=3072, read_file could only return 6 to 17 lines per call (sequence: 12, 9, 7, 8, 17, 6, 7, 10, 15, 17, 13; average ~11 lines/call). To read 155 lines of NOTES.md requires ~14 calls, exceeding the entire 12-turn ceiling of the session before completing NOTES.md (stopped at next_offset=122, line 121), leaving README.md unread past line 53.
+    - Architectural pathology: Repository documentation became unreadable by the repository tool itself due to byte-cap slicing on long Arabic prose lines.
+    - Calibration event completeness: All 13 turns wrote calibration events to the session JSONL (Fanout confirmed intact). An 8-turn regression across the sliced read_file sequence (prompt_tokens 2222 to 2970, encoded_bytes 7802 to 10055) shows slope = 0.3390 tokens/byte (~2.95 bytes/token, net delta 748 tokens over 2253 bytes = 3.01 bytes/token), confirming live end-to-end multi-turn payload density.
+    - Scaffold deficit unmasked: At Turn 4 (prompt_tokens=2908), adopted ratchet ratio jumped to 1.45 because heuristic estimate was ~2006 tokens (deficit of ~902 tokens). This proves the heuristic severely underestimates the fixed structural scaffold (JSON tool schemas + role framing). The ~2x overestimate on Arabic prose was masking the scaffold deficit. Changing `runesPerTokOther` from 1.6 to ~3.5 in isolation would drop Arabic prose estimates, unmasking the scaffold deficit during early turns and causing true tokens to exceed heuristic estimates, directly creating 413 rejections.
+    - UI ordering anomaly noted: In chat.go / render.go, `EventRead` ("✂ NOTES.md · مقروء جزئيًا") is emitted immediately upon truncation detection before `ToolEnd` ("✓ read_file · 4ms"), confirming event display order fragility.
+    - Root cleanup noted: Loose non-test file `test_gate.go` and scratch scripts `fix_*.py` exist in repository root; `test_gate.go` without `_test.go` suffix compiles into root package in `go build ./...` unless ignored.
