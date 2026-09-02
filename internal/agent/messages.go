@@ -12,11 +12,13 @@ import (
 
 // Messages rebuilds provider history from a live branch. Feed it Live(),
 // never the raw file: the raw file contains abandoned branches.
+const maxPendingNotices = 32
+
 func Messages(evs []Event) []provider.Message {
 	var (
-		out     []provider.Message
-		text    strings.Builder
-		calls   []provider.ToolCall
+		out            []provider.Message
+		text           strings.Builder
+		calls          []provider.ToolCall
 		results        []provider.ToolResult
 		open           = map[string]string{} // id -> name, still awaiting a result
 		pendingNotices []string
@@ -66,7 +68,9 @@ func Messages(evs []Event) []provider.Message {
 			// provider, and pretending it is "system" would mislead the
 			// model into treating a notice as an instruction.
 			if len(open) > 0 || len(calls) > 0 {
-				pendingNotices = append(pendingNotices, e.Text)
+				if len(pendingNotices) < maxPendingNotices {
+					pendingNotices = append(pendingNotices, e.Text)
+				}
 				continue
 			}
 			flush()
