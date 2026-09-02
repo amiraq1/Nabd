@@ -496,19 +496,33 @@ func pickProvider() (provider.Provider, error) {
 		return provider.NewOpenRouter()
 	case "groq":
 		return provider.NewGroq()
+	case "":
+		switch {
+		case config.Has("GROQ_API_KEY"):
+			return provider.NewGroq()
+		case config.Has("OPENROUTER_API_KEY"):
+			return provider.NewOpenRouter()
+		case config.Has("NVIDIA_API_KEY"):
+			return provider.NewNVIDIA()
+		case config.Has("ANTHROPIC_API_KEY"):
+			return provider.NewAnthropic()
+		}
+		return nil, errMissingKey
 	}
-
-	if config.Has("GROQ_API_KEY") {
-		return provider.NewGroq()
-	}
-	if config.Has("OPENROUTER_API_KEY") {
-		return provider.NewOpenRouter()
-	}
-	if config.Has("NVIDIA_API_KEY") {
-		return provider.NewNVIDIA()
-	}
-	return provider.NewAnthropic()
+	return nil, fmt.Errorf("unknown NABD_PROVIDER %q · values: nvidia, anthropic, openrouter, groq, router",
+		config.Get("NABD_PROVIDER"))
 }
+
+// errMissingKey is the first-run wall: it names every supported key so a
+// phone user is not sent hunting through the source to find the one that
+// works.
+var errMissingKey = errors.New(`no provider key found in ~/.ag/config or the environment.
+Set one key and restart, or force the provider:
+  ANTHROPIC_API_KEY=...   (anthropic)
+  NVIDIA_API_KEY=...      (nvidia)
+  OPENROUTER_API_KEY=...  (openrouter)
+  GROQ_API_KEY=...        (groq)
+  NABD_PROVIDER=nvidia|anthropic|openrouter|groq|router`)
 
 func pickRouterProvider() (provider.Provider, error) {
 	if config.Has("NABD_BASE_URL") {

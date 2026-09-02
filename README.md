@@ -22,7 +22,7 @@ written down rather than assumed.
 ## التشغيل
 
 ```sh
-go build -o ag ./cmd/ag
+./build.sh                        # يبني ag، وتُدمج نسخة git في اللافتة
 
 export ANTHROPIC_API_KEY=...      # أو
 export NVIDIA_API_KEY=nvapi-...   # أي مزوّد يتكلّم لهجة OpenAI

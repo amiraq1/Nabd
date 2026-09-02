@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"nabd/internal/provider"
 )
 
 // TestSystemModelDirection: system is model-facing text sent with every
@@ -117,5 +119,83 @@ func TestLatestSessionProjectIsolation(t *testing.T) {
 	}
 	if got != pa2 {
 		t.Errorf("expected pa2 (%s) but got %s", pa2, got)
+	}
+}
+
+// noProviderEnv blanks every knob pickProvider reads, so the tests are
+// immune to whatever the machine running them has exported or written in
+// ~/.ag/config.
+func noProviderEnv(t *testing.T) {
+	t.Helper()
+	for _, k := range []string{
+		"NABD_PROVIDER", "NABD_MODEL",
+		"ANTHROPIC_API_KEY", "NVIDIA_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY",
+	} {
+		t.Setenv(k, "")
+	}
+	// A real ~/.ag/config on the developer's machine would otherwise leak
+	// into these tests through config.Get's env fallback chain.
+	t.Setenv("NABD_CONFIG", filepath.Join(t.TempDir(), "missing"))
+}
+
+func TestPickProviderPrefersKeyPresence(t *testing.T) {
+	noProviderEnv(t)
+
+	cases := []struct {
+		name       string
+		key, value string
+		build      func() (provider.Provider, error)
+	}{
+		{"NVIDIA", "NVIDIA_API_KEY", "nvkey", func() (provider.Provider, error) { return provider.NewNVIDIA() }},
+		{"OpenRouter", "OPENROUTER_API_KEY", "orkey", func() (provider.Provider, error) { return provider.NewOpenRouter() }},
+		{"Anthropic", "ANTHROPIC_API_KEY", "ackey", func() (provider.Provider, error) { return provider.NewAnthropic() }},
+	}
+	for _, c := range cases {
+		noProviderEnv(t)
+		t.Setenv(c.key, c.value)
+		p, err := pickProvider()
+		if err != nil {
+			t.Fatalf("pickProvider with %s key: %v", c.name, err)
+		}
+		want, err := c.build()
+		if err != nil {
+			t.Fatalf("build %s: %v", c.name, err)
+		}
+		if p.Name() != want.Name() {
+			t.Errorf("%s key picked Name %q, want %q", c.name, p.Name(), want.Name())
+		}
+	}
+}
+
+func TestPickProviderNamesEveryKeyWhenNonePresent(t *testing.T) {
+	noProviderEnv(t)
+
+	_, err := pickProvider()
+	if err == nil {
+		t.Fatal("pickProvider with no key succeeded")
+	}
+	for _, want := range []string{"ANTHROPIC_API_KEY", "NVIDIA_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %s", err, want)
+		}
+	}
+}
+
+func TestPickProviderRejectsUnknownName(t *testing.T) {
+	noProviderEnv(t)
+	t.Setenv("NABD_PROVIDER", "gemini")
+	t.Setenv("OPENROUTER_API_KEY", "k")
+
+	if _, err := pickProvider(); err == nil || !strings.Contains(err.Error(), "unknown NABD_PROVIDER") {
+		t.Fatalf("unknown NABD_PROVIDER: err = %v, want refusal", err)
+	}
+}
+
+func TestForcedProviderWithoutKeyNamesItsVar(t *testing.T) {
+	noProviderEnv(t)
+	t.Setenv("NABD_PROVIDER", "nvidia")
+
+	if _, err := pickProvider(); err == nil || !strings.Contains(err.Error(), "NVIDIA_API_KEY") {
+		t.Fatalf("err = %v, want a NVIDIA_API_KEY hint", err)
 	}
 }
