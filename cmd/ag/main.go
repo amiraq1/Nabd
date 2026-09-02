@@ -86,7 +86,7 @@ func doChat(dir string, cont bool) error {
 			return err
 		}
 		prevEvs = agent.Live(evs)
-		fmt.Printf("استأنفتُ %s · %d حدثًا حيًّا من %d\n",
+		fmt.Printf("resumed %s · %d live events of %d\n",
 			filepath.Base(prev), len(prevEvs), len(evs))
 	}
 
@@ -143,9 +143,9 @@ func doChat(dir string, cont bool) error {
 			return err.Error()
 		}
 		chat.SetInput(txt) // the cut turn comes back to the prompt, editable
-		s := fmt.Sprintf("رجعتُ %d دور", n)
+		s := fmt.Sprintf("rewound %d turns", n)
 		if k := len(reg.Pending()); k > 0 {
-			s += fmt.Sprintf(" · %d تعديل على القرص لم يُلغَ (/undo %d)", k, k)
+			s += fmt.Sprintf(" · %d uncommitted edits on disk (/undo %d)", k, k)
 		}
 		return s
 	}
@@ -179,7 +179,7 @@ func doChat(dir string, cont bool) error {
 	chat.OnEdits = func() string {
 		p := reg.Pending()
 		if len(p) == 0 {
-			return "لا تعديلات قابلة للتراجع"
+			return "no reversible edits pending"
 		}
 		var b strings.Builder
 		for i, e := range p {
@@ -191,14 +191,14 @@ func doChat(dir string, cont bool) error {
 	chat.OnCtx = func() string {
 		ms := agent.Squeeze(agent.Messages(agent.Live(loop.Hist())), agent.KeepFullRounds)
 		p := loop.Budget.Pressure(ms)
-		return fmt.Sprintf("السياق %d%% (%d / %d رمزا)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
+		return fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
 	}
 	chat.OnCompact = func() string {
 		// Wait, context is already imported in main.go
 		if err := loop.Compact(context.Background(), loop.Budget.Usable()*4/10); err != nil {
 			return err.Error()
 		}
-		return "ضُغط السياق يدويًا"
+		return "context compacted manually"
 	}
 
 	_, err = tea.NewProgram(chat).Run()
@@ -326,7 +326,7 @@ func latestSession() (string, error) {
 		}
 	}
 	if last == "" {
-		return "", fmt.Errorf("لا جلسات سابقة")
+		return "", fmt.Errorf("no previous sessions")
 	}
 	return filepath.Join(dir, last), nil
 }
