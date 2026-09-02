@@ -97,6 +97,11 @@ func pathOfArgs(raw []byte) string {
 }
 
 func Squeeze(ms []provider.Message, keepRounds int) []provider.Message {
+	// Competing tails are a fold-time hazard: consecutive truncated reads
+	// of one path leave several "continue with offset=" directives, and a
+	// model that follows an older one re-reads an already-covered range.
+	// Exactly one live tail per path survives the fold.
+	ms = DedupeReadTails(ms)
 	rounds, cut := 0, -1
 	for i := len(ms) - 1; i >= 0; i-- {
 		if ms[i].Role != provider.User {
@@ -157,6 +162,60 @@ func Squeeze(ms []provider.Message, keepRounds int) []provider.Message {
 			rs[j].Output = fmt.Sprintf("«%d bytes of output removed to save context; re-run the call if needed»", len(r.Output))
 		}
 		out[i].ToolResults = rs
+	}
+	return out
+}
+
+// DedupeReadTails keeps only the newest truncation tail per path. An older
+// tail names a stale next_offset and competes with the live one: a model
+// that follows it re-reads an already-covered range and the loop tightens.
+// The superseded read result is flattened to the same one-line stub the
+// fold uses — the range survives, the stale offset directive does not.
+func DedupeReadTails(ms []provider.Message) []provider.Message {
+	seen := map[string]bool{} // paths whose newest tail is already kept
+	out := make([]provider.Message, len(ms))
+	copy(out, ms)
+	for i := len(out) - 1; i >= 0; i-- {
+		if len(out[i].ToolResults) == 0 {
+			continue
+		}
+		// Paths for read results come from the preceding assistant
+		// message's tool_use, matched by ID — same pairing Squeeze keeps.
+		paths := map[string]string{}
+		if i > 0 {
+			for _, tc := range out[i-1].ToolCalls {
+				if tc.Name == "read_file" {
+					paths[tc.ID] = pathOfArgs(tc.Input)
+				}
+			}
+		}
+		rs := make([]provider.ToolResult, len(out[i].ToolResults))
+		copy(rs, out[i].ToolResults)
+		modified := false
+		// Newest first, so within one message the later result wins too.
+		for j := len(rs) - 1; j >= 0; j-- {
+			if rs[j].IsErr || !isReadResult(rs[j].Output) {
+				continue
+			}
+			if !strings.Contains(rs[j].Output, "[TRUNCATED:") {
+				continue
+			}
+			p := paths[rs[j].ID]
+			if p == "" {
+				continue
+			}
+			if seen[p] {
+				if rng := readRange(rs[j].Output); rng != "" {
+					rs[j].Output = fmt.Sprintf("«read lines %s of %s (content squeezed; do not re-read this range)»", rng, p)
+					modified = true
+				}
+				continue
+			}
+			seen[p] = true
+		}
+		if modified {
+			out[i].ToolResults = rs
+		}
 	}
 	return out
 }
