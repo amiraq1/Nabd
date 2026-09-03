@@ -161,6 +161,9 @@ func (m *Feed) runtimeStatusText() string {
 	if m.modalVisible {
 		return "Permission Required"
 	}
+	if m.runningTool != "" {
+		return "Running " + m.runningTool + "…"
+	}
 	if m.running {
 		return "Generating…"
 	}

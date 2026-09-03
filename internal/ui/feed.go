@@ -61,9 +61,10 @@ type Feed struct {
 	pending *agent.ToolCall
 
 	// Run state.
-	running bool // an agent/model/tool run is in flight
-	busy    bool // true while a run is in flight (running or awaiting permission)
-	cancel  context.CancelFunc
+	running     bool // an agent/model/tool run is in flight
+	busy        bool // true while a run is in flight (running or awaiting permission)
+	runningTool string
+	cancel      context.CancelFunc
 
 	// Runner is how a send reaches the agent loop. Set by the CLI.
 	runner Runner
@@ -147,6 +148,7 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case doneMsg:
 		m.running = false
 		m.busy = false
+		m.runningTool = ""
 		m.cancel = nil
 		if msg.err != nil {
 			m.status = "error: " + errSummary(msg.err)
@@ -205,6 +207,12 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 // trySend/doneMsg instead.
 func (m *Feed) trackState(e agent.Event) {
 	switch e.Type {
+	case agent.ToolStart:
+		if e.Call != nil {
+			m.runningTool = e.Call.Name
+		}
+	case agent.ToolEnd:
+		m.runningTool = ""
 	case agent.PermAsk:
 		if !m.modalVisible && !m.decisionPending {
 			m.followBeforeModal = m.follow
@@ -220,6 +228,7 @@ func (m *Feed) trackState(e agent.Event) {
 		m.modalVisible = false
 		m.decisionPending = false
 		m.pending = nil
+		m.runningTool = ""
 		m.permModal.close()
 		m.follow = m.followBeforeModal
 		if m.follow {
@@ -426,6 +435,7 @@ func (m *Feed) cancelRun(status string) {
 		m.cancel()
 		m.cancel = nil
 	}
+	m.runningTool = ""
 	if status != "" {
 		m.status = status
 	}
