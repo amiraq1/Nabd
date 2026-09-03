@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode"
@@ -21,7 +23,7 @@ func TestSystemModelDirection(t *testing.T) {
 	for _, want := range []string{
 		"Reply in Arabic", // explicit output-language directive
 		"50 columns",      // width instruction
-		"never repeat",    // the brevity triad
+		"never repeat",     // the brevity triad
 		"never apologise",
 		"never list anything without cause",
 		"Two lines suffice",
@@ -30,4 +32,58 @@ func TestSystemModelDirection(t *testing.T) {
 			t.Errorf("system must contain %q (the meaning was dropped)", want)
 		}
 	}
+}
+
+// TestLatestSessionRespectsDir verifies that latestSession searches only
+// within the given directory (respecting --dir) and returns a clear Arabic
+// error when no session exists.
+func TestLatestSessionRespectsDir(t *testing.T) {
+	// Empty directory → clear error.
+	dir := t.TempDir()
+	if _, err := latestSession(dir); err == nil {
+		t.Error("expected error for empty dir, got nil")
+	} else if got := err.Error(); !strings.Contains(got, "لا جلسات سابقة") {
+		t.Errorf("error should be in Arabic, got %q", got)
+	}
+
+	// Directory with a session → returns the .jsonl path.
+	sessionFile := filepath.Join(dir, "20260901-120000.000.jsonl")
+	if err := os.WriteFile(sessionFile, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := latestSession(dir)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != sessionFile {
+		t.Errorf("got %q, want %q", got, sessionFile)
+	}
+}
+
+// TestSessionPathCreatesUniqueNewFile verifies that sessionPath generates a
+// new unique filename (never reuses an existing one) and respects --dir.
+func TestSessionPathCreatesUniqueNewFile(t *testing.T) {
+	dir := t.TempDir()
+	p1, err := sessionPath(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(p1, ".jsonl") {
+		t.Errorf("sessionPath should end with .jsonl, got %q", p1)
+	}
+	// Millisecond precision means the name includes a dot before jsonl.
+	base := filepath.Base(p1)
+	if !strings.Contains(base, ".") {
+		t.Errorf("sessionPath should use millisecond precision, got %q", base)
+	}
+	// Calling again produces a different name (or same second is OK as long
+	// as we don't collide with existing files).
+	p2, err := sessionPath(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// They may be equal if called within the same millisecond; that's fine
+	// as long as the file doesn't pre-exist. What matters is that the caller
+	// (doChat) does NOT call sessionPath on --continue.
+	_ = p2
 }

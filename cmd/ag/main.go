@@ -72,33 +72,41 @@ func doChat(dir string, cont bool) error {
 		return err
 	}
 
-	// Resolve the previous session BEFORE creating the new journal file:
-	// latestSession() picks the newest *.jsonl, and the new file would
-	// otherwise shadow the one we actually want to continue.
-	var prevEvs []agent.Event
+	// Determine the journal path BEFORE creating the loop: on --continue
+	// we open the existing session file itself (append); on a new session
+	// we create a fresh file. These two paths must never be confused.
+	var journalPath string
 	if cont {
-		prev, err := latestSession()
+		journalPath, err = latestSession(dir)
 		if err != nil {
 			return err
 		}
-		evs, err := store.Read(prev)
+	} else {
+		journalPath, err = sessionPath(dir)
+		if err != nil {
+			return err
+		}
+	}
+
+	journal, err := store.NewJSONL(journalPath)
+	if err != nil {
+		return err
+	}
+	defer journal.Close()
+
+	// On --continue, seed the loop from the existing events in the journal
+	// BEFORE the UI starts emitting, so Seq/Parent continue correctly and
+	// every Parent references an event present in this same file.
+	var prevEvs []agent.Event
+	if cont {
+		evs, err := store.Read(journalPath)
 		if err != nil {
 			return err
 		}
 		prevEvs = agent.Live(evs)
 		fmt.Printf("resumed %s · %d live events of %d\n",
-			filepath.Base(prev), len(prevEvs), len(evs))
+			filepath.Base(journalPath), len(prevEvs), len(evs))
 	}
-
-	path, err := sessionPath(dir)
-	if err != nil {
-		return err
-	}
-	journal, err := store.NewJSONL(path)
-	if err != nil {
-		return err
-	}
-	defer journal.Close()
 
 	// The UI is a sink too, behind a buffered channel: a slow terminal
 	// must not stall the loop, and the journal must never wait on paint.
@@ -205,7 +213,7 @@ func doChat(dir string, cont bool) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("session:", path)
+	fmt.Println("session:", journalPath)
 	return nil
 }
 
@@ -221,6 +229,9 @@ func (c chanSink) Emit(e agent.Event) error {
 	return nil
 }
 
+// sessionPath returns a fresh, unique path for a new session. The name uses
+// millisecond precision to avoid collisions when two sessions start in the
+// same second. Callers must not call this when --continue is set.
 func sessionPath(dir string) (string, error) {
 	if dir == "" {
 		home, err := os.UserHomeDir()
@@ -229,7 +240,7 @@ func sessionPath(dir string) (string, error) {
 		}
 		dir = filepath.Join(home, ".ag", "sessions")
 	}
-	name := time.Now().UTC().Format("20060102-150405") + ".jsonl"
+	name := time.Now().UTC().Format("20060102-150405.000") + ".jsonl"
 	return filepath.Join(dir, name), nil
 }
 
@@ -313,26 +324,38 @@ func (g gate) Effective(tool string, d agent.Decision) agent.Decision {
 	return g.p.Effective(tool, d)
 }
 
-func latestSession() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
+// latestSession returns the path to the most recent *.jsonl in the session
+// directory. It respects an explicit --dir; otherwise it defaults to
+// ~/.ag/sessions. Returns a clear error when no session exists.
+func latestSession(dir string) (string, error) {
+	sessDir := dir
+	if sessDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		sessDir = filepath.Join(home, ".ag", "sessions")
 	}
-	dir := filepath.Join(home, ".ag", "sessions")
-	ents, err := os.ReadDir(dir)
+	ents, err := os.ReadDir(sessDir)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("لا جلسات سابقة في %s", sessDir)
+		}
 		return "", err
 	}
 	var last string
 	for _, e := range ents {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
-			last = e.Name()
+			name := e.Name()
+			if name > last {
+				last = name
+			}
 		}
 	}
 	if last == "" {
-		return "", fmt.Errorf("no previous sessions")
+		return "", fmt.Errorf("لا جلسات سابقة في %s", sessDir)
 	}
-	return filepath.Join(dir, last), nil
+	return filepath.Join(sessDir, last), nil
 }
 
 // editRecords pulls the persisted edit fingerprints out of a live branch,
