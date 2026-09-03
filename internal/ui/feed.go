@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"nabd/internal/agent"
@@ -47,9 +46,15 @@ type Feed struct {
 	// Composer.
 	composer *composer
 
+	// Slash command completion menu.
+	menu *slashMenu
+
 	// Permission modal state, driven by the event stream (PermAsk opens
 	// it, PermReply/Interrupted close it).
-	modalVisible bool
+	modalVisible      bool
+	decisionPending   bool
+	followBeforeModal bool
+	permModal         *PermissionModal
 
 	// pending holds the tool call awaiting a permission decision while the
 	// modal is visible (for help text and tests).
@@ -115,13 +120,15 @@ func (m *Feed) HistoryBrowsing() bool { return m.history.browsing() }
 // NewFeed creates a feed model.
 func NewFeed() *Feed {
 	return &Feed{
-		proj:     presentation.NewProjector(),
-		width:    DefaultWidth,
-		height:   24,
-		follow:   true,
-		lines:    []string{},
-		composer: newComposer(),
-		history:  newUserHistory(),
+		proj:      presentation.NewProjector(),
+		width:     DefaultWidth,
+		height:    24,
+		follow:    true,
+		lines:     []string{},
+		composer:  newComposer(),
+		history:   newUserHistory(),
+		permModal: newPermissionModal(),
+		menu:      newSlashMenu(),
 	}
 }
 
@@ -157,7 +164,11 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case permReplyMsg:
 		if m.Approve != nil {
 			m.Approve.Reply(msg.Decision)
+		} else {
+			m.addDiagnostic("permission reply failed: no approver")
 		}
+		m.decisionPending = false
+		m.permModal.decisionPending = false
 		return m, nil
 	}
 	return m, nil
@@ -174,7 +185,7 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 		m.trackState(e)
 	}
 	m.refresh()
-	if m.modalVisible {
+	if m.modalVisible || m.decisionPending {
 		// The feed keeps projecting behind the modal, but visible
 		// auto-scroll pauses (Phase 2 decision).
 		m.unseen++
@@ -195,15 +206,25 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 func (m *Feed) trackState(e agent.Event) {
 	switch e.Type {
 	case agent.PermAsk:
+		if !m.modalVisible && !m.decisionPending {
+			m.followBeforeModal = m.follow
+		}
 		m.modalVisible = true
 		m.pending = e.Call
+		m.permModal.open(e.Call)
 		// While the modal is visible the composer must not receive keys.
 		if m.composer.focused() {
 			m.composer.blur()
 		}
 	case agent.PermReply, agent.Interrupted:
 		m.modalVisible = false
+		m.decisionPending = false
 		m.pending = nil
+		m.permModal.close()
+		m.follow = m.followBeforeModal
+		if m.follow {
+			m.scrollToEnd()
+		}
 		// The modal closed: restore composer focus. The composer owned
 		// focus before the ask (typing a next draft during a run is
 		// allowed); if a new PermAsk follows immediately, the next event
@@ -284,6 +305,7 @@ func (m *Feed) onResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 		m.height = 1
 	}
 	m.composer.resize(m.width, maxComposerHeight)
+	m.syncSlashMenu()
 	m.refresh()
 	return m, nil
 }
@@ -305,6 +327,12 @@ func (m *Feed) viewportHeight() int {
 	if m.unseen > 0 && !m.follow {
 		reserved++ // unseen indicator row
 	}
+	if m.modalVisible {
+		reserved += m.permModal.lineCount()
+	}
+	if m.menu.visible {
+		reserved += m.menu.lineCount()
+	}
 	vh := m.height - reserved
 	if vh < 1 {
 		return 0
@@ -317,11 +345,14 @@ func (m *Feed) statusText() string { return m.status }
 
 // helpText returns the documented key bindings for the current state.
 func (m *Feed) helpText() string {
-	if m.modalVisible {
-		if m.pendingToolName() == "bash" {
-			return "y allow once · n deny · (no session allow for commands)"
+	if m.modalVisible || m.decisionPending {
+		if m.decisionPending {
+			return "submitting decision…"
 		}
-		return "y allow once · a allow session · n deny"
+		if m.pendingToolName() == "bash" {
+			return "y allow once · n deny · Enter confirm · Up/Down select"
+		}
+		return "y allow once · a allow session · n deny · Enter confirm · Up/Down select"
 	}
 	if m.running || m.busy {
 		return "Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C cancel"
@@ -372,6 +403,16 @@ func (m *Feed) View() string {
 	b.WriteString(dim.Render(m.helpText()))
 	b.WriteByte('\n')
 
+	if m.modalVisible {
+		b.WriteString(m.permModal.view(m.width))
+		b.WriteByte('\n')
+	}
+
+	if m.menu.visible {
+		b.WriteString(m.menu.view(m.width))
+		b.WriteByte('\n')
+	}
+
 	b.WriteString(m.composer.view())
 	return b.String()
 }
@@ -391,8 +432,11 @@ func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.onCtrlD()
 	}
 
-	if m.modalVisible {
+	if m.modalVisible || m.decisionPending {
 		return m.modalKey(k)
+	}
+	if m.menu.visible {
+		return m.menuKey(k)
 	}
 	if m.composer.focused() {
 		return m.composerKey(k)
@@ -412,7 +456,7 @@ func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // until the blocked run returns. context.CancelFunc is safe to call from
 // any goroutine and never touches the Bubble Tea model.
 func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
-	if m.modalVisible {
+	if m.modalVisible || m.decisionPending {
 		if m.running || m.busy {
 			m.cancelRun("canceling…")
 		}
@@ -426,6 +470,7 @@ func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
 	if !m.composer.isEmpty() {
 		m.composer.clear()
 		m.history.resetBrowsing()
+		m.menu.close()
 		m.status = ""
 		return m, nil
 	}
@@ -440,11 +485,13 @@ func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
 //     never quit.
 //   - Composer empty: quit only when every safe-exit condition holds.
 func (m *Feed) onCtrlD() (tea.Model, tea.Cmd) {
-	if m.modalVisible {
+	if m.modalVisible || m.decisionPending {
 		return m, nil
 	}
 	if !m.composer.isEmpty() {
-		return m, m.composer.deleteForward()
+		cmd := m.composer.deleteForward()
+		m.syncSlashMenu()
+		return m, cmd
 	}
 	if m.safeToQuit() {
 		return m, tea.Quit
@@ -458,7 +505,7 @@ func (m *Feed) safeToQuit() bool {
 	if m.running || m.busy || m.cancel != nil {
 		return false
 	}
-	if m.modalVisible {
+	if m.modalVisible || m.decisionPending {
 		return false
 	}
 	return true
@@ -480,19 +527,44 @@ func (m *Feed) cancelRun(status string) {
 // ordinary key goes to the modal; the composer, viewport and history are
 // untouched, and nothing can be sent.
 func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch k.String() {
-	case "y", "Y":
-		return m.answerModal(agent.AllowOnce)
-	case "a", "A":
-		return m.answerModal(agent.AllowSession)
-	case "n", "N", "esc":
+	if m.decisionPending {
+		return m, nil
+	}
+
+	switch k.Type {
+	case tea.KeyUp, tea.KeyLeft:
+		m.permModal.prevChoice()
+		return m, nil
+	case tea.KeyDown, tea.KeyRight:
+		m.permModal.nextChoice()
+		return m, nil
+	case tea.KeyEnter:
+		if m.permModal.selected >= 0 {
+			return m.answerModal(m.permModal.currentDecision())
+		}
+		return m, nil
+	case tea.KeyEsc:
 		return m.answerModal(agent.Deny)
-	case "ctrl+c":
+	case tea.KeyCtrlC:
 		// Cancels the in-flight run; never approves.
 		if m.running || m.busy {
 			m.cancelRun("canceling…")
 		}
 		return m, nil
+	}
+
+	switch k.String() {
+	case "y", "Y":
+		return m.answerModal(agent.AllowOnce)
+	case "a", "A":
+		if m.permModal.supportsSession() {
+			return m.answerModal(agent.AllowSession)
+		}
+		return m, nil
+	case "n", "N":
+		return m.answerModal(agent.Deny)
+	case "esc":
+		return m.answerModal(agent.Deny)
 	default:
 		// Swallowed by the modal.
 		return m, nil
@@ -504,6 +576,11 @@ func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // clears any residual modal state); the focus restore happens here so the
 // keyboard is usable immediately even before that event arrives.
 func (m *Feed) answerModal(d agent.Decision) (tea.Model, tea.Cmd) {
+	if m.decisionPending {
+		return m, nil
+	}
+	m.decisionPending = true
+	m.permModal.decisionPending = true
 	m.modalVisible = false
 	m.pending = nil
 	if !m.composer.focused() {
@@ -569,6 +646,7 @@ func isNewlineKey(k tea.KeyMsg) bool {
 //   - otherwise: accept — clear the composer, reset history browsing, add
 //     the message to history, and start the run.
 func (m *Feed) trySend() (tea.Model, tea.Cmd) {
+	m.menu.close()
 	text := m.composer.value()
 	if strings.TrimSpace(text) == "" {
 		return m, nil
@@ -608,31 +686,26 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 // restores the cut message for editing). Unknown commands keep the text in
 // the composer and show an error.
 func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
-	f := strings.Fields(line)
-	if len(f) == 0 {
+	parsed := ParseSlashCommand(line)
+	if !parsed.Valid {
+		m.status = parsed.Error
 		return m, nil
 	}
-	n := 1
-	if len(f) > 1 {
-		if v, err := strconv.Atoi(f[1]); err == nil && v > 0 {
-			n = v
-		}
-	}
-	switch f[0] {
+	switch parsed.Command.Name {
 	case "/undo":
 		m.composer.clear()
 		if m.callbacks.OnUndo == nil {
 			m.status = "undo not supported in this version"
 			return m, nil
 		}
-		m.status = m.callbacks.OnUndo(n)
+		m.status = m.callbacks.OnUndo(parsed.N)
 		return m, nil
 	case "/rewind":
 		if m.callbacks.OnRewind == nil {
 			m.status = "rewind not supported in this version"
 			return m, nil
 		}
-		restored, status := m.callbacks.OnRewind(n)
+		restored, status := m.callbacks.OnRewind(parsed.N)
 		m.composer.clear()
 		m.composer.setValue(restored)
 		m.history.resetBrowsing()
@@ -671,7 +744,7 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// Unknown command: keep the text, tell the user.
-	m.status = "unknown command: " + f[0]
+	m.status = "unknown command: " + parsed.RawCmd
 	return m, nil
 }
 
@@ -699,7 +772,9 @@ func (m *Feed) insertNewline() (tea.Model, tea.Cmd) {
 	// Enter as a rune insert is handled by giving the textarea its own
 	// InsertNewline key (plain Enter). Alt is stripped because the textarea
 	// only matches on the plain key.
-	return m, m.composer.update(tea.KeyMsg{Type: tea.KeyEnter})
+	cmd := m.composer.update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.syncSlashMenu()
+	return m, cmd
 }
 
 // composerUp applies the history rule: Up recalls the previous history
@@ -780,7 +855,82 @@ func (m *Feed) composerEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		m.composer.growToContent(maxComposerHeight)
 	}
+	m.syncSlashMenu()
 	return m, cmd
+}
+
+// menuKey handles keyboard interaction while the slash command menu is open.
+func (m *Feed) menuKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case k.Type == tea.KeyUp:
+		m.menu.prev()
+		return m, nil
+	case k.Type == tea.KeyDown:
+		m.menu.next()
+		return m, nil
+	case k.Type == tea.KeyTab, k.Type == tea.KeyEnter:
+		// Complete the selected command into composer text. NEVER executes simultaneously!
+		if cmd, ok := m.menu.currentCommand(); ok {
+			completed := cmd.Name + " "
+			m.composer.setValue(completed)
+			m.history.setDraft(completed)
+			m.composer.growToContent(maxComposerHeight)
+		}
+		m.menu.close()
+		return m, nil
+	case k.Type == tea.KeyEsc:
+		m.menu.close()
+		return m, nil
+	case isNewlineKey(k):
+		return m.insertNewline()
+	default:
+		// Ordinary typing or edits: delegate to composerEdit, which syncs the menu.
+		return m.composerEdit(k)
+	}
+}
+
+// shouldOpenSlashMenu checks preconditions for opening the slash command menu:
+//  1. Permission modal is not visible or pending.
+//  2. Composer is focused.
+//  3. Input starts with '/' (no leading whitespace).
+//  4. Single line input, cursor on line 0.
+//  5. Inside command token (no spaces in input yet).
+func (m *Feed) shouldOpenSlashMenu() bool {
+	if m.busy || m.running || m.modalVisible || m.decisionPending {
+		return false
+	}
+	if !m.composer.focused() {
+		return false
+	}
+	text := m.composer.value()
+	if !strings.HasPrefix(text, "/") {
+		return false
+	}
+	if strings.Contains(text, "\n") {
+		return false
+	}
+	if strings.Contains(text, " ") {
+		return false
+	}
+	if m.composer.cursorLogicalLine() != 0 {
+		return false
+	}
+	return true
+}
+
+// syncSlashMenu updates the slash menu popup state based on the current composer text.
+func (m *Feed) syncSlashMenu() {
+	if !m.shouldOpenSlashMenu() {
+		m.menu.close()
+		return
+	}
+	text := m.composer.value()
+	matches := FilterSlashCommands(text)
+	if len(matches) > 0 {
+		m.menu.open(matches)
+	} else {
+		m.menu.close()
+	}
 }
 
 // viewportKey handles scrolling and global keys when the composer does not

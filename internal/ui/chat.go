@@ -3,7 +3,6 @@ package ui
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"nabd/internal/agent"
@@ -231,19 +230,16 @@ func (m *Chat) View() string {
 }
 
 func (m *Chat) command(line string) string {
-	f := strings.Fields(line)
-	switch f[0] {
+	parsed := ParseSlashCommand(line)
+	if !parsed.Valid {
+		return parsed.Error
+	}
+	switch parsed.Command.Name {
 	case "/rewind":
-		n := 1
-		if len(f) > 1 {
-			if v, err := strconv.Atoi(f[1]); err == nil && v > 0 {
-				n = v
-			}
-		}
 		if m.OnRewind == nil {
 			return "rewind not supported in this version"
 		}
-		return m.OnRewind(n)
+		return m.OnRewind(parsed.N)
 	case "/ctx":
 		if m.OnCtx == nil {
 			return "—"
@@ -255,16 +251,10 @@ func (m *Chat) command(line string) string {
 		}
 		return m.OnCompact()
 	case "/undo":
-		n := 1
-		if len(f) > 1 {
-			if v, err := strconv.Atoi(f[1]); err == nil && v > 0 {
-				n = v
-			}
-		}
 		if m.OnUndo == nil {
 			return "undo not supported in this version"
 		}
-		return m.OnUndo(n)
+		return m.OnUndo(parsed.N)
 	case "/edits":
 		if m.OnEdits == nil {
 			return "—"
@@ -273,7 +263,7 @@ func (m *Chat) command(line string) string {
 	case "/help":
 		return "/undo [n] · /edits · /ctx · /compact · ctrl+c · ctrl+d"
 	}
-	return "unknown command: " + f[0]
+	return "unknown command: " + parsed.RawCmd
 }
 
 func (m *Chat) SetInput(s string) {
