@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/config"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
@@ -215,9 +216,15 @@ func die(err error) {
 	os.Exit(1)
 }
 
-// pickProvider prefers whatever key is present. NABD_PROVIDER forces one.
+// pickProvider prefers whatever key is present, in ~/.ag/config first and
+// the environment second. NABD_PROVIDER forces one. A config file with loose
+// permissions is a hard error here rather than a silent fallback: the user
+// wrote a key down and believes it is protected.
 func pickProvider() (provider.Provider, error) {
-	switch os.Getenv("NABD_PROVIDER") {
+	if err := config.Load(); err != nil {
+		return nil, err
+	}
+	switch config.Get("NABD_PROVIDER") {
 	case "nvidia":
 		return provider.NewNVIDIA()
 	case "anthropic":
@@ -225,10 +232,10 @@ func pickProvider() (provider.Provider, error) {
 	case "openrouter":
 		return provider.NewOpenRouter()
 	}
-	if os.Getenv("OPENROUTER_API_KEY") != "" {
+	if config.Has("OPENROUTER_API_KEY") {
 		return provider.NewOpenRouter()
 	}
-	if os.Getenv("NVIDIA_API_KEY") != "" {
+	if config.Has("NVIDIA_API_KEY") {
 		return provider.NewNVIDIA()
 	}
 	return provider.NewAnthropic()

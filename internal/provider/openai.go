@@ -8,10 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"nabd/internal/config"
 )
 
 // OpenAICompat speaks the OpenAI chat-completions dialect, which NVIDIA
@@ -32,41 +33,28 @@ const nvidiaBase = "https://integrate.api.nvidia.com/v1"
 // tool calling -- most NIM models do not, and one that does not will
 // happily describe the tool it would have called instead of calling it.
 func NewNVIDIA() (*OpenAICompat, error) {
-	k := strings.TrimSpace(os.Getenv("NVIDIA_API_KEY"))
+	k := config.Get("NVIDIA_API_KEY")
 	if k == "" {
-		return nil, errors.New("NVIDIA_API_KEY is not set")
+		return nil, errors.New("NVIDIA_API_KEY is not set (env or ~/.ag/config)")
 	}
-	m := strings.TrimSpace(os.Getenv("NABD_MODEL"))
-	if m == "" {
-		m = "qwen/qwen3-coder-480b-a35b-instruct"
-	}
-	base := strings.TrimSpace(os.Getenv("NABD_BASE_URL"))
-	if base == "" {
-		base = nvidiaBase
-	}
+	m := config.GetOr("NABD_MODEL", "qwen/qwen3-coder-480b-a35b-instruct")
+	base := config.GetOr("NABD_BASE_URL", nvidiaBase)
 	return &OpenAICompat{
 		Key: k, Model: m, BaseURL: base, Label: "nvidia",
 		Client: &http.Client{},
 	}, nil
 }
 
-func env(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
-}
-
 func NewOpenRouter() (*OpenAICompat, error) {
-	k := os.Getenv("OPENROUTER_API_KEY")
+	k := config.Get("OPENROUTER_API_KEY")
 	if k == "" {
-		return nil, errors.New("OPENROUTER_API_KEY غير مضبوط")
+		return nil, errors.New("OPENROUTER_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
 	}
 	return &OpenAICompat{
 		Key:     k,
 		Label:   "openrouter",
-		Model:   env("NABD_MODEL", "anthropic/claude-3.5-haiku"),
-		BaseURL: env("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
+		Model:   config.GetOr("NABD_MODEL", "anthropic/claude-3.5-haiku"),
+		BaseURL: config.GetOr("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
 		Client:  &http.Client{},
 	}, nil
 }
