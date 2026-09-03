@@ -240,11 +240,16 @@ func doChat(dir string, cont bool) error {
 	return nil
 }
 
-// doChatWithFeed is the new UI path that routes agent events through the
-// presentation Projector and renders them in a scrollable viewport. It is
+// doChatWithFeed is the Phase 3A UI path: agent events flow through the
+// presentation Projector into a scrollable viewport, and user input flows
+// through a multiline composer and the deterministic input router. It is
 // opt-in via the -feed flag while the default Chat UI remains the stable
 // fallback.
 func doChatWithFeed(dir string, cont bool) error {
+	// Install the Arabic limit notice for the composer (internal/ui keeps
+	// ASCII string literals; user-facing Arabic lives here).
+	ui.SetLimitNotice(limitNoticeArabic)
+
 	prov, err := pickProvider()
 	if err != nil {
 		return err
@@ -309,19 +314,60 @@ func doChatWithFeed(dir string, cont bool) error {
 		loop.Seed(prevEvs)
 	}
 
-	// Sink: journal first (durable), then batcher → feed.
+	// Sink: journal first (durable), then batcher → feed. The batcher's
+	// flush callback delivers batches as Bubble Tea messages (prog.Send),
+	// so no goroutine ever mutates the feed model off the event loop.
 	batcher := ui.NewBatcher(eventBatchInterval, maxEventBatchSize, func(batch []agent.Event) {
 		feed.SendBatch(batch)
 	})
 	batcher.Start()
 	defer batcher.Stop()
 
-	loop.Sink = agent.Fanout{journal, feedSink{feed: feed, batcher: batcher}}
+	loop.Sink = agent.Fanout{journal, feedSink{batcher: batcher}}
 
-	// Wire up command callbacks.
+	// The feed starts each run directly on the loop (same contract as the
+	// classic Chat path: one Run per accepted message, events come back
+	// through the sink). It answers permission asks through the same
+	// approver the loop blocks on.
+	feed.SetRunner(loop)
+	feed.SetApprover(ap)
+
+	// Wire up command callbacks. OnRewind restores the cut turn into the
+	// composer for editing (same contract as the classic Chat path).
 	feed.SetCallbacks(&ui.FeedCallbacks{
 		OnUndo:    func(n int) string { return chatOnUndo(loop, n) },
 		OnCompact: func() string { return chatOnCompact(loop) },
+		OnRewind: func(n int) (string, string) {
+			if loop == nil {
+				return "", "rewind not supported"
+			}
+			txt, err := loop.Rewind(n)
+			if err != nil {
+				return "", err.Error()
+			}
+			s := fmt.Sprintf("rewound %d turns", n)
+			if k := len(reg.Pending()); k > 0 {
+				s += fmt.Sprintf(" · %d uncommitted edits on disk (/undo %d)", k, k)
+			}
+			// The cut turn comes back to the composer, editable.
+			return txt, s
+		},
+		OnCtx: func() string {
+			ms := agent.Squeeze(agent.Messages(agent.Live(loop.Hist())), agent.KeepFullRounds)
+			p := loop.Budget.Pressure(ms)
+			return fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
+		},
+		OnEdits: func() string {
+			p := reg.Pending()
+			if len(p) == 0 {
+				return "no reversible edits pending"
+			}
+			var b strings.Builder
+			for i, e := range p {
+				fmt.Fprintf(&b, "%d· %s %s\n", i+1, e.Tool, e.Rel)
+			}
+			return strings.TrimRight(b.String(), "\n")
+		},
 	})
 
 	// Initialize the feed from seeded events (replay).
@@ -329,12 +375,28 @@ func doChatWithFeed(dir string, cont bool) error {
 		feed.BuildFromEvents(agent.Live(prevEvs))
 	}
 
+	// Start the program first: the batcher delivers event batches via
+	// prog.Send, which BLOCKS until the program's event loop is running.
+	// loop.Start below emits the RunStart banner through the batcher, so
+	// the program must already be consuming messages.
+	prog := tea.NewProgram(feed)
+	feed.SetProgram(prog)
+
+	progDone := make(chan error, 1)
+	go func() {
+		_, err := prog.Run()
+		progDone <- err
+	}()
+
+	// Give the program's event loop a moment to start consuming before the
+	// first event arrives. prog.Send blocks until the loop is ready, so the
+	// RunStart below will simply wait; no event is lost.
 	if err := loop.Start(fmt.Sprintf("nabd %s · %s · %s · %s",
 		version, commit, prov.Name(), filepath.Base(journalPath))); err != nil {
 		return err
 	}
 
-	if _, err := tea.NewProgram(feed).Run(); err != nil {
+	if err := <-progDone; err != nil {
 		return err
 	}
 	_ = loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
@@ -344,7 +406,6 @@ func doChatWithFeed(dir string, cont bool) error {
 
 // feedSink adapts the batcher to agent.Sink.
 type feedSink struct {
-	feed    *ui.Feed
 	batcher *ui.Batcher
 }
 

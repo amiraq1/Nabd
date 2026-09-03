@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"nabd/internal/agent"
@@ -17,17 +19,18 @@ const (
 	minViewportWidth    = 20
 )
 
-// Feed is the new UI model: a scrollable viewport over a projected feed.
+// Feed is the Phase 3A UI model: a projected, scrollable feed; a multiline
+// composer; and a deterministic input router that arbitrates between the
+// permission modal, the composer, the viewport and global shortcuts.
 type Feed struct {
 	proj *presentation.Projector
 
 	// Viewport state.
 	width     int
 	height    int
-	scrollTop int // index of first visible item
+	scrollTop int // index of the first visible rendered line
 	follow    bool
 	unseen    int
-	modal     bool // permission modal visible
 
 	// Cached rendered lines for the current viewport.
 	lines []string
@@ -41,65 +44,88 @@ type Feed struct {
 	// Callbacks wired by the CLI.
 	callbacks FeedCallbacks
 
-	// Composer state (kept minimal; full composer is Phase 3).
-	input   string
-	running bool
-	status  string
+	// Composer.
+	composer *composer
+
+	// Permission modal state, driven by the event stream (PermAsk opens
+	// it, PermReply/Interrupted close it).
+	modalVisible bool
+
+	// pending holds the tool call awaiting a permission decision while the
+	// modal is visible (for help text and tests).
 	pending *agent.ToolCall
+
+	// Run state.
+	running bool // an agent/model/tool run is in flight
+	busy    bool // true while a run is in flight (running or awaiting permission)
+	cancel  context.CancelFunc
+
+	// Runner is how a send reaches the agent loop. Set by the CLI.
+	runner Runner
+
+	// Approve answers permission requests. Set by the CLI.
+	Approve *Approver
+
+	// History of submitted user messages.
+	history *userHistory
+
+	// status is the transient status line above the composer. ASCII only,
+	// like every other visible UI string.
+	status string
+
+	// prog is the live Bubble Tea program (wired by the CLI) used to
+	// deliver event batches from the batcher goroutine.
+	prog *tea.Program
 }
 
 // FeedCallbacks holds the hooks the feed uses to talk back to the loop.
 type FeedCallbacks struct {
 	OnUndo    func(n int) string
 	OnCompact func() string
+	// OnRewind returns the restored text (for the composer) and a status
+	// message. The restored text is what /rewind cut away, put back for
+	// editing.
+	OnRewind func(n int) (restored, status string)
+	OnCtx    func() string
+	OnEdits  func() string
 }
 
 // SetHeader sets the header line shown above the viewport.
 func (m *Feed) SetHeader(h string) { m.header = h }
 
-// SetCallbacks wires the undo/compact hooks.
+// SetCallbacks wires the command hooks.
 func (m *Feed) SetCallbacks(cb *FeedCallbacks) {
 	if cb != nil {
 		m.callbacks = *cb
 	}
 }
 
-// SendBatch delivers a batch of events to the feed.
-func (m *Feed) SendBatch(events []agent.Event) {
-	if len(events) == 0 {
-		return
-	}
-	m.applyBatch(events)
-}
+// SetRunner wires the agent loop runner used to start a run.
+func (m *Feed) SetRunner(r Runner) { m.runner = r }
 
-// BuildFromEvents initializes the feed from a complete event list (replay).
-func (m *Feed) BuildFromEvents(events []agent.Event) {
-	m.proj = presentation.NewProjector()
-	for _, e := range events {
-		_ = m.proj.Apply(e)
-	}
-	m.refresh()
-	m.scrollToEnd()
-}
+// SetApprover wires the permission answer channel.
+func (m *Feed) SetApprover(a *Approver) { m.Approve = a }
 
-// Composer state (kept minimal; full composer is Phase 3).
-//
-//nolint:unused // kept for Phase 3 composer integration
-//
-//nolint:structcheck
+// HistoryLen exposes the current history length (tests).
+func (m *Feed) HistoryLen() int { return m.history.len() }
+
+// HistoryBrowsing reports whether Up/Down history recall is active (tests).
+func (m *Feed) HistoryBrowsing() bool { return m.history.browsing() }
 
 // NewFeed creates a feed model.
 func NewFeed() *Feed {
 	return &Feed{
-		proj:   presentation.NewProjector(),
-		width:  DefaultWidth,
-		height: 24,
-		follow: true,
-		lines:  []string{},
+		proj:     presentation.NewProjector(),
+		width:    DefaultWidth,
+		height:   24,
+		follow:   true,
+		lines:    []string{},
+		composer: newComposer(),
+		history:  newUserHistory(),
 	}
 }
 
-// Init implements tea.Model.
+// Init implements tea.Model. The composer owns focus by default.
 func (m *Feed) Init() tea.Cmd {
 	return nil
 }
@@ -108,45 +134,119 @@ func (m *Feed) Init() tea.Cmd {
 func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		// Use the available terminal width, clamped to a sane minimum. The
-		// viewport is NOT capped at 60 columns — that was a holdover from the
-		// old single-line prompt. Wide terminals get a wide feed.
-		if m.width < minViewportWidth {
-			m.width = minViewportWidth
-		}
-		m.height = msg.Height
-		m.refresh()
-		return m, nil
-
+		return m.onResize(msg)
 	case agentEventBatchMsg:
 		return m.applyBatch(msg.Events)
-
+	case doneMsg:
+		m.running = false
+		m.busy = false
+		m.cancel = nil
+		if msg.err != nil {
+			m.status = "error: " + errSummary(msg.err)
+		} else {
+			m.status = ""
+		}
+		// A finished run returns focus to the composer (nothing else
+		// claims it once the modal is closed).
+		if !m.modalVisible && !m.composer.focused() {
+			m.composer.focus()
+		}
+		return m, nil
 	case tea.KeyMsg:
-		return m.handleKey(msg)
+		return m.routeKey(msg)
+	case permReplyMsg:
+		if m.Approve != nil {
+			m.Approve.Reply(msg.Decision)
+		}
+		return m, nil
 	}
 	return m, nil
 }
 
-// applyBatch processes a batch of events through the projector.
+// applyBatch processes a batch of events through the projector. The batch
+// arrives as a Bubble Tea message on the event loop, never from a
+// goroutine, so mutating model state here is safe.
 func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 	for _, e := range events {
 		if err := m.proj.Apply(e); err != nil {
 			m.addDiagnostic(fmt.Sprintf("unable to project event %s seq=%d: %v", e.Type, e.Seq, err))
 		}
+		m.trackState(e)
 	}
 	m.refresh()
-	switch {
-	case m.modal:
-		// Feed updates logically behind the modal, but visible auto-scroll pauses.
+	if m.modalVisible {
+		// The feed keeps projecting behind the modal, but visible
+		// auto-scroll pauses (Phase 2 decision).
 		m.unseen++
-	case m.follow:
+	} else if m.follow {
 		m.scrollToEnd()
-	default:
-		// User is browsing history; count unseen updates.
+	} else {
+		// Browsing older output; count unseen updates.
 		m.unseen++
 	}
 	return m, nil
+}
+
+// trackState keeps the permission modal in lockstep with the event stream:
+// PermAsk opens it, PermReply/Interrupted close it. Run busy state is NOT
+// derived from events here: RunStart/RunEnd are session boundaries (one per
+// session), not per-turn boundaries, so the feed manages busy/running from
+// trySend/doneMsg instead.
+func (m *Feed) trackState(e agent.Event) {
+	switch e.Type {
+	case agent.PermAsk:
+		m.modalVisible = true
+		m.pending = e.Call
+		// While the modal is visible the composer must not receive keys.
+		if m.composer.focused() {
+			m.composer.blur()
+		}
+	case agent.PermReply, agent.Interrupted:
+		m.modalVisible = false
+		m.pending = nil
+		// The modal closed: restore composer focus. The composer owned
+		// focus before the ask (typing a next draft during a run is
+		// allowed); if a new PermAsk follows immediately, the next event
+		// re-blurs it.
+		if !m.composer.focused() {
+			m.composer.focus()
+		}
+	}
+}
+
+// SendBatch is called from the batcher goroutine. It must not mutate the
+// model off the Bubble Tea loop; the events are parked and delivered as a
+// message instead. When no program is wired (tests drive Update directly)
+// the batch is applied synchronously.
+func (m *Feed) SendBatch(events []agent.Event) {
+	if len(events) == 0 {
+		return
+	}
+	if m.prog != nil {
+		m.prog.Send(agentEventBatchMsg{Events: events})
+		return
+	}
+	// Test path: no live program; apply directly. Tests call SendBatch from
+	// the test goroutine only, so this is safe.
+	m.applyBatch(events)
+}
+
+// SetProgram wires the running program so batcher flushes are delivered as
+// messages instead of mutating the model off the event loop.
+func (m *Feed) SetProgram(p *tea.Program) { m.prog = p }
+
+// BuildFromEvents initializes the feed from a complete event list (replay
+// or --continue). UI history is rebuilt from the live user_msg events only,
+// so rewind-cancelled messages never enter history.
+func (m *Feed) BuildFromEvents(events []agent.Event) {
+	m.proj = presentation.NewProjector()
+	for _, e := range events {
+		_ = m.proj.Apply(e)
+		m.trackState(e)
+	}
+	m.history.buildFromEvents(events)
+	m.refresh()
+	m.scrollToEnd()
 }
 
 // addDiagnostic records a UI-side diagnostic (not written to journal).
@@ -172,91 +272,536 @@ func (m *Feed) scrollToEnd() {
 	m.unseen = 0
 }
 
-// visibleHeight returns how many lines the viewport can show.
-func (m *Feed) visibleHeight() int {
-	// Reserve space for header (1) + status (1) + composer (2).
-	return max(1, m.height-4)
+// onResize recomputes the layout: composer first, then the viewport. Focus
+// and text are preserved; nothing goes negative.
+func (m *Feed) onResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
+	m.width = msg.Width
+	if m.width < minViewportWidth {
+		m.width = minViewportWidth
+	}
+	m.height = msg.Height
+	if m.height < 1 {
+		m.height = 1
+	}
+	m.composer.resize(m.width, maxComposerHeight)
+	m.refresh()
+	return m, nil
 }
 
-// View renders the full screen.
+// viewportHeight returns the rows the feed viewport may use after the
+// header, status/help line and composer rows are reserved. Never negative.
+func (m *Feed) viewportHeight() int {
+	if m.height <= 0 {
+		return 0
+	}
+	reserved := m.composer.height
+	if m.header != "" {
+		reserved++ // header row
+	}
+	if m.status != "" {
+		reserved++ // status row
+	}
+	reserved++ // help row
+	if m.unseen > 0 && !m.follow {
+		reserved++ // unseen indicator row
+	}
+	vh := m.height - reserved
+	if vh < 1 {
+		return 0
+	}
+	return vh
+}
+
+// statusText returns the transient status line content, or "".
+func (m *Feed) statusText() string { return m.status }
+
+// helpText returns the documented key bindings for the current state.
+func (m *Feed) helpText() string {
+	if m.modalVisible {
+		if m.pendingToolName() == "bash" {
+			return "y allow once · n deny · (no session allow for commands)"
+		}
+		return "y allow once · a allow session · n deny"
+	}
+	if m.running || m.busy {
+		return "Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C cancel"
+	}
+	return "Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit"
+}
+
+// pendingToolName returns the name of the tool awaiting permission, or "".
+func (m *Feed) pendingToolName() string {
+	if m.pending == nil {
+		return ""
+	}
+	return m.pending.Name
+}
+
+// View renders the full screen: header, viewport, unseen indicator,
+// status/help line, composer.
 func (m *Feed) View() string {
 	var b strings.Builder
 
-	// Header.
 	if m.header != "" {
 		b.WriteString(m.header)
 		b.WriteByte('\n')
 	}
 
-	// Viewport.
-	vh := m.visibleHeight()
-	start := m.scrollTop
-	end := min(start+vh, len(m.lines))
-	if start < len(m.lines) {
+	vh := m.viewportHeight()
+	if vh > 0 && len(m.lines) > 0 {
+		start := m.scrollTop
+		if start >= len(m.lines) {
+			start = max(0, len(m.lines)-vh)
+		}
+		end := min(start+vh, len(m.lines))
 		for i := start; i < end; i++ {
 			b.WriteString(m.lines[i])
 			b.WriteByte('\n')
 		}
 	}
 
-	// Unseen indicator.
 	if m.unseen > 0 && !m.follow {
 		b.WriteString(dim.Render(fmt.Sprintf("v %d updates", m.unseen)))
 		b.WriteByte('\n')
 	}
 
-	// Status line.
-	if m.status != "" {
-		b.WriteString(dim.Render("· " + m.status))
+	if s := m.statusText(); s != "" {
+		b.WriteString(dim.Render("· " + s))
 		b.WriteByte('\n')
 	}
+	b.WriteString(dim.Render(m.helpText()))
+	b.WriteByte('\n')
 
-	// Composer.
-	b.WriteString("› " + m.input + "▌")
-
+	b.WriteString(m.composer.view())
 	return b.String()
 }
 
-// handleKey processes keyboard input.
-func (m *Feed) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Permission modal has priority.
-	if m.pending != nil {
-		switch k.String() {
-		case "y", "Y":
-			m.pending = nil
-			// Approve via the existing approver mechanism.
-			return m, func() tea.Msg { return agentReplyMsg{agent.AllowOnce} }
-		case "a", "A":
-			m.pending = nil
-			return m, func() tea.Msg { return agentReplyMsg{agent.AllowSession} }
-		case "n", "N", "esc":
-			m.pending = nil
-			return m, func() tea.Msg { return agentReplyMsg{agent.Deny} }
-		case "ctrl+c":
-			return m, nil
-		}
-		return m, nil
-	}
-
+// routeKey is the deterministic input router. Precedence:
+//
+//  1. Ctrl-C / Ctrl-D (safety keys, always first)
+//  2. Permission modal
+//  3. Composer (when focused)
+//  4. Viewport scrolling
+//  5. Global shortcuts
+func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.Type {
 	case tea.KeyCtrlC:
-		if m.running {
-			m.status = "canceling…"
-			return m, func() tea.Msg { return interruptMsg{} }
-		}
-		return m, tea.Quit
-
+		return m.onCtrlC()
 	case tea.KeyCtrlD:
-		if m.running {
+		return m.onCtrlD()
+	}
+
+	if m.modalVisible {
+		return m.modalKey(k)
+	}
+	if m.composer.focused() {
+		return m.composerKey(k)
+	}
+	return m.viewportKey(k)
+}
+
+// onCtrlC implements the deterministic cancel policy:
+//   - Modal visible: cancel the in-flight run; never approve, never quit.
+//   - Run in flight: cancel it; never quit mid-flight.
+//   - Composer non-empty: clear it (and history browsing); never quit.
+//   - Otherwise: quit (the app's exit policy, unchanged).
+//
+// Cancellation calls m.cancel() (a context.CancelFunc) directly: the run
+// command may be blocking the Bubble Tea loop right now, so the cancel must
+// not travel through another tea.Msg — that message could not be processed
+// until the blocked run returns. context.CancelFunc is safe to call from
+// any goroutine and never touches the Bubble Tea model.
+func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
+	if m.modalVisible {
+		if m.running || m.busy {
+			m.cancelRun("canceling…")
+		}
+		// A modal with no run behind it (orphan ask): ignore safely.
+		return m, nil
+	}
+	if m.running || m.busy {
+		m.cancelRun("canceling…")
+		return m, nil
+	}
+	if !m.composer.isEmpty() {
+		m.composer.clear()
+		m.history.resetBrowsing()
+		m.status = ""
+		return m, nil
+	}
+	// Empty composer, idle: quit.
+	return m, tea.Quit
+}
+
+// onCtrlD implements the deterministic exit policy:
+//   - Modal visible: the modal owns it; ignore safely (never approve,
+//     never quit, never reach the composer or exit handler).
+//   - Composer non-empty: delete the rune under the cursor (rune-safe),
+//     never quit.
+//   - Composer empty: quit only when every safe-exit condition holds.
+func (m *Feed) onCtrlD() (tea.Model, tea.Cmd) {
+	if m.modalVisible {
+		return m, nil
+	}
+	if !m.composer.isEmpty() {
+		return m, m.composer.deleteForward()
+	}
+	if m.safeToQuit() {
+		return m, tea.Quit
+	}
+	m.status = "cannot exit now: run in progress or state not clean"
+	return m, nil
+}
+
+// safeToQuit reports whether every exit precondition holds.
+func (m *Feed) safeToQuit() bool {
+	if m.running || m.busy || m.cancel != nil {
+		return false
+	}
+	if m.modalVisible {
+		return false
+	}
+	return true
+}
+
+// cancelRun cancels the in-flight run context directly (never via a
+// message, see onCtrlC). Repeated cancellation is a no-op.
+func (m *Feed) cancelRun(status string) {
+	if m.cancel != nil {
+		m.cancel()
+		m.cancel = nil
+	}
+	if status != "" {
+		m.status = status
+	}
+}
+
+// modalKey routes keys while the permission modal is visible. Every
+// ordinary key goes to the modal; the composer, viewport and history are
+// untouched, and nothing can be sent.
+func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.String() {
+	case "y", "Y":
+		return m.answerModal(agent.AllowOnce)
+	case "a", "A":
+		return m.answerModal(agent.AllowSession)
+	case "n", "N", "esc":
+		return m.answerModal(agent.Deny)
+	case "ctrl+c":
+		// Cancels the in-flight run; never approves.
+		if m.running || m.busy {
+			m.cancelRun("canceling…")
+		}
+		return m, nil
+	default:
+		// Swallowed by the modal.
+		return m, nil
+	}
+}
+
+// answerModal forwards a permission decision to the approver and restores
+// composer focus. The loop answers with a PermReply event (which also
+// clears any residual modal state); the focus restore happens here so the
+// keyboard is usable immediately even before that event arrives.
+func (m *Feed) answerModal(d agent.Decision) (tea.Model, tea.Cmd) {
+	m.modalVisible = false
+	m.pending = nil
+	if !m.composer.focused() {
+		m.composer.focus()
+	}
+	return m, func() tea.Msg { return permReplyMsg{Decision: d} }
+}
+
+// composerKey routes keys while the composer is focused.
+func (m *Feed) composerKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case isSendKey(k):
+		return m.trySend()
+	case isNewlineKey(k):
+		// Alt+Enter / Ctrl+J insert a newline instead of sending. The
+		// textarea only binds plain Enter to InsertNewline, so both are
+		// converted to a plain Enter for the textarea.
+		return m.insertNewline()
+	case k.Type == tea.KeyUp:
+		return m.composerUp()
+	case k.Type == tea.KeyDown:
+		return m.composerDown()
+	case k.Type == tea.KeyPgUp || k.Type == tea.KeyPgDown:
+		// Explicit scroll keys go to the viewport even while the composer
+		// is focused (they are not editing keys).
+		return m.viewportKey(k)
+	default:
+		// Editing keys and runes: pass through, then enforce the limits.
+		return m.composerEdit(k)
+	}
+}
+
+// isSendKey reports whether the key means "send the message": a plain
+// Enter, never Alt+Enter, never a bracketed-paste rune.
+func isSendKey(k tea.KeyMsg) bool {
+	if k.Paste {
+		return false
+	}
+	return k.Type == tea.KeyEnter && !k.Alt
+}
+
+// isNewlineKey reports whether the key is a documented newline shortcut:
+// Ctrl+J (primary, reliable on Termux) or Alt+Enter when it arrives as a
+// distinct key. Shift+Enter is never relied upon.
+func isNewlineKey(k tea.KeyMsg) bool {
+	if k.Paste {
+		return false
+	}
+	if k.Type == tea.KeyCtrlJ {
+		return true
+	}
+	return k.Type == tea.KeyEnter && k.Alt
+}
+
+// trySend implements the send policy:
+//   - a slash command (/undo, /compact, /ctx, /edits, /rewind, /help) is
+//     handled locally via the CLI callbacks, never sent to the model;
+//   - empty/whitespace-only text: never send;
+//   - no runner available: reject, keep the text, no history entry;
+//   - a run already in flight: reject (no queue in Phase 3A), keep the
+//     text, do not touch history;
+//   - text over the limits: reject with a notice;
+//   - otherwise: accept — clear the composer, reset history browsing, add
+//     the message to history, and start the run.
+func (m *Feed) trySend() (tea.Model, tea.Cmd) {
+	text := m.composer.value()
+	if strings.TrimSpace(text) == "" {
+		return m, nil
+	}
+	if strings.HasPrefix(text, "/") {
+		if m.busy {
+			m.status = "wait for the current run to finish first"
 			return m, nil
 		}
-		return m, tea.Quit
+		return m.runCommand(text)
+	}
+	if m.runner == nil {
+		// Nothing can ever accept this message: keep the text, show why.
+		m.status = "error: no runner available"
+		return m, nil
+	}
+	if m.busy {
+		m.status = "a run is in progress; cancel it or wait before sending"
+		return m, nil
+	}
+	if inputTooLong(text) {
+		m.status = limitNotice
+		return m, nil
+	}
+	// Accept the send.
+	m.composer.clear()
+	m.history.resetBrowsing()
+	m.history.add(text)
+	m.running = true
+	m.busy = true
+	m.status = ""
+	return m, m.startRun(text)
+}
 
+// runCommand handles a slash command locally. The composer is cleared on
+// success; the returned text becomes the new composer value (rewind
+// restores the cut message for editing). Unknown commands keep the text in
+// the composer and show an error.
+func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
+	f := strings.Fields(line)
+	if len(f) == 0 {
+		return m, nil
+	}
+	n := 1
+	if len(f) > 1 {
+		if v, err := strconv.Atoi(f[1]); err == nil && v > 0 {
+			n = v
+		}
+	}
+	switch f[0] {
+	case "/undo":
+		m.composer.clear()
+		if m.callbacks.OnUndo == nil {
+			m.status = "undo not supported in this version"
+			return m, nil
+		}
+		m.status = m.callbacks.OnUndo(n)
+		return m, nil
+	case "/rewind":
+		if m.callbacks.OnRewind == nil {
+			m.status = "rewind not supported in this version"
+			return m, nil
+		}
+		restored, status := m.callbacks.OnRewind(n)
+		m.composer.clear()
+		m.composer.setValue(restored)
+		m.history.resetBrowsing()
+		m.status = status
+		if status == "" {
+			m.status = "rewound"
+		}
+		return m, nil
+	case "/ctx":
+		m.composer.clear()
+		if m.callbacks.OnCtx == nil {
+			m.status = "—"
+			return m, nil
+		}
+		m.status = m.callbacks.OnCtx()
+		return m, nil
+	case "/compact":
+		m.composer.clear()
+		if m.callbacks.OnCompact == nil {
+			m.status = "—"
+			return m, nil
+		}
+		m.status = m.callbacks.OnCompact()
+		return m, nil
+	case "/edits":
+		m.composer.clear()
+		if m.callbacks.OnEdits == nil {
+			m.status = "—"
+			return m, nil
+		}
+		m.status = m.callbacks.OnEdits()
+		return m, nil
+	case "/help":
+		m.composer.clear()
+		m.status = "/undo [n] · /edits · /ctx · /compact · /rewind [n]"
+		return m, nil
+	}
+	// Unknown command: keep the text, tell the user.
+	m.status = "unknown command: " + f[0]
+	return m, nil
+}
+
+// startRun launches the accepted message on the runner. The caller (trySend)
+// has already verified the runner exists and the text is within limits, so
+// a run always starts here.
+func (m *Feed) startRun(text string) tea.Cmd {
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancel = cancel
+	return func() tea.Msg {
+		err := m.runner.Run(ctx, text)
+		cancel()
+		return doneMsg{err}
+	}
+}
+
+// insertNewline inserts a single newline at the cursor, enforcing the line
+// limit atomically. The textarea's Enter binding does the split.
+func (m *Feed) insertNewline() (tea.Model, tea.Cmd) {
+	text := m.composer.value()
+	if countInputLines(text)+1 > maxInputLines {
+		m.status = limitNotice
+		return m, nil
+	}
+	// Enter as a rune insert is handled by giving the textarea its own
+	// InsertNewline key (plain Enter). Alt is stripped because the textarea
+	// only matches on the plain key.
+	return m, m.composer.update(tea.KeyMsg{Type: tea.KeyEnter})
+}
+
+// composerUp applies the history rule: Up recalls the previous history
+// entry only when the composer is empty or the cursor is on the first
+// logical line. Otherwise it is a normal cursor move inside the textarea.
+func (m *Feed) composerUp() (tea.Model, tea.Cmd) {
+	text := m.composer.value()
+	onFirst := text == "" || m.composer.cursorLogicalLine() == 0
+	if !onFirst {
+		return m.composerMove(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	if m.history.len() == 0 {
+		if text == "" {
+			return m, nil
+		}
+		return m.composerMove(tea.KeyMsg{Type: tea.KeyUp})
+	}
+	// Save the draft on the first transition into browsing.
+	if !m.history.browsing() {
+		m.history.saveDraft(text)
+	}
+	s, ok := m.history.up()
+	if !ok {
+		return m, nil // already at the oldest entry; text unchanged
+	}
+	m.composer.setValue(s)
+	return m, nil
+}
+
+// composerDown applies the history rule: Down recalls the newer entry only
+// while browsing and when the cursor is on the last logical line of the
+// recalled text. Past the newest entry the saved draft is restored and
+// browsing ends.
+func (m *Feed) composerDown() (tea.Model, tea.Cmd) {
+	if !m.history.browsing() {
+		return m.composerMove(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	text := m.composer.value()
+	onLast := text == "" || m.composer.cursorLogicalLine() >= m.composer.logicalLineCount()-1
+	if !onLast {
+		return m.composerMove(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	s, ok := m.history.down()
+	if !ok {
+		return m, nil
+	}
+	m.composer.setValue(s)
+	return m, nil
+}
+
+// composerMove hands a navigation key to the textarea (a plain cursor
+// move, not history).
+func (m *Feed) composerMove(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	return m.composerEdit(k)
+}
+
+// composerEdit passes an editing key to the textarea, then enforces the
+// input limits atomically: if the mutation crossed a limit the whole
+// change is rolled back and a notice is shown (never a silent cut).
+// Historical content that already exceeded the cap (e.g. recalled from an
+// old journal before this policy) may still be edited down; only growth
+// past the cap is blocked.
+func (m *Feed) composerEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	before := m.composer.value()
+	cmd := m.composer.update(k)
+	after := m.composer.value()
+	if after != before {
+		alreadyOver := inputTooLong(before)
+		if inputTooLong(after) && !alreadyOver {
+			m.composer.setValue(before)
+			m.status = limitNotice
+			return m, nil
+		}
+		// Any real edit ends history browsing; the edited text becomes the
+		// new draft.
+		m.history.edited()
+		m.history.setDraft(after)
+		m.status = ""
+		m.composer.growToContent(maxComposerHeight)
+	}
+	return m, cmd
+}
+
+// viewportKey handles scrolling and global keys when the composer does not
+// own the key.
+func (m *Feed) viewportKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.Type {
+	case tea.KeyPgUp:
+		m.follow = false
+		m.scrollTop = min(m.scrollTop+m.viewportHeight(), max(0, len(m.lines)-m.viewportHeight()))
+		return m, nil
+	case tea.KeyPgDown:
+		m.scrollTop = max(m.scrollTop-m.viewportHeight(), 0)
+		if m.scrollTop == 0 {
+			m.follow = true
+			m.unseen = 0
+		}
+		return m, nil
 	case tea.KeyUp:
 		m.follow = false
-		m.scrollTop = min(m.scrollTop+1, max(0, len(m.lines)-m.visibleHeight()))
+		m.scrollTop = min(m.scrollTop+1, max(0, len(m.lines)-m.viewportHeight()))
 		return m, nil
-
 	case tea.KeyDown:
 		m.scrollTop = max(m.scrollTop-1, 0)
 		if m.scrollTop == 0 {
@@ -264,76 +809,29 @@ func (m *Feed) handleKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.unseen = 0
 		}
 		return m, nil
-
-	case tea.KeyPgUp:
-		m.follow = false
-		m.scrollTop = min(m.scrollTop+m.visibleHeight(), max(0, len(m.lines)-m.visibleHeight()))
-		return m, nil
-
-	case tea.KeyPgDown:
-		m.scrollTop = max(m.scrollTop-m.visibleHeight(), 0)
-		if m.scrollTop == 0 {
-			m.follow = true
-			m.unseen = 0
-		}
-		return m, nil
-
 	case tea.KeyHome:
 		m.follow = false
-		m.scrollTop = max(0, len(m.lines)-m.visibleHeight())
+		m.scrollTop = max(0, len(m.lines)-m.viewportHeight())
 		return m, nil
-
 	case tea.KeyEnd:
 		m.follow = true
 		m.unseen = 0
 		m.scrollTop = 0
 		return m, nil
-
-	case tea.KeyEnter:
-		line := strings.TrimSpace(m.input)
-		if line == "" {
-			return m, nil
-		}
-		m.input = ""
-		m.running = true
-		m.status = ""
-		return m, func() tea.Msg { return userSubmitMsg{Text: line} }
-
-	case tea.KeyBackspace:
-		if r := []rune(m.input); len(r) > 0 {
-			m.input = string(r[:len(r)-1])
-		}
-		return m, nil
-
-	case tea.KeyCtrlU:
-		m.input = ""
-		return m, nil
-
-	case tea.KeySpace:
-		m.input += " "
-		return m, nil
-
-	case tea.KeyRunes:
-		m.input += string(k.Runes)
+	default:
 		return m, nil
 	}
-	return m, nil
 }
+
+// Message types used inside the feed.
 
 // agentEventBatchMsg carries a batch of events from the batcher.
 type agentEventBatchMsg struct {
 	Events []agent.Event
 }
 
-// agentReplyMsg carries a permission decision.
-type agentReplyMsg struct {
+// permReplyMsg carries a permission decision from the modal keys to the
+// Update handler that forwards it to the approver.
+type permReplyMsg struct {
 	Decision agent.Decision
-}
-
-// interruptMsg signals cancellation.
-type interruptMsg struct{}
-
-// userSubmitMsg carries user input.
-type userSubmitMsg struct {
-	Text string
 }

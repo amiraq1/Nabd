@@ -252,7 +252,9 @@ func TestFeedFollowMode(t *testing.T) {
 	}
 }
 
-// TestFeedScrollUpDisablesFollow verifies scrolling up pauses follow.
+// TestFeedScrollUpDisablesFollow verifies scrolling up pauses follow. In
+// Phase 3A the composer owns Up/Down for editing and history, so explicit
+// viewport scrolling goes through PgUp/PgDn (see feed.go helpText).
 func TestFeedScrollUpDisablesFollow(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
@@ -263,7 +265,7 @@ func TestFeedScrollUpDisablesFollow(t *testing.T) {
 		{Seq: 2, Type: agent.UserMsg, Text: "msg2"},
 	}})
 	// Scroll up.
-	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyUp})
+	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyPgUp})
 	if f.follow {
 		t.Error("follow mode should be disabled after scrolling up")
 	}
@@ -278,8 +280,9 @@ func TestFeedUnseenCounter(t *testing.T) {
 	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
 		{Seq: 1, Type: agent.UserMsg, Text: "msg1"},
 	}})
-	// Scroll up to disable follow.
-	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyUp})
+	// Scroll up to disable follow (PgUp is the explicit scroll key while
+	// the composer owns Up/Down).
+	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyPgUp})
 	// New event arrives while not following.
 	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
 		{Seq: 2, Type: agent.UserMsg, Text: "msg2"},
