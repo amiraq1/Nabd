@@ -175,31 +175,7 @@ func doChat(dir string, cont bool) error {
 		return s
 	}
 
-	chat.OnUndo = func(n int) string {
-		// The journal is the source of truth, not the in-memory edit log:
-		// after a restart (--continue) the edit log is empty, but the
-		// edit_record events from the seeded session are still there.
-		recs := editRecords(agent.Live(loop.Hist()))
-		var b strings.Builder
-		for _, r := range reg.PersistedUndo(recs, n) {
-			mark := "✗"
-			if r.OK {
-				mark = "✓"
-			}
-			if r.Rel == "" {
-				fmt.Fprintf(&b, "%s %s\n", mark, r.Note)
-				continue
-			}
-			fmt.Fprintf(&b, "%s %s — %s\n", mark, r.Rel, r.Note)
-		}
-		s := strings.TrimRight(b.String(), "\n")
-		// The journal is the single source of truth: emit the undo as a
-		// Notice so the event survives in session.jsonl and reaches the UI
-		// through the event channel. Returning "" keeps the status line from
-		// duplicating what the Notice renders.
-		loop.Note(fmt.Sprintf("/undo %d — %s", n, s))
-		return ""
-	}
+	chat.OnUndo = func(n int) string { return fileUndo(loop, reg, n) }
 
 	chat.OnEdits = func() string {
 		p := reg.Pending()
@@ -335,7 +311,7 @@ func doChatWithFeed(dir string, cont bool) error {
 	// Wire up command callbacks. OnRewind restores the cut turn into the
 	// composer for editing (same contract as the classic Chat path).
 	feed.SetCallbacks(&ui.FeedCallbacks{
-		OnUndo:    func(n int) string { return chatOnUndo(loop, n) },
+		OnUndo:    func(n int) string { return fileUndo(loop, reg, n) },
 		OnCompact: func() string { return chatOnCompact(loop) },
 		OnRewind: func(n int) (string, string) {
 			if loop == nil {
@@ -414,14 +390,41 @@ func (s feedSink) Emit(e agent.Event) error {
 	return nil
 }
 
-func chatOnUndo(loop *agent.Loop, n int) string {
-	if loop == nil {
+// fileUndo rewinds file edits recorded in the journal (not conversation
+// turns — that is /rewind). It is the single implementation shared by the
+// classic Chat UI and the feed UI so both surfaces behave identically:
+//
+//   - the journal is the source of truth, not the in-memory edit log: after
+//     a restart (--continue) the edit log is empty, but the edit_record
+//     events from the seeded session are still there;
+//   - the undo is emitted as exactly one Notice so it survives in
+//     session.jsonl and reaches the UI through the event channel;
+//   - "" is returned so the UI status line does not duplicate what the
+//     Notice renders. A shortfall (no records) returns a visible message
+//     because the Notice text would be empty.
+func fileUndo(loop *agent.Loop, reg *tools.Registry, n int) string {
+	if loop == nil || reg == nil {
 		return "undo not supported"
 	}
-	if _, err := loop.Rewind(n); err != nil {
-		return err.Error()
+	recs := editRecords(agent.Live(loop.Hist()))
+	if len(recs) == 0 {
+		return "no edits to undo"
 	}
-	return fmt.Sprintf("rewound %d turns", n)
+	var b strings.Builder
+	for _, r := range reg.PersistedUndo(recs, n) {
+		mark := "✗"
+		if r.OK {
+			mark = "✓"
+		}
+		if r.Rel == "" {
+			fmt.Fprintf(&b, "%s %s\n", mark, r.Note)
+			continue
+		}
+		fmt.Fprintf(&b, "%s %s — %s\n", mark, r.Rel, r.Note)
+	}
+	s := strings.TrimRight(b.String(), "\n")
+	loop.Note(fmt.Sprintf("/undo %d — %s", n, s))
+	return ""
 }
 
 func chatOnCompact(loop *agent.Loop) string {
