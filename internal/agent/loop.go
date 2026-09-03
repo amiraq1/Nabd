@@ -651,16 +651,19 @@ func pathOf(raw []byte) string {
 
 // emit stamps identity and hands the event on. Seq and Parent are
 // assigned here and nowhere else, which is what makes the journal a
-// tree rather than a pile.
+// tree rather than a pile. A sink failure is returned to the caller so the
+// loop does not continue as if the event was durably recorded.
 func (l *Loop) emit(e Event) error {
-	l.emitAt(l.parent, e)
-	return nil
+	return l.emitAt(l.parent, e)
 }
 
 // Note lets a human action enter the journal through the same door events
 // use, so seq and parent stay the single tree they were designed to be.
+// Note failures are logged but do not stop the loop — a notice is not a
+// safety-critical event, and crashing the session on a UI blip is worse
+// than dropping a status line.
 func (l *Loop) Note(text string) {
-	l.emit(Event{Type: Notice, Text: text})
+	_ = l.emit(Event{Type: Notice, Text: text})
 }
 
 // Fanout sends each event to several sinks, stopping at the first error:

@@ -200,22 +200,27 @@ type headTail struct {
 }
 
 func (h *headTail) Write(p []byte) (int, error) {
-	h.total += len(p)
-	if n := bashHead - len(h.head); n > 0 {
-		if n > len(p) {
-			n = len(p)
+	// io.Writer contract: return the number of bytes consumed from the
+	// original slice, not the number appended to tail. Returning less than
+	// len(p) without an error signals a short write and may cause io.Copy to
+	// retry or lose data.
+	n := len(p)
+	h.total += n
+	if remaining := bashHead - len(h.head); remaining > 0 {
+		if remaining > n {
+			remaining = n
 		}
-		h.head = append(h.head, p[:n]...)
-		p = p[n:]
+		h.head = append(h.head, p[:remaining]...)
+		p = p[remaining:]
 	}
 	if len(p) == 0 {
-		return len(p), nil
+		return n, nil
 	}
 	h.tail = append(h.tail, p...)
 	if len(h.tail) > bashTail {
 		h.tail = h.tail[len(h.tail)-bashTail:]
 	}
-	return len(p), nil
+	return n, nil
 }
 
 func (h *headTail) String() string {

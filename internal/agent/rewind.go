@@ -42,18 +42,30 @@ func (l *Loop) Rewind(n int) (string, error) {
 }
 
 // emitAt is emit with the parent chosen by the caller instead of by time.
-// It is the whole mechanism: seq still grows, parent walks back.
-func (l *Loop) emitAt(parent int, e Event) {
+// It is the whole mechanism: seq still grows, parent walks back. A sink
+// failure is returned so callers can stop the loop instead of continuing
+// as if the event was durably recorded.
+func (l *Loop) emitAt(parent int, e Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.seq++
 	e.Seq, e.Parent = l.seq, parent
 	if e.Time.IsZero() {
-		e.Time = time.Now().UTC()
+		e.Time = l.clockNowUTC()
 	}
 	l.parent = e.Seq
 	l.hist = append(l.hist, e)
 	if l.Sink != nil {
-		l.Sink.Emit(e)
+		return l.Sink.Emit(e)
 	}
+	return nil
+}
+
+// clockNowUTC mirrors Loop.clockNow but is usable here without embedding.
+// It returns time.Now().UTC() unless a fake clock is injected via l.now.
+func (l *Loop) clockNowUTC() time.Time {
+	if l.now != nil {
+		return l.now().UTC()
+	}
+	return time.Now().UTC()
 }
