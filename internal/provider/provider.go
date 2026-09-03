@@ -5,6 +5,9 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+
+	"nabd/internal/config"
 )
 
 type Role string
@@ -79,4 +82,18 @@ type Request struct {
 type Provider interface {
 	Name() string
 	Stream(ctx context.Context, req Request) (<-chan Chunk, error)
+}
+
+// DefaultMaxTokens is the per-reply output cap sent when a Request does not
+// set one. Providers that meter tokens-per-minute (Groq: 8000 on the free
+// key) count max_tokens against the budget *before* generation, so a 4096
+// default left room for one file read per minute. 2048 is enough for a
+// terminal that asks for two-line answers; NABD_MAX_TOKENS overrides it.
+func DefaultMaxTokens() int {
+	if v := config.Get("NABD_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 256 {
+			return n
+		}
+	}
+	return 2048
 }

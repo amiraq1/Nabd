@@ -265,7 +265,7 @@ type sseEvent struct {
 func (a *Anthropic) encode(req Request) ([]byte, error) {
 	maxTok := req.MaxTok
 	if maxTok <= 0 {
-		maxTok = 4096
+		maxTok = DefaultMaxTokens()
 	}
 	w := wire{
 		Model:  a.Model,

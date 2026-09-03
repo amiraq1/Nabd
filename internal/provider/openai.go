@@ -29,6 +29,12 @@ type OpenAICompat struct {
 
 const nvidiaBase = "https://integrate.api.nvidia.com/v1"
 
+// nvidiaDefaultModel is a catalog entry verified live on 2026-09-03 and
+// known to call tools. Defaults on NIM rot (Friction 1: the previous one
+// answered 410); when this one goes, the 404/410 branch below tells the
+// user how to pick another instead of guessing for them.
+const nvidiaDefaultModel = "moonshotai/kimi-k2.6"
+
 // NewNVIDIA reads NVIDIA_API_KEY. Pick a model that actually supports
 // tool calling -- most NIM models do not, and one that does not will
 // happily describe the tool it would have called instead of calling it.
@@ -37,7 +43,7 @@ func NewNVIDIA() (*OpenAICompat, error) {
 	if k == "" {
 		return nil, errors.New("NVIDIA_API_KEY is not set (env or ~/.ag/config)")
 	}
-	m := config.GetOr("NABD_MODEL", "qwen/qwen3-coder-480b-a35b-instruct")
+	m := config.GetOr("NABD_MODEL", nvidiaDefaultModel)
 	base := config.GetOr("NABD_BASE_URL", nvidiaBase)
 	return &OpenAICompat{
 		Key: k, Model: m, BaseURL: base,
@@ -51,6 +57,7 @@ func NewOpenRouter() (*OpenAICompat, error) {
 		return nil, errors.New("OPENROUTER_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
 	}
 	return &OpenAICompat{
+		Key:     k,
 		Model:   config.GetOr("NABD_MODEL", "anthropic/claude-3.5-haiku"),
 		BaseURL: config.GetOr("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
 		Client:  &http.Client{},
@@ -74,6 +81,21 @@ func (c *OpenAICompat) Label() string {
 }
 
 func (o *OpenAICompat) Name() string { return o.Label() + "/" + shortModel(o.Model) }
+
+// keyVar names the environment variable a user of this host would set, for
+// error messages that spell out a curl command. Unknown hosts get a
+// neutral name rather than a wrong one.
+func (o *OpenAICompat) keyVar() string {
+	switch l := o.Label(); {
+	case strings.Contains(l, "nvidia"):
+		return "NVIDIA_API_KEY"
+	case strings.Contains(l, "openrouter"):
+		return "OPENROUTER_API_KEY"
+	case strings.Contains(l, "groq"):
+		return "GROQ_API_KEY"
+	}
+	return "API_KEY"
+}
 
 func shortModel(m string) string {
 	if i := strings.LastIndexByte(m, '/'); i >= 0 {
@@ -161,7 +183,7 @@ func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chun
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
-			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).\nاعرض المتاح:\n  curl -s %s/models -H \"Authorization: Bearer $NVIDIA_API_KEY\" | jq -r '.data[].id'\nثم: export NABD_MODEL=<id>", o.Model, resp.StatusCode, o.BaseURL)
+			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).\nاعرض المتاح:\n  curl -s %s/models -H \"Authorization: Bearer $%s\" | jq -r '.data[].id'\nثم ضع NABD_MODEL=<id> في ~/.ag/config", o.Model, resp.StatusCode, o.BaseURL, o.keyVar())
 		}
 		return parseRetryAfter(resp.Header.Get("retry-after")),
 			&httpError{Status: resp.StatusCode, Body: apiMessage(msg)}
@@ -312,7 +334,7 @@ type oaiChunk struct {
 func (o *OpenAICompat) encode(req Request) ([]byte, error) {
 	maxTok := req.MaxTok
 	if maxTok <= 0 {
-		maxTok = 4096
+		maxTok = DefaultMaxTokens()
 	}
 	w := oaiWire{Model: o.Model, MaxTok: maxTok, Stream: true, Temperature: 0.2}
 

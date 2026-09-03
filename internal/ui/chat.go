@@ -9,7 +9,6 @@ import (
 	"nabd/internal/agent"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // Runner is the loop, seen from the UI: one message in, events out.
@@ -83,19 +82,11 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case agent.PermReply, agent.Interrupted:
 			m.pending = nil
 		}
-		var prints []string
-		if m.buf != "" {
-			prints = append(prints, block(" ", m.buf, m.width, lipgloss.NewStyle()))
-			m.buf = ""
-		}
-		if s := RenderEvent(e, m.width); s != "" {
-			prints = append(prints, s)
-		}
 		var cmds []tea.Cmd
-		if len(prints) > 0 {
+		if s := flushJoin(&m.buf, e, m.width); s != "" {
 			// One Println per Update: tea.Batch runs commands concurrently,
 			// so two Printlns would race for the terminal.
-			cmds = append(cmds, tea.Println(strings.Join(prints, "\n")))
+			cmds = append(cmds, tea.Println(s))
 		}
 		cmds = append(cmds, waitEvent(m.events))
 		return m, tea.Batch(cmds...)
@@ -172,6 +163,7 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.running {
+			m.status = "انتظر انتهاء الدور · نصّك محفوظ"
 			return m, nil
 		}
 		text := line
@@ -213,6 +205,12 @@ func (m *Chat) View() string {
 		s := "· يعمل · ctrl+c للإلغاء"
 		if m.status != "" {
 			s = "· " + m.status
+		}
+		if m.input != "" {
+			s += "\n› " + m.input
+		}
+		if p := partialTail(m.buf, 6, m.width); p != "" {
+			return p + "\n" + dim.Render(s)
 		}
 		return dim.Render(s)
 	}
@@ -271,7 +269,7 @@ func (m *Chat) command(line string) string {
 		}
 		return m.OnEdits()
 	case "/help":
-		return "/undo [n] · /edits · /ctx · /compact · ctrl+c · ctrl+d"
+		return "/undo [n] · /edits · /rewind [n] · /ctx · /compact · ctrl+c · ctrl+d"
 	}
 	return "أمر غير معروف: " + f[0]
 }

@@ -237,29 +237,49 @@ func die(err error) {
 	os.Exit(1)
 }
 
-// loadEnv reads ~/.ag/env and populates missing environment variables.
+// loadEnv is the legacy path: ~/.ag/env, populated into the process
+// environment before ~/.ag/config existed. It stays for people who have
+// not moved yet, with the same rule config enforces: a file readable by
+// others is refused, not read, because a key that leaks is worse than a
+// key that is missing. The user is told once to migrate. config.Load
+// runs after this and wins on any key present in both.
 func loadEnv() {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return
 	}
-	b, err := os.ReadFile(filepath.Join(home, ".ag", "env"))
+	path := filepath.Join(home, ".ag", "env")
+	fi, err := os.Stat(path)
 	if err != nil {
 		return
 	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		fmt.Fprintf(os.Stderr, "ag: %s مفتوح للغير (%04o) — لن يُقرأ. شغّل: chmod 600 %s\n",
+			path, fi.Mode().Perm(), path)
+		return
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	loaded := 0
 	for _, line := range strings.Split(string(b), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		line = strings.TrimPrefix(line, "export ")
 		if idx := strings.IndexByte(line, '='); idx > 0 {
 			k := strings.TrimSpace(line[:idx])
-			v := strings.TrimSpace(line[idx+1:])
-			v = strings.Trim(v, `"'`)
+			v := strings.Trim(strings.TrimSpace(line[idx+1:]), `"'`)
 			if os.Getenv(k) == "" {
 				os.Setenv(k, v)
+				loaded++
 			}
 		}
+	}
+	if loaded > 0 {
+		fmt.Fprintln(os.Stderr, "ag: ~/.ag/env قديم — انقل محتواه إلى ~/.ag/config (نفس الصيغة) ثم احذفه")
 	}
 }
 
