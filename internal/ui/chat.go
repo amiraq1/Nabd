@@ -37,10 +37,12 @@ type Chat struct {
 	OnCtx     func() string
 	OnCompact func() string
 	OnEdits   func() string
+	rend      Renderer
 }
 
 func NewChat(r Runner, events <-chan agent.Event) *Chat {
-	return &Chat{runner: r, events: events, width: DefaultWidth, Approve: NewApprover()}
+	return &Chat{runner: r, events: events, width: DefaultWidth, Approve: NewApprover(),
+		rend: Renderer{Width: DefaultWidth}}
 }
 
 func (m *Chat) Init() tea.Cmd { return waitEvent(m.events) }
@@ -68,6 +70,7 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w = DefaultWidth
 		}
 		m.width = w
+		m.rend.Width = w
 		return m, nil
 
 	case evMsg:
@@ -79,7 +82,7 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.pending = nil
 		}
 		var cmds []tea.Cmd
-		if s := RenderEvent(e, m.width); s != "" {
+		if s := m.rend.Feed(e); s != "" {
 			cmds = append(cmds, tea.Println(s))
 		}
 		cmds = append(cmds, waitEvent(m.events))
@@ -92,10 +95,14 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.status = "خطأ"
 		}
-		if m.quit {
-			return m, tea.Quit
+		var cmd tea.Cmd
+		if s := m.rend.Flush(); s != "" { // a turn that ended mid-sentence
+			cmd = tea.Println(s)
 		}
-		return m, nil
+		if m.quit {
+			return m, tea.Sequence(cmd, tea.Quit)
+		}
+		return m, cmd
 
 	case tea.KeyMsg:
 		return m.key(msg)
@@ -160,6 +167,7 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.running {
+			m.status = "انتظر انتهاء الدور · نصّك محفوظ في السطر"
 			return m, nil
 		}
 		text := line
@@ -201,6 +209,14 @@ func (m *Chat) View() string {
 		s := "· يعمل · ctrl+c للإلغاء"
 		if m.status != "" {
 			s = "· " + m.status
+		}
+		if m.input != "" {
+			s += "\n› " + m.input
+		}
+		// The answer in flight: last few lines, so the phone shows
+		// progress without scrolling the whole thing past you.
+		if p := m.rend.Partial(6); p != "" {
+			return p + "\n" + dim.Render(s)
 		}
 		return dim.Render(s)
 	}
@@ -259,7 +275,7 @@ func (m *Chat) command(line string) string {
 		}
 		return m.OnEdits()
 	case "/help":
-		return "/undo [n] · /edits · /ctx · /compact · ctrl+c · ctrl+d"
+		return "/undo [n] · /edits · /rewind [n] · /ctx · /compact · ctrl+c · ctrl+d"
 	}
 	return "أمر غير معروف: " + f[0]
 }

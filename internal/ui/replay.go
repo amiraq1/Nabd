@@ -23,6 +23,7 @@ type Replay struct {
 	speed  float64
 	paused bool
 	done   bool
+	rend   *Renderer // pointer: Replay is a value model and the buffer must survive copies
 }
 
 // NewReplay takes the live branch, not the raw file: a compacted session
@@ -35,6 +36,7 @@ func NewReplay(events []agent.Event, speed float64) Replay {
 		events: agent.Live(events),
 		width:  DefaultWidth,
 		speed:  speed,
+		rend:   &Renderer{Width: DefaultWidth},
 	}
 }
 
@@ -49,7 +51,7 @@ func (m Replay) step() tea.Cmd {
 	i := m.next
 
 	var cmds []tea.Cmd
-	if s := RenderEvent(e, m.width); s != "" {
+	if s := m.rend.Feed(e); s != "" {
 		cmds = append(cmds, tea.Println(s))
 	}
 	cmds = append(cmds, tea.Tick(m.delay(i), func(time.Time) tea.Msg {
@@ -88,6 +90,7 @@ func (m Replay) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w = DefaultWidth
 		}
 		m.width = w
+		m.rend.Width = w
 		return m, nil
 
 	case tea.KeyMsg:
@@ -131,6 +134,9 @@ func (m Replay) advance() (tea.Model, tea.Cmd) {
 	m.next++
 	if m.next >= len(m.events) {
 		m.done = true
+		if s := m.rend.Flush(); s != "" {
+			return m, tea.Sequence(tea.Println(s), tea.Quit)
+		}
 		return m, tea.Quit
 	}
 	return m, m.step()
@@ -156,6 +162,9 @@ func (m Replay) View() string {
 		s += " · q"
 	case m.paused:
 		s += " · موقوف · مسافة/→"
+	}
+	if p := m.rend.Partial(6); p != "" {
+		return p + "\n" + dim.Render(s)
 	}
 	return dim.Render(s)
 }
