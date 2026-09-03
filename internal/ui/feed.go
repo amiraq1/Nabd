@@ -349,9 +349,6 @@ func (m *Feed) helpText() string {
 		if m.decisionPending {
 			return "submitting decision…"
 		}
-		if m.pendingToolName() == "bash" {
-			return "y allow once · n deny · Enter confirm · Up/Down select"
-		}
 		return "y allow once · a allow session · n deny · Enter confirm · Up/Down select"
 	}
 	if m.running || m.busy {
@@ -557,10 +554,7 @@ func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y":
 		return m.answerModal(agent.AllowOnce)
 	case "a", "A":
-		if m.permModal.supportsSession() {
-			return m.answerModal(agent.AllowSession)
-		}
-		return m, nil
+		return m.answerModal(agent.AllowSession)
 	case "n", "N":
 		return m.answerModal(agent.Deny)
 	case "esc":

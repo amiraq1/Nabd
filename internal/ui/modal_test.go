@@ -40,7 +40,7 @@ func TestModalRenderingAndChoices(t *testing.T) {
 		t.Errorf("view missing choices for write_file:\n%s", view)
 	}
 
-	// For bash (executing tool), Allow Session must NOT be offered
+	// For bash (executing tool), all choices including Allow Session are rendered
 	f2, _ := feedWithRunner(t)
 	f2.width = 80
 	f2.height = 24
@@ -48,8 +48,61 @@ func TestModalRenderingAndChoices(t *testing.T) {
 		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c2", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
 	}})
 	view2 := f2.View()
-	if strings.Contains(view2, "Allow Session") {
-		t.Errorf("bash must not offer Allow Session:\n%s", view2)
+	if !strings.Contains(view2, "Allow Session") {
+		t.Errorf("bash modal must include Allow Session choice, got:\n%s", view2)
+	}
+}
+
+// TestBashAllowSessionCoreOwnedEffectiveDecision proves that:
+// 1. Modal opens for a bash request.
+// 2. Pressing 'a' sends agent.AllowSession to the approver (UI does NOT compute EffectiveDecision).
+// 3. Core policy calculates EffectiveDecision = AllowOnce.
+// 4. Emitted event records Decision=AllowSession and EffectiveDecision=AllowOnce.
+func TestBashAllowSessionCoreOwnedEffectiveDecision(t *testing.T) {
+	f, _ := feedWithRunner(t)
+	ap := NewApprover()
+	f.SetApprover(ap)
+
+	// 1. Open modal for bash
+	f.Update(agentEventBatchMsg{Events: []agent.Event{
+		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c_bash", Name: "bash", Args: json.RawMessage(`"echo hi"`)}},
+	}})
+	if !f.modalVisible {
+		t.Fatal("modal must be visible for bash tool call")
+	}
+
+	// 2. Press 'a'
+	_, cmd := f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if cmd == nil {
+		t.Fatal("pressing 'a' must produce reply command")
+	}
+
+	// 3. Approver receives agent.AllowSession exactly once
+	f = updateCmd(f, cmd)
+	select {
+	case d := <-ap.reply:
+		if d != agent.AllowSession {
+			t.Fatalf("approver received %v, want agent.AllowSession (UI must not downgrade)", d)
+		}
+	default:
+		t.Fatal("approver reply channel is empty")
+	}
+
+	// 4 & 5. Core Gate computes EffectiveDecision = AllowOnce for bash,
+	// and emits PermReply event with Decision=AllowSession and EffectiveDecision=AllowOnce.
+	permEv := agent.Event{
+		Seq:               2,
+		Type:              agent.PermReply,
+		Call:              &agent.ToolCall{ID: "c_bash", Name: "bash"},
+		Decision:          agent.AllowSession,
+		EffectiveDecision: agent.AllowOnce,
+	}
+	f.Update(agentEventBatchMsg{Events: []agent.Event{permEv}})
+
+	// 6. Presentation renders both requested and applied decisions
+	view := f.View()
+	if !strings.Contains(view, "requested session, applied once") {
+		t.Fatalf("expected feed view to show requested session and applied once, got:\n%s", view)
 	}
 }
 
@@ -71,10 +124,16 @@ func TestModalArrowSelectionAndEnter(t *testing.T) {
 		t.Fatalf("after first Down, selected = %d, want 0", f.permModal.selected)
 	}
 
-	// Second Down arrow moves to Deny (index 1)
+	// Second Down arrow moves to Allow Session (index 1)
 	f.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if f.permModal.selected != 1 {
 		t.Fatalf("after second Down, selected = %d, want 1", f.permModal.selected)
+	}
+
+	// Third Down arrow moves to Deny (index 2)
+	f.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if f.permModal.selected != 2 {
+		t.Fatalf("after third Down, selected = %d, want 2", f.permModal.selected)
 	}
 
 	// Enter confirms selection (Deny)

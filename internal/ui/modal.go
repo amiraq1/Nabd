@@ -50,20 +50,10 @@ func (m *PermissionModal) toolName() string {
 	return m.call.Name
 }
 
-func (m *PermissionModal) supportsSession() bool {
-	return m.toolName() != "bash"
-}
-
 func (m *PermissionModal) choices() []PermissionChoice {
-	if m.supportsSession() {
-		return []PermissionChoice{
-			{Decision: agent.AllowOnce, Label: "Allow Once", KeyHint: "y"},
-			{Decision: agent.AllowSession, Label: "Allow Session", KeyHint: "a"},
-			{Decision: agent.Deny, Label: "Deny", KeyHint: "n / esc"},
-		}
-	}
 	return []PermissionChoice{
 		{Decision: agent.AllowOnce, Label: "Allow Once", KeyHint: "y"},
+		{Decision: agent.AllowSession, Label: "Allow Session", KeyHint: "a"},
 		{Decision: agent.Deny, Label: "Deny", KeyHint: "n / esc"},
 	}
 }
