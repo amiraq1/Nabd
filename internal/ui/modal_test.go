@@ -253,3 +253,79 @@ func TestModalResizeNarrowTerminals(t *testing.T) {
 		}
 	}
 }
+
+// TestModalTermuxSnapshotDimensions asserts visual card structure and height limits
+// on typical Termux phone dimensions: 80x24 (landscape), 40x20 (portrait), 50x16 (small).
+func TestModalTermuxSnapshotDimensions(t *testing.T) {
+	dimensions := []struct {
+		width  int
+		height int
+		name   string
+	}{
+		{width: 80, height: 24, name: "80x24-landscape"},
+		{width: 40, height: 20, name: "40x20-portrait"},
+		{width: 50, height: 16, name: "50x16-small"},
+	}
+
+	for _, d := range dimensions {
+		t.Run(d.name, func(t *testing.T) {
+			f, _ := feedWithRunner(t)
+			f.Update(tea.WindowSizeMsg{Width: d.width, Height: d.height})
+
+			// 1. Open modal with bash command
+			f.Update(agentEventBatchMsg{Events: []agent.Event{
+				{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c_snap", Name: "bash", Args: json.RawMessage(`"pwd"`)}},
+			}})
+
+			// 2. Select index 0 (Allow Once) via Down arrow
+			f.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+			// 3. Render view during active modal
+			v := f.View()
+			if v == "" {
+				t.Fatal("empty modal view")
+			}
+
+			// Invariant A: Total lines must strictly not exceed terminal height
+			numLines := countLines(v)
+			if numLines > d.height {
+				t.Fatalf("rendered %d lines, exceeding terminal height %d:\n%s", numLines, d.height, v)
+			}
+
+			// Invariant B: Card top border must be rendered
+			if !strings.Contains(v, "+-- Permission") {
+				t.Fatalf("missing card top border in view:\n%s", v)
+			}
+
+			// Invariant C: Selected choice must clearly display [*]
+			if !strings.Contains(v, "[*] Allow Once") {
+				t.Fatalf("selected choice must visually show [*] Allow Once:\n%s", v)
+			}
+
+			// Invariant D: Composer must be visibly paused
+			if !strings.Contains(v, "composer paused") {
+				t.Fatalf("composer must be replaced by paused notice during modal:\n%s", v)
+			}
+			if strings.Contains(v, "type a message") {
+				t.Fatalf("composer placeholder must NOT appear while modal is active:\n%s", v)
+			}
+
+			// Invariant E: Answer modal -> verify composer is restored
+			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+			f.Update(agentEventBatchMsg{Events: []agent.Event{
+				{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c_snap"}, Decision: agent.AllowOnce, EffectiveDecision: agent.AllowOnce},
+			}})
+
+			vClosed := f.View()
+			if !strings.Contains(vClosed, "type a message") {
+				t.Fatalf("composer placeholder must be restored after modal close:\n%s", vClosed)
+			}
+			if strings.Contains(vClosed, "composer paused") {
+				t.Fatalf("composer paused notice must disappear after modal close:\n%s", vClosed)
+			}
+			if countLines(vClosed) > d.height {
+				t.Fatalf("post-modal lines %d exceed height %d", countLines(vClosed), d.height)
+			}
+		})
+	}
+}

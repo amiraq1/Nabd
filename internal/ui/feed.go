@@ -313,10 +313,12 @@ func (m *Feed) onResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 // viewportHeight returns the rows the feed viewport may use after the
 // header, status/help line and composer rows are reserved. Never negative.
 func (m *Feed) viewportHeight() int {
-	if m.height <= 0 {
-		return 0
+	reserved := 0
+	if m.modalVisible || m.decisionPending {
+		reserved++ // "permission decision required — composer paused" row
+	} else {
+		reserved += m.composer.height
 	}
-	reserved := m.composer.height
 	if m.header != "" {
 		reserved++ // header row
 	}
@@ -410,7 +412,11 @@ func (m *Feed) View() string {
 		b.WriteByte('\n')
 	}
 
-	b.WriteString(m.composer.view())
+	if m.modalVisible || m.decisionPending {
+		b.WriteString(dim.Render("· permission decision required — composer paused"))
+	} else {
+		b.WriteString(m.composer.view())
+	}
 	return b.String()
 }
 

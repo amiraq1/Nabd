@@ -275,7 +275,6 @@ func doChatWithFeed(dir string, cont bool) error {
 
 	// Create the feed model and the event batcher.
 	feed := ui.NewFeed()
-	feed.SetHeader(fmt.Sprintf("nabd %s · %s · %s", version, commit, prov.Name()))
 
 	// Create the loop BEFORE wiring callbacks (callbacks reference it).
 	loop := &agent.Loop{

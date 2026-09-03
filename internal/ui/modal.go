@@ -120,46 +120,80 @@ func (m *PermissionModal) view(width int) string {
 	if w < 20 {
 		w = 20
 	}
+	cardW := w
+	if cardW > 60 {
+		cardW = 60
+	}
 
-	var b strings.Builder
+	// formatRow wraps text in vertical borders: | <content> |
+	formatRow := func(s string) string {
+		rCount := utf8.RuneCountInString(s)
+		avail := cardW - 4
+		if rCount > avail {
+			s = truncate(s, avail)
+			rCount = utf8.RuneCountInString(s)
+		}
+		pad := max(0, avail-rCount)
+		return "| " + s + strings.Repeat(" ", pad) + " |"
+	}
 
-	// Top banner
-	b.WriteString(warn.Render("── Permission Required ────────────────────────"))
-	b.WriteByte('\n')
+	var lines []string
 
-	// Tool name and execution status
+	// Top border
+	title := "+-- Permission Required "
+	if utf8.RuneCountInString(title) > cardW-2 {
+		title = "+-- Permission "
+	}
+	dashCount := max(0, cardW-utf8.RuneCountInString(title)-1)
+	lines = append(lines, warn.Render(title+strings.Repeat("-", dashCount)+"+"))
+
+	// Tool name
 	tool := m.toolName()
 	if tool == "" {
 		tool = "unknown"
 	}
-	b.WriteString(fmt.Sprintf("Tool: %s (not executed yet)\n", bold.Render(tool)))
+	lines = append(lines, formatRow(fmt.Sprintf("Tool: %s (not executed yet)", tool)))
 
-	// Arguments
-	if m.call != nil && len(m.call.Args) > 0 {
-		argDisplay := safeArgs(string(m.call.Args), max(10, w-10))
-		b.WriteString(fmt.Sprintf("Args: %s\n", dim.Render(argDisplay)))
+	// Arguments line
+	hasArgs := m.call != nil && len(m.call.Args) > 0 && string(m.call.Args) != "{}" && string(m.call.Args) != `""`
+	if hasArgs {
+		argDisplay := safeArgs(string(m.call.Args), cardW-14)
+		lines = append(lines, formatRow(fmt.Sprintf("Args: %s", argDisplay)))
 	}
 
-	// Submission state or interactive choices
+	// Blank row
+	lines = append(lines, formatRow(""))
+
+	// Choices
 	if m.decisionPending {
-		b.WriteString(dim.Render("· submitting decision…\n"))
+		lines = append(lines, formatRow("· submitting decision…"))
 	} else {
-		ch := m.choices()
-		var choiceStrings []string
-		for i, c := range ch {
+		for i, c := range m.choices() {
+			mark := "[ ]"
 			if i == m.selected {
-				choiceStrings = append(choiceStrings, good.Render(fmt.Sprintf("[*] %s", c.Label)))
-			} else {
-				choiceStrings = append(choiceStrings, dim.Render(fmt.Sprintf("[ ] %s", c.Label)))
+				mark = "[*]"
 			}
+			rowText := fmt.Sprintf("  %s %s (%s)", mark, c.Label, c.KeyHint)
+			lines = append(lines, formatRow(rowText))
 		}
-		b.WriteString(strings.Join(choiceStrings, "   "))
-		b.WriteByte('\n')
+	}
+
+	// Blank row
+	lines = append(lines, formatRow(""))
+
+	// Hint row
+	if m.decisionPending {
+		lines = append(lines, formatRow("waiting for decision to apply…"))
+	} else if m.selected >= 0 {
+		lines = append(lines, formatRow("Enter confirm · Up/Down select · y/a/n direct"))
+	} else {
+		lines = append(lines, formatRow("y/a/n direct · Up/Down select · Enter confirm"))
 	}
 
 	// Bottom border
-	b.WriteString(dim.Render("───────────────────────────────────────────────"))
-	return b.String()
+	lines = append(lines, dim.Render("+"+strings.Repeat("-", cardW-2)+"+"))
+
+	return strings.Join(lines, "\n")
 }
 
 // lineCount returns the number of rendered lines in view().
@@ -167,9 +201,13 @@ func (m *PermissionModal) lineCount() int {
 	if !m.visible && !m.decisionPending {
 		return 0
 	}
-	count := 4 // top border, tool line, choices line, bottom border
-	if m.call != nil && len(m.call.Args) > 0 {
-		count++ // args line
+	count := 7 // top, tool, blank, choices(1 or 3), blank, hint, bottom
+	if !m.decisionPending {
+		count += 2 // 3 choices instead of 1
+	}
+	hasArgs := m.call != nil && len(m.call.Args) > 0 && string(m.call.Args) != "{}" && string(m.call.Args) != `""`
+	if hasArgs {
+		count++
 	}
 	return count
 }
