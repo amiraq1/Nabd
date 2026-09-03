@@ -196,3 +196,71 @@ func TestParseRetryAfterVariants(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenAIStreamRequiresTerminalMarker verifies that a stream ending without
+// [DONE] and without a finish_reason is treated as an error (truncated),
+// not a silent success.
+func TestOpenAIStreamRequiresTerminalMarker(t *testing.T) {
+	cases := []struct {
+		name     string
+		body     string
+		wantErr  bool
+	}{
+		{
+			name:    "normal with [DONE]",
+			body:    "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: [DONE]\n\n",
+			wantErr: false,
+		},
+		{
+			name:    "normal with finish_reason",
+			body:    "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+			wantErr: false,
+		},
+		{
+			name:    "truncated: no [DONE], no finish_reason",
+			body:    "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n",
+			wantErr: true,
+		},
+		{
+			name:    "truncated after text",
+			body:    "data: {\"choices\":[{\"delta\":{\"content\":\"some text here\"}}]}\n\n",
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("content-type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer server.Close()
+
+			prov := &OpenAICompat{
+				BaseURL: server.URL,
+				Key:     "test-key",
+				Model:   "test-model",
+				Client:  server.Client(),
+			}
+
+			ch, err := prov.Stream(context.Background(), Request{
+				Messages: []Message{{Role: User, Text: "test"}},
+				MaxTok:   1024,
+			})
+			if err != nil {
+				t.Fatalf("Stream: %v", err)
+			}
+
+			var sawError bool
+			for c := range ch {
+				if c.Kind == ChunkError {
+					sawError = true
+				}
+			}
+			if sawError != tc.wantErr {
+				t.Errorf("sawError=%v, want %v", sawError, tc.wantErr)
+			}
+		})
+	}
+}

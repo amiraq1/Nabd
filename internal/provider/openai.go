@@ -351,13 +351,14 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
 	var (
-		stop             string
-		promptTokens     int
-		completionTokens int
-		finishReason     string
-		usageReported    bool
-		pending          = map[int]*pendingCall{}
-		order            []int
+		stop              string
+		promptTokens      int
+		completionTokens  int
+		finishReason      string
+		usageReported     bool
+		gotDone           bool // true when the stream terminated with [DONE]
+		pending           = map[int]*pendingCall{}
+		order             []int
 	)
 
 	emit := func(c Chunk) bool {
@@ -380,6 +381,7 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 			continue
 		}
 		if data == "[DONE]" {
+			gotDone = true
 			break
 		}
 
@@ -436,6 +438,12 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 	}
 	if err := sc.Err(); err != nil {
 		return 0, err
+	}
+	// A stream that ends without [DONE] and without a reliable finish_reason
+	// was truncated mid-flight (connection drop). Treat it as an error so the
+	// agent does not silently accept a partial answer as complete.
+	if !gotDone && finishReason == "" {
+		return 0, io.ErrUnexpectedEOF
 	}
 
 	for i, idx := range order {
