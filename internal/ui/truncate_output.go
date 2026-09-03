@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Tool output display limits. Applied at render time only; the original
@@ -16,15 +18,14 @@ const (
 )
 
 // truncateOutput returns display lines for a tool's output, bounded by the
-// limits above. The original string is not modified.
+// limits above, with every line constrained to fit within width terminal cells.
+// The original string is not modified.
 func truncateOutput(output string, width int) []string {
 	if output == "" {
 		return nil
 	}
-	// Fast path: small output.
-	if utf8.RuneCountInString(output) <= maxToolOutputChars &&
-		strings.Count(output, "\n") < maxToolOutputLines {
-		return strings.Split(output, "\n")
+	if width <= 0 {
+		width = DefaultWidth
 	}
 
 	lines := strings.Split(output, "\n")
@@ -51,18 +52,25 @@ func truncateOutput(output string, width int) []string {
 	return enforceCharBudget(out, maxToolOutputChars)
 }
 
-// truncateDisplayLine breaks a single line to fit the viewport width.
+// truncateDisplayLine breaks a single line to fit the viewport width using
+// ansi-aware cell-width measurement. This correctly handles Arabic, Emoji,
+// CJK, combining marks, and ANSI escape sequences.
 func truncateDisplayLine(line string, width int) []string {
-	runes := []rune(line)
-	if len(runes) <= width {
+	if width <= 0 {
+		width = DefaultWidth
+	}
+	if ansi.StringWidth(line) <= width {
 		return []string{line}
 	}
-	var out []string
-	for len(runes) > width {
-		out = append(out, string(runes[:width]))
-		runes = runes[width:]
+	wrapped := ansi.Hardwrap(line, width, false)
+	if wrapped == "" {
+		return []string{line}
 	}
-	out = append(out, string(runes))
+	parts := strings.Split(wrapped, "\n")
+	var out []string
+	for _, p := range parts {
+		out = append(out, p)
+	}
 	return out
 }
 

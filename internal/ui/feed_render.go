@@ -2,16 +2,28 @@ package ui
 
 import (
 	"fmt"
-	"unicode/utf8"
+	"strings"
 
 	"nabd/internal/presentation"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
-// renderItems converts feed items to display lines.
+// renderItems converts feed items to display lines, each constrained to width.
 func renderItems(items []presentation.FeedItem, width int) []string {
 	var lines []string
 	for _, it := range items {
-		lines = append(lines, renderItem(it, width)...)
+		raw := renderItem(it, width)
+		for _, l := range raw {
+			// Guarantee every stored line fits within width terminal cells.
+			if width > 0 && ansi.StringWidth(l) > width {
+				for _, sub := range strings.Split(ansi.Hardwrap(l, width, false), "\n") {
+					lines = append(lines, sub)
+				}
+			} else {
+				lines = append(lines, l)
+			}
+		}
 	}
 	return lines
 }
@@ -34,7 +46,7 @@ func renderItem(it presentation.FeedItem, width int) []string {
 	case presentation.ItemRunBoundary:
 		return renderRunBoundary(it, width)
 	default:
-		return []string{dim.Render(fmt.Sprintf("· unknown item %s", it.Type))}
+		return []string{dim.Render(truncateToWidth(fmt.Sprintf("· unknown item %s", it.Type), width, "…"))}
 	}
 }
 
@@ -71,17 +83,17 @@ func renderTool(it presentation.FeedItem, width int) []string {
 	if t.Args != "" {
 		head += " " + truncate(t.Args, width/3)
 	}
-	out = append(out, head)
+	out = append(out, truncateToWidth(head, width, "…"))
 
 	// Duration / exit info.
 	if t.Status == presentation.ToolRunning {
 		out = append(out, dim.Render("  ···"))
 	} else if t.Duration > 0 {
-		out = append(out, dim.Render(fmt.Sprintf("  %dms", t.Duration)))
+		out = append(out, dim.Render(truncateToWidth(fmt.Sprintf("  %dms", t.Duration), width, "…")))
 	} else if t.ExitCode != 0 {
-		out = append(out, bad.Render(fmt.Sprintf("  exit %d", t.ExitCode)))
+		out = append(out, bad.Render(truncateToWidth(fmt.Sprintf("  exit %d", t.ExitCode), width, "…")))
 	} else if t.Signal != "" {
-		out = append(out, bad.Render("  · "+t.Signal))
+		out = append(out, bad.Render(truncateToWidth("  · "+t.Signal, width, "…")))
 	}
 
 	// Output (truncated).
@@ -110,15 +122,16 @@ func renderPerm(it presentation.FeedItem, width int) []string {
 	if p.Args != "" {
 		head += " " + truncate(p.Args, width/3)
 	}
-	out = append(out, head)
+	out = append(out, truncateToWidth(head, width, "…"))
 	if p.Status == presentation.PermAllow && p.Effective != p.Decision {
-		out = append(out, dim.Render(fmt.Sprintf("  · requested %s, applied %s", p.Decision, p.Effective)))
+		notice := fmt.Sprintf("  · requested %s, applied %s", p.Decision, p.Effective)
+		out = append(out, dim.Render(truncateToWidth(notice, width, "…")))
 	}
 	return out
 }
 
 func renderNotice(it presentation.FeedItem, width int) []string {
-	return []string{warn.Render("⚑ " + it.Text)}
+	return []string{warn.Render(truncateToWidth("⚑ "+it.Text, width, "…"))}
 }
 
 func renderError(it presentation.FeedItem, width int) []string {
@@ -126,14 +139,11 @@ func renderError(it presentation.FeedItem, width int) []string {
 	if text == "" {
 		text = "error"
 	}
-	return []string{bad.Render("✗ " + text)}
+	return []string{bad.Render(truncateToWidth("✗ "+text, width, "…"))}
 }
 
 func renderRunBoundary(it presentation.FeedItem, width int) []string {
-	if it.RunBoundary == "end" {
-		return []string{dim.Render("── " + it.Text)}
-	}
-	return []string{dim.Render("── " + it.Text)}
+	return []string{dim.Render(truncateToWidth("── "+it.Text, width, "…"))}
 }
 
 // toolStatusSymbol returns a status glyph for a tool card.
@@ -156,16 +166,11 @@ func toolStatusSymbol(s presentation.ToolStatus) string {
 	}
 }
 
-// truncate shortens a string to max runes, preserving UTF-8.
+// truncate shortens a string using ansi-aware visual width.
+// Prefer truncateToWidth (visual cells); this is kept for callers using rune count.
 func truncate(s string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	if utf8.RuneCountInString(s) <= max {
-		return s
-	}
-	runes := []rune(s)
-	return string(runes[:max-1]) + "…"
+	return truncateToWidth(s, max, "…")
 }
-
-// wrap breaks text into lines of at most width runes.

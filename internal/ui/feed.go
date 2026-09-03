@@ -310,55 +310,6 @@ func (m *Feed) onResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// viewportHeight returns the rows the feed viewport may use after the
-// header, status/help line and composer rows are reserved. Never negative.
-func (m *Feed) viewportHeight() int {
-	reserved := 0
-	if m.modalVisible || m.decisionPending {
-		reserved++ // "permission decision required — composer paused" row
-	} else {
-		reserved += m.composer.height
-	}
-	if m.header != "" {
-		reserved++ // header row
-	}
-	if m.status != "" {
-		reserved++ // status row
-	}
-	reserved++ // help row
-	if m.unseen > 0 && !m.follow {
-		reserved++ // unseen indicator row
-	}
-	if m.modalVisible {
-		reserved += m.permModal.lineCount()
-	}
-	if m.menu.visible {
-		reserved += m.menu.lineCount()
-	}
-	vh := m.height - reserved
-	if vh < 1 {
-		return 0
-	}
-	return vh
-}
-
-// statusText returns the transient status line content, or "".
-func (m *Feed) statusText() string { return m.status }
-
-// helpText returns the documented key bindings for the current state.
-func (m *Feed) helpText() string {
-	if m.modalVisible || m.decisionPending {
-		if m.decisionPending {
-			return "submitting decision…"
-		}
-		return "y allow once · a allow session · n deny · Enter confirm · Up/Down select"
-	}
-	if m.running || m.busy {
-		return "Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C cancel"
-	}
-	return "Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit"
-}
-
 // pendingToolName returns the name of the tool awaiting permission, or "".
 func (m *Feed) pendingToolName() string {
 	if m.pending == nil {
@@ -367,57 +318,11 @@ func (m *Feed) pendingToolName() string {
 	return m.pending.Name
 }
 
-// View renders the full screen: header, viewport, unseen indicator,
-// status/help line, composer.
-func (m *Feed) View() string {
-	var b strings.Builder
-
-	if m.header != "" {
-		b.WriteString(m.header)
-		b.WriteByte('\n')
-	}
-
-	vh := m.viewportHeight()
-	if vh > 0 && len(m.lines) > 0 {
-		start := m.scrollTop
-		if start >= len(m.lines) {
-			start = max(0, len(m.lines)-vh)
-		}
-		end := min(start+vh, len(m.lines))
-		for i := start; i < end; i++ {
-			b.WriteString(m.lines[i])
-			b.WriteByte('\n')
-		}
-	}
-
-	if m.unseen > 0 && !m.follow {
-		b.WriteString(dim.Render(fmt.Sprintf("v %d updates", m.unseen)))
-		b.WriteByte('\n')
-	}
-
-	if s := m.statusText(); s != "" {
-		b.WriteString(dim.Render("· " + s))
-		b.WriteByte('\n')
-	}
-	b.WriteString(dim.Render(m.helpText()))
-	b.WriteByte('\n')
-
-	if m.modalVisible {
-		b.WriteString(m.permModal.view(m.width))
-		b.WriteByte('\n')
-	}
-
-	if m.menu.visible {
-		b.WriteString(m.menu.view(m.width))
-		b.WriteByte('\n')
-	}
-
-	if m.modalVisible || m.decisionPending {
-		b.WriteString(dim.Render("· permission decision required — composer paused"))
-	} else {
-		b.WriteString(m.composer.view())
-	}
-	return b.String()
+// viewportHeight returns the number of rows the viewport may use.
+// Delegates to computeLayout for accurate visual-row accounting.
+// Kept for backward compatibility with tests.
+func (m *Feed) viewportHeight() int {
+	return m.computeLayout().ViewportRows
 }
 
 // routeKey is the deterministic input router. Precedence:
@@ -936,13 +841,15 @@ func (m *Feed) syncSlashMenu() {
 // viewportKey handles scrolling and global keys when the composer does not
 // own the key.
 func (m *Feed) viewportKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	lm := m.computeLayout()
+	vh := lm.ViewportRows
 	switch k.Type {
 	case tea.KeyPgUp:
 		m.follow = false
-		m.scrollTop = min(m.scrollTop+m.viewportHeight(), max(0, len(m.lines)-m.viewportHeight()))
+		m.scrollTop = min(m.scrollTop+vh, max(0, len(m.lines)-vh))
 		return m, nil
 	case tea.KeyPgDown:
-		m.scrollTop = max(m.scrollTop-m.viewportHeight(), 0)
+		m.scrollTop = max(m.scrollTop-vh, 0)
 		if m.scrollTop == 0 {
 			m.follow = true
 			m.unseen = 0
@@ -950,7 +857,7 @@ func (m *Feed) viewportKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyUp:
 		m.follow = false
-		m.scrollTop = min(m.scrollTop+1, max(0, len(m.lines)-m.viewportHeight()))
+		m.scrollTop = min(m.scrollTop+1, max(0, len(m.lines)-vh))
 		return m, nil
 	case tea.KeyDown:
 		m.scrollTop = max(m.scrollTop-1, 0)
@@ -961,7 +868,7 @@ func (m *Feed) viewportKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyHome:
 		m.follow = false
-		m.scrollTop = max(0, len(m.lines)-m.viewportHeight())
+		m.scrollTop = max(0, len(m.lines)-vh)
 		return m, nil
 	case tea.KeyEnd:
 		m.follow = true

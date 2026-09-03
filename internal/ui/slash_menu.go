@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // maxMenuCommands is the maximum number of items displayed in the menu.
@@ -64,6 +66,19 @@ func (m *slashMenu) lineCount() int {
 	return len(m.items) + 2
 }
 
+// maxItemsForHeight returns the maximum number of menu items that fit in
+// a given available height (accounting for 2 border rows).
+func maxItemsForHeight(availableRows int) int {
+	if availableRows <= 2 {
+		return 0
+	}
+	n := availableRows - 2
+	if n > maxMenuCommands {
+		return maxMenuCommands
+	}
+	return n
+}
+
 // view renders the menu popup docked above the composer.
 func (m *slashMenu) view(width int) string {
 	if !m.visible || len(m.items) == 0 {
@@ -74,23 +89,48 @@ func (m *slashMenu) view(width int) string {
 	if w < 20 {
 		w = 20
 	}
+	// Menu is at most 50 wide on narrow phones, full width on wider screens.
+	menuW := w
+	if menuW > 50 {
+		menuW = 50
+	}
+
+	// Build separator line that exactly fills menuW (never auto-wraps).
+	// Header: "── Commands ─────────"
+	header := "── Commands "
+	headerW := ansi.StringWidth(header)
+	dashesNeeded := menuW - headerW
+	if dashesNeeded < 0 {
+		dashesNeeded = 0
+	}
+	headerLine := header + strings.Repeat("─", dashesNeeded)
+
+	// Footer separator.
+	footerLine := strings.Repeat("─", menuW)
 
 	var b strings.Builder
-	b.WriteString(dim.Render("── Commands ───────────────────────────────────"))
+	b.WriteString(dim.Render(headerLine))
 	b.WriteByte('\n')
 
 	for i, cmd := range m.items {
 		prefix := "  "
 		line := fmt.Sprintf("%-12s %s", cmd.Usage, cmd.Description)
+		maxLineW := menuW - ansi.StringWidth(prefix)
+		if maxLineW < 4 {
+			maxLineW = 4
+		}
+		if ansi.StringWidth(line) > maxLineW {
+			line = ansi.Truncate(line, maxLineW, "…")
+		}
 		if i == m.selected {
 			prefix = "> "
-			b.WriteString(good.Render(prefix + truncate(line, w-4)))
+			b.WriteString(good.Render(prefix + line))
 		} else {
-			b.WriteString(dim.Render(prefix + truncate(line, w-4)))
+			b.WriteString(dim.Render(prefix + line))
 		}
 		b.WriteByte('\n')
 	}
 
-	b.WriteString(dim.Render("───────────────────────────────────────────────"))
+	b.WriteString(dim.Render(footerLine))
 	return b.String()
 }

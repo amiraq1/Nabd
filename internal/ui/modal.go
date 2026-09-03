@@ -6,6 +6,8 @@ import (
 	"unicode/utf8"
 
 	"nabd/internal/agent"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // PermissionChoice represents an selectable action in the permission modal.
@@ -126,14 +128,18 @@ func (m *PermissionModal) view(width int) string {
 	}
 
 	// formatRow wraps text in vertical borders: | <content> |
+	// Uses ansi.StringWidth for accurate cell-width measurement.
 	formatRow := func(s string) string {
-		rCount := utf8.RuneCountInString(s)
 		avail := cardW - 4
-		if rCount > avail {
-			s = truncate(s, avail)
-			rCount = utf8.RuneCountInString(s)
+		if avail < 0 {
+			avail = 0
 		}
-		pad := max(0, avail-rCount)
+		sw := ansi.StringWidth(s)
+		if sw > avail {
+			s = ansi.Truncate(s, avail, "…")
+			sw = ansi.StringWidth(s)
+		}
+		pad := max(0, avail-sw)
 		return "| " + s + strings.Repeat(" ", pad) + " |"
 	}
 
@@ -141,10 +147,10 @@ func (m *PermissionModal) view(width int) string {
 
 	// Top border
 	title := "+-- Permission Required "
-	if utf8.RuneCountInString(title) > cardW-2 {
+	if ansi.StringWidth(title) > cardW-2 {
 		title = "+-- Permission "
 	}
-	dashCount := max(0, cardW-utf8.RuneCountInString(title)-1)
+	dashCount := max(0, cardW-ansi.StringWidth(title)-1)
 	lines = append(lines, warn.Render(title+strings.Repeat("-", dashCount)+"+"))
 
 	// Tool name
