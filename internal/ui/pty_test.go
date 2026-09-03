@@ -433,11 +433,11 @@ func TestPTYModalRestoresDraftAndCursor(t *testing.T) {
 		},
 	})
 
-	err = sess.WaitForCondition("modal closed", 2*time.Second, func(s ScreenSnapshot) bool {
-		return !s.ModalVisible()
+	err = sess.WaitForCondition("modal closed and composer unpaused", 2*time.Second, func(s ScreenSnapshot) bool {
+		return !s.ModalVisible() && !s.Contains("composer paused")
 	})
 	if err != nil {
-		t.Fatalf("modal did not close: %v", err)
+		t.Fatalf("modal did not close or composer remained paused: %v", err)
 	}
 
 	snap := sess.Snapshot()

@@ -100,9 +100,13 @@ type PTYSession struct {
 	Approver *TestApprover
 	Runner   *TestPTYRunner
 
-	mu       sync.Mutex
-	closed   bool
-	doneChan chan error
+	mu              sync.Mutex
+	closed          bool
+	doneChan        chan error
+	rawBytes        []byte
+	primaryBytes    []byte
+	altScreenEnters int
+	altScreenExits  int
 }
 
 // TestApprover wraps Approver to record decisions and count.
@@ -201,8 +205,17 @@ func (r *TestPTYRunner) Count() int {
 	return r.executionCount
 }
 
+// defaultFeedProgramOptions wires the Bubble Tea program options used by Feed.
+// On the baseline before Gate F, this is empty (inline mode).
+var defaultFeedProgramOptions []tea.ProgramOption
+
 // StartPTYSession starts a real PTY session for UI testing with given dimensions.
-func StartPTYSession(t *testing.T, width, height int) *PTYSession {
+func StartPTYSession(t *testing.T, width, height int, opts ...tea.ProgramOption) *PTYSession {
+	return StartPTYSessionWithPrimaryMarker(t, width, height, "", opts...)
+}
+
+// StartPTYSessionWithPrimaryMarker starts a PTY session with pre-existing primary screen content.
+func StartPTYSessionWithPrimaryMarker(t *testing.T, width, height int, marker string, opts ...tea.ProgramOption) *PTYSession {
 	t.Helper()
 
 	master, slave, err := pty.Open()
@@ -218,6 +231,9 @@ func StartPTYSession(t *testing.T, width, height int) *PTYSession {
 	}
 
 	vt := vt10x.New(vt10x.WithSize(width, height))
+	if marker != "" {
+		vt.Write([]byte(marker + "\r\n"))
+	}
 
 	feed := NewFeed()
 	feed.width = width
@@ -229,10 +245,20 @@ func StartPTYSession(t *testing.T, width, height int) *PTYSession {
 	feed.SetApprover(approver.Approver)
 	feed.Approve = approver.Approver
 
-	prog := tea.NewProgram(
-		feed,
+	allOpts := []tea.ProgramOption{
 		tea.WithInput(slave),
 		tea.WithOutput(slave),
+	}
+	if len(defaultFeedProgramOptions) > 0 {
+		allOpts = append(allOpts, defaultFeedProgramOptions...)
+	} else {
+		allOpts = append(allOpts, feed.ProgramOptions()...)
+	}
+	allOpts = append(allOpts, opts...)
+
+	prog := tea.NewProgram(
+		feed,
+		allOpts...,
 	)
 	feed.SetProgram(prog)
 
@@ -256,8 +282,24 @@ func StartPTYSession(t *testing.T, width, height int) *PTYSession {
 		for {
 			n, err := master.Read(buf)
 			if n > 0 {
+				chunk := buf[:n]
 				sess.mu.Lock()
-				sess.VT.Write(buf[:n])
+				sess.rawBytes = append(sess.rawBytes, chunk...)
+				rawStr := string(sess.rawBytes)
+				sess.altScreenEnters = strings.Count(rawStr, "\x1b[?1049h") +
+					strings.Count(rawStr, "\x1b[?47h") +
+					strings.Count(rawStr, "\x1b[?1047h")
+				sess.altScreenExits = strings.Count(rawStr, "\x1b[?1049l") +
+					strings.Count(rawStr, "\x1b[?47l") +
+					strings.Count(rawStr, "\x1b[?1047l")
+
+				wasAlt := sess.VT.Mode()&vt10x.ModeAltScreen != 0
+				sess.VT.Write(chunk)
+				isAlt := sess.VT.Mode()&vt10x.ModeAltScreen != 0
+
+				if !wasAlt && !isAlt {
+					sess.primaryBytes = append(sess.primaryBytes, chunk...)
+				}
 				sess.mu.Unlock()
 			}
 			if err != nil {
@@ -387,6 +429,49 @@ func (s *PTYSession) WaitForText(text string, timeout time.Duration) error {
 	return s.WaitForCondition(fmt.Sprintf("text %q", text), timeout, func(snap ScreenSnapshot) bool {
 		return snap.Contains(text)
 	})
+}
+
+// IsAltScreenActive reports whether the terminal is currently in alternate screen mode.
+func (s *PTYSession) IsAltScreenActive() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.VT.Mode()&vt10x.ModeAltScreen != 0
+}
+
+// AltScreenEnters returns the number of times alternate screen enter was requested.
+func (s *PTYSession) AltScreenEnters() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.altScreenEnters
+}
+
+// AltScreenExits returns the number of times alternate screen exit was requested.
+func (s *PTYSession) AltScreenExits() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.altScreenExits
+}
+
+// PrimaryBytes returns a copy of raw bytes written while alternate screen was inactive.
+func (s *PTYSession) PrimaryBytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]byte, len(s.primaryBytes))
+	copy(cp, s.primaryBytes)
+	return cp
+}
+
+// PrimaryHasFullFrame reports whether a full TUI frame was rendered while in primary screen mode.
+func (s *PTYSession) PrimaryHasFullFrame() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	str := string(s.primaryBytes)
+	return strings.Contains(str, "──") && strings.Contains(str, "Enter")
+}
+
+// Done returns a channel signaling program completion.
+func (s *PTYSession) Done() <-chan error {
+	return s.doneChan
 }
 
 // Close gracefully closes the session, terminating Bubble Tea and PTY descriptors.

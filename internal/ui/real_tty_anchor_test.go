@@ -18,7 +18,7 @@ import (
 //	ABOVE the composer.
 //
 // The test goes through the same program wiring as the production -feed path
-// (inline renderer, no AltScreen, PTY-backed input/output), types via raw PTY
+// (full-window alternate-screen renderer, PTY-backed input/output), types via raw PTY
 // bytes only, never calls Focus() manually, never uses SetValue(), never
 // touches the network, and waits by polling the current grid with bounded
 // deadlines (no blind sleeps).

@@ -265,6 +265,15 @@ func (m *Feed) SendBatch(events []agent.Event) {
 // messages instead of mutating the model off the event loop.
 func (m *Feed) SetProgram(p *tea.Program) { m.prog = p }
 
+// ProgramOptions returns the standard Bubble Tea options for running the full-screen Feed UI.
+// It activates alternate-screen mode so full-height frames, viewport padding, and continuous
+// redraws do not leak into the terminal's primary scrollback buffer.
+func (m *Feed) ProgramOptions() []tea.ProgramOption {
+	return []tea.ProgramOption{
+		tea.WithAltScreen(),
+	}
+}
+
 // BuildFromEvents initializes the feed from a complete event list (replay
 // or --continue). UI history is rebuilt from the live user_msg events only,
 // so rewind-cancelled messages never enter history.

@@ -354,7 +354,7 @@ func doChatWithFeed(dir string, cont bool) error {
 	// prog.Send, which BLOCKS until the program's event loop is running.
 	// loop.Start below emits the RunStart banner through the batcher, so
 	// the program must already be consuming messages.
-	prog := tea.NewProgram(feed)
+	prog := tea.NewProgram(feed, feed.ProgramOptions()...)
 	feed.SetProgram(prog)
 
 	progDone := make(chan error, 1)
