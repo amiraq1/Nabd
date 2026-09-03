@@ -10,6 +10,7 @@ import (
 	"nabd/internal/agent"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // DefaultWidth is a phone in portrait, one hand.
@@ -223,40 +224,22 @@ func block(sym, s string, width int, st lipgloss.Style) string {
 	return st.Render(b.String())
 }
 
-// wrap breaks on spaces at width runes, counting runes not bytes: Arabic
-// text is where a byte-based wrapper shows its ignorance.
+// wrap breaks on spaces at width terminal cells, properly accounting for
+// Arabic, emoji, ANSI styles, and double-width characters.
 func wrap(s string, width int) []string {
 	if width < 8 {
 		width = 8
 	}
+	wrapped := ansi.Wordwrap(s, width, " ")
 	var out []string
-	for _, para := range strings.Split(s, "\n") {
-		line, n := "", 0
-		for _, w := range strings.Fields(para) {
-			r := []rune(w)
-			for len(r) > width { // a word longer than the screen
-				if n > 0 {
-					out = append(out, line)
-					line, n = "", 0
-				}
-				out = append(out, string(r[:width]))
-				r = r[width:]
+	for _, line := range strings.Split(wrapped, "\n") {
+		if ansi.StringWidth(line) > width {
+			for _, sub := range strings.Split(ansi.Hardwrap(line, width, false), "\n") {
+				out = append(out, sub)
 			}
-			if len(r) == 0 {
-				continue
-			}
-			if n > 0 && n+1+len(r) > width {
-				out = append(out, line)
-				line, n = "", 0
-			}
-			if n > 0 {
-				line += " "
-				n++
-			}
-			line += string(r)
-			n += len(r)
+		} else {
+			out = append(out, line)
 		}
-		out = append(out, line)
 	}
 	return out
 }

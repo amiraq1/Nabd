@@ -9,6 +9,7 @@ import (
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Defaults for the feed viewport.
@@ -312,6 +313,8 @@ func (m *Feed) onResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 
 // viewportHeight returns the rows the feed viewport may use after the
 // header, status/help line and composer rows are reserved. Never negative.
+// viewportHeight returns the rows the feed viewport may use after the
+// visual chrome (header, help, modal/menu, composer) rows are reserved. Never negative.
 func (m *Feed) viewportHeight() int {
 	reserved := 0
 	if m.modalVisible || m.decisionPending {
@@ -325,7 +328,7 @@ func (m *Feed) viewportHeight() int {
 	if m.status != "" {
 		reserved++ // status row
 	}
-	reserved++ // help row
+	reserved += len(m.helpLines(m.width)) // help rows
 	if m.unseen > 0 && !m.follow {
 		reserved++ // unseen indicator row
 	}
@@ -336,7 +339,7 @@ func (m *Feed) viewportHeight() int {
 		reserved += m.menu.lineCount()
 	}
 	vh := m.height - reserved
-	if vh < 1 {
+	if vh < 0 {
 		return 0
 	}
 	return vh
@@ -359,6 +362,46 @@ func (m *Feed) helpText() string {
 	return "Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit"
 }
 
+// helpLines returns visual rows of help text, wrapped or abbreviated to width.
+func (m *Feed) helpLines(width int) []string {
+	txt := m.helpText()
+	if txt == "" {
+		return nil
+	}
+	if width <= 0 {
+		return []string{txt}
+	}
+	if ansi.StringWidth(txt) <= width {
+		return []string{txt}
+	}
+	// Adaptive shortening for narrow mobile screens (e.g. 40 columns):
+	if m.modalVisible || m.decisionPending {
+		if m.decisionPending {
+			return []string{"submitting decision…"}
+		}
+		short := "y once · a session · n deny · Enter ok"
+		if ansi.StringWidth(short) <= width {
+			return []string{short}
+		}
+	} else if m.running || m.busy {
+		short := "Enter send · Ctrl+J new · Ctrl+C cancel"
+		if ansi.StringWidth(short) <= width {
+			return []string{short}
+		}
+	} else {
+		short := "Enter send · Ctrl+J new · Ctrl+C quit"
+		if ansi.StringWidth(short) <= width {
+			return []string{short}
+		}
+		tiny := "Enter send · Ctrl+C quit"
+		if ansi.StringWidth(tiny) <= width {
+			return []string{tiny}
+		}
+	}
+	wrapped := ansi.Hardwrap(txt, width, false)
+	return strings.Split(wrapped, "\n")
+}
+
 // pendingToolName returns the name of the tool awaiting permission, or "".
 func (m *Feed) pendingToolName() string {
 	if m.pending == nil {
@@ -370,14 +413,18 @@ func (m *Feed) pendingToolName() string {
 // View renders the full screen: header, viewport, unseen indicator,
 // status/help line, composer.
 func (m *Feed) View() string {
+	if m.width <= 0 || m.height <= 0 {
+		return ""
+	}
+
 	var b strings.Builder
+	vh := m.viewportHeight()
 
 	if m.header != "" {
-		b.WriteString(m.header)
+		b.WriteString(ansi.Truncate(m.header, m.width, "…"))
 		b.WriteByte('\n')
 	}
 
-	vh := m.viewportHeight()
 	if vh > 0 && len(m.lines) > 0 {
 		start := m.scrollTop
 		if start >= len(m.lines) {
@@ -396,11 +443,14 @@ func (m *Feed) View() string {
 	}
 
 	if s := m.statusText(); s != "" {
-		b.WriteString(dim.Render("· " + s))
+		b.WriteString(dim.Render("· " + ansi.Truncate(s, max(1, m.width-4), "…")))
 		b.WriteByte('\n')
 	}
-	b.WriteString(dim.Render(m.helpText()))
-	b.WriteByte('\n')
+
+	for _, hl := range m.helpLines(m.width) {
+		b.WriteString(dim.Render(hl))
+		b.WriteByte('\n')
+	}
 
 	if m.modalVisible {
 		b.WriteString(m.permModal.view(m.width))
@@ -413,11 +463,27 @@ func (m *Feed) View() string {
 	}
 
 	if m.modalVisible || m.decisionPending {
-		b.WriteString(dim.Render("· permission decision required — composer paused"))
+		paused := "· permission decision required — composer paused"
+		if ansi.StringWidth(paused) > m.width {
+			paused = "· permission required — composer paused"
+		}
+		if ansi.StringWidth(paused) > m.width {
+			paused = ansi.Truncate(paused, m.width, "…")
+		}
+		b.WriteString(dim.Render(paused))
 	} else {
 		b.WriteString(m.composer.view())
 	}
-	return b.String()
+
+	output := b.String()
+	outLines := strings.Split(output, "\n")
+	if len(outLines) > m.height && m.height > 0 {
+		// Budget safety constraint: always guarantee countLines(View()) <= m.height
+		// Keeping bottom lines preserves Composer and Modal.
+		outLines = outLines[len(outLines)-m.height:]
+		return strings.Join(outLines, "\n")
+	}
+	return output
 }
 
 // routeKey is the deterministic input router. Precedence:

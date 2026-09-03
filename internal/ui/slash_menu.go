@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // maxMenuCommands is the maximum number of items displayed in the menu.
@@ -18,6 +20,8 @@ type slashMenu struct {
 func newSlashMenu() *slashMenu {
 	return &slashMenu{
 		selected: 0,
+		items:    nil,
+		visible:  false,
 	}
 }
 
@@ -71,26 +75,39 @@ func (m *slashMenu) view(width int) string {
 	}
 
 	w := width
-	if w < 20 {
-		w = 20
+	if w < 10 {
+		w = 10
+	}
+	menuW := w
+	if menuW > 50 {
+		menuW = 50
 	}
 
 	var b strings.Builder
-	b.WriteString(dim.Render("── Commands ───────────────────────────────────"))
+	title := "── Commands "
+	if ansi.StringWidth(title) > menuW-2 {
+		title = "── "
+	}
+	topDash := max(0, menuW-ansi.StringWidth(title))
+	b.WriteString(dim.Render(title + strings.Repeat("─", topDash)))
 	b.WriteByte('\n')
 
+	avail := max(1, menuW-4)
 	for i, cmd := range m.items {
 		prefix := "  "
 		line := fmt.Sprintf("%-12s %s", cmd.Usage, cmd.Description)
+		if ansi.StringWidth(line) > avail {
+			line = ansi.Truncate(line, avail, "…")
+		}
 		if i == m.selected {
 			prefix = "> "
-			b.WriteString(good.Render(prefix + truncate(line, w-4)))
+			b.WriteString(good.Render(prefix + line))
 		} else {
-			b.WriteString(dim.Render(prefix + truncate(line, w-4)))
+			b.WriteString(dim.Render(prefix + line))
 		}
 		b.WriteByte('\n')
 	}
 
-	b.WriteString(dim.Render("───────────────────────────────────────────────"))
+	b.WriteString(dim.Render(strings.Repeat("─", menuW)))
 	return b.String()
 }

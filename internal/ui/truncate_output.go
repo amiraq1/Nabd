@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // Tool output display limits. Applied at render time only; the original
@@ -16,15 +18,11 @@ const (
 )
 
 // truncateOutput returns display lines for a tool's output, bounded by the
-// limits above. The original string is not modified.
+// limits above. Every line is visually constrained to width cells so it never
+// causes unexpected terminal wrapping. The original string is not modified.
 func truncateOutput(output string, width int) []string {
 	if output == "" {
 		return nil
-	}
-	// Fast path: small output.
-	if utf8.RuneCountInString(output) <= maxToolOutputChars &&
-		strings.Count(output, "\n") < maxToolOutputLines {
-		return strings.Split(output, "\n")
 	}
 
 	lines := strings.Split(output, "\n")
@@ -53,17 +51,11 @@ func truncateOutput(output string, width int) []string {
 
 // truncateDisplayLine breaks a single line to fit the viewport width.
 func truncateDisplayLine(line string, width int) []string {
-	runes := []rune(line)
-	if len(runes) <= width {
+	if width <= 0 || ansi.StringWidth(line) <= width {
 		return []string{line}
 	}
-	var out []string
-	for len(runes) > width {
-		out = append(out, string(runes[:width]))
-		runes = runes[width:]
-	}
-	out = append(out, string(runes))
-	return out
+	wrapped := ansi.Hardwrap(line, width, false)
+	return strings.Split(wrapped, "\n")
 }
 
 // runeCount counts runes across lines.

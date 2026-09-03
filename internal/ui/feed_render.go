@@ -2,16 +2,27 @@ package ui
 
 import (
 	"fmt"
-	"unicode/utf8"
+	"strings"
 
 	"nabd/internal/presentation"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
-// renderItems converts feed items to display lines.
+// renderItems converts feed items to display lines, strictly ensuring that
+// every line's visual cell width is <= width.
 func renderItems(items []presentation.FeedItem, width int) []string {
 	var lines []string
 	for _, it := range items {
-		lines = append(lines, renderItem(it, width)...)
+		for _, l := range renderItem(it, width) {
+			if width > 0 && ansi.StringWidth(l) > width {
+				for _, sub := range strings.Split(ansi.Hardwrap(l, width, false), "\n") {
+					lines = append(lines, sub)
+				}
+			} else {
+				lines = append(lines, l)
+			}
+		}
 	}
 	return lines
 }
@@ -69,9 +80,9 @@ func renderTool(it presentation.FeedItem, width int) []string {
 	sym := toolStatusSymbol(t.Status)
 	head := fmt.Sprintf("%s %s", sym, t.Name)
 	if t.Args != "" {
-		head += " " + truncate(t.Args, width/3)
+		head += " " + truncate(t.Args, max(1, width/3))
 	}
-	out = append(out, head)
+	out = append(out, truncate(head, width))
 
 	// Duration / exit info.
 	if t.Status == presentation.ToolRunning {
@@ -84,7 +95,7 @@ func renderTool(it presentation.FeedItem, width int) []string {
 		out = append(out, bad.Render("  · "+t.Signal))
 	}
 
-	// Output (truncated).
+	// Output (truncated and wrapped).
 	if t.Output != "" {
 		out = append(out, truncateOutput(t.Output, width)...)
 	}
@@ -108,17 +119,17 @@ func renderPerm(it presentation.FeedItem, width int) []string {
 	}
 	head := fmt.Sprintf("%s %s", sym, p.Name)
 	if p.Args != "" {
-		head += " " + truncate(p.Args, width/3)
+		head += " " + truncate(p.Args, max(1, width/3))
 	}
-	out = append(out, head)
+	out = append(out, truncate(head, width))
 	if p.Status == presentation.PermAllow && p.Effective != p.Decision {
-		out = append(out, dim.Render(fmt.Sprintf("  · requested %s, applied %s", p.Decision, p.Effective)))
+		out = append(out, dim.Render(truncate(fmt.Sprintf("  · requested %s, applied %s", p.Decision, p.Effective), width)))
 	}
 	return out
 }
 
 func renderNotice(it presentation.FeedItem, width int) []string {
-	return []string{warn.Render("⚑ " + it.Text)}
+	return []string{warn.Render(truncate("⚑ "+it.Text, width))}
 }
 
 func renderError(it presentation.FeedItem, width int) []string {
@@ -126,14 +137,11 @@ func renderError(it presentation.FeedItem, width int) []string {
 	if text == "" {
 		text = "error"
 	}
-	return []string{bad.Render("✗ " + text)}
+	return []string{bad.Render(truncate("✗ "+text, width))}
 }
 
 func renderRunBoundary(it presentation.FeedItem, width int) []string {
-	if it.RunBoundary == "end" {
-		return []string{dim.Render("── " + it.Text)}
-	}
-	return []string{dim.Render("── " + it.Text)}
+	return []string{dim.Render(truncate("── "+it.Text, width))}
 }
 
 // toolStatusSymbol returns a status glyph for a tool card.
@@ -156,16 +164,15 @@ func toolStatusSymbol(s presentation.ToolStatus) string {
 	}
 }
 
-// truncate shortens a string to max runes, preserving UTF-8.
+// truncate shortens a string to max terminal cells, preserving UTF-8 and ANSI.
 func truncate(s string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	if utf8.RuneCountInString(s) <= max {
+	if ansi.StringWidth(s) <= max {
 		return s
 	}
-	runes := []rune(s)
-	return string(runes[:max-1]) + "…"
+	return ansi.Truncate(s, max, "…")
 }
 
 // wrap breaks text into lines of at most width runes.
