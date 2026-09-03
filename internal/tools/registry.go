@@ -83,6 +83,8 @@ func (r *Registry) Class(tool string) (perm.Class, bool) {
 		return perm.Mutating, true
 	case "read_file", "glob", "grep":
 		return perm.ReadOnly, true
+	case "bash":
+		return perm.Executing, true
 	default:
 		return 0, false
 	}

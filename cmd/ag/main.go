@@ -309,6 +309,10 @@ func (g gate) Record(tool string, d agent.Decision) {
 	}
 }
 
+func (g gate) Effective(tool string, d agent.Decision) agent.Decision {
+	return g.p.Effective(tool, d)
+}
+
 func latestSession() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
