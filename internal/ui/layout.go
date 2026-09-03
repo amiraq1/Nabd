@@ -228,20 +228,33 @@ func (m *Feed) View() string {
 		b.WriteByte('\n')
 	}
 
-	// 2. Viewport (feed lines).
-	if lm.ViewportRows > 0 && len(m.lines) > 0 {
-		start := m.scrollTop
-		if start >= len(m.lines) {
-			start = max(0, len(m.lines)-lm.ViewportRows)
-		}
-		end := min(start+lm.ViewportRows, len(m.lines))
-		for i := start; i < end; i++ {
-			line := m.lines[i]
-			// Each stored line must already satisfy width; this is an extra guard.
-			if ansi.StringWidth(line) > w {
-				line = ansi.Truncate(line, w, "…")
+	// 2. Viewport (feed lines). The viewport block always emits exactly
+	// ViewportRows rows: the visible feed lines plus blank padding INSIDE
+	// the viewport. This keeps visualHeight(View()) == terminalHeight so
+	// the inline renderer anchors the composer/footer chrome to the bottom
+	// row of the grid, and all otherwise unused vertical space belongs to
+	// the viewport above the composer — never as blank rows below the
+	// footer.
+	if lm.ViewportRows > 0 {
+		emitted := 0
+		if len(m.lines) > 0 {
+			start := m.scrollTop
+			if start >= len(m.lines) {
+				start = max(0, len(m.lines)-lm.ViewportRows)
 			}
-			b.WriteString(line)
+			end := min(start+lm.ViewportRows, len(m.lines))
+			for i := start; i < end; i++ {
+				line := m.lines[i]
+				// Each stored line must already satisfy width; this is an extra guard.
+				if ansi.StringWidth(line) > w {
+					line = ansi.Truncate(line, w, "…")
+				}
+				b.WriteString(line)
+				b.WriteByte('\n')
+				emitted++
+			}
+		}
+		for i := emitted; i < lm.ViewportRows; i++ {
 			b.WriteByte('\n')
 		}
 	}
