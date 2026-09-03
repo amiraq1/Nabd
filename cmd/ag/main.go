@@ -202,17 +202,23 @@ func doChat(dir string, cont bool) error {
 		return fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
 	}
 	chat.OnCompact = func() string {
-		// Wait, context is already imported in main.go
-		if err := loop.Compact(context.Background(), loop.Budget.Usable()*4/10); err != nil {
-			return err.Error()
-		}
-		return "context compacted manually"
+		// Return immediately so the UI stays responsive; run compaction in a
+		// background goroutine and surface the result via the event channel.
+		go func() {
+			if err := loop.Compact(context.Background(), loop.Budget.Usable()*4/10); err != nil {
+				loop.Note("compact failed: " + err.Error())
+			}
+		}()
+		return "يضغط السياق…"
 	}
 
 	_, err = tea.NewProgram(chat).Run()
 	if err != nil {
 		return err
 	}
+	// Mark the session as finished before closing the journal so the
+	// terminal state is durably recorded. End() emits exactly one RunEnd.
+	_ = loop.End(fmt.Sprintf("جلسة منتهية · %s", filepath.Base(journalPath)))
 	fmt.Println("session:", journalPath)
 	return nil
 }

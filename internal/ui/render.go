@@ -112,6 +112,9 @@ func RenderEvent(e agent.Event, width int) string {
 	case agent.EventRateLimit:
 		return warn.Render(fmt.Sprintf("⚑ rate limit %d · retry in %.1fs (attempt %d)", e.Code, e.WaitSec, e.Attempt))
 
+	case agent.RunEnd:
+		return dim.Render("── " + e.Text)
+
 	case agent.TurnStart, agent.TurnEnd, agent.EventCalib:
 		// TurnEnd and calibration are structure, not content: nothing to show.
 		return ""

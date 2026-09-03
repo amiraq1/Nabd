@@ -50,6 +50,7 @@ type Loop struct {
 	// without sleeping.
 	now    func() time.Time
 	warned bool
+	ended  bool // true once End() has been called; guards against double RunEnd
 
 	mu     sync.Mutex
 	seq    int
@@ -664,6 +665,20 @@ func (l *Loop) emit(e Event) error {
 // than dropping a status line.
 func (l *Loop) Note(text string) {
 	_ = l.emit(Event{Type: Notice, Text: text})
+}
+
+// End marks the session as finished. It emits exactly one RunEnd event and
+// is safe to call multiple times (only the first call emits). Call this
+// before closing the journal so the terminal state is durably recorded.
+func (l *Loop) End(text string) error {
+	l.mu.Lock()
+	if l.ended {
+		l.mu.Unlock()
+		return nil
+	}
+	l.ended = true
+	l.mu.Unlock()
+	return l.emit(Event{Type: RunEnd, Text: text})
 }
 
 // Fanout sends each event to several sinks, stopping at the first error:

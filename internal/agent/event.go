@@ -34,6 +34,7 @@ const (
 	EventCalib         EventType = "calibration"
 	EventRateLimit     EventType = "rate_limit"
 	EventProviderUsage EventType = "provider_usage"
+	RunEnd             EventType = "run_end"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.

@@ -278,3 +278,36 @@ func TestFanoutOrderIsDeterministic(t *testing.T) {
 		t.Fatalf("second sink called after first failed: %v", order)
 	}
 }
+
+// TestEndEmitsExactlyOneRunEnd verifies that Loop.End emits exactly one
+// RunEnd event regardless of how many times it is called, and that the
+// event carries the supplied text.
+func TestEndEmitsExactlyOneRunEnd(t *testing.T) {
+	sink := &recordSink{}
+	l := &Loop{Sink: sink, Budget: NewBudget()}
+
+	if err := l.End("first"); err != nil {
+		t.Fatalf("End: %v", err)
+	}
+	if err := l.End("second"); err != nil {
+		t.Fatalf("End: %v", err)
+	}
+	if err := l.End("third"); err != nil {
+		t.Fatalf("End: %v", err)
+	}
+
+	var runEndCount int
+	var lastText string
+	for _, e := range sink.evs {
+		if e.Type == RunEnd {
+			runEndCount++
+			lastText = e.Text
+		}
+	}
+	if runEndCount != 1 {
+		t.Fatalf("expected exactly 1 RunEnd, got %d", runEndCount)
+	}
+	if lastText != "first" {
+		t.Errorf("RunEnd text = %q, want \"first\"", lastText)
+	}
+}
