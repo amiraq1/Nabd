@@ -209,7 +209,7 @@ func doChat(dir string, cont bool) error {
 				loop.Note("compact failed: " + err.Error())
 			}
 		}()
-		return "يضغط السياق…"
+		return statusCompacting
 	}
 
 	_, err = tea.NewProgram(chat).Run()
@@ -218,7 +218,7 @@ func doChat(dir string, cont bool) error {
 	}
 	// Mark the session as finished before closing the journal so the
 	// terminal state is durably recorded. End() emits exactly one RunEnd.
-	_ = loop.End(fmt.Sprintf("جلسة منتهية · %s", filepath.Base(journalPath)))
+	_ = loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
 	fmt.Println("session:", journalPath)
 	return nil
 }
@@ -345,7 +345,7 @@ func latestSession(dir string) (string, error) {
 	ents, err := os.ReadDir(sessDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return "", fmt.Errorf("لا جلسات سابقة في %s", sessDir)
+			return "", fmt.Errorf(errNoSessions, sessDir)
 		}
 		return "", err
 	}
@@ -359,7 +359,7 @@ func latestSession(dir string) (string, error) {
 		}
 	}
 	if last == "" {
-		return "", fmt.Errorf("لا جلسات سابقة في %s", sessDir)
+		return "", fmt.Errorf(errNoSessions, sessDir)
 	}
 	return filepath.Join(sessDir, last), nil
 }

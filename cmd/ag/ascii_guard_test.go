@@ -21,10 +21,12 @@ func TestCmdAGStringLiteralsEnforceASCIISymbolWhitelist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("glob *.go: %v", err)
 	}
-
+	// errors.go holds user-facing Arabic error messages; exempt from the
+	// ASCII whitelist (the CLI user is Arabic-speaking).
+	const exempt = "errors.go"
 	fset := token.NewFileSet()
 	for _, fpath := range files {
-		if strings.HasSuffix(fpath, "_test.go") {
+		if strings.HasSuffix(fpath, "_test.go") || fpath == exempt {
 			continue
 		}
 
