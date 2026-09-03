@@ -24,7 +24,7 @@ func (l loopTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, 
 func (l loopTools) Check(tool string) (agent.Verdict, string) {
 	return agent.VerdictAllow, ""
 }
-func (l loopTools) Record(tool string, d agent.Decision)              {}
+func (l loopTools) Record(tool string, d agent.Decision)                   {}
 func (l loopTools) Effective(tool string, d agent.Decision) agent.Decision { return d }
 func (l loopTools) Ask(ctx context.Context, c agent.ToolCall) agent.Decision {
 	return agent.AllowOnce
@@ -258,4 +258,3 @@ func (p *readOnceProvider) Stream(ctx context.Context, req provider.Request) (<-
 	close(ch)
 	return ch, nil
 }
-

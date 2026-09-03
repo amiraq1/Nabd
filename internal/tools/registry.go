@@ -23,14 +23,14 @@ type Tool interface {
 // here can change a byte on disk, which is why no permission gate exists
 // yet. That gate arrives with write.go, not before.
 type Registry struct {
-	root      *Root
-	sh        *snap.Shadow
-	edits     *editLog
-	list      []Tool
-	byName    map[string]Tool
-	linesRead int // set by read_file, consumed by the next commit()
-	truncated bool // set by read_file, consumed by RunDetailed
-	nextOffset int // set by read_file on truncation, consumed by RunDetailed
+	root       *Root
+	sh         *snap.Shadow
+	edits      *editLog
+	list       []Tool
+	byName     map[string]Tool
+	linesRead  int  // set by read_file, consumed by the next commit()
+	truncated  bool // set by read_file, consumed by RunDetailed
+	nextOffset int  // set by read_file on truncation, consumed by RunDetailed
 }
 
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {

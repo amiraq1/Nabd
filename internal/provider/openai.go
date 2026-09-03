@@ -351,14 +351,14 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
 	var (
-		stop              string
-		promptTokens      int
-		completionTokens  int
-		finishReason      string
-		usageReported     bool
-		gotDone           bool // true when the stream terminated with [DONE]
-		pending           = map[int]*pendingCall{}
-		order             []int
+		stop             string
+		promptTokens     int
+		completionTokens int
+		finishReason     string
+		usageReported    bool
+		gotDone          bool // true when the stream terminated with [DONE]
+		pending          = map[int]*pendingCall{}
+		order            []int
 	)
 
 	emit := func(c Chunk) bool {

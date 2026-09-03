@@ -117,8 +117,8 @@ func TestLoopEmitsReadRecordWhenTruncated(t *testing.T) {
 // allowGate approves everything without asking.
 type allowGate struct{}
 
-func (allowGate) Check(tool string) (agent.Verdict, string) { return agent.VerdictAllow, "" }
-func (allowGate) Record(tool string, d agent.Decision)      {}
+func (allowGate) Check(tool string) (agent.Verdict, string)              { return agent.VerdictAllow, "" }
+func (allowGate) Record(tool string, d agent.Decision)                   {}
 func (allowGate) Effective(tool string, d agent.Decision) agent.Decision { return d }
 func (allowGate) Ask(ctx context.Context, c agent.ToolCall) agent.Decision {
 	return agent.AllowOnce

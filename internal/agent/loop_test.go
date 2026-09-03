@@ -42,7 +42,7 @@ func (m mockTools) Check(tool string) (Verdict, string) {
 func (m mockTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
 	return "mock output", true, nil
 }
-func (m mockTools) Record(string, Decision) {}
+func (m mockTools) Record(string, Decision)                    {}
 func (m mockTools) Effective(tool string, d Decision) Decision { return d }
 func (m mockTools) Ask(ctx context.Context, c ToolCall) Decision {
 	if m.allowed {
@@ -171,9 +171,9 @@ func TestToolPairing(t *testing.T) {
 // errSink fails after a configurable number of successful emits, then
 // returns the injected error. Used to test that sink failures stop the loop.
 type errSink struct {
-	mu       sync.Mutex
-	emitErr  error
-	allow    int
+	mu        sync.Mutex
+	emitErr   error
+	allow     int
 	emitCount int
 }
 

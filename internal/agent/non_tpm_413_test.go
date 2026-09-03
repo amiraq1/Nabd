@@ -33,7 +33,14 @@ func TestNonTPM413NoFalseNotice(t *testing.T) {
 		Budget:   agent.NewBudget(),
 		Gate:     noTools{},
 		Human:    noTools{},
-		Sink:     sinkFn3(func(e agent.Event) error { mu.Lock(); defer mu.Unlock(); if e.Type == agent.Notice { notices = append(notices, e.Text) }; return nil }),
+		Sink: sinkFn3(func(e agent.Event) error {
+			mu.Lock()
+			defer mu.Unlock()
+			if e.Type == agent.Notice {
+				notices = append(notices, e.Text)
+			}
+			return nil
+		}),
 	}
 	_ = l.Run(context.Background(), "سؤال")
 

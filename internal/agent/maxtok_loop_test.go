@@ -53,8 +53,8 @@ func (noTools) Specs() []provider.ToolSpec { return nil }
 func (noTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
 	return "", false, nil
 }
-func (noTools) Check(tool string) (agent.Verdict, string) { return agent.VerdictDeny, "no" }
-func (noTools) Record(tool string, d agent.Decision)      {}
+func (noTools) Check(tool string) (agent.Verdict, string)              { return agent.VerdictDeny, "no" }
+func (noTools) Record(tool string, d agent.Decision)                   {}
 func (noTools) Effective(tool string, d agent.Decision) agent.Decision { return d }
 func (noTools) Ask(ctx context.Context, c agent.ToolCall) agent.Decision {
 	return agent.Deny

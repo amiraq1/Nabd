@@ -202,9 +202,9 @@ func TestParseRetryAfterVariants(t *testing.T) {
 // not a silent success.
 func TestOpenAIStreamRequiresTerminalMarker(t *testing.T) {
 	cases := []struct {
-		name     string
-		body     string
-		wantErr  bool
+		name    string
+		body    string
+		wantErr bool
 	}{
 		{
 			name:    "normal with [DONE]",

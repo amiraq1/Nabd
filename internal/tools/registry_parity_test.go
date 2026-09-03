@@ -38,11 +38,10 @@ func TestRegistrySpecsParity(t *testing.T) {
 			t.Errorf("Specs() returns %q, not in registry byName", s.Name)
 		}
 	}
-		// Every concrete tool must declare a name that the registry actually knows.
+	// Every concrete tool must declare a name that the registry actually knows.
 	for _, tt := range r.list {
 		if s := tt.Spec(); !byName[s.Name] {
 			t.Errorf("tool list declares %q not present in byName", s.Name)
 		}
 	}
 }
-

@@ -23,7 +23,7 @@ func TestSystemModelDirection(t *testing.T) {
 	for _, want := range []string{
 		"Reply in Arabic", // explicit output-language directive
 		"50 columns",      // width instruction
-		"never repeat",     // the brevity triad
+		"never repeat",    // the brevity triad
 		"never apologise",
 		"never list anything without cause",
 		"Two lines suffice",

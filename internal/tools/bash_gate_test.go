@@ -23,12 +23,12 @@ func (g bashGate) Check(tool string) (agent.Verdict, string) {
 	}
 	return agent.VerdictDeny, "غير معروف"
 }
-func (g bashGate) Record(tool string, d agent.Decision) {}
+func (g bashGate) Record(tool string, d agent.Decision)                   {}
 func (g bashGate) Effective(tool string, d agent.Decision) agent.Decision { return d }
 
 // bashProvider asks for one bash tool call.
 type bashProvider struct {
-	cmd  string
+	cmd   string
 	calls int
 }
 

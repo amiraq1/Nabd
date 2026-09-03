@@ -17,8 +17,8 @@ import (
 func TestStaleOffsetsOfferedMetric(t *testing.T) {
 	var messages []provider.Message
 	segs := []struct {
-		id           string
-		s, e, next   int
+		id         string
+		s, e, next int
 	}{
 		{"r1", 1, 29, 30},
 		{"r2", 30, 58, 59},

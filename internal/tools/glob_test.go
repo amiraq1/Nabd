@@ -18,7 +18,7 @@ import (
 // Go-repo-shaped fixture.
 func TestGlobStarMatchesRootFiles(t *testing.T) {
 	r, dir := newReg(t)
-		// main.go would normally be newest, but the stamp below is
+	// main.go would normally be newest, but the stamp below is
 	// `now + (len(files)-i) minutes`, so files[0] (".goreleaser.yml")
 	// is the newest; the list is emitted newest-first.
 	files := []string{".goreleaser.yml", "go.mod", "README.md", "main.go"}
@@ -53,7 +53,7 @@ func TestGlobStarMatchesRootFiles(t *testing.T) {
 	if strings.Contains(out, "internal/tools/read.go") {
 		t.Errorf("* must not match across separators, got:\n%s", out)
 	}
-		// Newest first: ".goreleaser.yml" carries the largest
+	// Newest first: ".goreleaser.yml" carries the largest
 	// (len(files)-0)-minute stamp and must lead the list.
 	if !strings.HasPrefix(out, files[0]+"\n") {
 		t.Errorf("newest file must be first, got:\n%s", out)
