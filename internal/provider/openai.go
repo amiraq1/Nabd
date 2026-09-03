@@ -151,6 +151,7 @@ type RateLimitError struct {
 	Used      int
 	Requested int
 	WaitSec   float64
+	Raw       string // verbatim Retry-After header or body text
 }
 
 func (e *RateLimitError) Error() string {
@@ -162,20 +163,35 @@ var (
 	reTPMFull  = regexp.MustCompile(`Limit\s+(\d+),\s*Used\s+(\d+),\s*Requested\s+(\d+)`)
 )
 
-func parseWaitDuration(retryAfterHeader, body string) (time.Duration, float64) {
-	// 1. Retry-After header
+// parseWaitDuration extracts the wait duration from a 429 response. It accepts
+// a numeric value (int or float seconds) or an RFC 7231 HTTP-date. It returns
+// the parsed duration, the raw seconds (for float-precision storage), and the
+// raw string (header or body text) for verbatim journaling. A zero duration
+// with parsed=false signals the caller to use fallback backoff.
+func parseWaitDuration(retryAfterHeader, body string, now time.Time) (time.Duration, float64, string, bool) {
+	// 1. Retry-After header — may be seconds or HTTP-date.
 	if s := strings.TrimSpace(retryAfterHeader); s != "" {
 		if sec, err := strconv.ParseFloat(s, 64); err == nil && sec > 0 {
-			return time.Duration(sec * float64(time.Second)), sec
+			return time.Duration(sec * float64(time.Second)), sec, s, true
 		}
+		if t, err := http.ParseTime(s); err == nil {
+			d := t.Sub(now)
+			if d < 0 {
+				d = 0 // past date: don't wait, but report parsed
+			}
+			return d, d.Seconds(), s, true
+		}
+		return 0, 0, s, false // malformed header
 	}
 	// 2. Provider body text, e.g. "try again in 4.7775s"
 	if m := reBodyWait.FindStringSubmatch(body); len(m) > 1 {
+		raw := strings.TrimSpace(m[0])
 		if sec, err := strconv.ParseFloat(m[1], 64); err == nil && sec > 0 {
-			return time.Duration(sec * float64(time.Second)), sec
+			return time.Duration(sec * float64(time.Second)), sec, raw, true
 		}
+		return 0, 0, raw, false
 	}
-	return 0, 0
+	return 0, 0, "", false
 }
 
 func parseTPMFullCounts(body string) (limit, used, requested int) {
@@ -189,41 +205,77 @@ func parseTPMFullCounts(body string) (limit, used, requested int) {
 	return l, 0, r
 }
 
-// run mirrors the Anthropic retry policy: silent while nothing
-// has been forwarded, final afterwards, with bounded HTTP 429 resume.
+// run performs a single request and reports the result. It does NOT sleep
+// or retry on 429: the agent owns the wait decision and the retry loop.
+// This eliminates double-waiting (provider sleeping, then agent sleeping)
+// and centralizes rate-limit policy in one place.
 func (o *OpenAICompat) run(ctx context.Context, body []byte, out chan<- Chunk) {
 	defer close(out)
 
-	var (
-		sent      atomic.Bool
-		totalWait time.Duration
-	)
-	const (
-		max429Attempts = 3
-		maxTotalWait   = 30 * time.Second
-	)
+	var sent atomic.Bool
 
-	for attempt := 1; ; attempt++ {
-		// A first-byte deadline is safe precisely while sent is false: nothing
-		// reached the reader, so cancelling and retrying cannot duplicate text.
-		// Once the first chunk lands, the stream may idle as long as it likes.
-		firstByte := 25 * time.Second
-		actx, cancel := context.WithCancel(ctx)
-		go func() {
-			t := time.NewTimer(firstByte)
-			defer t.Stop()
-			select {
-			case <-t.C:
-				if !sent.Load() {
-					cancel() // silent retry, then a clear message
-				}
-			case <-actx.Done():
+	// One attempt. On 429, emit a typed RateLimit chunk and return the
+	// parsed wait so the agent can decide how long to wait before retrying.
+	firstByte := 25 * time.Second
+	actx, cancel := context.WithCancel(ctx)
+	go func() {
+		t := time.NewTimer(firstByte)
+		defer t.Stop()
+		select {
+		case <-t.C:
+			if !sent.Load() {
+				cancel() // first byte never arrived; fail fast
 			}
-		}()
+		case <-actx.Done():
+		}
+	}()
 
-		retryAfter, err := o.attempt(actx, body, out, &sent)
-		cancel()
+	retryAfter, err := o.attempt(actx, body, out, &sent)
+	cancel()
 
+	if err == nil {
+		return
+	}
+	if ctx.Err() != nil {
+		out <- Chunk{Kind: ChunkError, Err: ctx.Err()}
+		return
+	}
+
+	var rle *RateLimitError
+	if errors.As(err, &rle) {
+		// Report the 429 to the agent. Do NOT sleep here — the agent owns
+		// the wait. Return a sentinel error so the agent knows this was a
+		// rate limit (not a fatal error) and can retry after waiting.
+		out <- Chunk{
+			Kind: ChunkRateLimit,
+			RateLimit: &RateLimitInfo{
+				Code:          rle.Status,
+				Limit:         rle.Limit,
+				Used:          rle.Used,
+				Requested:     rle.Requested,
+				WaitSec:       rle.WaitSec,
+				Attempt:       1,
+				Err:           err.Error(),
+				RetryAfter:    rle.WaitSec,
+				RawMessage:    rle.Body,
+				RawRetryAfter: rle.Raw,
+			},
+		}
+		// Close the channel; the agent sees the RateLimit chunk and the
+		// stream end, then decides whether to wait and retry.
+		return
+	}
+
+	// Non-429 transient error: keep the existing single-retry behavior
+	// for network/EOF failures. This is not rate-limit policy.
+	if !sent.Load() && transient(err) {
+		select {
+		case <-ctx.Done():
+			out <- Chunk{Kind: ChunkError, Err: ctx.Err()}
+			return
+		case <-time.After(backoff(1, retryAfter)):
+		}
+		retryAfter, err = o.attempt(ctx, body, out, &sent)
 		if err == nil {
 			return
 		}
@@ -231,63 +283,12 @@ func (o *OpenAICompat) run(ctx context.Context, body []byte, out chan<- Chunk) {
 			out <- Chunk{Kind: ChunkError, Err: ctx.Err()}
 			return
 		}
-
-		var rle *RateLimitError
-		if errors.As(err, &rle) {
-			waitDur := retryAfter
-			waitSec := rle.WaitSec
-			if waitDur <= 0 {
-				waitDur = minBackoff << (attempt - 1)
-				if waitDur > maxBackoff {
-					waitDur = maxBackoff
-				}
-				waitSec = waitDur.Seconds()
-			}
-
-			if sent.Load() || attempt >= max429Attempts || totalWait+waitDur > maxTotalWait {
-				out <- Chunk{Kind: ChunkError, Err: err, Retryable: !sent.Load()}
-				return
-			}
-
-			totalWait += waitDur
-
-			// Emit exactly one ChunkRateLimit per wait
-			out <- Chunk{
-				Kind: ChunkRateLimit,
-				RateLimit: &RateLimitInfo{
-					Code:      rle.Status,
-					Limit:     rle.Limit,
-					Used:      rle.Used,
-					Requested: rle.Requested,
-					WaitSec:   waitSec,
-					Attempt:   attempt,
-					Err:       err.Error(),
-				},
-			}
-
-			select {
-			case <-ctx.Done():
-				out <- Chunk{Kind: ChunkError, Err: ctx.Err()}
-				return
-			case <-time.After(waitDur):
-			}
-			continue
-		}
-
-		if sent.Load() || attempt >= maxAttempts || !transient(err) {
-			if attempt >= maxAttempts && !sent.Load() && errors.Is(err, context.Canceled) {
-				err = fmt.Errorf("الخادم لم يبدأ الردّ خلال 25 ثانية — جرّب NABD_MODEL آخر")
-			}
-			out <- Chunk{Kind: ChunkError, Err: err, Retryable: !sent.Load()}
-			return
-		}
-		select {
-		case <-ctx.Done():
-			out <- Chunk{Kind: ChunkError, Err: ctx.Err()}
-			return
-		case <-time.After(backoff(attempt, retryAfter)):
-		}
 	}
+
+	if !sent.Load() && errors.Is(err, context.Canceled) {
+		err = fmt.Errorf("الخادم لم يبدأ الردّ خلال 25 ثانية — جرّب NABD_MODEL آخر")
+	}
+	out <- Chunk{Kind: ChunkError, Err: err, Retryable: !sent.Load()}
 }
 
 func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chunk, sent *atomic.Bool) (time.Duration, error) {
@@ -324,7 +325,7 @@ func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chun
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			body := apiMessage(msg)
-			waitDur, waitSec := parseWaitDuration(resp.Header.Get("retry-after"), body)
+			waitDur, waitSec, raw, _ := parseWaitDuration(resp.Header.Get("retry-after"), body, time.Now())
 			lim, usd, req := parseTPMFullCounts(body)
 			return waitDur, &RateLimitError{
 				Status:    resp.StatusCode,
@@ -333,6 +334,7 @@ func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chun
 				Used:      usd,
 				Requested: req,
 				WaitSec:   waitSec,
+				Raw:       raw,
 			}
 		}
 		return parseRetryAfter(resp.Header.Get("retry-after")),
@@ -349,10 +351,13 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 
 	var (
-		stop         string
-		promptTokens int
-		pending      = map[int]*pendingCall{}
-		order        []int
+		stop             string
+		promptTokens     int
+		completionTokens int
+		finishReason     string
+		usageReported    bool
+		pending          = map[int]*pendingCall{}
+		order            []int
 	)
 
 	emit := func(c Chunk) bool {
@@ -385,8 +390,14 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 		if ev.Error != nil && ev.Error.Message != "" {
 			return 0, errors.New(ev.Error.Message)
 		}
-		if ev.Usage != nil && ev.Usage.PromptTokens > 0 {
-			promptTokens = ev.Usage.PromptTokens
+		if ev.Usage != nil {
+			usageReported = true
+			if ev.Usage.PromptTokens > 0 {
+				promptTokens = ev.Usage.PromptTokens
+			}
+			if ev.Usage.CompletionTokens > 0 {
+				completionTokens = ev.Usage.CompletionTokens
+			}
 		}
 		if len(ev.Choices) == 0 {
 			continue
@@ -419,6 +430,7 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 		}
 
 		if ch.FinishReason != "" {
+			finishReason = ch.FinishReason
 			stop = normaliseStop(ch.FinishReason)
 		}
 	}
@@ -444,7 +456,9 @@ func (o *OpenAICompat) readSSE(ctx context.Context, r io.Reader, out chan<- Chun
 		}
 	}
 
-	emit(Chunk{Kind: ChunkStop, Stop: stop, PromptTokens: promptTokens, EncodedBytes: encodedBytes})
+	emit(Chunk{Kind: ChunkStop, Stop: stop, PromptTokens: promptTokens,
+		CompletionTokens: completionTokens, FinishReason: finishReason,
+		EncodedBytes: encodedBytes, AbsentUsage: !usageReported})
 	return 0, nil
 }
 
@@ -482,7 +496,8 @@ type oaiChunk struct {
 		Message string `json:"message"`
 	} `json:"error"`
 	Usage *struct {
-		PromptTokens int `json:"prompt_tokens"`
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
 	} `json:"usage"`
 }
 

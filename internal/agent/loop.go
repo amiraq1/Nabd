@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -44,14 +45,30 @@ type Loop struct {
 	KeepFullRounds   int
 	// RateLimitBudget is the max 429 events allowed per Run(); 0 means 3.
 	RateLimitBudget int
-	warned           bool
+	// now is the clock the loop uses for rate-limit timing. nil means the
+	// real wall clock; tests inject a fake so they can prove escalation
+	// without sleeping.
+	now    func() time.Time
+	warned bool
 
-	mu                sync.Mutex
-	seq               int
-	parent            int
-	hist              []Event
-	rateLimitHits     int       // resets at the start of each Run()
-	lastRateLimitTime time.Time // for cooldown calculation
+	mu     sync.Mutex
+	seq    int
+	parent int
+	hist   []Event
+	// rateLimitState tracks consecutive 429s for the active Run().
+	// It is reset at the start of each Run() and after every successful turn.
+	rateLimitHits      int           // consecutive 429s since last success
+	lastRateLimitTime  time.Time     // when the most recent 429 landed (for cooldown)
+	providerRetryAfter time.Duration // provider-declared wait for the most recent 429
+	rateLimitTotalWait time.Duration // cumulative wait spent on 429s this Run
+	rateLimitAttempts  int           // turns that ended in 429 since last success
+}
+
+func (l *Loop) clockNow() time.Time {
+	if l.now == nil {
+		return time.Now()
+	}
+	return l.now()
 }
 
 func (l *Loop) estimateMessages(ms []provider.Message) int {
@@ -92,11 +109,43 @@ var ErrMaxTurns = errors.New("turn ceiling reached")
 // session is intact; the caller should wait before retrying.
 var ErrRateLimitBudget = errors.New("rate limit budget exhausted")
 
+// errTurnRateLimited is returned by streamTurn when the provider responded
+// with a 429. It signals Run() to wait and retry this turn rather than
+// counting it as a success (which would reset the consecutive-429 counter).
+var errTurnRateLimited = errors.New("turn ended in 429, retry after waiting")
+
 func (l *Loop) rateLimitCeiling() int {
 	if l.RateLimitBudget > 0 {
 		return l.RateLimitBudget
 	}
 	return 3
+}
+
+// rateLimitWait returns how long to wait before the next attempt after a
+// 429. Policy (single source of truth):
+//   - If the provider declared a Retry-After, use ceil(it) to whole seconds.
+//   - Otherwise use exponential backoff: 1, 2, 4, 8, then capped at 10s.
+//   - The result is capped at maxSingleWait (120s).
+//
+// This replaces the old hits×3s cooldown, which double-waited on top of the
+// provider's own wait.
+func rateLimitWait(retryAfter time.Duration, consecutiveHits int) time.Duration {
+	const maxSingleWait = 120 * time.Second
+	var wait time.Duration
+	if retryAfter > 0 {
+		// Round UP to whole seconds, matching what the provider actually waits.
+		wait = time.Duration(math.Ceil(retryAfter.Seconds())) * time.Second
+	} else {
+		// Exponential backoff: 1, 2, 4, 8, 10, 10... seconds.
+		wait = time.Duration(1<<(consecutiveHits-1)) * time.Second
+		if wait > 10*time.Second {
+			wait = 10 * time.Second
+		}
+	}
+	if wait > maxSingleWait {
+		wait = maxSingleWait
+	}
+	return wait
 }
 
 func (l *Loop) Start(banner string) error {
@@ -115,6 +164,9 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 	l.mu.Lock()
 	l.rateLimitHits = 0
 	l.lastRateLimitTime = time.Time{}
+	l.providerRetryAfter = 0
+	l.rateLimitTotalWait = 0
+	l.rateLimitAttempts = 0
 	l.mu.Unlock()
 
 	maxTurns := l.MaxTurns
@@ -122,12 +174,35 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		maxTurns = 12
 	}
 
+	// Absolute rate-limit termination bounds, independent of the hits
+	// ceiling: a provider that keeps answering 429 without a usable
+	// retry_after must not be able to stall the loop forever. Whichever
+	// bound is reached first aborts the run.
+	const (
+		maxRateLimitWait    = 120 * time.Second
+		maxRateLimitAttempt = 8
+	)
 	for turn := 0; turn < maxTurns; turn++ {
-		// CHECK A: circuit breaker before doing any more work.
+		// CHECK A: circuit breakers before doing any more work.
 		l.mu.Lock()
 		hits := l.rateLimitHits
 		last := l.lastRateLimitTime
+		retryAfter := l.providerRetryAfter
+		totalWait := l.rateLimitTotalWait
+		attempts := l.rateLimitAttempts
 		l.mu.Unlock()
+
+		// Absolute guard: total time already spent waiting on 429s, or the
+		// number of consecutive 429-aborted turns, must cap the run even if
+		// the hits ceiling is configured higher.
+		if totalWait >= maxRateLimitWait || attempts >= maxRateLimitAttempt {
+			_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
+				"rate limit absolute bound reached (%s waited, %d attempts) · wait and retry",
+				totalWait.Round(time.Second), attempts)})
+			_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})
+			return ErrRateLimitBudget
+		}
+
 		if hits >= l.rateLimitCeiling() {
 			_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
 				"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits)})
@@ -135,12 +210,15 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			return ErrRateLimitBudget
 		}
 
-		// Cooldown: if we already absorbed some 429s, wait before firing
-		// the next turn so we don't immediately hit the ceiling again.
+		// Wait before retrying after a 429. The agent is the sole owner of
+		// the wait; the provider only reports. Policy: ceil(retry_after) if
+		// the provider declared one, else exponential backoff (1,2,4,8,10s),
+		// capped at 120s. This replaces the old hits×3s cooldown which
+		// double-waited on top of the provider's own wait.
 		if hits > 0 && !last.IsZero() {
-			cooldown := time.Duration(hits) * 3 * time.Second
-			if elapsed := time.Since(last); elapsed < cooldown {
-				remaining := cooldown - elapsed
+			wait := rateLimitWait(retryAfter, hits)
+			if elapsed := l.clockNow().Sub(last); elapsed < wait {
+				remaining := wait - elapsed
 				select {
 				case <-ctx.Done():
 					_ = l.emit(Event{Type: Interrupted, Text: "ctrl+c"})
@@ -171,6 +249,13 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 				_ = l.emit(Event{Type: Interrupted, Text: "ctrl+c"})
 				return nil // an interruption is an outcome, not a failure
 			}
+			if errors.Is(err, errTurnRateLimited) {
+				// The provider reported a 429 this turn. Do NOT reset the
+				// consecutive-hits counter — the turn did not succeed. The
+				// cooldown at the top of the next loop iteration will wait
+				// the appropriate amount, then retry.
+				continue
+			}
 			if errors.Is(err, ErrRateLimitBudget) {
 				// CHECK B: mid-stream ceiling hit; emit and surface.
 				l.mu.Lock()
@@ -191,6 +276,20 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			_ = l.emit(Event{Type: RunError, Err: err.Error()})
 			return err
 		}
+
+		// A turn that survived provider calls without a 429 is a success: a
+		// 429s absorbed earlier in this run are now stale, so the cumulative
+		// hit counter is reset. Otherwise a couple of early rate limits
+		// followed by healthy turns would let hits drift up to the ceiling
+		// and kill a later request the provider was ready to serve — the
+		// root cause of the session 62 death (2 initial 429s, then two fine
+		// reads, then abort at 3 hits without a third retry).
+		l.mu.Lock()
+		l.rateLimitHits = 0
+		l.rateLimitAttempts = 0
+		l.lastRateLimitTime = time.Time{}
+		l.mu.Unlock()
+
 		if len(calls) == 0 {
 			if stop == "max_tokens" {
 				_ = l.emit(Event{Type: Notice, Text: "reached length limit · say \"continue\""})
@@ -216,6 +315,9 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 }
 
 // streamTurn consumes exactly one assistant turn.
+// It returns errTurnRateLimited (not a fatal error) when the provider
+// responded with a 429, so Run() can wait and retry instead of resetting
+// the consecutive-429 counter.
 func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provider.ToolCall, string, error) {
 	if err := l.emit(Event{Type: TurnStart}); err != nil {
 		return nil, "", err
@@ -237,9 +339,10 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 	}
 
 	var (
-		text  string
-		calls []provider.ToolCall
-		stop  string
+		text        string
+		calls       []provider.ToolCall
+		stop        string
+		rateLimited bool // set when the provider emits a 429 this turn
 	)
 	for c := range ch {
 		switch c.Kind {
@@ -254,20 +357,22 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 
 		case provider.ChunkStop:
 			stop = c.Stop
-			// One calibration record per successful turn: the encoded request
-			// bytes, the provider's measured prompt tokens, and the message
-			// count. Two such points solve ratio and overhead by regression
-			// (bytes ≈ overhead + prompt_tokens/ratio·n_msgs) — no failed
-			// request or captured body needed. Journal-only: Messages()
-			// ignores the type, so it never reaches the model or the screen
-			// and cannot inflate the history that caused a 413.
-			if c.EncodedBytes > 0 {
-				_ = l.emit(Event{Type: EventCalib, Calib: &Calibration{
-					EncodedBytes: c.EncodedBytes,
-					PromptTokens: c.PromptTokens,
-					Messages:     len(ms),
-				}})
-			}
+			// Record the provider's measured usage and the request parameters
+			// for this successful turn. These are the raw inputs needed to
+			// derive the charge model: prompt_tokens, completion_tokens,
+			// finish_reason, and the max_tokens the client requested.
+			_ = l.emit(Event{Type: EventCalib, Calib: &Calibration{
+				EncodedBytes: c.EncodedBytes,
+				PromptTokens: c.PromptTokens,
+				Messages:     len(ms),
+			}})
+			_ = l.emit(Event{Type: EventProviderUsage, Usage: &ProviderUsage{
+				PromptTokens:     c.PromptTokens,
+				CompletionTokens: c.CompletionTokens,
+				FinishReason:     c.FinishReason,
+				RequestMaxTokens: maxOutputTokens(),
+				NormalizedStop:   stop,
+			}})
 			if c.PromptTokens > 0 {
 				// Fold the provider's measured input count into the budget
 				// ratio — this is the calibration that was dead until now.
@@ -281,28 +386,62 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 
 		case provider.ChunkRateLimit:
 			if c.RateLimit != nil {
+				l.mu.Lock()
+				// Carry the provider's own retry-after through to Run()'s
+				// wait, so an explicit "try again in Ns" wins over a
+				// generic backoff.
+				var retryAfter time.Duration
+				if c.RateLimit.WaitSec > 0 {
+					retryAfter = time.Duration(c.RateLimit.WaitSec * float64(time.Second))
+					l.providerRetryAfter = retryAfter
+				} else {
+					retryAfter = l.providerRetryAfter
+				}
+				l.rateLimitHits++
+				l.rateLimitAttempts++
+				if retryAfter > 0 {
+					l.rateLimitTotalWait += retryAfter
+				}
+				l.lastRateLimitTime = l.clockNow()
+				hits := l.rateLimitHits
+				totalWait := l.rateLimitTotalWait
+				attempts := l.rateLimitAttempts
+				l.mu.Unlock()
+
 				_ = l.emit(Event{
-					Type:      EventRateLimit,
-					Code:      c.RateLimit.Code,
-					Limit:     c.RateLimit.Limit,
-					Used:      c.RateLimit.Used,
-					Requested: c.RateLimit.Requested,
-					WaitSec:   c.RateLimit.WaitSec,
-					Attempt:   c.RateLimit.Attempt,
-					Err:       c.RateLimit.Err,
+					Type:       EventRateLimit,
+					Code:       c.RateLimit.Code,
+					Limit:      c.RateLimit.Limit,
+					Used:       c.RateLimit.Used,
+					Requested:  c.RateLimit.Requested,
+					WaitSec:    c.RateLimit.WaitSec,
+					Attempt:    c.RateLimit.Attempt,
+					Err:        c.RateLimit.Err,
+					RetryAfter: retryAfter.Seconds(),
+					RawMessage: c.RateLimit.RawMessage,
 				})
-			}
 
-			l.mu.Lock()
-			l.rateLimitHits++
-			l.lastRateLimitTime = time.Now()
-			hits := l.rateLimitHits
-			l.mu.Unlock()
+				// Mark this turn as rate-limited so Run() knows not to
+				// reset the consecutive-hits counter. The provider no longer
+				// sleeps here (it just reports), so the agent owns the wait.
+				rateLimited = true
 
-			if hits >= l.rateLimitCeiling() {
-				for range ch {
-				} // drain so provider goroutine isn't blocked
-				return nil, "", ErrRateLimitBudget
+				// A burst of 429s within one turn trips the same absolute
+				// guard as the Run() head, so we cannot be stalled here
+				// either.
+				if totalWait >= 120*time.Second || attempts >= 8 {
+					for range ch {
+					} // drain so provider goroutine isn't blocked
+					return nil, "", ErrRateLimitBudget
+				}
+				if hits >= l.rateLimitCeiling() {
+					for range ch {
+					} // drain so provider goroutine isn't blocked
+					return nil, "", ErrRateLimitBudget
+				}
+				// The provider closes the channel after reporting the 429
+				// (it does not sleep or retry). The for-loop will exit and
+				// we return errTurnRateLimited below.
 			}
 
 		case provider.ChunkError:
@@ -329,6 +468,12 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 	}
 	if err := l.emit(Event{Type: TurnEnd}); err != nil {
 		return nil, "", err
+	}
+	// If the provider reported a 429 this turn, signal Run() to wait and
+	// retry rather than counting this as a success (which would reset the
+	// consecutive-429 counter and let hits drift to the ceiling).
+	if rateLimited {
+		return nil, "", errTurnRateLimited
 	}
 	return calls, stop, nil
 }

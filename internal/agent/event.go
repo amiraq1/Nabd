@@ -15,24 +15,25 @@ const MaxPersistedOutput = 16384
 type EventType string
 
 const (
-	RunStart    EventType = "run_start"
-	UserMsg     EventType = "user_msg"
-	TurnStart   EventType = "turn_start"
-	TextDelta   EventType = "text_delta"
-	ToolStart   EventType = "tool_start"
-	PermAsk     EventType = "perm_ask"
-	PermReply   EventType = "perm_reply"
-	ToolEnd     EventType = "tool_end"
-	Notice      EventType = "notice"
-	RunError    EventType = "run_error"
-	Interrupted EventType = "interrupted"
-	TurnEnd     EventType = "turn_end"
-	Compact     EventType = "compact"
-	Rewind      EventType = "rewind"
-	EventEdit   EventType = "edit_record"
-	EventRead   EventType = "read_record"
-	EventCalib     EventType = "calibration"
-	EventRateLimit EventType = "rate_limit"
+	RunStart           EventType = "run_start"
+	UserMsg            EventType = "user_msg"
+	TurnStart          EventType = "turn_start"
+	TextDelta          EventType = "text_delta"
+	ToolStart          EventType = "tool_start"
+	PermAsk            EventType = "perm_ask"
+	PermReply          EventType = "perm_reply"
+	ToolEnd            EventType = "tool_end"
+	Notice             EventType = "notice"
+	RunError           EventType = "run_error"
+	Interrupted        EventType = "interrupted"
+	TurnEnd            EventType = "turn_end"
+	Compact            EventType = "compact"
+	Rewind             EventType = "rewind"
+	EventEdit          EventType = "edit_record"
+	EventRead          EventType = "read_record"
+	EventCalib         EventType = "calibration"
+	EventRateLimit     EventType = "rate_limit"
+	EventProviderUsage EventType = "provider_usage"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.
@@ -47,22 +48,52 @@ type Event struct {
 	Time   time.Time `json:"t"`
 	Type   EventType `json:"type"`
 
-	Text      string       `json:"text,omitempty"`
-	Call      *ToolCall    `json:"call,omitempty"`
-	Decision  Decision     `json:"decision,omitempty"`
-	Err       string       `json:"err,omitempty"`
-	Code      int          `json:"code,omitempty"`
-	Limit     int          `json:"limit,omitempty"`
-	Used      int          `json:"used,omitempty"`
-	Requested int          `json:"requested,omitempty"`
-	WaitSec   float64      `json:"wait_s,omitempty"`
-	Attempt   int          `json:"attempt,omitempty"`
-	Edit      *EditRecord  `json:"edit,omitempty"`
-	Read      *ReadRecord  `json:"read,omitempty"`
-	Calib     *Calibration `json:"calib,omitempty"`
+	Text      string    `json:"text,omitempty"`
+	Call      *ToolCall `json:"call,omitempty"`
+	Decision  Decision  `json:"decision,omitempty"`
+	Err       string    `json:"err,omitempty"`
+	Code      int       `json:"code,omitempty"`
+	Limit     int       `json:"limit,omitempty"`
+	Used      int       `json:"used,omitempty"`
+	Requested int       `json:"requested,omitempty"`
+	WaitSec   float64   `json:"wait_s,omitempty"`
+	Attempt   int       `json:"attempt,omitempty"`
+	// RetryAfter preserves the raw wait the provider declared (seconds,
+	// float64), and RawMessage the exact body that came with the 429, so a
+	// later measurement can re-derive Limit/Used/Requested or the wait
+	// without losing source precision (0.1s ≈ ±13 tokens). Storage keeps
+	// these verbatim; only display may round. RawRetryAfter is the verbatim
+	// Retry-After header or body text.
+	RetryAfter    float64 `json:"retry_after,omitempty"`
+	RawMessage    string  `json:"raw_message,omitempty"`
+	RawRetryAfter string  `json:"raw_retry_after,omitempty"`
+	// RequestMaxTokens is the max_tokens the client sent with this request.
+	RequestMaxTokens int `json:"request_max_tokens,omitempty"`
+	// PromptTokens/CompletionTokens/FinishReason capture the provider's
+	// measured usage and stop reason for a successful request, so the
+	// charge model can be derived from raw observations, not estimates.
+	PromptTokens     int          `json:"prompt_tokens,omitempty"`
+	CompletionTokens int          `json:"completion_tokens,omitempty"`
+	FinishReason     string       `json:"finish_reason,omitempty"`
+	NormalizedStop   string       `json:"normalized_stop,omitempty"`
+	Edit             *EditRecord  `json:"edit,omitempty"`
+	Read             *ReadRecord  `json:"read,omitempty"`
+	Calib            *Calibration `json:"calib,omitempty"`
 
 	FirstKept int              `json:"first_kept,omitempty"`
 	Compact   *CompactionStats `json:"compact,omitempty"`
+	Usage     *ProviderUsage   `json:"usage,omitempty"`
+}
+
+// ProviderUsage records the provider's measured token usage and stop reason
+// for one successful request, alongside the max_tokens the client requested.
+// Absent fields are zero/empty; a nil Usage means the provider did not report.
+type ProviderUsage struct {
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	FinishReason     string `json:"finish_reason"`
+	RequestMaxTokens int    `json:"request_max_tokens"`
+	NormalizedStop   string `json:"normalized_stop"`
 }
 
 // CompactionStats records the context measurements at each actual compaction.

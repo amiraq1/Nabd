@@ -53,7 +53,10 @@ const (
 	ChunkRateLimit
 )
 
-// RateLimitInfo describes an HTTP 429 rate limit encounter and the wait before retrying.
+// RateLimitInfo describes an HTTP 429 rate limit encounter and the wait
+// before retrying. RetryAfter carries the provider-declared wait (seconds,
+// float64, source precision preserved) and RawMessage the exact response body,
+// so the loop/measurements never lose what the provider said.
 type RateLimitInfo struct {
 	Code      int
 	Limit     int
@@ -62,6 +65,13 @@ type RateLimitInfo struct {
 	WaitSec   float64
 	Attempt   int
 	Err       string
+	// RetryAfter is the raw wait the provider asked for; WaitSec already
+	// equals it, but keeping both separate guarantees float precision is
+	// never rounded when stored. RawMessage is the un-shortened body.
+	// RawRetryAfter is the verbatim Retry-After header or body text.
+	RetryAfter    float64
+	RawMessage    string
+	RawRetryAfter string
 }
 
 // Chunk is one thing that happened during a turn.
@@ -82,6 +92,17 @@ type Chunk struct {
 	// from usage.prompt_tokens. Zero when the provider does not report it.
 	// Carried on the final chunk of a turn.
 	PromptTokens int
+	// CompletionTokens is the provider's measured output count for the
+	// request, from usage.completion_tokens. Zero when the provider does
+	// not report it OR when the value is genuinely zero; use the
+	// AbsentUsage flag to distinguish.
+	CompletionTokens int
+	// FinishReason is the raw stop reason from the provider (e.g. "length",
+	// "stop", "tool_calls"). Empty when the provider does not report it.
+	FinishReason string
+	// AbsentUsage distinguishes "provider reported 0 tokens" from
+	// "provider did not report usage at all".
+	AbsentUsage bool
 	// EncodedBytes is the size of the JSON request body actually sent.
 	// Carried on the final chunk of a turn, for budget calibration.
 	EncodedBytes int

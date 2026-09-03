@@ -6,6 +6,7 @@ package agent
 
 import (
 	"log/slog"
+	"os"
 	"strings"
 
 	"nabd/internal/provider"
@@ -15,10 +16,14 @@ import (
 // never the raw file: the raw file contains abandoned branches.
 const maxPendingNotices = 32
 
+// toolResultItem is a result still waiting to be flushed with its pairing
+// metadata. name lets the consumer reconstruct an unknown tool's identity
+// from an orphan ToolEnd; there is deliberately no path field — read
+// de-duplication (FIX 4) collapsed consecutive same-path reads and dropped
+// the first slice, which lost data (README 54-87, session 62).
 type toolResultItem struct {
 	result provider.ToolResult
 	name   string
-	path   string
 }
 
 func Messages(evs []Event) []provider.Message {
@@ -27,10 +32,28 @@ func Messages(evs []Event) []provider.Message {
 		text           strings.Builder
 		calls          []provider.ToolCall
 		toolResults    []toolResultItem
-		callPaths      = map[string]string{}
 		open           = map[string]string{} // id -> name, still awaiting a result
 		pendingNotices []string
 	)
+
+	// idSeen tracks which tool_use IDs have already been appended to calls
+	// in the current round. A duplicated tool_call_id breaks the provider's
+	// pairing invariant (two tool_results answered by one ID), so each ID
+	// must appear at most once per Messages() message.
+	idSeen := map[string]bool{}
+
+	// appendUniqueCall adds a tool call and reports whether it was actually
+	// new. If the same ID was already registered this round we still emit a
+	// ToolStart event (the journal says it happened) but we do not duplicate
+	// the call in the message; the result block keeps a single match.
+	appendUniqueCall := func(c provider.ToolCall) bool {
+		if idSeen[c.ID] {
+			return false
+		}
+		idSeen[c.ID] = true
+		calls = append(calls, c)
+		return true
+	}
 
 	flush := func() {
 		// A tool_use with no tool_result poisons the next request on every
@@ -41,40 +64,46 @@ func Messages(evs []Event) []provider.Message {
 					ID: id, Output: "cancelled: " + name, IsErr: true,
 				},
 				name: name,
-				path: callPaths[id],
 			})
 			delete(open, id)
 		}
+		open = map[string]string{}
 
-		// After collecting all toolResult messages, deduplicate:
-		// If consecutive results call the same tool on the same path,
-		// keep only the last one — earlier reads are subsets.
-		deduped := toolResults[:0]
-		keptIDs := make(map[string]bool)
-		for i, tr := range toolResults {
-			if i+1 < len(toolResults) &&
-				tr.name == toolResults[i+1].name &&
-				tr.path != "" &&
-				tr.path == toolResults[i+1].path {
-				continue // superseded by the next result for the same file
-			}
-			deduped = append(deduped, tr)
-			keptIDs[tr.result.ID] = true
-		}
-
-		// Keep matching tool calls so provider API pairing invariants remain sound.
-		if len(deduped) < len(toolResults) && len(calls) > 0 {
-			dedupedCalls := calls[:0]
+		// Old archives (and --continue over a session written before the
+		// tool-pairing fix) can carry a ToolEnd whose matching ToolStart was
+		// never journaled. The provider API rejects a tool_result whose
+		// tool_use_id has no preceding call, so the consumer must
+		// reconstruct the missing tool_use rather than drop the result —
+		// dropping the error text hides from the model that the tool is
+		// unknown and it will keep re-invoking it forever.
+		for i := range toolResults {
+			tr := &toolResults[i]
+			// If this result has no matching call already, rebuild one. This
+			// applies to BOTH success and error results: an orphan ToolEnd
+			// that carried a refusal (e.g. "unknown tool") must still get a
+			// tool_use, or the model has a tool_result with no tool_call. The
+			// error text stays whole — dropping it hides that the tool is
+			// unknown and the model keeps re-invoking it forever.
+			hasID := false
 			for _, c := range calls {
-				if keptIDs[c.ID] {
-					dedupedCalls = append(dedupedCalls, c)
+				if c.ID == tr.result.ID {
+					hasID = true
+					break
 				}
 			}
-			calls = dedupedCalls
+			if !hasID && tr.result.ID != "" {
+				name := tr.name
+				if name == "" {
+					name = "unknown"
+				}
+				appendUniqueCall(provider.ToolCall{
+					ID: tr.result.ID, Name: name,
+				})
+			}
 		}
 
 		var results []provider.ToolResult
-		for _, tr := range deduped {
+		for _, tr := range toolResults {
 			results = append(results, tr.result)
 		}
 
@@ -91,6 +120,7 @@ func Messages(evs []Event) []provider.Message {
 		pendingNotices = nil
 		text.Reset()
 		calls, toolResults = nil, nil
+		idSeen = map[string]bool{}
 	}
 
 	for _, ev := range evs {
@@ -136,33 +166,35 @@ func Messages(evs []Event) []provider.Message {
 			if len(toolResults) > 0 {
 				flush()
 			}
-			calls = append(calls, provider.ToolCall{
+			appendUniqueCall(provider.ToolCall{
 				ID: ev.Call.ID, Name: ev.Call.Name, Input: ev.Call.Args,
 			})
 			open[ev.Call.ID] = ev.Call.Name
-			if p := pathOf(ev.Call.Args); p != "" {
-				callPaths[ev.Call.ID] = p
-			}
 
 		case ToolEnd:
 			if ev.Call == nil {
 				continue
 			}
-			delete(open, ev.Call.ID)
-			p := pathOf(ev.Call.Args)
-			if p == "" {
-				p = callPaths[ev.Call.ID]
-			}
+			// A matching ToolStart ends here: clear the open entry.
+			// ToolEnd without a name (old archives, an unknown tool whose
+			// start was never journaled) falls back to the open-name if
+			// one is recorded, else the generic marker. The output is never
+			// dropped: hiding the error text would conceal from the model
+			// that the tool is unknown, and it would keep re-invoking it.
 			name := ev.Call.Name
 			if name == "" {
-				name = open[ev.Call.ID]
+				if n, ok := open[ev.Call.ID]; ok {
+					name = n
+				} else {
+					name = "unknown"
+				}
 			}
+			delete(open, ev.Call.ID)
 			toolResults = append(toolResults, toolResultItem{
 				result: provider.ToolResult{
 					ID: ev.Call.ID, Output: ev.Call.Output, IsErr: !ev.Call.OK,
 				},
 				name: name,
-				path: p,
 			})
 
 		case TurnEnd, Interrupted, RunError:
@@ -180,10 +212,20 @@ func Messages(evs []Event) []provider.Message {
 
 		default:
 			// Unknown event type — skip it rather than risk sending
-			// garbage to the model. A log line helps catch future bugs.
-			slog.Warn("journal/Messages: unknown event type", "type", ev.Type, "seq", ev.Seq)
+			// garbage to the model. A log line (silenced outside debug)
+			// helps catch future bugs without corrupting the TUI.
+			debugWarn("journal/Messages: unknown event type", "type", ev.Type, "seq", ev.Seq)
 		}
 	}
 	flush()
 	return out
+}
+
+// debugWarn emits a slog warning only when NABD_DEBUG is set. The default
+// path must never write to stderr under bubbletea: a stray log line would
+// corrupt the rendered frame.
+func debugWarn(msg string, args ...any) {
+	if os.Getenv("NABD_DEBUG") != "" {
+		slog.Warn(msg, args...)
+	}
 }
