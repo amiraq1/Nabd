@@ -15,6 +15,7 @@ import (
 const (
 	maxVisibleFeedItems = 500
 	maxUIDiagnostics    = 20
+	maxUINotices        = 50
 	minViewportWidth    = 20
 )
 
@@ -36,6 +37,21 @@ type Feed struct {
 
 	// UI diagnostics (not written to journal).
 	diagnostics []string
+
+	// notices are UI-originated feed items (not in the journal): failures
+	// the loop could not journal itself, e.g. the runner returning an error
+	// with no RunError event. They are permanent — they live in the feed,
+	// scroll with it and count towards scrollTop — unlike m.status, which
+	// is transient and cleared by the next keystroke. Each notice is
+	// anchored after the last journal Seq seen when it was raised so the
+	// feed stays chronological.
+	notices []presentation.FeedItem
+	lastSeq int // highest event Seq applied so far (notice anchor)
+
+	// errorSeenSinceSend is true once a RunError/Interrupted event arrived
+	// for the current send. doneMsg uses it to avoid a duplicate notice
+	// when the loop already journaled the failure.
+	errorSeenSinceSend bool
 
 	// Header info.
 	header string
@@ -150,10 +166,12 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.runningTool = ""
 		m.cancel = nil
-		if msg.err != nil {
-			m.status = "error: " + errSummary(msg.err)
-		} else {
-			m.status = ""
+		// The transient row ("Generating…", "canceling…") is over. A
+		// failure is not transient: it enters the feed as a permanent,
+		// scrollable line unless the loop already journaled a RunError.
+		m.status = ""
+		if msg.err != nil && !m.errorSeenSinceSend {
+			m.addNotice(presentation.ItemError, errSummary(msg.err))
 		}
 		// A finished run returns focus to the composer (nothing else
 		// claims it once the modal is closed).
@@ -185,6 +203,9 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 			m.addDiagnostic(fmt.Sprintf("unable to project event %s seq=%d: %v", e.Type, e.Seq, err))
 		}
 		m.trackState(e)
+		if e.Seq > m.lastSeq {
+			m.lastSeq = e.Seq
+		}
 	}
 	m.refresh()
 	if m.modalVisible || m.decisionPending {
@@ -207,6 +228,8 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 // trySend/doneMsg instead.
 func (m *Feed) trackState(e agent.Event) {
 	switch e.Type {
+	case agent.RunError:
+		m.errorSeenSinceSend = true
 	case agent.ToolStart:
 		if e.Call != nil {
 			m.runningTool = e.Call.Name
@@ -225,6 +248,9 @@ func (m *Feed) trackState(e agent.Event) {
 			m.composer.blur()
 		}
 	case agent.PermReply, agent.Interrupted:
+		if e.Type == agent.Interrupted {
+			m.errorSeenSinceSend = true
+		}
 		m.modalVisible = false
 		m.decisionPending = false
 		m.pending = nil
@@ -279,9 +305,14 @@ func (m *Feed) ProgramOptions() []tea.ProgramOption {
 // so rewind-cancelled messages never enter history.
 func (m *Feed) BuildFromEvents(events []agent.Event) {
 	m.proj = presentation.NewProjector()
+	m.notices = nil
+	m.lastSeq = 0
 	for _, e := range events {
 		_ = m.proj.Apply(e)
 		m.trackState(e)
+		if e.Seq > m.lastSeq {
+			m.lastSeq = e.Seq
+		}
 	}
 	m.history.buildFromEvents(events)
 	m.refresh()
@@ -296,9 +327,55 @@ func (m *Feed) addDiagnostic(text string) {
 	}
 }
 
-// refresh rebuilds the visible lines from the projector.
+// addNotice appends a permanent UI notice to the feed through the same
+// render path as journal items. It is anchored after the last event Seq
+// seen, so later journal events render below it. The feed is refreshed and
+// follows to the end when the user was already following.
+func (m *Feed) addNotice(kind presentation.ItemType, text string) {
+	if text == "" {
+		return
+	}
+	m.notices = append(m.notices, presentation.FeedItem{
+		Type: kind,
+		ID:   fmt.Sprintf("ui_%d_%d", m.lastSeq, len(m.notices)),
+		Seq:  m.lastSeq,
+		Text: text,
+	})
+	if len(m.notices) > maxUINotices {
+		m.notices = m.notices[len(m.notices)-maxUINotices:]
+	}
+	m.refresh()
+	if m.follow && !m.modalVisible && !m.decisionPending {
+		m.scrollToEnd()
+	} else {
+		m.unseen++
+	}
+}
+
+// mergeNotices interleaves UI notices into the Seq-sorted projector items.
+// A notice anchored at Seq k is placed after every item with Seq <= k.
+// Notices are appended in chronological order with non-decreasing anchors,
+// so a single forward merge keeps both sequences in order.
+func mergeNotices(items, notices []presentation.FeedItem) []presentation.FeedItem {
+	if len(notices) == 0 {
+		return items
+	}
+	out := make([]presentation.FeedItem, 0, len(items)+len(notices))
+	ni := 0
+	for _, it := range items {
+		for ni < len(notices) && notices[ni].Seq < it.Seq {
+			out = append(out, notices[ni])
+			ni++
+		}
+		out = append(out, it)
+	}
+	out = append(out, notices[ni:]...)
+	return out
+}
+
+// refresh rebuilds the visible lines from the projector plus UI notices.
 func (m *Feed) refresh() {
-	items := m.proj.Items()
+	items := mergeNotices(m.proj.Items(), m.notices)
 	if len(items) > maxVisibleFeedItems {
 		items = items[len(items)-maxVisibleFeedItems:]
 	}
@@ -601,6 +678,7 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 	m.history.add(text)
 	m.running = true
 	m.busy = true
+	m.errorSeenSinceSend = false
 	m.status = ""
 	return m, m.startRun(text)
 }

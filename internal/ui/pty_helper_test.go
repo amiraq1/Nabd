@@ -189,14 +189,23 @@ type TestPTYRunner struct {
 	mu             sync.Mutex
 	executionCount int
 	runs           []string
+	err            error // returned by Run when set (failure injection)
 }
 
 func (r *TestPTYRunner) Run(ctx context.Context, text string) error {
 	r.mu.Lock()
 	r.executionCount++
 	r.runs = append(r.runs, text)
+	err := r.err
 	r.mu.Unlock()
-	return nil
+	return err
+}
+
+// FailWith makes every subsequent Run return err.
+func (r *TestPTYRunner) FailWith(err error) {
+	r.mu.Lock()
+	r.err = err
+	r.mu.Unlock()
 }
 
 func (r *TestPTYRunner) Count() int {
@@ -450,6 +459,17 @@ func (s *PTYSession) AltScreenExits() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.altScreenExits
+}
+
+// RawBytes returns a copy of every byte the program wrote to the PTY so far,
+// in order. This is the terminal's history as a byte stream (what a
+// scrollback would have recorded), not the final rendered screen.
+func (s *PTYSession) RawBytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]byte, len(s.rawBytes))
+	copy(cp, s.rawBytes)
+	return cp
 }
 
 // PrimaryBytes returns a copy of raw bytes written while alternate screen was inactive.
