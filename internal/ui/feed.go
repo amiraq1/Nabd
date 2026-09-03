@@ -14,6 +14,7 @@ import (
 const (
 	maxVisibleFeedItems = 500
 	maxUIDiagnostics    = 20
+	minViewportWidth    = 20
 )
 
 // Feed is the new UI model: a scrollable viewport over a projected feed.
@@ -37,12 +38,55 @@ type Feed struct {
 	// Header info.
 	header string
 
+	// Callbacks wired by the CLI.
+	callbacks FeedCallbacks
+
 	// Composer state (kept minimal; full composer is Phase 3).
 	input   string
 	running bool
 	status  string
 	pending *agent.ToolCall
 }
+
+// FeedCallbacks holds the hooks the feed uses to talk back to the loop.
+type FeedCallbacks struct {
+	OnUndo    func(n int) string
+	OnCompact func() string
+}
+
+// SetHeader sets the header line shown above the viewport.
+func (m *Feed) SetHeader(h string) { m.header = h }
+
+// SetCallbacks wires the undo/compact hooks.
+func (m *Feed) SetCallbacks(cb *FeedCallbacks) {
+	if cb != nil {
+		m.callbacks = *cb
+	}
+}
+
+// SendBatch delivers a batch of events to the feed.
+func (m *Feed) SendBatch(events []agent.Event) {
+	if len(events) == 0 {
+		return
+	}
+	m.applyBatch(events)
+}
+
+// BuildFromEvents initializes the feed from a complete event list (replay).
+func (m *Feed) BuildFromEvents(events []agent.Event) {
+	m.proj = presentation.NewProjector()
+	for _, e := range events {
+		_ = m.proj.Apply(e)
+	}
+	m.refresh()
+	m.scrollToEnd()
+}
+
+// Composer state (kept minimal; full composer is Phase 3).
+//
+//nolint:unused // kept for Phase 3 composer integration
+//
+//nolint:structcheck
 
 // NewFeed creates a feed model.
 func NewFeed() *Feed {
@@ -65,11 +109,11 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
-		if m.width > 60 {
-			m.width = 60
-		}
-		if m.width < 20 {
-			m.width = DefaultWidth
+		// Use the available terminal width, clamped to a sane minimum. The
+		// viewport is NOT capped at 60 columns — that was a holdover from the
+		// old single-line prompt. Wide terminals get a wide feed.
+		if m.width < minViewportWidth {
+			m.width = minViewportWidth
 		}
 		m.height = msg.Height
 		m.refresh()

@@ -321,3 +321,20 @@ func TestFeedItemsAreCopy(t *testing.T) {
 		t.Error("Items() returned a reference to internal state")
 	}
 }
+
+// TestFeedWideViewportUsesFullWidth verifies the viewport is NOT capped at 60
+// columns — a wide terminal should produce a wide feed.
+func TestFeedWideViewportUsesFullWidth(t *testing.T) {
+	f := NewFeed()
+	// Simulate a 120-column terminal.
+	_, _ = f.Update(tea.WindowSizeMsg{Width: 120, Height: 24})
+	if f.width < 120 {
+		t.Errorf("width = %d, want >= 120 (viewport should use available width)", f.width)
+	}
+	// Narrow terminal clamps to minimum.
+	f2 := NewFeed()
+	_, _ = f2.Update(tea.WindowSizeMsg{Width: 5, Height: 10})
+	if f2.width < minViewportWidth {
+		t.Errorf("narrow width = %d, want >= %d", f2.width, minViewportWidth)
+	}
+}

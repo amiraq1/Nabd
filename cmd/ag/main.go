@@ -21,6 +21,16 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+// Feed UI tuning constants.
+const (
+	// eventBatchInterval is how long the batcher waits before flushing a
+	// partial batch of events to the UI.
+	eventBatchInterval = 20 * time.Millisecond
+	// maxEventBatchSize forces a flush when this many events accumulate
+	// within one interval.
+	maxEventBatchSize = 128
+)
+
 const system = `You are nabd, a coding agent working inside a phone terminal 50 columns wide.
 Reply in Arabic. Be extremely brief: never repeat the question, never apologise, and never list anything without cause. Two lines suffice when two suffice.`
 
@@ -36,6 +46,7 @@ func main() {
 	sessDir := flag.String("dir", "", "session directory (default ~/.ag/sessions)")
 	cont := flag.Bool("continue", false, "resume the latest session")
 	showVer := flag.Bool("version", false, "print version and exit")
+	useFeed := flag.Bool("feed", false, "use the new projected feed UI (experimental)")
 	flag.Parse()
 
 	if *showVer {
@@ -45,6 +56,12 @@ func main() {
 
 	if *replay != "" {
 		if err := doReplay(*replay, *speed); err != nil {
+			die(err)
+		}
+		return
+	}
+	if *useFeed {
+		if err := doChatWithFeed(*sessDir, *cont); err != nil {
 			die(err)
 		}
 		return
@@ -221,6 +238,141 @@ func doChat(dir string, cont bool) error {
 	_ = loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
 	fmt.Println("session:", journalPath)
 	return nil
+}
+
+// doChatWithFeed is the new UI path that routes agent events through the
+// presentation Projector and renders them in a scrollable viewport. It is
+// opt-in via the -feed flag while the default Chat UI remains the stable
+// fallback.
+func doChatWithFeed(dir string, cont bool) error {
+	prov, err := pickProvider()
+	if err != nil {
+		return err
+	}
+
+	var journalPath string
+	if cont {
+		journalPath, err = latestSession(dir)
+		if err != nil {
+			return err
+		}
+	} else {
+		journalPath, err = sessionPath(dir)
+		if err != nil {
+			return err
+		}
+	}
+
+	journal, err := store.NewJSONL(journalPath)
+	if err != nil {
+		return err
+	}
+	defer journal.Close()
+
+	var prevEvs []agent.Event
+	if cont {
+		evs, err := store.Read(journalPath)
+		if err != nil {
+			return err
+		}
+		prevEvs = agent.Live(evs)
+		fmt.Printf("resumed %s · %d live events of %d\n",
+			filepath.Base(journalPath), len(prevEvs), len(evs))
+	}
+
+	root, err := tools.NewRoot("")
+	if err != nil {
+		return err
+	}
+	sh, err := snap.New(root.Dir())
+	if err != nil {
+		return err
+	}
+	reg := tools.NewRegistry(root, sh)
+	pol := perm.New(reg)
+	ap := ui.NewApprover()
+
+	// Create the feed model and the event batcher.
+	feed := ui.NewFeed()
+	feed.SetHeader(fmt.Sprintf("nabd %s · %s · %s", version, commit, prov.Name()))
+
+	// Create the loop BEFORE wiring callbacks (callbacks reference it).
+	loop := &agent.Loop{
+		Provider: prov,
+		Tools:    reg,
+		System:   system,
+		Gate:     gate{pol},
+		Budget:   agent.NewBudget(),
+		Human:    ap,
+	}
+	if cont {
+		loop.Seed(prevEvs)
+	}
+
+	// Sink: journal first (durable), then batcher → feed.
+	batcher := ui.NewBatcher(eventBatchInterval, maxEventBatchSize, func(batch []agent.Event) {
+		feed.SendBatch(batch)
+	})
+	batcher.Start()
+	defer batcher.Stop()
+
+	loop.Sink = agent.Fanout{journal, feedSink{feed: feed, batcher: batcher}}
+
+	// Wire up command callbacks.
+	feed.SetCallbacks(&ui.FeedCallbacks{
+		OnUndo:    func(n int) string { return chatOnUndo(loop, n) },
+		OnCompact: func() string { return chatOnCompact(loop) },
+	})
+
+	// Initialize the feed from seeded events (replay).
+	if len(prevEvs) > 0 {
+		feed.BuildFromEvents(agent.Live(prevEvs))
+	}
+
+	if err := loop.Start(fmt.Sprintf("nabd %s · %s · %s · %s",
+		version, commit, prov.Name(), filepath.Base(journalPath))); err != nil {
+		return err
+	}
+
+	if _, err := tea.NewProgram(feed).Run(); err != nil {
+		return err
+	}
+	_ = loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
+	fmt.Println("session:", journalPath)
+	return nil
+}
+
+// feedSink adapts the batcher to agent.Sink.
+type feedSink struct {
+	feed    *ui.Feed
+	batcher *ui.Batcher
+}
+
+func (s feedSink) Emit(e agent.Event) error {
+	s.batcher.Add(e)
+	return nil
+}
+
+func chatOnUndo(loop *agent.Loop, n int) string {
+	if loop == nil {
+		return "undo not supported"
+	}
+	if _, err := loop.Rewind(n); err != nil {
+		return err.Error()
+	}
+	return fmt.Sprintf("rewound %d turns", n)
+}
+
+func chatOnCompact(loop *agent.Loop) string {
+	if loop == nil {
+		return "compact not supported"
+	}
+	go func() {
+		if err := loop.Compact(context.Background(), loop.Budget.Usable()*4/10); err != nil {
+			loop.Note("compact failed: " + err.Error())
+		}
+	}()
+	return statusCompacting
 }
 
 // chanSink hands events to the UI, dropping nothing but never blocking
