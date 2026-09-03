@@ -1,3 +1,11 @@
 # Ideas and Future Work
 
-- **Secure API Key Storage**: Extract the provider API keys (`NVIDIA_API_KEY`, `ANTHROPIC_API_KEY`, etc.) from the environment variables into a separate config file located outside the project root (e.g., `~/.ag/config`). **Keys must be read from `~/.ag/config` exclusively and never written to a file inside the root directory, even temporarily.** This ensures that `scrubEnv` doesn't have to perfectly filter the environment, and a rogue command like `cat ~/.bashrc` cannot accidentally leak credentials.
+- ~~**Secure API Key Storage**~~ — done: `internal/config` reads `~/.ag/config`
+  (or `NABD_CONFIG`) read-only, refuses files with mode wider than `0600`, and
+  never writes a byte. Environment variables remain a fallback.
+  Remaining follow-up: `scrubEnv` still filters the environment by suffix; once
+  everyone has migrated, consider passing an *empty* credential set explicitly
+  instead of filtering.
+- **TOCTOU**: `openat2(RESOLVE_BENEATH)` on Linux for the path layer.
+- **Multi-process undo**: the pending-edit log lives in process memory; two
+  `ag` instances in one repo cannot see each other's edits.
