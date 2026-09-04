@@ -403,9 +403,10 @@ repo with an `exec.Command` lacking `Env` exits 1 with
 ## 12. Clean-clone evidence
 
 ```
-$ git clone --quiet --no-hardlinks /data/data/com.termux/files/home/nabd /tmp/nabd-clean
-$ cd /tmp/nabd-clean && git status --short
-(clean — tracked files only, no untracked artifacts needed)
+$ git clone --quiet --no-local /data/data/com.termux/files/home/nabd "$HOME/tmp/nabd-clean"
+$ cd "$HOME/tmp/nabd-clean" && git status --short
+(clean — tracked files only; /tmp is unwritable under this proot, so the
+ clone target is $HOME/tmp)
 
 $ go build ./... && echo BUILD_OK
 BUILD_OK
@@ -441,8 +442,17 @@ Status vocabulary, per spec:
 
 - **Race detector**: unavailable on Android/arm64; the authoritative run is
   the ubuntu-latest CI step.
-- **exec.Cmd.Env audit**: the script is POSIX shell; it runs on the CI
-  ubuntu-latest runner as well as here.
+- **exec.Cmd.Env audit**: the audit script (`scripts/check-exec-env.sh`) is
+  bash — `#!/usr/bin/env bash` and it uses process substitution, so it is not
+  POSIX-sh-portable; it runs on the CI ubuntu-latest runner
+  (`bash scripts/check-exec-env.sh`) as well as here.
+- **Bash tool availability (Section B, test #10)**: the bash integration tests
+  always invoke the real `sh` via `exec.Command`. If `sh` were absent they
+  fail loudly (`t.Fatal` on `cmd.Start`), never silently pass — which is
+  exactly the "do not silently pass when bash is unavailable" guarantee the
+  spec demands. No `t.Skip` guard is installed: `sh` is a hard dependency of
+  the bash tool on every supported platform, so a skip would mask a genuinely
+  broken environment rather than document a real platform limitation.
 - **Windows**: the Phase 2 Windows no-replace path is verified by
   cross-compile and stdlib errno mapping, not by a Windows runtime in this
   sandbox (unchanged from Phase 2; documented there).
