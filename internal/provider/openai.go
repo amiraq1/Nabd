@@ -23,10 +23,11 @@ import (
 // against the same Provider interface is what proves the interface was
 // worth having: the loop and the journal are untouched.
 type OpenAICompat struct {
-	Key     string
-	Model   string
-	BaseURL string
-	Client  *http.Client
+	Key         string
+	Model       string
+	BaseURL     string
+	Client      *http.Client
+	retryPolicy RetryPolicy // unexported; set by constructor
 }
 
 // TPMError is Groq's per-minute token ceiling response. It is deliberately
@@ -88,7 +89,8 @@ func NewNVIDIA() (*OpenAICompat, error) {
 	base := config.GetOr("NABD_BASE_URL", nvidiaBase)
 	return &OpenAICompat{
 		Key: k, Model: m, BaseURL: base,
-		Client: &http.Client{},
+		Client:      &http.Client{},
+		retryPolicy: RetryStandalone,
 	}, nil
 }
 
@@ -98,10 +100,11 @@ func NewOpenRouter() (*OpenAICompat, error) {
 		return nil, errors.New("OPENROUTER_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
 	}
 	return &OpenAICompat{
-		Key:     k,
-		Model:   config.GetOr("NABD_MODEL", "anthropic/claude-3.5-haiku"),
-		BaseURL: config.GetOr("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
-		Client:  &http.Client{},
+		Key:         k,
+		Model:       config.GetOr("NABD_MODEL", "anthropic/claude-3.5-haiku"),
+		BaseURL:     config.GetOr("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
+		Client:      &http.Client{},
+		retryPolicy: RetryStandalone,
 	}, nil
 }
 
@@ -111,10 +114,46 @@ func NewGroq() (*OpenAICompat, error) {
 		return nil, errors.New("GROQ_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
 	}
 	return &OpenAICompat{
-		Key:     k,
-		Model:   config.GetOr("NABD_MODEL", "qwen-2.5-32b"),
-		BaseURL: "https://api.groq.com/openai/v1",
-		Client:  &http.Client{},
+		Key:         k,
+		Model:       config.GetOr("NABD_MODEL", "qwen-2.5-32b"),
+		BaseURL:     "https://api.groq.com/openai/v1",
+		Client:      &http.Client{},
+		retryPolicy: RetryStandalone,
+	}, nil
+}
+
+// defaultBaseURLs maps the router-recognized provider names to their canonical
+// base URLs. Used by NewOpenAICompatForRoute to set a sensible default.
+var defaultBaseURLs = map[string]string{
+	"groq":       "https://api.groq.com/openai/v1",
+	"openrouter": "https://openrouter.ai/api/v1",
+	"nvidia":     nvidiaBase,
+}
+
+// NewOpenAICompatForRoute creates an OpenAICompat provider for router use.
+// All parameters are passed explicitly — no config globals are read (F14, X12).
+// providerName is one of: groq, openrouter, nvidia.
+// baseURL may be empty; defaultBaseURLs[providerName] is used in that case.
+func NewOpenAICompatForRoute(providerName, model, key, baseURL string) (*OpenAICompat, error) {
+	if key == "" {
+		return nil, fmt.Errorf("%s route: API key is required (not set)", providerName)
+	}
+	if model == "" {
+		return nil, fmt.Errorf("%s route: model must be specified explicitly", providerName)
+	}
+	if baseURL == "" {
+		var ok bool
+		baseURL, ok = defaultBaseURLs[providerName]
+		if !ok {
+			return nil, fmt.Errorf("%s route: unknown provider; cannot determine base URL", providerName)
+		}
+	}
+	return &OpenAICompat{
+		Key:         key,
+		Model:       model,
+		BaseURL:     baseURL,
+		Client:      &http.Client{},
+		retryPolicy: RetrySingleAttempt,
 	}, nil
 }
 
@@ -154,6 +193,11 @@ func (o *OpenAICompat) Stream(ctx context.Context, req Request) (<-chan Chunk, e
 	out := make(chan Chunk, 32)
 	go o.run(ctx, body, out)
 	return out, nil
+}
+
+// Start satisfies SingleAttempt (Section E).
+func (o *OpenAICompat) Start(ctx context.Context, req Request) (<-chan Chunk, error) {
+	return o.Stream(ctx, req)
 }
 
 // RateLimitError represents an HTTP 429 response from an upstream provider.
@@ -218,15 +262,55 @@ func parseTPMFullCounts(body string) (limit, used, requested int) {
 	return l, 0, r
 }
 
-// run performs a single request and reports the result. It does NOT sleep
-// or retry on 429: the agent owns the wait decision and the retry loop.
-// This eliminates double-waiting (provider sleeping, then agent sleeping)
-// and centralizes rate-limit policy in one place.
+// run performs the request and reports the result.
+//
+// When retryPolicy == RetrySingleAttempt (router path), exactly one HTTP
+// attempt is made: no internal first-byte timer (the router ctx carries the
+// prestream deadline), no retry on transient errors (the router owns that).
+//
+// When retryPolicy == RetryStandalone (legacy path), behavior is unchanged
+// from v1.1.0: one attempt with a 25s first-byte timer; a single retry on
+// non-429 transient errors; 429 reported as ChunkRateLimit for the agent (H1).
 func (o *OpenAICompat) run(ctx context.Context, body []byte, out chan<- Chunk) {
 	defer close(out)
 
 	var sent atomic.Bool
 
+	if o.retryPolicy == RetrySingleAttempt {
+		// Router path: one attempt, no first-byte timer, no retry.
+		_, err := o.attempt(ctx, body, out, &sent)
+		if err == nil {
+			return
+		}
+		if ctx.Err() != nil {
+			out <- Chunk{Kind: ChunkError, Err: ctx.Err()}
+			return
+		}
+		// Emit typed RateLimit chunk so the router can classify correctly.
+		var rle *RateLimitError
+		if errors.As(err, &rle) {
+			out <- Chunk{
+				Kind: ChunkRateLimit,
+				RateLimit: &RateLimitInfo{
+					Code:          rle.Status,
+					Limit:         rle.Limit,
+					Used:          rle.Used,
+					Requested:     rle.Requested,
+					WaitSec:       rle.WaitSec,
+					Attempt:       1,
+					Err:           err.Error(),
+					RetryAfter:    rle.WaitSec,
+					RawMessage:    rle.Body,
+					RawRetryAfter: rle.Raw,
+				},
+			}
+			return
+		}
+		out <- Chunk{Kind: ChunkError, Err: err, Retryable: !sent.Load()}
+		return
+	}
+
+	// RetryStandalone path — unchanged from v1.1.0.
 	// One attempt. On 429, emit a typed RateLimit chunk and return the
 	// parsed wait so the agent can decide how long to wait before retrying.
 	firstByte := 25 * time.Second

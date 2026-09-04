@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -485,6 +486,8 @@ func pickProvider() (provider.Provider, error) {
 		return nil, err
 	}
 	switch config.Get("NABD_PROVIDER") {
+	case "router":
+		return pickRouterProvider()
 	case "nvidia":
 		return provider.NewNVIDIA()
 	case "anthropic":
@@ -494,6 +497,7 @@ func pickProvider() (provider.Provider, error) {
 	case "groq":
 		return provider.NewGroq()
 	}
+
 	if config.Has("GROQ_API_KEY") {
 		return provider.NewGroq()
 	}
@@ -504,6 +508,48 @@ func pickProvider() (provider.Provider, error) {
 		return provider.NewNVIDIA()
 	}
 	return provider.NewAnthropic()
+}
+
+func pickRouterProvider() (provider.Provider, error) {
+	if config.Has("NABD_BASE_URL") {
+		return nil, errors.New("NABD_BASE_URL is not allowed when NABD_PROVIDER=router (base URLs are determined per-route)")
+	}
+	if config.Has("NABD_MODEL") {
+		fmt.Fprintf(os.Stderr, "notice: NABD_MODEL is ignored when NABD_PROVIDER=router; models are determined by NABD_ROUTES\n")
+	}
+	_, err := provider.ParseRouterMode(config.Get("NABD_ROUTER_MODE"))
+	if err != nil {
+		return nil, err
+	}
+
+	routesRaw := config.Get("NABD_ROUTES")
+	if routesRaw == "" {
+		return nil, errors.New("NABD_ROUTES is required when NABD_PROVIDER=router")
+	}
+	entries, err := provider.ParseRoutes(routesRaw)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := provider.ValidateRouteKeys(entries); err != nil {
+		return nil, err
+	}
+
+	timeoutSec, err := provider.ParsePrestreamTimeout(config.Get("NABD_ROUTER_PRESTREAM_TIMEOUT"))
+	if err != nil {
+		return nil, err
+	}
+
+	var routes []provider.Route
+	for _, entry := range entries {
+		r, err := provider.BuildRoute(entry)
+		if err != nil {
+			return nil, err
+		}
+		routes = append(routes, r)
+	}
+
+	return provider.NewRouter(routes, time.Duration(timeoutSec)*time.Second, provider.RealClock{})
 }
 
 // gate translates the policy's vocabulary into the loop's. It is the only

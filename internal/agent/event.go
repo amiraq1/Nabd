@@ -35,6 +35,7 @@ const (
 	EventCalib         EventType = "calibration"
 	EventRateLimit     EventType = "rate_limit"
 	EventProviderUsage EventType = "provider_usage"
+	EventProviderRoute EventType = "provider_route"
 	RunEnd             EventType = "run_end"
 )
 
@@ -90,9 +91,21 @@ type Event struct {
 	FirstKept int              `json:"first_kept,omitempty"`
 	Compact   *CompactionStats `json:"compact,omitempty"`
 	Usage     *ProviderUsage   `json:"usage,omitempty"`
+	Route     *ProviderRoute   `json:"route,omitempty"`
+}
+
+// ProviderRoute records one routing decision attempt/event (Section O).
+type ProviderRoute struct {
+	StreamID string `json:"stream_id"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Attempt  int    `json:"attempt"`
+	Status   string `json:"status"`
+	Reason   string `json:"reason,omitempty"`
 }
 
 // ProviderUsage records the provider's measured token usage and stop reason
+
 // for one successful request, alongside the max_tokens the client requested.
 // Absent fields are zero/empty; a nil Usage means the provider did not report.
 type ProviderUsage struct {
