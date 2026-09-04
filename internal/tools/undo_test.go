@@ -22,7 +22,6 @@ func newReg(t *testing.T) (*Registry, string) {
 	return NewRegistry(root, sh), root.Dir()
 }
 
-
 // providerToolCall converts our internal args into a provider.ToolCall
 func providerToolCall(name string, input json.RawMessage) provider.ToolCall {
 	return provider.ToolCall{

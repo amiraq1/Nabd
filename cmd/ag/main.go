@@ -93,9 +93,14 @@ func doChat(dir string, cont bool) error {
 	// Determine the journal path BEFORE creating the loop: on --continue
 	// we open the existing session file itself (append); on a new session
 	// we create a fresh file. These two paths must never be confused.
+	root, err := tools.NewRoot("")
+	if err != nil {
+		return err
+	}
+
 	var journalPath string
 	if cont {
-		journalPath, err = latestSession(dir)
+		journalPath, err = latestSession(dir, root.Dir())
 		if err != nil {
 			return err
 		}
@@ -128,10 +133,6 @@ func doChat(dir string, cont bool) error {
 
 	// The UI is a sink too, behind a buffered channel: a slow terminal
 	// must not stall the loop, and the journal must never wait on paint.
-	root, err := tools.NewRoot("")
-	if err != nil {
-		return err
-	}
 	sh, err := snap.New(root.Dir())
 	if err != nil {
 		return err
@@ -156,7 +157,7 @@ func doChat(dir string, cont bool) error {
 
 	cwd, _ := os.Getwd()
 	if err := loop.Start(fmt.Sprintf("nabd %s · %s · %s · %s",
-		version, commit, prov.Name(), filepath.Base(cwd))); err != nil {
+		version, commit, prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
 		return err
 	}
 
@@ -232,9 +233,14 @@ func doChatWithFeed(dir string, cont bool) error {
 		return err
 	}
 
+	root, err := tools.NewRoot("")
+	if err != nil {
+		return err
+	}
+
 	var journalPath string
 	if cont {
-		journalPath, err = latestSession(dir)
+		journalPath, err = latestSession(dir, root.Dir())
 		if err != nil {
 			return err
 		}
@@ -262,10 +268,6 @@ func doChatWithFeed(dir string, cont bool) error {
 			filepath.Base(journalPath), len(prevEvs), len(evs))
 	}
 
-	root, err := tools.NewRoot("")
-	if err != nil {
-		return err
-	}
 	sh, err := snap.New(root.Dir())
 	if err != nil {
 		return err
@@ -367,7 +369,7 @@ func doChatWithFeed(dir string, cont bool) error {
 	// first event arrives. prog.Send blocks until the loop is ready, so the
 	// RunStart below will simply wait; no event is lost.
 	if err := loop.Start(fmt.Sprintf("nabd %s · %s · %s · %s",
-		version, commit, prov.Name(), filepath.Base(journalPath))); err != nil {
+		version, commit, prov.Name(), filepath.Base(journalPath)), root.Dir()); err != nil {
 		return err
 	}
 
@@ -574,7 +576,7 @@ func (g gate) Effective(tool string, d agent.Decision) agent.Decision {
 // latestSession returns the path to the most recent *.jsonl in the session
 // directory. It respects an explicit --dir; otherwise it defaults to
 // ~/.ag/sessions. Returns a clear error when no session exists.
-func latestSession(dir string) (string, error) {
+func latestSession(dir, projectRoot string) (string, error) {
 	sessDir := dir
 	if sessDir == "" {
 		home, err := os.UserHomeDir()
@@ -590,19 +592,35 @@ func latestSession(dir string) (string, error) {
 		}
 		return "", err
 	}
-	var last string
-	for _, e := range ents {
+
+	// ReadDir returns sorted by name (timestamp). We iterate backwards to find the newest.
+	for i := len(ents) - 1; i >= 0; i-- {
+		e := ents[i]
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
 			name := e.Name()
-			if name > last {
-				last = name
+			path := filepath.Join(sessDir, name)
+
+			// Check if project root matches
+			events, err := store.Read(path)
+			if err != nil {
+				continue
+			}
+
+			for _, ev := range events {
+				if ev.Type == agent.RunStart {
+					if ev.ProjectRoot == "" {
+						// Legacy session without root metadata is skipped
+						continue
+					}
+					if ev.ProjectRoot == projectRoot {
+						return path, nil
+					}
+					break
+				}
 			}
 		}
 	}
-	if last == "" {
-		return "", fmt.Errorf(errNoSessions, sessDir)
-	}
-	return filepath.Join(sessDir, last), nil
+	return "", fmt.Errorf(errNoSessions, sessDir)
 }
 
 // editRecords pulls the persisted edit fingerprints out of a live branch,

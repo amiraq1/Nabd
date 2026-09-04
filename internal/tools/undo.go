@@ -1,16 +1,16 @@
-// Package tools: undo.go walks the edit log backwards. It is deliberately
-// not a Tool: the model may write, but only the human may rewind. An agent
-// that can undo its own work can also erase the evidence of it.
 package tools
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"os"
 
 	"nabd/internal/agent"
 	"nabd/internal/snap"
+)
+
+var (
+	ErrUndoConflictMissing = errors.New("target file is missing; will not overwrite your deletion")
+	ErrUndoConflictChanged = errors.New("changed after the agent wrote it; will not overwrite your work")
 )
 
 // UndoResult is one attempted rewind, in the order attempted.
@@ -22,7 +22,6 @@ type UndoResult struct {
 
 // drop removes the newest entry. Called only after a restore succeeded, so a
 // refused rewind leaves the log intact and the next /undo sees the same head.
-
 
 // PersistedUndo rewinds edits recorded in the journal (not the in-memory
 // log). It is what makes /undo survive a process restart: the records come
@@ -48,6 +47,7 @@ func (r *Registry) PersistedUndo(recs []*agent.EditRecord, n int) []UndoResult {
 // rewindRecord restores one persisted record: verify the file still matches
 // HashAfter, then put BlobBefore back through the shadow.
 func (r *Registry) rewindRecord(rec *agent.EditRecord) UndoResult {
+	// D: Restore Only Through a Resolved Absolute Path
 	abs, err := r.root.Resolve(rec.Path)
 	if err != nil {
 		return UndoResult{Rel: rec.Path, Note: err.Error()}
@@ -56,11 +56,21 @@ func (r *Registry) rewindRecord(rec *agent.EditRecord) UndoResult {
 	if err != nil {
 		return UndoResult{Rel: rec.Path, Note: err.Error()}
 	}
-	// The file must still be exactly as the agent left it. If a human
-	// touched it since, restoring would silently destroy their work.
-	if rec.HashAfter != "" && sha256hexOf(now.Blob, r.sh) != rec.HashAfter {
-		return UndoResult{Rel: rec.Path, Note: "changed after the agent wrote it; will not overwrite your work"}
+
+	// B: Honest Shadow Diagnostics
+	if rec.HashAfter != "" {
+		if now.Absent {
+			return UndoResult{Rel: rec.Path, Note: ErrUndoConflictMissing.Error()}
+		}
+		nowHash := ""
+		if len(now.Blob) > 5 {
+			nowHash = now.Blob[5:]
+		}
+		if nowHash != rec.HashAfter {
+			return UndoResult{Rel: rec.Path, Note: ErrUndoConflictChanged.Error()}
+		}
 	}
+
 	if rec.BlobBefore == "" {
 		// Creation: the "before" was absence.
 		if err := os.Remove(abs); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -68,30 +78,17 @@ func (r *Registry) rewindRecord(rec *agent.EditRecord) UndoResult {
 		}
 		return UndoResult{Rel: rec.Path, OK: true, Note: "deleted (write_file)"}
 	}
-	if err := r.sh.Restore(snap.State{Rel: rec.Path, Blob: rec.BlobBefore}); err != nil {
+
+	// Explicitly read the recovery blob to ensure it is available and not corrupt
+	if _, err := r.sh.Read(rec.BlobBefore); err != nil {
+		return UndoResult{Rel: rec.Path, Note: err.Error()} // surface the typed shadow error
+	}
+
+	// Restore through RestoreAt
+	if err := r.sh.RestoreAt(abs, snap.State{Rel: rec.Path, Blob: rec.BlobBefore, Mode: rec.ModeBefore}); err != nil {
 		return UndoResult{Rel: rec.Path, Note: err.Error()}
 	}
 	return UndoResult{Rel: rec.Path, OK: true, Note: "restored (write_file)"}
 }
-
-// sha256hexOf hashes content behind a shadow blob id, or "" if unreadable.
-func sha256hexOf(blob string, sh *snap.Shadow) string {
-	if blob == "" {
-		return ""
-	}
-	b, err := sh.Read(blob)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(b)
-	return hex.EncodeToString(sum[:])
-}
-
-// Undo rewinds up to n edits, newest first, and stops at the first refusal:
-// a chain of rewinds that skips a link would leave the tree in a state no
-// snapshot ever described.
-
-
-// Pending lists what /undo would walk, newest first.
 
 var ErrNoEdits = errors.New("no edits")

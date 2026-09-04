@@ -194,7 +194,7 @@ func TestSinkFailureStopsStart(t *testing.T) {
 		Sink:     sink,
 		Budget:   NewBudget(),
 	}
-	if err := l.Start("nabd test"); err == nil {
+	if err := l.Start("nabd test", ""); err == nil {
 		t.Fatal("expected error from Start() when sink fails, got nil")
 	}
 }

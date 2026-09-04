@@ -1,7 +1,3 @@
-// Package snap records what a file looked like before the agent touched
-// it, and puts it back. There is no separate store to maintain: when the
-// project is a git repository, git's own object database holds the
-// content, and the "shadow" is two hashes in the journal.
 package snap
 
 import (
@@ -10,12 +6,15 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+)
+
+var (
+	ErrShadowMissing    = errors.New("recovery content is missing")
+	ErrShadowCorruption = errors.New("recovery content is damaged")
 )
 
 // State is a file at one instant. Absent is a state, not an error: the
@@ -23,7 +22,7 @@ import (
 type State struct {
 	Rel    string      `json:"rel"`
 	Absent bool        `json:"absent,omitempty"`
-	Blob   string      `json:"blob,omitempty"` // git oid, or s256:… fallback
+	Blob   string      `json:"blob,omitempty"` // s256:… fallback
 	Size   int64       `json:"size,omitempty"`
 	Mode   os.FileMode `json:"mode,omitempty"`
 	At     time.Time   `json:"at"`
@@ -38,31 +37,23 @@ type Change struct {
 // Shadow hashes and stores content for a single project root.
 type Shadow struct {
 	root  string
-	git   bool
-	store string // used only when git is absent
+	store string
 }
 
-// New probes for git once. A git repo costs nothing: hash-object writes
-// a loose object that gc leaves alone while it is reachable from nothing
-// but our hash -- which is why we keep the hash in the journal.
+// New sets up the shadow store for a root. We use .ag/shadow as a
+// durable content-addressed store. We DO NOT rely on git gc or git
+// for keeping objects reachable.
 func New(root string) (*Shadow, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, err
 	}
 	s := &Shadow{root: abs, store: filepath.Join(abs, ".ag", "shadow")}
-
-	if _, err := exec.LookPath("git"); err == nil {
-		cmd := exec.Command("git", "-C", abs, "rev-parse", "--git-dir")
-		cmd.Stderr = io.Discard
-		if cmd.Run() == nil {
-			s.git = true
-		}
-	}
 	return s, nil
 }
 
-func (s *Shadow) UsesGit() bool { return s.git }
+func (s *Shadow) UsesGit() bool    { return false }
+func (s *Shadow) StoreDir() string { return s.store }
 
 // Capture reads the current state of an absolute path inside the root and
 // stores its content so it can be restored later.
@@ -138,7 +129,10 @@ func (s *Shadow) Read(id string) ([]byte, error) {
 // Restore puts a file back into a recorded state, atomically.
 func (s *Shadow) Restore(st State) error {
 	abs := filepath.Join(s.root, filepath.FromSlash(st.Rel))
+	return s.RestoreAt(abs, st)
+}
 
+func (s *Shadow) RestoreAt(abs string, st State) error {
 	if st.Absent {
 		err := os.Remove(abs)
 		if errors.Is(err, os.ErrNotExist) {
@@ -152,7 +146,12 @@ func (s *Shadow) Restore(st State) error {
 	}
 	mode := st.Mode
 	if mode == 0 {
-		mode = 0o644
+		// Legacy record: preserve existing mode if it exists
+		if fi, err := os.Stat(abs); err == nil {
+			mode = fi.Mode().Perm()
+		} else {
+			mode = 0o644 // conservative documented default for absent file with unknown mode
+		}
 	}
 	return WriteAtomic(abs, data, mode)
 }
@@ -163,16 +162,20 @@ func (s *Shadow) Restore(st State) error {
 //
 // This is where tmp+rename belongs -- not in the append-only journal,
 // where a single O_APPEND write already carries a whole line.
+
 func WriteAtomic(abs string, data []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+	dir := filepath.Dir(abs)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(abs), ".ag-*.tmp")
+	tmp, err := os.CreateTemp(dir, ".ag-*.tmp")
 	if err != nil {
 		return err
 	}
 	name := tmp.Name()
-	defer os.Remove(name) // no-op once the rename succeeds
+
+	// Ensure cleanup on failure
+	defer os.Remove(name)
 
 	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
@@ -188,59 +191,85 @@ func WriteAtomic(abs string, data []byte, mode os.FileMode) error {
 	if err := os.Chmod(name, mode.Perm()); err != nil {
 		return err
 	}
-	return os.Rename(name, abs)
+	if err := os.Rename(name, abs); err != nil {
+		return err
+	}
+
+	// Destination-directory sync for full power-loss durability on POSIX
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
+
+	return nil
 }
 
 // --- content store ---
 
 // put stores content and returns its identifier.
 func (s *Shadow) put(data []byte) (string, error) {
-	if s.git {
-		cmd := exec.Command("git", "-C", s.root, "hash-object", "-w", "--stdin")
-		cmd.Stdin = bytes.NewReader(data)
-		var out, errb bytes.Buffer
-		cmd.Stdout, cmd.Stderr = &out, &errb
-		if err := cmd.Run(); err != nil {
-			return "", fmt.Errorf("git hash-object: %s", strings.TrimSpace(errb.String()))
-		}
-		return strings.TrimSpace(out.String()), nil
-	}
-
 	sum := sha256.Sum256(data)
 	id := "s256:" + hex.EncodeToString(sum[:])
 	p := filepath.Join(s.store, id[5:7], id[7:])
-	if _, err := os.Stat(p); err == nil {
-		return id, nil // content-addressed: already there
+
+	// handle an already-existing identical blob safely.
+	if existingData, err := os.ReadFile(p); err == nil {
+		if bytes.Equal(existingData, data) {
+			return id, nil // content-addressed: already there and matches
+		}
+		// Do not overwrite an existing blob with different content. (Corruption!)
+		// The prompt says: "Do not overwrite an existing blob with different content."
+		// But practically, if sha256 matches, it should be the same.
+		// If it exists but is DIFFERENT data, it's corrupted on disk. We shouldn't overwrite it here maybe,
+		// but returning id is fine, or we could return an error. Let's just return id if identical.
+		// Wait, if it exists and is different, we can either error out or overwrite it. The prompt explicitly says: "Do not overwrite an existing blob with different content."
+		return "", fmt.Errorf("blob collision or corruption: %s exists with different content", p)
 	}
+
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return "", err
 	}
-	if err := WriteAtomic(p, data, 0o600); err != nil {
+	if err := WriteAtomic(p, data, 0o400); err != nil {
 		return "", err
 	}
 	return id, nil
 }
 
-func (s *Shadow) get(id string) ([]byte, error) {
-	if id == "" {
-		return nil, errors.New("لا محتوى محفوظ")
+func validateID(id string) error {
+	if len(id) != 5+64 || !strings.HasPrefix(id, "s256:") {
+		return fmt.Errorf("%w: invalid format: %s", ErrShadowMissing, id)
 	}
-	if strings.HasPrefix(id, "s256:") {
-		return os.ReadFile(filepath.Join(s.store, id[5:7], id[7:]))
+	hexPart := id[5:]
+	for i := 0; i < len(hexPart); i++ {
+		c := hexPart[i]
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return fmt.Errorf("%w: invalid character in digest: %q", ErrShadowMissing, c)
+		}
 	}
-	cmd := exec.Command("git", "-C", s.root, "cat-file", "blob", id)
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("git cat-file %s: %s", id[:min(8, len(id))],
-			strings.TrimSpace(errb.String()))
-	}
-	return out.Bytes(), nil
+	return nil
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+func (s *Shadow) get(id string) ([]byte, error) {
+	if id == "" {
+		return nil, fmt.Errorf("%w: empty blob id", ErrShadowMissing)
 	}
-	return b
+	if err := validateID(id); err != nil {
+		return nil, err
+	}
+
+	p := filepath.Join(s.store, id[5:7], id[7:])
+	data, err := os.ReadFile(p)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: %v", ErrShadowMissing, err)
+		}
+		return nil, fmt.Errorf("%w: %v", ErrShadowMissing, err) // Or explicit wrapped IO
+	}
+
+	sum := sha256.Sum256(data)
+	if hex.EncodeToString(sum[:]) != id[5:] {
+		return nil, fmt.Errorf("%w: blob %s checksum mismatch", ErrShadowCorruption, id)
+	}
+
+	return data, nil
 }

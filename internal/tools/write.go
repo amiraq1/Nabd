@@ -100,6 +100,7 @@ func buildRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLin
 		ReadLines:  readLines,
 		BlobAfter:  after.Blob,
 		BlobBefore: before.Blob,
+		ModeBefore: before.Mode,
 	}
 	if !before.Absent {
 		if b, err := sh.Read(before.Blob); err == nil {

@@ -40,7 +40,7 @@ func TestSystemModelDirection(t *testing.T) {
 func TestLatestSessionRespectsDir(t *testing.T) {
 	// Empty directory → clear error.
 	dir := t.TempDir()
-	if _, err := latestSession(dir); err == nil {
+	if _, err := latestSession(dir, "/project"); err == nil {
 		t.Error("expected error for empty dir, got nil")
 	} else if got := err.Error(); !strings.Contains(got, "لا جلسات سابقة") {
 		t.Errorf("error should be in Arabic, got %q", got)
@@ -48,10 +48,10 @@ func TestLatestSessionRespectsDir(t *testing.T) {
 
 	// Directory with a session → returns the .jsonl path.
 	sessionFile := filepath.Join(dir, "20260901-120000.000.jsonl")
-	if err := os.WriteFile(sessionFile, []byte("{}\n"), 0o644); err != nil {
+	if err := os.WriteFile(sessionFile, []byte("{\"type\":\"run_start\",\"project_root\":\"/project\"}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := latestSession(dir)
+	got, err := latestSession(dir, "/project")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -86,4 +86,36 @@ func TestSessionPathCreatesUniqueNewFile(t *testing.T) {
 	// as long as the file doesn't pre-exist. What matters is that the caller
 	// (doChat) does NOT call sessionPath on --continue.
 	_ = p2
+}
+
+func TestLatestSessionProjectIsolation(t *testing.T) {
+	dir := t.TempDir()
+
+	// 1. Legacy session (no project root) -> Should be skipped
+	leg := filepath.Join(dir, "20260901-000000.000.jsonl")
+	os.WriteFile(leg, []byte("{\"type\":\"run_start\"}\n"), 0644)
+
+	// 2. Session for Project B -> Should be skipped if we want Project A
+	pb := filepath.Join(dir, "20260901-010000.000.jsonl")
+	os.WriteFile(pb, []byte("{\"type\":\"run_start\",\"project_root\":\"/projectB\"}\n"), 0644)
+
+	// 3. Session for Project A -> MATCH
+	pa1 := filepath.Join(dir, "20260901-020000.000.jsonl")
+	os.WriteFile(pa1, []byte("{\"type\":\"run_start\",\"project_root\":\"/projectA\"}\n"), 0644)
+
+	// 4. Newer Session for Project B -> The globally newest, but should be skipped
+	pb2 := filepath.Join(dir, "20260901-030000.000.jsonl")
+	os.WriteFile(pb2, []byte("{\"type\":\"run_start\",\"project_root\":\"/projectB\"}\n"), 0644)
+
+	// 5. Newer Session for Project A -> NEWEST MATCH
+	pa2 := filepath.Join(dir, "20260901-040000.000.jsonl")
+	os.WriteFile(pa2, []byte("{\"type\":\"run_start\",\"project_root\":\"/projectA\"}\n"), 0644)
+
+	got, err := latestSession(dir, "/projectA")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != pa2 {
+		t.Errorf("expected pa2 (%s) but got %s", pa2, got)
+	}
 }

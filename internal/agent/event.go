@@ -5,6 +5,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 	"unicode/utf8"
 )
@@ -44,10 +45,11 @@ const (
 // or a fork writes a new event whose Parent is an older Seq, which makes
 // the file a tree without ever touching a byte already written.
 type Event struct {
-	Seq    int       `json:"seq"`
-	Parent int       `json:"parent,omitempty"`
-	Time   time.Time `json:"t"`
-	Type   EventType `json:"type"`
+	Seq         int       `json:"seq"`
+	Parent      int       `json:"parent,omitempty"`
+	Time        time.Time `json:"t"`
+	Type        EventType `json:"type"`
+	ProjectRoot string    `json:"project_root,omitempty"`
 
 	Text     string    `json:"text,omitempty"`
 	Call     *ToolCall `json:"call,omitempty"`
@@ -145,8 +147,9 @@ type EditRecord struct {
 	// BlobBefore/BlobAfter are the shadow's content keys (git oid or
 	// s256:…). They are what a restarted /undo needs to pull content back;
 	// the SHA-256 hashes alone cannot address git's object store.
-	BlobBefore string `json:"blob_before,omitempty"`
-	BlobAfter  string `json:"blob_after,omitempty"`
+	ModeBefore os.FileMode `json:"mode_before,omitempty"`
+	BlobBefore string      `json:"blob_before,omitempty"`
+	BlobAfter  string      `json:"blob_after,omitempty"`
 }
 
 // ToolCall carries both the request and its outcome.

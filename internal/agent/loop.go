@@ -149,8 +149,8 @@ func rateLimitWait(retryAfter time.Duration, consecutiveHits int) time.Duration 
 	return wait
 }
 
-func (l *Loop) Start(banner string) error {
-	return l.emit(Event{Type: RunStart, Text: banner})
+func (l *Loop) Start(banner, projectRoot string) error {
+	return l.emit(Event{Type: RunStart, Text: banner, ProjectRoot: projectRoot})
 }
 
 // Run handles one user message to completion. Cancel ctx to interrupt;
