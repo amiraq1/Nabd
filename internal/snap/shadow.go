@@ -311,8 +311,15 @@ func (s *Shadow) put(data []byte) (string, error) {
 		for retries := 0; retries < 100; retries++ {
 			if err := os.Mkdir(lockPath, 0755); err != nil {
 				if os.IsExist(err) {
+					// Check for stale lock (older than 10 seconds)
+					if fi, statErr := os.Stat(lockPath); statErr == nil {
+						if time.Since(fi.ModTime()) > 10*time.Second {
+							os.Remove(lockPath) // attempt to clear stale lock
+							continue
+						}
+					}
 					// Wait a tiny bit and retry (concurrent write in progress)
-					time.Sleep(5 * time.Millisecond)
+					time.Sleep(10 * time.Millisecond)
 					continue
 				}
 				return "", fmt.Errorf("failed to acquire lock: %w", err)

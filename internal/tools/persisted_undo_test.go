@@ -42,6 +42,7 @@ func TestPersistedUndoModesAndLegacy(t *testing.T) {
 	raw2, _ := json.Marshal(map[string]any{"path": "doc.txt", "content": "edited text"})
 	reg.Run(ctx, providerToolCall("write_file", raw2))
 	recReg := reg.LastEdit()
+	recReg.ModeBefore = 0 // simulate legacy
 
 	raw3, _ := json.Marshal(map[string]any{"path": "new.txt", "content": "new"})
 	reg.Run(ctx, providerToolCall("write_file", raw3))
