@@ -93,19 +93,32 @@ func load() (map[string]string, error) {
 
 // ParseFile reads and parses the file at p with the permission check.
 // It is exported for tests and for anyone who wants a different location.
+//
+// Security: the path is checked with os.Lstat so an attacker cannot swap a
+// symlink in front of the open (TOCTOU via a symlink to a loose file). A
+// symlink is refused outright; only a regular file is accepted; group/other
+// permission bits are refused; and on Unix the file must be owned by the
+// current user (documented as a Windows limitation: NT ACL semantics make a
+// numeric-uid ownership check meaningless there, so it is skipped).
 func ParseFile(p string) (map[string]string, error) {
-	fi, err := os.Stat(p)
+	fi, err := os.Lstat(p)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]string{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if fi.IsDir() {
-		return nil, fmt.Errorf("%s: هو مجلد لا ملف", p)
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("%s: رابط مرن غير مسموح — الملف العادي مطلوب (chmod 600 على الملف الحقيقي)", p)
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s: غير منتظم — الملف العادي مطلوب", p)
 	}
 	if mode := fi.Mode().Perm(); mode&0o077 != 0 {
 		return nil, fmt.Errorf("%s: الصلاحيات %04o مفتوحة للغير — شغّل: chmod 600 %s", p, mode, p)
+	}
+	if err := checkOwner(p, fi); err != nil {
+		return nil, err
 	}
 	f, err := os.Open(p)
 	if err != nil {
@@ -113,6 +126,13 @@ func ParseFile(p string) (map[string]string, error) {
 	}
 	defer f.Close()
 	return Parse(f)
+}
+
+// checkOwner enforces Unix ownership of the config file: it must belong to the
+// current user, the way ssh refuses a loose private key owned by someone else.
+// On non-Unix platforms it is a no-op (see owner_unix.go / owner_other.go).
+func checkOwner(p string, fi os.FileInfo) error {
+	return checkOwnerPlatform(p, fi)
 }
 
 // Parse reads KEY=VALUE lines. Blank lines and `#` comments are skipped;
