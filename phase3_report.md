@@ -486,15 +486,17 @@ Status vocabulary, per spec:
 - `go test ./... -race -count=1` locally on this Termux/proot
   Android/arm64 environment: **UNSUPPORTED** (platform cannot execute it;
   the command ran and reported `-race is not supported on android/arm64`).
-- ubuntu-latest CI run for this branch: **PENDING_CI** — the workflow runs
-  `go test ./... -race -count=1` (phase2_report section 14 shows the race
-  gate passing on the Phase 2 head), but this branch has not been pushed to
-  the remote, so no run exists for it yet. No configured-but-unrun CI is
-  reported as PASS.
+- ubuntu-latest CI run for this branch: **PASS** — the workflow
+  (`.github/workflows/test.yml`) ran `go test ./... -race -count=1` on the
+  `phase3/env-isolation` push and every package reported `ok` under the
+  detector: `cmd/ag`, `internal/agent`, `internal/config`, `internal/perm`,
+  `internal/presentation`, `internal/provider`, `internal/snap`, `internal/store`,
+  `internal/tools` (2.5s), and `internal/ui` (13.5s). The run concluded
+  `success`; staticcheck (`GOTOOLCHAIN=local .../staticcheck@latest ./...`) and
+  the exec.Cmd.Env static audit (`bash scripts/check-exec-env.sh`) also passed.
 - The new concurrency gate `TestConcurrentToolMetadataIsInvocationScoped` is
-  intended to run under `-race` on CI (it forces genuine goroutine overlap via a
-  sync barrier). Its authoritative status is therefore **PENDING_CI** until the
-  branch is pushed; locally it passes cleanly without the detector.
+  part of `internal/tools`, so it ran under `-race` on CI and passed. Its
+  status is therefore **PASS**. Locally it passes cleanly without the detector.
 
 ## 14. Remaining platform limitations
 
