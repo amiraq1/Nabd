@@ -47,11 +47,11 @@ func (l *Loop) decide(ctx context.Context, c ToolCall, emit func(Event) error) (
 		if why == "" {
 			why = "unknown or forbidden tool"
 		}
-		emit(Event{Type: PermReply, Call: &c, Decision: Deny, EffectiveDecision: Deny, Text: why})
+		emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: why})
 		return Deny, why
 	}
 	if l.Human == nil {
-		emit(Event{Type: PermReply, Call: &c, Decision: Deny, EffectiveDecision: Deny, Text: "no prompt interface"})
+		emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: "no prompt interface"})
 		return Deny, "no prompt interface"
 	}
 	emit(Event{Type: PermAsk, Call: &c, Text: why})
@@ -62,7 +62,7 @@ func (l *Loop) decide(ctx context.Context, c ToolCall, emit func(Event) error) (
 	// Apply policy constraints: the effective decision may differ from the
 	// raw click (e.g. AllowSession for bash → AllowOnce).
 	effective := l.Gate.Effective(c.Name, d)
-	emit(Event{Type: PermReply, Call: &c, Decision: d, EffectiveDecision: effective})
+	emit(Event{Type: PermReply, Call: &c, Decision: effective, RawDecision: d})
 	if effective == AllowSession {
 		l.Gate.Record(c.Name, effective)
 	}

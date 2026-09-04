@@ -29,7 +29,7 @@ func TestIntegrationFullPipeline(t *testing.T) {
 		{Seq: 4, Type: agent.TextDelta, Text: "inspection..."},
 		{Seq: 5, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "call_1", Name: "read_file", Args: []byte(`{"path":"main.go"}`)}},
 		{Seq: 6, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "call_1", Name: "read_file", Args: []byte(`{"path":"main.go"}`)}},
-		{Seq: 7, Type: agent.PermReply, Call: &agent.ToolCall{ID: "call_1"}, Decision: agent.AllowOnce, EffectiveDecision: agent.AllowOnce},
+		{Seq: 7, Type: agent.PermReply, Call: &agent.ToolCall{ID: "call_1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
 		{Seq: 8, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "call_1", Name: "read_file", Output: "file content here", OK: true}},
 		{Seq: 9, Type: agent.TurnEnd},
 		{Seq: 10, Type: agent.RunEnd, Text: "session complete"},

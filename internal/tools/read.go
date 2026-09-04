@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"nabd/internal/agent"
+	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
 
@@ -108,6 +109,10 @@ type readFile struct {
 	root *Root
 	reg  *Registry
 }
+
+var _ Classified = readFile{}
+
+func (readFile) Class() perm.Class { return perm.ReadOnly }
 
 func (readFile) Name() string { return "read_file" }
 

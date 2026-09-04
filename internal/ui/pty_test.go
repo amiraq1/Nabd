@@ -162,11 +162,11 @@ func TestPTYPermissionAllowOnceRestoresComposer(t *testing.T) {
 	// Deliver PermReply to simulate core processing
 	sess.InjectBatch([]agent.Event{
 		{
-			Seq:               2,
-			Type:              agent.PermReply,
-			Call:              &agent.ToolCall{ID: "c1", Name: "write_file"},
-			Decision:          agent.AllowOnce,
-			EffectiveDecision: agent.AllowOnce,
+			Seq:         2,
+			Type:        agent.PermReply,
+			Call:        &agent.ToolCall{ID: "c1", Name: "write_file"},
+			Decision:    agent.AllowOnce,
+			RawDecision: agent.AllowOnce,
 		},
 	})
 
@@ -219,11 +219,11 @@ func TestPTYPermissionDenyDoesNotExecuteTool(t *testing.T) {
 
 	sess.InjectBatch([]agent.Event{
 		{
-			Seq:               2,
-			Type:              agent.PermReply,
-			Call:              &agent.ToolCall{ID: "c_deny", Name: "delete_database"},
-			Decision:          agent.Deny,
-			EffectiveDecision: agent.Deny,
+			Seq:         2,
+			Type:        agent.PermReply,
+			Call:        &agent.ToolCall{ID: "c_deny", Name: "delete_database"},
+			Decision:    agent.Deny,
+			RawDecision: agent.Deny,
 		},
 		{
 			Seq:  3,
@@ -282,11 +282,11 @@ func TestPTYBashAllowSessionIsCoreDowngraded(t *testing.T) {
 	// Core policy calculation: AllowSession for bash -> AllowOnce
 	sess.InjectBatch([]agent.Event{
 		{
-			Seq:               2,
-			Type:              agent.PermReply,
-			Call:              &agent.ToolCall{ID: "c_bash", Name: "bash"},
-			Decision:          agent.AllowSession,
-			EffectiveDecision: agent.AllowOnce,
+			Seq:         2,
+			Type:        agent.PermReply,
+			Call:        &agent.ToolCall{ID: "c_bash", Name: "bash"},
+			Decision:    agent.AllowSession,
+			RawDecision: agent.AllowOnce,
 		},
 	})
 
@@ -338,11 +338,11 @@ func TestPTYRepeatedDecisionIsIdempotent(t *testing.T) {
 
 	sess.InjectBatch([]agent.Event{
 		{
-			Seq:               2,
-			Type:              agent.PermReply,
-			Call:              &agent.ToolCall{ID: "c_dup", Name: "write_file"},
-			Decision:          agent.AllowOnce,
-			EffectiveDecision: agent.AllowOnce,
+			Seq:         2,
+			Type:        agent.PermReply,
+			Call:        &agent.ToolCall{ID: "c_dup", Name: "write_file"},
+			Decision:    agent.AllowOnce,
+			RawDecision: agent.AllowOnce,
 		},
 	})
 
@@ -425,11 +425,11 @@ func TestPTYModalRestoresDraftAndCursor(t *testing.T) {
 
 	sess.InjectBatch([]agent.Event{
 		{
-			Seq:               2,
-			Type:              agent.PermReply,
-			Call:              &agent.ToolCall{ID: "c_draft", Name: "read_file"},
-			Decision:          agent.AllowOnce,
-			EffectiveDecision: agent.AllowOnce,
+			Seq:         2,
+			Type:        agent.PermReply,
+			Call:        &agent.ToolCall{ID: "c_draft", Name: "read_file"},
+			Decision:    agent.AllowOnce,
+			RawDecision: agent.AllowOnce,
 		},
 	})
 

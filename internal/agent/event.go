@@ -52,17 +52,17 @@ type Event struct {
 	Text     string    `json:"text,omitempty"`
 	Call     *ToolCall `json:"call,omitempty"`
 	Decision Decision  `json:"decision,omitempty"`
-	// EffectiveDecision is the decision actually applied after policy
-	// constraints (e.g. AllowSession for bash becomes AllowOnce). When set,
-	// it reflects the real grant, not the raw user click.
-	EffectiveDecision Decision `json:"effective_decision,omitempty"`
-	Err               string   `json:"err,omitempty"`
-	Code              int      `json:"code,omitempty"`
-	Limit             int      `json:"limit,omitempty"`
-	Used              int      `json:"used,omitempty"`
-	Requested         int      `json:"requested,omitempty"`
-	WaitSec           float64  `json:"wait_s,omitempty"`
-	Attempt           int      `json:"attempt,omitempty"`
+	// RawDecision preserves the user's raw click (e.g. AllowSession for bash)
+	// when the policy downgrades it (e.g. to AllowOnce). If missing (zero/deny),
+	// it means this is an old record where Decision holds the only known value.
+	RawDecision Decision `json:"raw_decision,omitempty"`
+	Err         string   `json:"err,omitempty"`
+	Code        int      `json:"code,omitempty"`
+	Limit       int      `json:"limit,omitempty"`
+	Used        int      `json:"used,omitempty"`
+	Requested   int      `json:"requested,omitempty"`
+	WaitSec     float64  `json:"wait_s,omitempty"`
+	Attempt     int      `json:"attempt,omitempty"`
 	// RetryAfter preserves the raw wait the provider declared (seconds,
 	// float64), and RawMessage the exact body that came with the 429, so a
 	// later measurement can re-derive Limit/Used/Requested or the wait

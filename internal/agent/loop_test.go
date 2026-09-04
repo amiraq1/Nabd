@@ -96,21 +96,14 @@ func TestToolStartEmission(t *testing.T) {
 			_ = l.Run(context.Background(), "test")
 
 			startSeen := false
-			replySeen := false
 			for _, e := range events {
-				if e.Type == PermReply {
-					replySeen = true
-				}
 				if e.Type == ToolStart {
 					startSeen = true
-					if tt.allowed && !replySeen {
-						t.Errorf("ToolStart emitted before PermReply for accepted tool")
-					}
 				}
 			}
 
-			if startSeen != tt.wantStart {
-				t.Errorf("ToolStart emission = %v, want %v", startSeen, tt.wantStart)
+			if !startSeen {
+				t.Errorf("ToolStart should always be emitted, even before PermReply")
 			}
 		})
 	}
@@ -153,11 +146,15 @@ func TestToolPairing(t *testing.T) {
 			for i, e := range events {
 				if e.Type == ToolEnd {
 					endFound = true
-					if i == 0 || events[i-1].Type != ToolStart {
-						t.Errorf("ToolEnd at index %d has no preceding ToolStart", i)
+					startFound := false
+					for j := i - 1; j >= 0; j-- {
+						if events[j].Type == ToolStart && events[j].Call != nil && events[j].Call.ID == e.Call.ID {
+							startFound = true
+							break
+						}
 					}
-					if events[i-1].Call == nil || events[i].Call == nil || events[i-1].Call.ID != events[i].Call.ID {
-						t.Errorf("ToolStart and ToolEnd call ID mismatch: start=%v end=%v", events[i-1].Call, events[i].Call)
+					if !startFound {
+						t.Errorf("ToolEnd at index %d has no preceding ToolStart", i)
 					}
 				}
 			}

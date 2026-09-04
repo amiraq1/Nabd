@@ -20,30 +20,9 @@ type UndoResult struct {
 	OK   bool
 }
 
-func (e *editLog) last() (Edit, bool) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if len(e.l) == 0 {
-		return Edit{}, false
-	}
-	return e.l[len(e.l)-1], true
-}
-
 // drop removes the newest entry. Called only after a restore succeeded, so a
 // refused rewind leaves the log intact and the next /undo sees the same head.
-func (e *editLog) drop() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if len(e.l) > 0 {
-		e.l = e.l[:len(e.l)-1]
-	}
-}
 
-func (e *editLog) count() int {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return len(e.l)
-}
 
 // PersistedUndo rewinds edits recorded in the journal (not the in-memory
 // log). It is what makes /undo survive a process restart: the records come
@@ -111,57 +90,8 @@ func sha256hexOf(blob string, sh *snap.Shadow) string {
 // Undo rewinds up to n edits, newest first, and stops at the first refusal:
 // a chain of rewinds that skips a link would leave the tree in a state no
 // snapshot ever described.
-func (r *Registry) Undo(n int) []UndoResult {
-	var out []UndoResult
-	for i := 0; i < n; i++ {
-		e, ok := r.edits.last()
-		if !ok {
-			out = append(out, UndoResult{Note: "no edits to undo"})
-			break
-		}
-		res := r.rewind(e)
-		out = append(out, res)
-		if !res.OK {
-			break
-		}
-		r.edits.drop()
-	}
-	return out
-}
 
-func (r *Registry) rewind(e Edit) UndoResult {
-	abs, err := r.root.Resolve(e.Rel)
-	if err != nil {
-		return UndoResult{Rel: e.Rel, Note: err.Error()}
-	}
-	now, err := r.sh.Capture(abs)
-	if err != nil {
-		return UndoResult{Rel: e.Rel, Note: err.Error()}
-	}
-	// The file must still be exactly as the agent left it. If a human touched
-	// it since, restoring would silently destroy their work, which is a worse
-	// failure than refusing to undo at all.
-	if !snap.Unchanged(now, e.After) {
-		return UndoResult{Rel: e.Rel, Note: "changed after the agent wrote it; will not overwrite your work"}
-	}
-	if err := r.sh.Restore(e.Before); err != nil {
-		return UndoResult{Rel: e.Rel, Note: err.Error()}
-	}
-	verb := "restored"
-	if e.Before.Absent {
-		verb = "deleted"
-	}
-	return UndoResult{Rel: e.Rel, OK: true, Note: verb + " (" + e.Tool + ")"}
-}
 
 // Pending lists what /undo would walk, newest first.
-func (r *Registry) Pending() []Edit {
-	all := r.edits.all()
-	rev := make([]Edit, 0, len(all))
-	for i := len(all) - 1; i >= 0; i-- {
-		rev = append(rev, all[i])
-	}
-	return rev
-}
 
 var ErrNoEdits = errors.New("no edits")

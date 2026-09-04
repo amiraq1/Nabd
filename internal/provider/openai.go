@@ -105,13 +105,17 @@ func NewOpenRouter() (*OpenAICompat, error) {
 	}, nil
 }
 
-func NewGroq() *OpenAICompat {
+func NewGroq() (*OpenAICompat, error) {
+	k := config.Get("GROQ_API_KEY")
+	if k == "" {
+		return nil, errors.New("GROQ_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
+	}
 	return &OpenAICompat{
-		Key:     config.Get("GROQ_API_KEY"),
-		Model:   config.GetOr("NABD_MODEL", "qwen/qwen3.8-27b"),
+		Key:     k,
+		Model:   config.GetOr("NABD_MODEL", "qwen-2.5-32b"),
 		BaseURL: "https://api.groq.com/openai/v1",
 		Client:  &http.Client{},
-	}
+	}, nil
 }
 
 func (c *OpenAICompat) Label() string {

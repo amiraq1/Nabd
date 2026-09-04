@@ -156,12 +156,12 @@ func TestModalKeyPriority(t *testing.T) {
 
 	// Ordinary keys while the modal is open must be swallowed.
 	for _, k := range []tea.KeyMsg{
-		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")},
-		tea.KeyMsg{Type: tea.KeyEnter},
-		tea.KeyMsg{Type: tea.KeyUp},
-		tea.KeyMsg{Type: tea.KeyDown},
-		tea.KeyMsg{Type: tea.KeyPgUp},
-		tea.KeyMsg{Type: tea.KeySpace},
+		{Type: tea.KeyRunes, Runes: []rune("x")},
+		{Type: tea.KeyEnter},
+		{Type: tea.KeyUp},
+		{Type: tea.KeyDown},
+		{Type: tea.KeyPgUp},
+		{Type: tea.KeySpace},
 	} {
 		_, cmd := f.Update(k)
 		if cmd != nil {

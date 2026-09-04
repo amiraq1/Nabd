@@ -298,7 +298,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			return nil
 		}
 
-		_, interrupted, err := l.runCalls(ctx, calls)
+		interrupted, err := l.runCalls(ctx, calls)
 		// Results are appended even when interrupted: the API rejects an
 		// assistant tool_use with no matching tool_result on the next turn.
 		if err != nil {
@@ -504,21 +504,18 @@ func (l *Loop) knownTool(name string) bool {
 // runCalls executes the batch in order. Order matters: the model asked
 // for read-then-write for a reason, and parallelism would gain a phone
 // nothing but a race.
-func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provider.ToolResult, bool, error) {
-	results := make([]provider.ToolResult, 0, len(calls))
-
-	for i, c := range calls {
+func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, error) {
+	for _, c := range calls {
 		if ctx.Err() != nil {
-			// Every remaining call still needs a result block.
-			for _, rest := range calls[i:] {
-				results = append(results, provider.ToolResult{
-					ID: rest.ID, Output: "cancelled", IsErr: true,
-				})
-			}
-			return results, true, nil
+			return true, nil
 		}
 
 		ac := ToolCall{ID: c.ID, Name: c.Name, Args: c.Input}
+
+		if err := l.emit(Event{Type: ToolStart, Call: &ac}); err != nil {
+			return false, err
+		}
+
 		// An unknown tool is not a permission question: the registry has
 		// no such tool, so asking the gate would misfile an existence
 		// error under deny and corrupt the evidence. Answer with the
@@ -527,26 +524,19 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 		if !l.knownTool(c.Name) {
 			msg := fmt.Sprintf("unknown tool %q · available: %s", c.Name, strings.Join(l.toolNames(), ", "))
 			ac.OK, ac.Output = false, msg
-			l.emit(Event{Type: ToolStart, Call: &ac})
 			l.emit(Event{Type: ToolEnd, Call: &ac})
-			results = append(results, provider.ToolResult{ID: c.ID, Output: msg, IsErr: true})
 			continue
 		}
+
 		d, why := l.decide(ctx, ac, l.emit)
 		if d == Deny {
 			msg := "refused to run " + c.Name
 			if why != "" {
 				msg += ": " + why
 			}
-			l.emit(Event{Type: ToolStart, Call: &ac})
 			ac.OK, ac.Output = false, msg
 			l.emit(Event{Type: ToolEnd, Call: &ac})
-			results = append(results, provider.ToolResult{ID: c.ID, Output: msg, IsErr: true})
 			continue
-		}
-
-		if err := l.emit(Event{Type: ToolStart, Call: &ac}); err != nil {
-			return results, false, err
 		}
 
 		start := time.Now()
@@ -556,12 +546,11 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 		}
 		ms := time.Since(start).Milliseconds()
 
-		results = append(results, provider.ToolResult{ID: c.ID, Output: out.Text, IsErr: !out.OK})
 		if eerr := l.emit(Event{Type: ToolEnd, Call: &ToolCall{
 			ID: c.ID, Name: c.Name, Output: out.Text, OK: out.OK,
 			Exit: out.Exit, Signal: out.Signal, MS: ms,
 		}}); eerr != nil {
-			return results, false, eerr
+			return false, eerr
 		}
 
 		// A mutation leaves a persisted fingerprint behind. The loop is the
@@ -571,7 +560,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 			if er, ok := l.Tools.(interface{ LastEdit() *EditRecord }); ok {
 				if rec := er.LastEdit(); rec != nil {
 					if eerr := l.emit(Event{Type: EventEdit, Edit: rec}); eerr != nil {
-						return results, false, eerr
+						return false, eerr
 					}
 				}
 			}
@@ -585,11 +574,11 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) ([]provi
 				Truncated:  true,
 				NextOffset: out.NextOffset,
 			}}); eerr != nil {
-				return results, false, eerr
+				return false, eerr
 			}
 		}
 	}
-	return results, false, nil
+	return false, nil
 }
 
 // exec isolates the tool from the loop: a panicking tool must not take

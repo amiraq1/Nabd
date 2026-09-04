@@ -39,7 +39,7 @@ func TestFocusRestoredAfterModalDuringRun(t *testing.T) {
 	startBlockingRun(t, f2, r2, "another run")
 	openModal(f2)
 	_, _ = f2.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 9, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, EffectiveDecision: agent.Deny},
+		{Seq: 9, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, RawDecision: agent.Deny},
 	}})
 	if !f2.composer.focused() {
 		t.Fatal("focus must return via the PermReply event path while busy")

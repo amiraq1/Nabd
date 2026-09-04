@@ -237,6 +237,7 @@ func (m *Feed) trackState(e agent.Event) {
 	case agent.ToolEnd:
 		m.runningTool = ""
 	case agent.PermAsk:
+		m.runningTool = ""
 		if !m.modalVisible && !m.decisionPending {
 			m.followBeforeModal = m.follow
 		}
@@ -251,10 +252,12 @@ func (m *Feed) trackState(e agent.Event) {
 		if e.Type == agent.Interrupted {
 			m.errorSeenSinceSend = true
 		}
+		if e.Type == agent.PermReply && e.Decision != agent.Deny && e.Call != nil {
+			m.runningTool = e.Call.Name
+		}
 		m.modalVisible = false
 		m.decisionPending = false
 		m.pending = nil
-		m.runningTool = ""
 		m.permModal.close()
 		m.follow = m.followBeforeModal
 		if m.follow {

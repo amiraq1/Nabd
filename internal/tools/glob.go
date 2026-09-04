@@ -11,12 +11,17 @@ import (
 	"strings"
 	"time"
 
+	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
 
 const maxGlobResults = 200
 
 type globFiles struct{ root *Root }
+
+var _ Classified = globFiles{}
+
+func (globFiles) Class() perm.Class { return perm.ReadOnly }
 
 func (globFiles) Name() string { return "glob" }
 

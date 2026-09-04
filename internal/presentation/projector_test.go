@@ -201,7 +201,7 @@ func TestBuildPermissionAllow(t *testing.T) {
 	evs := []agent.Event{
 		{Seq: 1, Type: agent.RunStart},
 		{Seq: 2, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: []byte(`{"cmd":"ls"}`)}},
-		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, EffectiveDecision: agent.AllowOnce},
+		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
 		{Seq: 4, Type: agent.TurnEnd},
 	}
 	p := presentation.NewProjector()
@@ -229,7 +229,7 @@ func TestBuildPermissionDeny(t *testing.T) {
 	evs := []agent.Event{
 		{Seq: 1, Type: agent.RunStart},
 		{Seq: 2, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
-		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, EffectiveDecision: agent.Deny},
+		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, RawDecision: agent.Deny},
 		{Seq: 4, Type: agent.TurnEnd},
 	}
 	p := presentation.NewProjector()

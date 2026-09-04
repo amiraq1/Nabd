@@ -173,7 +173,7 @@ func TestOverlayFullEndToEndIntegration(t *testing.T) {
 
 	// 12. Core emits PermReply: Modal closes, focus restored, follow restored
 	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "call_1"}, Decision: agent.AllowSession, EffectiveDecision: agent.AllowSession},
+		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "call_1"}, Decision: agent.AllowSession, RawDecision: agent.AllowSession},
 	}})
 	if f.modalVisible {
 		t.Fatal("step 12: modal must close on PermReply")

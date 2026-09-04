@@ -112,7 +112,7 @@ func TestYOLOIsTotalButNotEternal(t *testing.T) {
 	}
 }
 
-func TestEffectiveDecisionForBash(t *testing.T) {
+func TestRawDecisionForBash(t *testing.T) {
 	p := New(testCls())
 	if got := p.Effective("bash", agent.AllowSession); got != agent.AllowOnce {
 		t.Errorf("Effective(bash, AllowSession) = %v, want AllowOnce", got)
@@ -125,7 +125,7 @@ func TestEffectiveDecisionForBash(t *testing.T) {
 	}
 }
 
-func TestEffectiveDecisionForWriteFile(t *testing.T) {
+func TestRawDecisionForWriteFile(t *testing.T) {
 	p := New(testCls())
 	if got := p.Effective("write_file", agent.AllowSession); got != agent.AllowSession {
 		t.Errorf("Effective(write_file, AllowSession) = %v, want AllowSession", got)

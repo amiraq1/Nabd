@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
 
@@ -30,6 +31,10 @@ const (
 )
 
 type bashTool struct{ root *Root }
+
+var _ Classified = bashTool{}
+
+func (bashTool) Class() perm.Class { return perm.Executing }
 
 func (bashTool) Name() string { return "bash" }
 

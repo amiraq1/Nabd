@@ -169,23 +169,23 @@ func doChat(dir string, cont bool) error {
 			return err.Error()
 		}
 		chat.SetInput(txt) // the cut turn comes back to the prompt, editable
-		s := fmt.Sprintf("rewound %d turns", n)
-		if k := len(reg.Pending()); k > 0 {
-			s += fmt.Sprintf(" · %d uncommitted edits on disk (/undo %d)", k, k)
-		}
-		return s
+		return fmt.Sprintf("rewound %d turns · disk edits remain, /undo does not cover edits after branch cut", n)
 	}
 
 	chat.OnUndo = func(n int) string { return fileUndo(loop, reg, n) }
 
 	chat.OnEdits = func() string {
-		p := reg.Pending()
+		p := editRecords(agent.Live(loop.Hist()))
 		if len(p) == 0 {
 			return "no reversible edits pending"
 		}
 		var b strings.Builder
 		for i, e := range p {
-			fmt.Fprintf(&b, "%d· %s %s\n", i+1, e.Tool, e.Rel)
+			tool := "edit_file"
+			if e.Patch == "" {
+				tool = "write_file"
+			}
+			fmt.Fprintf(&b, "%d· %s %s\n", i+1, tool, e.Path)
 		}
 		return strings.TrimRight(b.String(), "\n")
 	}
@@ -321,12 +321,7 @@ func doChatWithFeed(dir string, cont bool) error {
 			if err != nil {
 				return "", err.Error()
 			}
-			s := fmt.Sprintf("rewound %d turns", n)
-			if k := len(reg.Pending()); k > 0 {
-				s += fmt.Sprintf(" · %d uncommitted edits on disk (/undo %d)", k, k)
-			}
-			// The cut turn comes back to the composer, editable.
-			return txt, s
+			return txt, fmt.Sprintf("rewound %d turns · disk edits remain, /undo does not cover edits after branch cut", n)
 		},
 		OnCtx: func() string {
 			ms := agent.Squeeze(agent.Messages(agent.Live(loop.Hist())), agent.KeepFullRounds)
@@ -334,13 +329,17 @@ func doChatWithFeed(dir string, cont bool) error {
 			return fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
 		},
 		OnEdits: func() string {
-			p := reg.Pending()
+			p := editRecords(agent.Live(loop.Hist()))
 			if len(p) == 0 {
 				return "no reversible edits pending"
 			}
 			var b strings.Builder
 			for i, e := range p {
-				fmt.Fprintf(&b, "%d· %s %s\n", i+1, e.Tool, e.Rel)
+				tool := "edit_file"
+				if e.Patch == "" {
+					tool = "write_file"
+				}
+				fmt.Fprintf(&b, "%d· %s %s\n", i+1, tool, e.Path)
 			}
 			return strings.TrimRight(b.String(), "\n")
 		},
@@ -533,10 +532,10 @@ func pickProvider() (provider.Provider, error) {
 	case "openrouter":
 		return provider.NewOpenRouter()
 	case "groq":
-		return provider.NewGroq(), nil
+		return provider.NewGroq()
 	}
 	if config.Has("GROQ_API_KEY") {
-		return provider.NewGroq(), nil
+		return provider.NewGroq()
 	}
 	if config.Has("OPENROUTER_API_KEY") {
 		return provider.NewOpenRouter()

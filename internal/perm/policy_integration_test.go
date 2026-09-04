@@ -61,4 +61,9 @@ func TestRegistryClassificationUsesRealRegistry(t *testing.T) {
 	if v, _ := p.Check("unknown_tool"); v != perm.Deny {
 		t.Errorf("unknown tool = %v, want Deny", v)
 	}
+
+	p.SetYOLO(true)
+	if v, _ := p.Check("bash"); v != perm.Allow {
+		t.Errorf("bash under YOLO = %v, want Allow", v)
+	}
 }

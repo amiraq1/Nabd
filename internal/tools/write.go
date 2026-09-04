@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"nabd/internal/agent"
+	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
 )
@@ -233,6 +234,10 @@ type writeFile struct {
 	reg  *Registry
 }
 
+var _ Classified = writeFile{}
+
+func (writeFile) Class() perm.Class { return perm.Mutating }
+
 func (writeFile) Name() string { return "write_file" }
 
 func (writeFile) Spec() provider.ToolSpec {
@@ -276,6 +281,10 @@ type editFile struct {
 	log  *editLog
 	reg  *Registry
 }
+
+var _ Classified = editFile{}
+
+func (editFile) Class() perm.Class { return perm.Mutating }
 
 func (editFile) Name() string { return "edit_file" }
 

@@ -69,39 +69,6 @@ func Messages(evs []Event) []provider.Message {
 		}
 		open = map[string]string{}
 
-		// Old archives (and --continue over a session written before the
-		// tool-pairing fix) can carry a ToolEnd whose matching ToolStart was
-		// never journaled. The provider API rejects a tool_result whose
-		// tool_use_id has no preceding call, so the consumer must
-		// reconstruct the missing tool_use rather than drop the result —
-		// dropping the error text hides from the model that the tool is
-		// unknown and it will keep re-invoking it forever.
-		for i := range toolResults {
-			tr := &toolResults[i]
-			// If this result has no matching call already, rebuild one. This
-			// applies to BOTH success and error results: an orphan ToolEnd
-			// that carried a refusal (e.g. "unknown tool") must still get a
-			// tool_use, or the model has a tool_result with no tool_call. The
-			// error text stays whole — dropping it hides that the tool is
-			// unknown and the model keeps re-invoking it forever.
-			hasID := false
-			for _, c := range calls {
-				if c.ID == tr.result.ID {
-					hasID = true
-					break
-				}
-			}
-			if !hasID && tr.result.ID != "" {
-				name := tr.name
-				if name == "" {
-					name = "unknown"
-				}
-				appendUniqueCall(provider.ToolCall{
-					ID: tr.result.ID, Name: name,
-				})
-			}
-		}
-
 		var results []provider.ToolResult
 		for _, tr := range toolResults {
 			results = append(results, tr.result)
@@ -188,6 +155,11 @@ func Messages(evs []Event) []provider.Message {
 				} else {
 					name = "unknown"
 				}
+			}
+			if _, ok := open[ev.Call.ID]; !ok && ev.Call.ID != "" {
+				appendUniqueCall(provider.ToolCall{
+					ID: ev.Call.ID, Name: name, Input: ev.Call.Args,
+				})
 			}
 			delete(open, ev.Call.ID)
 			toolResults = append(toolResults, toolResultItem{

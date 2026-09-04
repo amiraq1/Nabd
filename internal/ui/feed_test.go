@@ -113,7 +113,7 @@ func TestFeedPermissionAllow(t *testing.T) {
 	f.height = 10
 	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
 		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: []byte(`{"cmd":"ls"}`)}},
-		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, EffectiveDecision: agent.AllowOnce},
+		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
 	}})
 	items := f.proj.Items()
 	var perm *presentation.FeedItem
@@ -138,7 +138,7 @@ func TestFeedPermissionDeny(t *testing.T) {
 	f.height = 10
 	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
 		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
-		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, EffectiveDecision: agent.Deny},
+		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, RawDecision: agent.Deny},
 	}})
 	items := f.proj.Items()
 	var perm *presentation.FeedItem
@@ -156,14 +156,14 @@ func TestFeedPermissionDeny(t *testing.T) {
 	}
 }
 
-// TestFeedEffectiveDecisionDiffers verifies AllowSession → AllowOnce is shown.
-func TestFeedEffectiveDecisionDiffers(t *testing.T) {
+// TestFeedRawDecisionDiffers verifies AllowSession → AllowOnce is shown.
+func TestFeedRawDecisionDiffers(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
 	f.height = 10
 	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
 		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
-		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowSession, EffectiveDecision: agent.AllowOnce},
+		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowSession, RawDecision: agent.AllowOnce},
 	}})
 	items := f.proj.Items()
 	var perm *presentation.FeedItem

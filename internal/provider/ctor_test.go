@@ -19,8 +19,9 @@ func TestConstructorsCarryKey(t *testing.T) {
 	if err != nil || nv.Key != "nv-k" {
 		t.Errorf("nvidia: key=%q err=%v", nv.Key, err)
 	}
-	if gq := NewGroq(); gq.Key != "gq-k" {
-		t.Errorf("groq: key=%q", gq.Key)
+	gq, err := NewGroq()
+	if err != nil || gq.Key != "gq-k" {
+		t.Errorf("groq: key=%q err=%v", gq.Key, err)
 	}
 	an, err := NewAnthropic()
 	if err != nil || an.Key != "an-k" {

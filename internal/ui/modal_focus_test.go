@@ -36,7 +36,7 @@ func TestFollowResumesAfterModalClose(t *testing.T) {
 
 	// The loop answers: PermReply event closes the modal.
 	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 4, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, EffectiveDecision: agent.AllowOnce},
+		{Seq: 4, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
 	}})
 	if f.modalVisible {
 		t.Fatal("modal must close on PermReply")
@@ -66,7 +66,7 @@ func TestFocusRestoredFromEventPath(t *testing.T) {
 	}
 	// Deny via the event stream (loop-side decision).
 	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, EffectiveDecision: agent.Deny},
+		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, RawDecision: agent.Deny},
 	}})
 	if f.modalVisible {
 		t.Fatal("modal must close")

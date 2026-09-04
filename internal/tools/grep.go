@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
 
@@ -20,6 +21,10 @@ const (
 )
 
 type grepFiles struct{ root *Root }
+
+var _ Classified = grepFiles{}
+
+func (grepFiles) Class() perm.Class { return perm.ReadOnly }
 
 func (grepFiles) Name() string { return "grep" }
 

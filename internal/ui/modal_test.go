@@ -53,12 +53,12 @@ func TestModalRenderingAndChoices(t *testing.T) {
 	}
 }
 
-// TestBashAllowSessionCoreOwnedEffectiveDecision proves that:
+// TestBashAllowSessionCoreOwnedRawDecision proves that:
 // 1. Modal opens for a bash request.
-// 2. Pressing 'a' sends agent.AllowSession to the approver (UI does NOT compute EffectiveDecision).
-// 3. Core policy calculates EffectiveDecision = AllowOnce.
-// 4. Emitted event records Decision=AllowSession and EffectiveDecision=AllowOnce.
-func TestBashAllowSessionCoreOwnedEffectiveDecision(t *testing.T) {
+// 2. Pressing 'a' sends agent.AllowSession to the approver (UI does NOT compute RawDecision).
+// 3. Core policy calculates RawDecision = AllowOnce.
+// 4. Emitted event records Decision=AllowSession and RawDecision=AllowOnce.
+func TestBashAllowSessionCoreOwnedRawDecision(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	ap := NewApprover()
 	f.SetApprover(ap)
@@ -88,14 +88,14 @@ func TestBashAllowSessionCoreOwnedEffectiveDecision(t *testing.T) {
 		t.Fatal("approver reply channel is empty")
 	}
 
-	// 4 & 5. Core Gate computes EffectiveDecision = AllowOnce for bash,
-	// and emits PermReply event with Decision=AllowSession and EffectiveDecision=AllowOnce.
+	// 4 & 5. Core Gate computes RawDecision = AllowOnce for bash,
+	// and emits PermReply event with Decision=AllowSession and RawDecision=AllowOnce.
 	permEv := agent.Event{
-		Seq:               2,
-		Type:              agent.PermReply,
-		Call:              &agent.ToolCall{ID: "c_bash", Name: "bash"},
-		Decision:          agent.AllowSession,
-		EffectiveDecision: agent.AllowOnce,
+		Seq:         2,
+		Type:        agent.PermReply,
+		Call:        &agent.ToolCall{ID: "c_bash", Name: "bash"},
+		Decision:    agent.AllowSession,
+		RawDecision: agent.AllowOnce,
 	}
 	f.Update(agentEventBatchMsg{Events: []agent.Event{permEv}})
 
@@ -210,7 +210,7 @@ func TestModalFollowRestorationOnlyOnTransition(t *testing.T) {
 
 	// Close modal: restores follow = false
 	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, EffectiveDecision: agent.AllowOnce},
+		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
 	}})
 	if f.follow != false {
 		t.Fatalf("after modal close follow = %v, want false", f.follow)
@@ -313,7 +313,7 @@ func TestModalTermuxSnapshotDimensions(t *testing.T) {
 			// Invariant E: Answer modal -> verify composer is restored
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c_snap"}, Decision: agent.AllowOnce, EffectiveDecision: agent.AllowOnce},
+				{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c_snap"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
 			}})
 
 			vClosed := f.View()

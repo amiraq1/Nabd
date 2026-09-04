@@ -298,7 +298,7 @@ func TestMobileLongWrappedOutputKeepsComposerVisible(t *testing.T) {
 			// Answer modal and type
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 8, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c2"}, Decision: agent.AllowOnce, EffectiveDecision: agent.AllowOnce},
+				{Seq: 8, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c2"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
 			}})
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
@@ -365,7 +365,7 @@ func TestPermissionModalPreservesComposerSlot(t *testing.T) {
 			// Close modal
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "m1"}, Decision: agent.AllowOnce, EffectiveDecision: agent.AllowOnce},
+				{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "m1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
 			}})
 
 			vClosed := f.View()

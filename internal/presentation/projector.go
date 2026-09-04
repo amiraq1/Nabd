@@ -232,9 +232,9 @@ func (p *Projector) appendPermReply(e agent.Event) error {
 			Name:      toolName(e),
 			Status:    PermDeny,
 			Decision:  e.Decision,
-			Effective: e.EffectiveDecision,
+			Effective: e.RawDecision,
 		}
-		if e.EffectiveDecision == agent.Deny {
+		if e.RawDecision == agent.Deny {
 			card.Status = PermDeny
 		} else {
 			card.Status = PermAllow
@@ -243,9 +243,9 @@ func (p *Projector) appendPermReply(e agent.Event) error {
 		return p.append(it)
 	}
 	ptr.Perm.Decision = e.Decision
-	ptr.Perm.Effective = e.EffectiveDecision
+	ptr.Perm.Effective = e.RawDecision
 	switch {
-	case e.EffectiveDecision == agent.Deny:
+	case e.RawDecision == agent.Deny:
 		ptr.Perm.Status = PermDeny
 	default:
 		ptr.Perm.Status = PermAllow

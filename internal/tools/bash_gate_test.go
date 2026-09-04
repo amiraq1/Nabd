@@ -129,7 +129,7 @@ func TestBashApprovedRunsSubprocess(t *testing.T) {
 	if permIdx < 0 || startIdx < 0 || endIdx < 0 {
 		t.Fatalf("missing events: perm=%d start=%d end=%d", permIdx, startIdx, endIdx)
 	}
-	if !(permIdx < startIdx && startIdx < endIdx) {
+	if !(startIdx < permIdx && permIdx < endIdx) {
 		t.Errorf("event ordering wrong: perm=%d start=%d end=%d", permIdx, startIdx, endIdx)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "approved.txt")); err != nil {

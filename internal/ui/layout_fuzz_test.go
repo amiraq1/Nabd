@@ -89,7 +89,7 @@ func FuzzLayoutInvariants(f *testing.F) {
 				if feed.modalVisible {
 					feed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 					feed.Update(agentEventBatchMsg{Events: []agent.Event{
-						{Seq: int(action) + 200, Type: agent.PermReply, Call: &agent.ToolCall{ID: "fz1"}, Decision: agent.AllowOnce, EffectiveDecision: agent.AllowOnce},
+						{Seq: int(action) + 200, Type: agent.PermReply, Call: &agent.ToolCall{ID: "fz1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
 					}})
 				}
 			case 17:
@@ -97,7 +97,7 @@ func FuzzLayoutInvariants(f *testing.F) {
 				if feed.modalVisible {
 					feed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
 					feed.Update(agentEventBatchMsg{Events: []agent.Event{
-						{Seq: int(action) + 300, Type: agent.PermReply, Call: &agent.ToolCall{ID: "fz1"}, Decision: agent.Deny, EffectiveDecision: agent.Deny},
+						{Seq: int(action) + 300, Type: agent.PermReply, Call: &agent.ToolCall{ID: "fz1"}, Decision: agent.Deny, RawDecision: agent.Deny},
 					}})
 				}
 			case 18:

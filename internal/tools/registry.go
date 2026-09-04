@@ -77,17 +77,19 @@ func (r *Registry) Edits() []Edit {
 	return r.edits.all()
 }
 
+type Classified interface {
+	Class() perm.Class
+}
+
 func (r *Registry) Class(tool string) (perm.Class, bool) {
-	switch tool {
-	case "write_file", "edit_file":
-		return perm.Mutating, true
-	case "read_file", "glob", "grep":
-		return perm.ReadOnly, true
-	case "bash":
-		return perm.Executing, true
-	default:
+	t, ok := r.byName[tool]
+	if !ok {
 		return 0, false
 	}
+	if c, ok := t.(Classified); ok {
+		return c.Class(), true
+	}
+	return 0, false
 }
 
 func (r *Registry) add(ts ...Tool) {
