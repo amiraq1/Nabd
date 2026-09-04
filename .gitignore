@@ -11,3 +11,7 @@ test_*.sh
 probe_*.sh
 input.txt
 .commandcode/
+
+# CI/release artifacts
+gh_log.txt
+*.log
