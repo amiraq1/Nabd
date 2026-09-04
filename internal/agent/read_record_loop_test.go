@@ -109,7 +109,7 @@ func TestLoopEmitsReadRecordWhenTruncated(t *testing.T) {
 	if !strings.Contains(toolResult, "[TRUNCATED:") {
 		t.Errorf("tool_result must carry the truncation tail, got %q", toolResult)
 	}
-	if !strings.Contains(toolResult, "use offset=") {
+	if !strings.Contains(toolResult, "continue with offset=") {
 		t.Errorf("tail must say how to continue, got %q", toolResult)
 	}
 }
@@ -117,8 +117,9 @@ func TestLoopEmitsReadRecordWhenTruncated(t *testing.T) {
 // allowGate approves everything without asking.
 type allowGate struct{}
 
-func (allowGate) Check(tool string) (agent.Verdict, string) { return agent.VerdictAllow, "" }
-func (allowGate) Record(tool string, d agent.Decision)      {}
+func (allowGate) Check(tool string) (agent.Verdict, string)              { return agent.VerdictAllow, "" }
+func (allowGate) Record(tool string, d agent.Decision)                   {}
+func (allowGate) Effective(tool string, d agent.Decision) agent.Decision { return d }
 func (allowGate) Ask(ctx context.Context, c agent.ToolCall) agent.Decision {
 	return agent.AllowOnce
 }

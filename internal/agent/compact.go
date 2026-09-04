@@ -12,9 +12,9 @@ import (
 	"nabd/internal/provider"
 )
 
-const summaryPrompt = `أنت تُلخّص جلسة برمجة لتستكملها بعد قصّ السياق.
-اكتب ملخّصًا موجزًا يذكر: ما طلبه المستخدم، ما أُنجز فعلًا، الملفات التي قُرئت أو عُدّلت بأسمائها، القرارات المتّخذة وأسبابها، وما بقي معلّقًا.
-لا تعتذر، لا تُحيّي، لا تخترع ما لم يحدث. النقاط التي لا تعرفها اتركها.`
+const summaryPrompt = `You are summarising a coding session so it can continue after context compaction.
+Write a brief summary mentioning: what the user asked, what was actually done, files read or modified by name, decisions taken and why, and what remains pending.
+Do not apologise, do not greet, do not invent what did not happen. Leave out points you do not know.`
 
 // Compact cuts history at the newest user turn whose tail fits in target,
 // summarises everything before it, and appends one Compact entry.
@@ -23,13 +23,47 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 	live := Live(l.hist)
 	l.mu.Unlock()
 
-	firstKept, dropped, ok := chooseBoundary(live, target)
+	before := Messages(live)
+	firstKept, dropped, ok := chooseBoundaryWith(live, target, l.estimateMessages)
 	if !ok {
-		return fmt.Errorf("لا حدّ صالح للضغط (%d حدثًا حيًّا)", len(live))
+		return fmt.Errorf("no valid boundary (%d live events)", len(live))
 	}
+	boundary := 0
+	for i, e := range live {
+		if e.Seq == firstKept {
+			boundary = i
+			break
+		}
+	}
+	kept := live[boundary:]
+	after := Squeeze(Messages(kept), l.keepFullRounds())
 	sum := l.summarise(ctx, dropped)
-	l.emit(Event{Type: Compact, FirstKept: firstKept, Text: sum})
+	l.emit(Event{
+		Type:      Compact,
+		FirstKept: firstKept,
+		Text:      sum,
+		Compact: &CompactionStats{
+			MessagesBefore: len(before),
+			MessagesAfter:  len(after),
+			TokensBefore:   l.estimateMessages(before),
+			TokensAfter:    l.estimateMessages(after),
+			BoundaryIndex:  boundary,
+			Stubs:          countReadStubs(after),
+		},
+	})
 	return nil
+}
+
+func countReadStubs(ms []provider.Message) int {
+	count := 0
+	for _, m := range ms {
+		for _, r := range m.ToolResults {
+			if strings.Contains(r.Output, "content squeezed") {
+				count++
+			}
+		}
+	}
+	return count
 }
 
 // chooseBoundary walks user turns from newest to oldest and takes the oldest
@@ -37,6 +71,10 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 // a round would leave a tool_result whose tool_use no longer exists, and the
 // next request would be rejected outright.
 func chooseBoundary(live []Event, target int) (int, []Event, bool) {
+	return chooseBoundaryWith(live, target, EstimateMessages)
+}
+
+func chooseBoundaryWith(live []Event, target int, estimate MessageEstimator) (int, []Event, bool) {
 	var idx []int
 	for i, e := range live {
 		if e.Type == UserMsg {
@@ -49,12 +87,12 @@ func chooseBoundary(live []Event, target int) (int, []Event, bool) {
 	best := -1
 	for k := len(idx) - 1; k >= 0; k-- {
 		i := idx[k]
-		if EstimateMessages(Messages(live[i:])) > target && best >= 0 {
+		if estimate(Messages(live[i:])) > target && best >= 0 {
 			break
 		}
 		best = i
 	}
-	if best <= 0 { // nothing older than the newest turn: not worth an entry
+	if best <= 0 {
 		return 0, nil, false
 	}
 	return live[best].Seq, live[:best], true
@@ -67,7 +105,7 @@ func (l *Loop) summarise(ctx context.Context, dropped []Event) string {
 	}
 	ms := append(Messages(dropped), provider.Message{
 		Role: provider.User,
-		Text: "لخّص ما سبق حسب التعليمات.",
+		Text: "Summarise what came before per the instructions.",
 	})
 	ch, err := l.Provider.Stream(ctx, provider.Request{
 		Messages: ms,
@@ -132,17 +170,17 @@ func mechanicalSummary(evs []Event) string {
 		}
 	}
 	var b strings.Builder
-	b.WriteString("«سجل مختصر»\nطلبات المستخدم:\n")
+	b.WriteString("«brief log»\nUser requests:\n")
 	b.WriteString(strings.Join(asks, "\n"))
 	if len(files) > 0 {
 		var fs []string
 		for f := range files {
 			fs = append(fs, f)
 		}
-		fmt.Fprintf(&b, "\nملفات مسّتها الأدوات: %s", strings.Join(fs, "، "))
+		fmt.Fprintf(&b, "\nFiles touched by tools: %s", strings.Join(fs, ", "))
 	}
 	if errs > 0 {
-		fmt.Fprintf(&b, "\nأخطاء أدوات: %d", errs)
+		fmt.Fprintf(&b, "\nTool errors: %d", errs)
 	}
 	return b.String()
 }

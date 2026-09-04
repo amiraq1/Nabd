@@ -3,13 +3,11 @@ package ui
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"nabd/internal/agent"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 )
 
 // Runner is the loop, seen from the UI: one message in, events out.
@@ -83,19 +81,11 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case agent.PermReply, agent.Interrupted:
 			m.pending = nil
 		}
-		var prints []string
-		if m.buf != "" {
-			prints = append(prints, block(" ", m.buf, m.width, lipgloss.NewStyle()))
-			m.buf = ""
-		}
-		if s := RenderEvent(e, m.width); s != "" {
-			prints = append(prints, s)
-		}
 		var cmds []tea.Cmd
-		if len(prints) > 0 {
+		if s := flushJoin(&m.buf, e, m.width); s != "" {
 			// One Println per Update: tea.Batch runs commands concurrently,
 			// so two Printlns would race for the terminal.
-			cmds = append(cmds, tea.Println(strings.Join(prints, "\n")))
+			cmds = append(cmds, tea.Println(s))
 		}
 		cmds = append(cmds, waitEvent(m.events))
 		return m, tea.Batch(cmds...)
@@ -105,7 +95,7 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cancel = nil
 		m.status = ""
 		if msg.err != nil {
-			m.status = "خطأ"
+			m.status = "error: " + errSummary(msg.err)
 		}
 		return m, nil
 
@@ -133,11 +123,11 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			if m.running && m.cancel != nil {
 				m.cancel()
-				m.status = "يُلغى…"
+				m.status = "canceling…"
 			}
 			return m, nil
 		default:
-			return m, nil // لا كتابة أثناء السؤال
+			return m, nil // no typing while prompt is pending
 		}
 	}
 	switch k.Type {
@@ -146,7 +136,7 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// because losing a half-finished answer to a fat thumb is cruel.
 		if m.running && m.cancel != nil {
 			m.cancel()
-			m.status = "يُلغى…"
+			m.status = "canceling…"
 			return m, nil
 		}
 		return m, tea.Quit
@@ -164,7 +154,7 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if strings.HasPrefix(line, "/") {
 			if m.running {
-				m.status = "انتظر انتهاء الدور"
+				m.status = "wait for turn to finish"
 				return m, nil
 			}
 			m.input = ""
@@ -172,6 +162,7 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		if m.running {
+			m.status = "wait for turn to finish · your text is kept"
 			return m, nil
 		}
 		text := line
@@ -210,9 +201,15 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // which is what lets you scroll back with your thumb and grep it later.
 func (m *Chat) View() string {
 	if m.running && m.pending == nil {
-		s := "· يعمل · ctrl+c للإلغاء"
+		s := "· working · ctrl+c to cancel"
 		if m.status != "" {
 			s = "· " + m.status
+		}
+		if m.input != "" {
+			s += "\n› " + m.input
+		}
+		if p := partialTail(m.buf, 6, m.width); p != "" {
+			return p + "\n" + dim.Render(s)
 		}
 		return dim.Render(s)
 	}
@@ -221,9 +218,9 @@ func (m *Chat) View() string {
 		line = dim.Render("· "+m.status) + "\n" + line
 	}
 	if m.pending != nil {
-		keys := "y سماح مرة · a سماح للجلسة · n رفض"
+		keys := "y allow once · a allow session · n deny"
 		if m.pending.Name == "bash" {
-			keys = "y سماح مرة · n رفض · (لا تصريح جلسة للأوامر)"
+			keys = "y allow once · n deny · (no session allow for commands)"
 		}
 		return line + "\n" + warn.Render(keys)
 	}
@@ -231,19 +228,16 @@ func (m *Chat) View() string {
 }
 
 func (m *Chat) command(line string) string {
-	f := strings.Fields(line)
-	switch f[0] {
+	parsed := ParseSlashCommand(line)
+	if !parsed.Valid {
+		return parsed.Error
+	}
+	switch parsed.Command.Name {
 	case "/rewind":
-		n := 1
-		if len(f) > 1 {
-			if v, err := strconv.Atoi(f[1]); err == nil && v > 0 {
-				n = v
-			}
-		}
 		if m.OnRewind == nil {
-			return "لا رجوع في هذه النسخة"
+			return "rewind not supported in this version"
 		}
-		return m.OnRewind(n)
+		return m.OnRewind(parsed.N)
 	case "/ctx":
 		if m.OnCtx == nil {
 			return "—"
@@ -255,27 +249,36 @@ func (m *Chat) command(line string) string {
 		}
 		return m.OnCompact()
 	case "/undo":
-		n := 1
-		if len(f) > 1 {
-			if v, err := strconv.Atoi(f[1]); err == nil && v > 0 {
-				n = v
-			}
-		}
 		if m.OnUndo == nil {
-			return "لا تراجع في هذه النسخة"
+			return "undo not supported in this version"
 		}
-		return m.OnUndo(n)
+		return m.OnUndo(parsed.N)
 	case "/edits":
 		if m.OnEdits == nil {
 			return "—"
 		}
 		return m.OnEdits()
 	case "/help":
-		return "/undo [n] · /edits · /ctx · /compact · ctrl+c · ctrl+d"
+		return "/undo [n] · /edits · /rewind [n] · /ctx · /compact · ctrl+c · ctrl+d"
 	}
-	return "أمر غير معروف: " + f[0]
+	return "unknown command: " + parsed.RawCmd
 }
 
 func (m *Chat) SetInput(s string) {
 	m.input = s
+}
+
+// errSummary formats a runtime error for the UI status bar while ensuring no
+// non-ASCII runes outside AllowedUISymbols leak into the interface.
+func errSummary(err error) string {
+	if err == nil {
+		return ""
+	}
+	s := err.Error()
+	for _, r := range s {
+		if r >= 128 && !AllowedUISymbols[r] {
+			return "execution failed"
+		}
+	}
+	return s
 }

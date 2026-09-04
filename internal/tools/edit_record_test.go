@@ -23,14 +23,18 @@ func TestEditRecordEmitted(t *testing.T) {
 	path := filepath.Join(dir, "notes.md")
 	os.WriteFile(path, []byte("سطر واحد\nسطر اثنان\nسطر ثلاثة\n"), 0o644)
 	raw, _ := json.Marshal(map[string]any{"path": "notes.md"})
-	if _, ok, err := r.Run(ctx, providerToolCall("read_file", raw)); err != nil || !ok {
-		t.Fatalf("read_file: ok=%v err=%v", ok, err)
+	out, err := r.RunDetailed(ctx, "read_file", raw)
+	if err != nil || !out.OK {
+		t.Fatalf("read_file: ok=%v err=%v", out.OK, err)
 	}
-	if r.linesRead != 3 {
-		t.Fatalf("linesRead=%d, want 3 (the read must be recorded)", r.linesRead)
+	if out.LinesRead != 3 {
+		t.Fatalf("out.LinesRead=%d, want 3 (the read must be recorded)", out.LinesRead)
 	}
+	// reads are result-scoped; the loop stages the count for the next write.
+	r.SetLinesRead(out.LinesRead)
 
-	// 2. write_file: rewrite the file, must emit an EditRecord.
+	// 2. write and check the EditRecord. The staged count flows read → write
+	// without stale carry-over (the write consumes exactly what the loop staged).
 	raw, _ = json.Marshal(map[string]any{
 		"path":    "notes.md",
 		"content": "سطر واحد\nسطر معدّل\n",

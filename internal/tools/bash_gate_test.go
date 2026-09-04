@@ -23,11 +23,12 @@ func (g bashGate) Check(tool string) (agent.Verdict, string) {
 	}
 	return agent.VerdictDeny, "غير معروف"
 }
-func (g bashGate) Record(tool string, d agent.Decision) {}
+func (g bashGate) Record(tool string, d agent.Decision)                   {}
+func (g bashGate) Effective(tool string, d agent.Decision) agent.Decision { return d }
 
 // bashProvider asks for one bash tool call.
 type bashProvider struct {
-	cmd  string
+	cmd   string
 	calls int
 }
 
@@ -83,15 +84,25 @@ func runBash(t *testing.T, verdict agent.Verdict, cmd string) ([]agent.Event, st
 	return events, dir
 }
 
-// TestBashDeniedRunsNoSubprocess: a denied bash call must produce no
-// tool_start and no filesystem side effect.
+// TestBashDeniedRunsNoSubprocess: a denied bash call must produce a paired
+// ToolStart/ToolEnd and no filesystem side effect.
 func TestBashDeniedRunsNoSubprocess(t *testing.T) {
 	events, dir := runBash(t, agent.VerdictDeny, "touch denied.txt")
 
+	startSeen, endSeen := false, false
 	for _, e := range events {
 		if e.Type == agent.ToolStart {
-			t.Fatalf("denied bash call produced ToolStart: %+v", e)
+			startSeen = true
 		}
+		if e.Type == agent.ToolEnd {
+			endSeen = true
+			if e.Call == nil || e.Call.OK {
+				t.Fatalf("denied bash call must have OK=false in ToolEnd")
+			}
+		}
+	}
+	if !startSeen || !endSeen {
+		t.Fatalf("expected paired ToolStart/ToolEnd, got start=%v end=%v", startSeen, endSeen)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "denied.txt")); !os.IsNotExist(err) {
 		t.Fatalf("denied bash call created a side effect file")
@@ -118,7 +129,7 @@ func TestBashApprovedRunsSubprocess(t *testing.T) {
 	if permIdx < 0 || startIdx < 0 || endIdx < 0 {
 		t.Fatalf("missing events: perm=%d start=%d end=%d", permIdx, startIdx, endIdx)
 	}
-	if !(permIdx < startIdx && startIdx < endIdx) {
+	if !(startIdx < permIdx && permIdx < endIdx) {
 		t.Errorf("event ordering wrong: perm=%d start=%d end=%d", permIdx, startIdx, endIdx)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "approved.txt")); err != nil {

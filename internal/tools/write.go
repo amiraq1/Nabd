@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"nabd/internal/agent"
+	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
 )
@@ -84,7 +85,7 @@ func commit(root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []
 		return before, after, err
 	}
 	if !snap.Unchanged(want, after) {
-		return before, after, errors.New("الكتابة لم تثبت على القرص كما هي")
+		return before, after, errors.New("write did not verify on disk as-is")
 	}
 	return before, after, nil
 }
@@ -99,6 +100,7 @@ func buildRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLin
 		ReadLines:  readLines,
 		BlobAfter:  after.Blob,
 		BlobBefore: before.Blob,
+		ModeBefore: before.Mode,
 	}
 	if !before.Absent {
 		if b, err := sh.Read(before.Blob); err == nil {
@@ -233,14 +235,18 @@ type writeFile struct {
 	reg  *Registry
 }
 
+var _ Classified = writeFile{}
+
+func (writeFile) Class() perm.Class { return perm.Mutating }
+
 func (writeFile) Name() string { return "write_file" }
 
 func (writeFile) Spec() provider.ToolSpec {
 	return spec("write_file",
-		"يكتب ملفًا كاملًا داخل المشروع، وينشئ المجلدات الناقصة. المحتوى القديم يُستبدل بالكامل، فاقرأ الملف أولًا إن كان موجودًا.",
+		"Write a whole file inside the project, creating missing directories. Old content is fully replaced; read the file first if it exists.",
 		`{"type":"object","properties":{
-			"path": {"type": "string", "description": "مسار نسبي داخل المشروع"},
-			"content": {"type": "string", "description": "المحتوى الكامل الجديد"}
+			"path": {"type": "string", "description": "relative path inside the project"},
+			"content": {"type": "string", "description": "the full new content"}
 		}, "required":["path", "content"]}`)
 }
 
@@ -250,24 +256,24 @@ func (w writeFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 		Content string `json:"content"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", false, fmt.Errorf("وسائط غير صالحة: %w", err)
+		return "", false, fmt.Errorf("invalid args: %w", err)
 	}
 	if len(a.Content) > maxWriteBytes {
-		return "", false, fmt.Errorf("المحتوى %d بايت، والحد %d", len(a.Content), maxWriteBytes)
+		return "", false, fmt.Errorf("content is %d bytes, limit is %d", len(a.Content), maxWriteBytes)
 	}
 	abs, err := w.root.Resolve(a.Path)
 	if err != nil {
 		return "", false, err
 	}
-	before, after, err := commit(w.root, w.sh, w.log, "write_file", abs, []byte(a.Content), w.reg.linesRead)
+	before, after, err := commit(w.root, w.sh, w.log, "write_file", abs, []byte(a.Content), w.reg.ConsumeLinesRead())
 	if err != nil {
 		return "", false, err
 	}
-	verb := "استُبدل"
+	verb := "replaced"
 	if before.Absent {
-		verb = "أُنشئ"
+		verb = "created"
 	}
-	return fmt.Sprintf("%s %s (%d بايت، %d سطرًا)", verb, w.root.Rel(abs), after.Size, linesIn(a.Content)), true, nil
+	return fmt.Sprintf("%s %s (%d bytes, %d lines)", verb, w.root.Rel(abs), after.Size, linesIn(a.Content)), true, nil
 }
 
 type editFile struct {
@@ -277,16 +283,20 @@ type editFile struct {
 	reg  *Registry
 }
 
+var _ Classified = editFile{}
+
+func (editFile) Class() perm.Class { return perm.Mutating }
+
 func (editFile) Name() string { return "edit_file" }
 
 func (editFile) Spec() provider.ToolSpec {
 	return spec("edit_file",
-		"يستبدل نصًا بنص داخل ملف موجود. النص القديم يجب أن يكون فريدًا في الملف، أو مرّر all=true لاستبدال كل المواضع.",
+		"Replace one text with another inside an existing file. The old text must be unique in the file, or pass all=true to replace every occurrence.",
 		`{"type":"object","properties":{
-			"path": {"type": "string", "description": "مسار نسبي داخل المشروع"},
-			"old": {"type": "string", "description": "النص المطلوب استبداله، حرفيًا"},
-			"new": {"type": "string", "description": "النص البديل"},
-			"all": {"type": "boolean", "description": "استبدال كل المواضع"}
+			"path": {"type": "string", "description": "relative path inside the project"},
+			"old": {"type": "string", "description": "the exact old text to replace"},
+			"new": {"type": "string", "description": "the replacement text"},
+			"all": {"type": "boolean", "description": "replace all occurrences"}
 		}, "required":["path", "old", "new"]}`)
 }
 
@@ -298,10 +308,10 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 		All  bool   `json:"all"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", false, fmt.Errorf("وسائط غير صالحة: %w", err)
+		return "", false, fmt.Errorf("invalid args: %w", err)
 	}
 	if a.Old == "" {
-		return "", false, errors.New("النص القديم فارغ؛ استخدم write_file لملف جديد")
+		return "", false, errors.New("old text is empty; use write_file for a new file")
 	}
 	abs, err := w.root.Resolve(a.Path)
 	if err != nil {
@@ -312,21 +322,21 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 		return "", false, err
 	}
 	if st.Size() > maxEditBytes {
-		return "", false, fmt.Errorf("الملف %d بايت، والحد %d", st.Size(), maxEditBytes)
+		return "", false, fmt.Errorf("file is %d bytes, limit is %d", st.Size(), maxEditBytes)
 	}
 	src, err := os.ReadFile(abs)
 	if err != nil {
 		return "", false, err
 	}
 	if hasNUL(src) {
-		return "", false, errors.New("ملف ثنائي")
+		return "", false, errors.New("binary file")
 	}
 	n := strings.Count(string(src), a.Old)
 	switch {
 	case n == 0:
-		return "", false, errors.New("لم يُعثر على النص القديم في " + w.root.Rel(abs))
+		return "", false, errors.New("old text not found in " + w.root.Rel(abs))
 	case n > 1 && !a.All:
-		return "", false, fmt.Errorf("النص القديم ورد %d مرات؛ وسّع المقطع ليصبح فريدًا أو مرّر all=true", n)
+		return "", false, fmt.Errorf("old text occurs %d times; widen the snippet to make it unique or pass all=true", n)
 	}
 	reps := n
 	var out string
@@ -336,10 +346,10 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 		out = strings.Replace(string(src), a.Old, a.New, 1)
 		reps = 1
 	}
-	if _, _, err := commit(w.root, w.sh, w.log, "edit_file", abs, []byte(out), w.reg.linesRead); err != nil {
+	if _, _, err := commit(w.root, w.sh, w.log, "edit_file", abs, []byte(out), w.reg.ConsumeLinesRead()); err != nil {
 		return "", false, err
 	}
-	return fmt.Sprintf("عُدّل %s (%d استبدال، %d سطرًا ← %d)",
+	return fmt.Sprintf("edited %s (%d replacements, %d lines → %d)",
 		w.root.Rel(abs), reps, linesIn(string(src)), linesIn(out)), true, nil
 }
 

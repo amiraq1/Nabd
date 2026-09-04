@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"nabd/internal/agent"
+	"nabd/internal/config"
+	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
 
@@ -17,12 +19,70 @@ const (
 	maxOutBytes  = 48 * 1024 // what one tool result may cost in context
 	maxLines     = 1200
 	maxLineRunes = 300 // a minified bundle must not eat the whole budget
-	// defaultMaxRead is the fallback when NABD_MAX_READ is unset. It is a
-	// calibration for the Groq 8000-TPM key, not a contract: provider limits
-	// differ, so the operator overrides it via NABD_MAX_READ. The 3 KiB value
-	// was calibrated by live 413s (16 KiB → 8016, 8 KiB × 2 reads → 9725).
-	defaultMaxRead = 3 * 1024
+	// Read budget derivation (STEP 1/8), written out:
+	//   tpmLimit   = 8000 tokens/min  (Groq key, measured live from 7×413)
+	//   maxTok     = NABD_MAX_TOKENS  (output reservation; default 1024)
+	//   overhead   = 2210 tokens  (MEASURED from two 413 sessions: system
+	//                prompt + tool schemas + message framing; the old 450
+	//                estimate was wrong by 5×)
+	//   bytesPerTok = 2.41  (MEASURED: 4121 read bytes over 1709 tokens
+	//                between sessions 203320 and 203954)
+	//   roundsPerMin = 2  (tool round + answer round per turn; the TPM cap
+	//                is per-minute across all requests, so the per-request
+	//                budget divides by the expected request count)
+	//   safety     = 0.5
+	//   safe_input_per_request = (tpmLimit/maxTok − overhead) / roundsPerMin
+	//   defaultMaxRead = safe_input × bytesPerTok × safety
+	// The shipped default stays 3072 (live-calibrated) until the derived
+	// value passes the disk measurement.
+	tpmLimit      = 8000
+	maxTokEnv     = "NABD_MAX_TOKENS"
+	defaultMaxTok = 1024
+	readOverhead  = 2210 // tokens; MEASURED from 413 sessions, not estimated
+	bytesPerTok   = 2.41 // MEASURED from session pair, Arabic-heavy content
+	readRounds    = 2    // requests per turn (tool + answer)
+	readSafety    = 0.5
 )
+
+// readMaxTokens mirrors the agent's NABD_MAX_TOKENS resolution so the read
+// cap follows the same output reservation. It reads through config.Get so a
+// value set in ~/.ag/config takes precedence, with the environment as the
+// documented fallback — the same contract every other limit uses.
+func readMaxTokens() int {
+	if v := config.Get(maxTokEnv); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 128 && n <= 8192 {
+			return n
+		}
+	}
+	return defaultMaxTok
+}
+
+// defaultMaxReadDerived derives the read cap from the measured input
+// budget. IMPORTANT: the derived value is NOT the default — the shipped
+// default is 3072 (live-calibrated) until the derived value passes the
+// disk measurement. The derivation is a candidate reachable via
+// NABD_MAX_READ.
+func defaultMaxReadDerived() int {
+	// Per-request input budget: the per-minute TPM cap divided by the
+	// expected request count in a turn, minus the measured overhead and the
+	// output reservation.
+	perReq := tpmLimit/readRounds - readMaxTokens() - readOverhead
+	if perReq < 0 {
+		perReq = 0
+	}
+	n := int(float64(perReq) * bytesPerTok * readSafety)
+	if n < minMaxRead {
+		return minMaxRead
+	}
+	return n
+}
+
+// defaultMaxRead is what NABD_MAX_READ falls back to when unset. Kept at
+// the live-calibrated 3072: the derived value (measured constants) still
+// needs the disk regression gate before it ships as a default.
+func defaultMaxRead() int {
+	return 3072
+}
 
 // maxReadBytes caps a single read_file call. Read once at startup from
 // NABD_MAX_READ so the cap follows the provider's token budget instead of
@@ -38,12 +98,12 @@ const (
 var maxReadBytes = envMaxRead()
 
 func envMaxRead() int {
-	if v := os.Getenv("NABD_MAX_READ"); v != "" {
+	if v := config.Get("NABD_MAX_READ"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= minMaxRead && n <= maxMaxRead {
 			return n
 		}
 	}
-	return defaultMaxRead
+	return defaultMaxRead()
 }
 
 type readFile struct {
@@ -51,54 +111,103 @@ type readFile struct {
 	reg  *Registry
 }
 
+var _ Classified = readFile{}
+
+func (readFile) Class() perm.Class { return perm.ReadOnly }
+
 func (readFile) Name() string { return "read_file" }
 
-// RunDetailed lets read_file report truncation through the Outcome, so the
-// loop can journal a read_record event when the byte cap cut the file.
+// readMeta is read_file's per-invocation result. Returning it through the
+// Outcome (instead of stamping it onto a shared registry slot) is what makes a
+// read's metadata ownable: concurrent reads on one Registry can never steal one
+// another's count or truncation. read_file itself no longer writes the shared
+// linesRead slot; the agent loop threads LinesRead to the next write via
+// Registry.SetLinesRead. The truncation slot is retained only for the legacy
+// plain-Run path and is drained within RunDetailed, so it cannot leak past the
+// call that produced it.
+type readMeta struct {
+	linesRead  int
+	truncated  bool
+	nextOffset int
+}
+
+// RunDetailed lets read_file report truncation and line count through the
+// Outcome, so the loop can journal a read_record event when the byte cap cut
+// the file short.
 func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.Outcome, error) {
-	text, ok, err := t.Run(ctx, raw)
-	trunc := false
-	if t.reg != nil {
-		trunc = t.reg.ConsumeTruncated()
+	text, meta, ok, err := t.run(ctx, raw)
+	if err != nil || ctx.Err() != nil {
+		// A failed or cancelled read must not leave partial metadata for a
+		// later unrelated call to inherit.
+		if t.reg != nil {
+			t.reg.ClearReadState()
+		}
+		return agent.Outcome{Text: text, OK: ok}, err
 	}
-	return agent.Outcome{Text: text, OK: ok, Truncated: trunc}, err
+	// The truncation flag lives in the Outcome (per-invocation). Drain the
+	// legacy slot here — its recovered value is intentionally discarded in
+	// favour of meta, so a concurrent reader can never swap flags via the slot.
+	if t.reg != nil {
+		t.reg.ConsumeTruncated()
+	}
+	return agent.Outcome{
+		Text:       text,
+		OK:         ok,
+		Truncated:  meta.truncated,
+		NextOffset: meta.nextOffset,
+		LinesRead:  meta.linesRead,
+	}, nil
 }
 
 func (readFile) Spec() provider.ToolSpec {
 	return spec("read_file",
-		"اقرأ ملفًا نصيًا. الأسطر مرقّمة. استخدم offset وlimit للملفات الطويلة.",
+		"Read a text file. Lines are numbered. Use offset and limit for long files.",
 		`{"type":"object","properties":{
-			"path":{"type":"string","description":"مسار نسبي من جذر المشروع"},
-			"offset":{"type":"integer","description":"أول سطر (يبدأ من ١)"},
-			"limit":{"type":"integer","description":"عدد الأسطر"}},
+			"path":{"type":"string","description":"relative path from the project root"},
+			"offset":{"type":"integer","description":"first line (starts at 1)"},
+			"limit":{"type":"integer","description":"number of lines"}},
 		 "required":["path"]}`)
 }
 
-func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, error) {
+// Run wraps the read implementation so that any error path — including the
+// plain Registry.Run path that never reaches RunDetailed — clears pending
+// read metadata. A failed read must not contaminate a later unrelated call
+// with stale linesRead/truncation state. The per-invocation line count and
+// truncation live in the Outcome (see RunDetailed); this plain path returns
+// text only and does not touch the shared slots.
+func (t readFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
+	text, _, ok, err := t.run(ctx, raw)
+	if err != nil && t.reg != nil {
+		t.reg.ClearReadState()
+	}
+	return text, ok, err
+}
+
+func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta, bool, error) {
 	var a struct {
 		Path   string `json:"path"`
 		Offset int    `json:"offset"`
 		Limit  int    `json:"limit"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", false, fmt.Errorf("وسائط غير صالحة: %w", err)
+		return "", readMeta{}, false, fmt.Errorf("invalid args: %w", err)
 	}
 
 	p, err := t.root.Resolve(a.Path)
 	if err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 	fi, err := os.Stat(p)
 	if err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 	if fi.IsDir() {
-		return "", false, fmt.Errorf("%s مجلد · استخدم glob", t.root.Rel(p))
+		return "", readMeta{}, false, fmt.Errorf("%s is a directory · use glob", t.root.Rel(p))
 	}
 
 	f, err := os.Open(p)
 	if err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 	defer f.Close()
 
@@ -107,10 +216,10 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 	head := make([]byte, 8192)
 	n, _ := f.Read(head)
 	if strings.IndexByte(string(head[:n]), 0) >= 0 {
-		return "", false, fmt.Errorf("%s ملف ثنائي (%d بايت)", t.root.Rel(p), fi.Size())
+		return "", readMeta{}, false, fmt.Errorf("%s is binary (%d bytes)", t.root.Rel(p), fi.Size())
 	}
 	if _, err := f.Seek(0, 0); err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 
 	from := a.Offset
@@ -134,12 +243,13 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 		total++
 	}
 	if _, err := f.Seek(0, 0); err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 
+	var meta readMeta
 	line, shown, capped := 0, 0, ""
 	for sc.Scan() {
 		line++
@@ -147,21 +257,39 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 			continue
 		}
 		if shown >= limit {
-			capped = fmt.Sprintf("… توقّف عند السطر %d · limit=%d", line-1, limit)
+			// Explicit range + next offset, in lines (the unit read_file's
+			// offset param uses), so the model never has to infer it.
+			capped = TruncTail(from, line-1, total, line)
 			break
 		}
 		if b.Len() > maxOutBytes {
-			capped = fmt.Sprintf("… توقّف عند السطر %d · بلغ حدّ الحجم", line-1)
+			capped = TruncTail(from, line-1, total, line)
 			break
 		}
 		// Byte cap: only emit the line if it still fits under maxReadBytes,
 		// so truncation always lands on a line boundary, never mid-line.
 		if b.Len()+len(sc.Bytes())+8 > maxReadBytes {
-			capped = fmt.Sprintf(
-				"[TRUNCATED: stopped at line %d of %d; use offset=%d to continue]",
-				line-1, total, line)
+			if shown == 0 && line == from {
+				// The line itself exceeds the cap. It is emitted clipped and
+				// marked, and next_offset skips past it — the remainder of
+				// this line is NOT reachable (the tool has no byte offset),
+				// so the marker says so explicitly rather than let the model
+				// believe it saw the whole file.
+				fmt.Fprintf(&b, "%d|%s [LINE_TRUNCATED: line longer than maxReadBytes=%d; remainder of this line is not readable with this tool]\n", line, clip(sc.Text(), maxLineRunes), maxReadBytes)
+				shown++
+				capped = TruncTail(from, line, total, line+1)
+				meta.truncated = true
+				meta.nextOffset = line + 1
+				if t.reg != nil {
+					t.reg.SetTruncated(line + 1)
+				}
+				break
+			}
+			capped = TruncTail(from, line-1, total, line)
+			meta.truncated = true
+			meta.nextOffset = line
 			if t.reg != nil {
-				t.reg.SetTruncated()
+				t.reg.SetTruncated(line)
 			}
 			break
 		}
@@ -169,22 +297,20 @@ func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, err
 		shown++
 	}
 	if err := sc.Err(); err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 
 	if shown == 0 {
 		if line == 0 {
-			return fmt.Sprintf("%s فارغ", t.root.Rel(p)), true, nil
+			return fmt.Sprintf("%s is empty", t.root.Rel(p)), readMeta{}, true, nil
 		}
-		return fmt.Sprintf("لا سطر عند offset=%d · الملف %d سطرًا", from, line), true, nil
+		return fmt.Sprintf("no lines at offset=%d · file has %d lines", from, line), readMeta{}, true, nil
 	}
 	if capped != "" {
 		b.WriteString(capped + "\n")
 	}
-	if t.reg != nil {
-		t.reg.SetLinesRead(shown)
-	}
-	return b.String(), true, nil
+	meta.linesRead = shown
+	return b.String(), meta, true, nil
 }
 
 func clip(s string, n int) string {
@@ -193,4 +319,20 @@ func clip(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + fmt.Sprintf(" …[+%d]", len(r)-n)
+}
+
+// TruncTail is the single formatter for every truncated read tail. It names
+// the range read (start–end), the total, and the exact next offset — all in
+// lines, the unit read_file's offset parameter uses — so the model never
+// has to infer or convert anything. One function, called from every
+// truncation path; a second copy would drift after a month.
+func TruncTail(start, end, total, nextOffset int) string {
+	if end < start {
+		end = start
+	}
+	return fmt.Sprintf(
+		"\n[TRUNCATED: read lines %d-%d of %d; continue with offset=%d]\n"+
+			"lines_read=%d  total_lines=%d  next_offset=%d",
+		start, end, total, nextOffset,
+		end-start+1, total, nextOffset)
 }

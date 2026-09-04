@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
 
@@ -21,15 +22,19 @@ const (
 
 type grepFiles struct{ root *Root }
 
+var _ Classified = grepFiles{}
+
+func (grepFiles) Class() perm.Class { return perm.ReadOnly }
+
 func (grepFiles) Name() string { return "grep" }
 
 func (grepFiles) Spec() provider.ToolSpec {
 	return spec("grep",
-		"ابحث بتعبير نمطي في الملفات. النتيجة مسار:سطر:نص.",
+		"Search files with a regular expression. Result is path:line:text.",
 		`{"type":"object","properties":{
-			"pattern":{"type":"string","description":"تعبير نمطي (Go RE2)"},
-			"path":{"type":"string","description":"مجلد أو ملف · الافتراضي الجذر"},
-			"glob":{"type":"string","description":"تصفية مثل **/*.go"},
+			"pattern":{"type":"string","description":"regular expression (Go RE2)"},
+			"path":{"type":"string","description":"directory or file, default root"},
+			"glob":{"type":"string","description":"filter like **/*.go"},
 			"ignore_case":{"type":"boolean"},
 			"limit":{"type":"integer"}},
 		 "required":["pattern"]}`)
@@ -44,10 +49,10 @@ func (t grepFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 		Limit      int    `json:"limit"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", false, fmt.Errorf("وسائط غير صالحة: %w", err)
+		return "", false, fmt.Errorf("invalid args: %w", err)
 	}
 	if strings.TrimSpace(a.Pattern) == "" {
-		return "", false, fmt.Errorf("نمط فارغ")
+		return "", false, fmt.Errorf("empty pattern")
 	}
 	expr := a.Pattern
 	if a.IgnoreCase {
@@ -56,7 +61,7 @@ func (t grepFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	// RE2 has no backtracking, so a hostile pattern cannot hang the phone.
 	re, err := regexp.Compile(expr)
 	if err != nil {
-		return "", false, fmt.Errorf("تعبير غير صالح: %w", err)
+		return "", false, fmt.Errorf("invalid regexp: %w", err)
 	}
 
 	start := a.Path
@@ -151,11 +156,11 @@ func (t grepFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	}
 
 	if hits == 0 {
-		return fmt.Sprintf("لا تطابق · %s", a.Pattern), true, nil
+		return fmt.Sprintf("no match · %s", a.Pattern), true, nil
 	}
-	fmt.Fprintf(&b, "— %d تطابقًا في %d ملفًا", hits, files)
+	fmt.Fprintf(&b, "— %d matches in %d files", hits, files)
 	if truncated {
-		b.WriteString(" · مقتطع")
+		b.WriteString(" · truncated")
 	}
 	b.WriteString("\n")
 	return b.String(), true, nil

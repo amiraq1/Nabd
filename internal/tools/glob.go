@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
 
@@ -17,14 +19,19 @@ const maxGlobResults = 200
 
 type globFiles struct{ root *Root }
 
+var _ Classified = globFiles{}
+
+func (globFiles) Class() perm.Class { return perm.ReadOnly }
+
 func (globFiles) Name() string { return "glob" }
 
 func (globFiles) Spec() provider.ToolSpec {
 	return spec("glob",
-		"ابحث عن ملفات بنمط مثل **/*.go أو internal/*/*_test.go. الأحدث أولًا.",
+		"Find files by pattern like **/*.go or internal/*/*_test.go. Newest first. Long result lists are paged: continue with offset.",
 		`{"type":"object","properties":{
 			"pattern":{"type":"string"},
-			"limit":{"type":"integer"}},
+			"limit":{"type":"integer"},
+			"offset":{"type":"integer","description":"1-based result offset for paging through a long list"}},
 		 "required":["pattern"]}`)
 }
 
@@ -32,13 +39,14 @@ func (t globFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	var a struct {
 		Pattern string `json:"pattern"`
 		Limit   int    `json:"limit"`
+		Offset  int    `json:"offset"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", false, fmt.Errorf("وسائط غير صالحة: %w", err)
+		return "", false, fmt.Errorf("invalid args: %w", err)
 	}
 	pat := strings.TrimSpace(a.Pattern)
 	if pat == "" {
-		return "", false, fmt.Errorf("نمط فارغ")
+		return "", false, errors.New("empty pattern")
 	}
 	if filepath.IsAbs(pat) {
 		return "", false, ErrAbsolute
@@ -46,6 +54,10 @@ func (t globFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	limit := a.Limit
 	if limit <= 0 || limit > maxGlobResults {
 		limit = maxGlobResults
+	}
+	start := a.Offset
+	if start < 1 {
+		start = 1
 	}
 
 	segs := strings.Split(filepath.ToSlash(filepath.Clean(pat)), "/")
@@ -91,18 +103,25 @@ func (t globFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	sort.Slice(hits, func(i, j int) bool { return hits[i].mod.After(hits[j].mod) })
 
 	if len(hits) == 0 {
-		return fmt.Sprintf("لا نتائج · %s", pat), true, nil
+		return fmt.Sprintf("no results · %s", pat), true, nil
 	}
 	total := len(hits)
-	if total > limit {
-		hits = hits[:limit]
+	if start > total {
+		return fmt.Sprintf("no results at offset=%d · %d total (newest first) · %s", start, total, pat), true, nil
+	}
+	end := start - 1 + limit
+	if end > total {
+		end = total
 	}
 	var b strings.Builder
-	for _, h := range hits {
+	for _, h := range hits[start-1 : end] {
 		b.WriteString(h.rel + "\n")
 	}
-	if total > limit {
-		fmt.Fprintf(&b, "… %d من %d\n", limit, total)
+	if end < total {
+		// Same continuation contract as read_file: the tail names the
+		// exact range shown and the offset that resumes after it — a
+		// silent cut invites the model to summarise half the truth.
+		fmt.Fprintf(&b, "showing %d-%d of %d · continue with offset=%d\n", start, end, total, end+1)
 	}
 	return b.String(), true, nil
 }

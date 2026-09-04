@@ -10,6 +10,7 @@ import (
 	"nabd/internal/agent"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // DefaultWidth is a phone in portrait, one hand.
@@ -22,6 +23,26 @@ var (
 	bad  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	warn = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
 )
+
+// AllowedUISymbols is the strict whitelist of non-ASCII glyphs permitted in UI string literals
+// and UI error displays. These are UI boundary, status, and decoration symbols, neither Arabic nor Latin.
+var AllowedUISymbols = map[rune]bool{
+	'⚙': true, // U+2699 ToolStart icon
+	'✓': true, // U+2713 Tool success / PermReply allow
+	'✗': true, // U+2717 Tool failure / RunError
+	'✂': true, // U+2702 Truncation cut icon
+	'⚑': true, // U+2691 Notice icon
+	'›': true, // U+203A User prompt prefix
+	'─': true, // U+2500 RunStart separator bar
+	'⊘': true, // U+2298 Interrupted icon
+	'≡': true, // U+2261 Compact icon
+	'✎': true, // U+270E Edit record icon
+	'·': true, // U+00B7 Middle dot separator
+	'…': true, // U+2026 Ellipsis
+	'—': true, // U+2014 Em dash
+	'▌': true, // U+258C Prompt cursor block
+	'→': true, // U+2192 Arrow
+}
 
 // RenderEvent returns the visible form of one event, or "" for events that
 // are structure rather than content. Turn boundaries are deliberately
@@ -41,7 +62,7 @@ func RenderEvent(e agent.Event, width int) string {
 		return block("⚙", callLine(e.Call), width, lipgloss.NewStyle())
 
 	case agent.PermAsk:
-		return block("?", callLine(e.Call)+" — يسمح؟", width, warn)
+		return block("?", callLine(e.Call)+" — allow?", width, warn)
 
 	case agent.PermReply:
 		st, mark := bad, "✗"
@@ -62,7 +83,7 @@ func RenderEvent(e agent.Event, width int) string {
 	case agent.Interrupted:
 		s := e.Text
 		if s == "" {
-			s = "توقّف"
+			s = "stopped"
 		}
 		return dim.Render("⊘ " + s)
 
@@ -76,7 +97,7 @@ func RenderEvent(e agent.Event, width int) string {
 		}
 		s := "✎ " + e.Edit.Path
 		if e.Edit.ReadLines > 0 {
-			s += fmt.Sprintf(" · قرأ %d سطرًا", e.Edit.ReadLines)
+			s += fmt.Sprintf(" · read %d lines", e.Edit.ReadLines)
 		}
 		return dim.Render(s)
 
@@ -87,11 +108,16 @@ func RenderEvent(e agent.Event, width int) string {
 			return ""
 		}
 		if e.Read.Truncated {
-			return warn.Render("✂ " + e.Read.Path + " · مقروء جزئيًا")
+			return warn.Render("✂ " + e.Read.Path + " · partially read")
 		}
-		return ""
+	case agent.EventRateLimit:
+		return warn.Render(fmt.Sprintf("⚑ rate limit %d · retry in %.1fs (attempt %d)", e.Code, e.WaitSec, e.Attempt))
 
-	case agent.TurnStart, agent.TurnEnd:
+	case agent.RunEnd:
+		return dim.Render("── " + e.Text)
+
+	case agent.TurnStart, agent.TurnEnd, agent.EventCalib:
+		// TurnEnd and calibration are structure, not content: nothing to show.
 		return ""
 	}
 	// Unknown type: show it rather than hide it. A newer nabd wrote this.
@@ -148,16 +174,29 @@ func toolEnd(c *agent.ToolCall, width int) string {
 	return out
 }
 
-// tail keeps the last line of output: the verdict is at the bottom.
+// maxTailLines is how many trailing lines of a tool result the phone screen
+// keeps: enough to read a short glob/read result whole, shallow enough that
+// long shell logs still end at the verdict. A one-line tail collapses a 5-row
+// glob listing to a single file — that is the "glob * → one line" defect,
+// because the result set itself vanishes and only the bottom line survives.
+const maxTailLines = 8
+
+// tail keeps the trailing lines of output. The verdict is at the bottom, but a
+// single-line tail hides every completed line above it — fatal for list
+// producers like glob, where the rows ARE the answer. Showing the last few
+// lines preserves the bottom verdict/tail while keeping the listing readable.
 func tail(s string) string {
 	s = strings.TrimRight(s, "\n")
 	if s == "" {
 		return ""
 	}
-	if i := strings.LastIndexByte(s, '\n'); i >= 0 {
-		return s[i+1:]
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxTailLines {
+		return s
 	}
-	return s
+	kept := lines[len(lines)-maxTailLines:]
+	kept[0] = "… " + kept[0]
+	return strings.Join(kept, "\n")
 }
 
 func dur(ms int64) string {
@@ -185,40 +224,64 @@ func block(sym, s string, width int, st lipgloss.Style) string {
 	return st.Render(b.String())
 }
 
-// wrap breaks on spaces at width runes, counting runes not bytes: Arabic
-// text is where a byte-based wrapper shows its ignorance.
+// wrap breaks text into lines of at most width terminal cells, using
+// ansi.StringWidth for visual measurement. This correctly handles Arabic,
+// Emoji, CJK, combining marks, and ANSI escape sequences.
 func wrap(s string, width int) []string {
 	if width < 8 {
 		width = 8
 	}
-	var out []string
-	for _, para := range strings.Split(s, "\n") {
-		line, n := "", 0
-		for _, w := range strings.Fields(para) {
-			r := []rune(w)
-			for len(r) > width { // a word longer than the screen
-				if n > 0 {
-					out = append(out, line)
-					line, n = "", 0
-				}
-				out = append(out, string(r[:width]))
-				r = r[width:]
-			}
-			if len(r) == 0 {
-				continue
-			}
-			if n > 0 && n+1+len(r) > width {
-				out = append(out, line)
-				line, n = "", 0
-			}
-			if n > 0 {
-				line += " "
-				n++
-			}
-			line += string(r)
-			n += len(r)
-		}
-		out = append(out, line)
+	if s == "" {
+		return []string{""}
 	}
-	return out
+	wrapped := ansi.Hardwrap(ansi.Wordwrap(s, width, " \t"), width, false)
+	lines := strings.Split(wrapped, "\n")
+	if len(lines) == 0 {
+		return []string{""}
+	}
+	return lines
+}
+
+// flushJoin is the one place text-delta buffers turn into scrollback. Both
+// Chat and Replay call it, so a session replays exactly as it was seen:
+// the buffered text block first, then the event that ended it, joined into
+// a single string because two tea.Println in one Batch race for the
+// terminal (P0-1.6). Returns "" when there is nothing to print.
+func flushJoin(buf *string, e agent.Event, width int) string {
+	var prints []string
+	if *buf != "" {
+		prints = append(prints, block(" ", *buf, width, lipgloss.NewStyle()))
+		*buf = ""
+	}
+	if s := RenderEvent(e, width); s != "" {
+		prints = append(prints, s)
+	}
+	return strings.Join(prints, "\n")
+}
+
+// partialTail is the live view of text still streaming: the last n wrapped
+// lines, marked with … when older lines were cut. A phone shows progress
+// without scrolling the answer past the reader; the scrollback gets the
+// whole block at flush time.
+func partialTail(buf string, n, width int) string {
+	s := strings.TrimSpace(buf)
+	if s == "" || n <= 0 {
+		return ""
+	}
+	if width < 20 {
+		width = DefaultWidth
+	}
+	lines := wrap(s, width-2)
+	more := len(lines) > n
+	if more {
+		lines = lines[len(lines)-n:]
+	}
+	for i := range lines {
+		pre := "  "
+		if i == 0 && more {
+			pre = "… "
+		}
+		lines[i] = pre + lines[i]
+	}
+	return strings.Join(lines, "\n")
 }

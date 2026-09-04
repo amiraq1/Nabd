@@ -1,0 +1,32 @@
+name: Go Tests
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - name: Build
+        run: go build ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test ./...
+      - name: Test with Race Detector
+        run: go test ./... -race -count=1
+      - name: Exec.Cmd.Env static audit
+        # Phase 3 gate: every os/exec.Command construction in non-test Go
+        # code must assign cmd.Env explicitly before Start. A nil Env makes
+        # the child inherit the full parent environment, defeating the bash
+        # tool's allowlist.
+        run: bash scripts/check-exec-env.sh
+      - name: Staticcheck
+        # GOTOOLCHAIN=local pins the parser to the installed toolchain (1.27,
+        # matching go.mod). Without it, staticcheck@latest forces its own
+        # minimum (go1.26.8) while parsing the go1.27 stdlib, which fails with
+        # go/types parse errors (e.g. `rfd` in splicePipe).
+        run: GOTOOLCHAIN=local go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...

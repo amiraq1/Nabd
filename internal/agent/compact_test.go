@@ -88,7 +88,7 @@ func TestSqueezeStubsStaleReadResults(t *testing.T) {
 			{ID: "r1", Name: "read_file", Input: json.RawMessage(`{"path":"big.go"}`)},
 		}},
 		{Role: provider.User, ToolResults: []provider.ToolResult{
-			{ID: "r1", Output: "1|line one\n2|line two\n3|line three\n[TRUNCATED: stopped at line 3 of 300; use offset=4 to continue]\n", IsErr: false},
+			{ID: "r1", Output: "1|line one\n2|line two\n3|line three\n[TRUNCATED: read lines 1-3 of 300; continue with offset=4]\nlines_read=3  total_lines=300  next_offset=4\n", IsErr: false},
 		}},
 		{Role: provider.User, Text: "keep"},
 		{Role: provider.User, Text: "u1"},
@@ -101,10 +101,10 @@ func TestSqueezeStubsStaleReadResults(t *testing.T) {
 		t.Fatalf("message count changed: %d", len(sq))
 	}
 	got := sq[1].ToolResults[0].Output
-	if !strings.Contains(got, "قرأتُ الأسطر 1-3 من big.go") {
+	if !strings.Contains(got, "read lines 1-3 of big.go") {
 		t.Errorf("read stub must name range and path, got: %q", got)
 	}
-	if !strings.Contains(got, "لا تعد قراءة هذا النطاق") {
+	if !strings.Contains(got, "do not re-read this range") {
 		t.Errorf("read stub must forbid re-reading (no loop), got: %q", got)
 	}
 	// The tool_use (assistant message 0) keeps its call and path.
@@ -115,7 +115,7 @@ func TestSqueezeStubsStaleReadResults(t *testing.T) {
 
 // TestReadRangeParsesTail: the range comes from the truncation tail.
 func TestReadRangeParsesTail(t *testing.T) {
-	out := "1|a\n2|b\n[TRUNCATED: stopped at line 3 of 300; use offset=4 to continue]\n"
+	out := "1|a\n2|b\n[TRUNCATED: read lines 1-2 of 300; continue with offset=3]\n"
 	if got := readRange(out); got != "1-2" {
 		t.Errorf("readRange=%q, want 1-2", got)
 	}

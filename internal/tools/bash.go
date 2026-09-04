@@ -12,11 +12,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
 
@@ -31,12 +33,16 @@ const (
 
 type bashTool struct{ root *Root }
 
+var _ Classified = bashTool{}
+
+func (bashTool) Class() perm.Class { return perm.Executing }
+
 func (bashTool) Name() string { return "bash" }
 
 func (bashTool) Spec() provider.ToolSpec {
 	return spec("bash",
-		"ينفّذ أمر صدفة داخل مجلد المشروع. لا مدخلات تفاعلية: أي أمر ينتظر إدخالًا سيرى نهاية ملف فورًا، فمرّر الأعلام غير التفاعلية (-y، --no-input). الأوامر التي تُبقي عمليات في الخلفية تُقتل عند انتهاء الأمر.",
-		`{"type":"object","properties":{"cmd":{"type":"string","description":"الأمر كما يُكتب في الصدفة"},"timeout_s":{"type":"integer","description":"مهلة بالثواني (افتراضي 120، أقصى 600)"}},"required":["cmd"]}`)
+		"Run a shell command inside the project directory. No interactive input: any command waiting for input sees EOF immediately, so pass non-interactive flags (-y, --no-input). Commands that keep background processes alive are killed when the command ends.",
+		`{"type":"object","properties":{"cmd":{"type":"string","description":"the command as typed in the shell"},"timeout_s":{"type":"integer","description":"timeout in seconds (default 120, max 600)"}},"required":["cmd"]}`)
 }
 
 func (b bashTool) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
@@ -50,10 +56,10 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		T   int    `json:"timeout_s"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return agent.Outcome{}, fmt.Errorf("وسائط غير صالحة: %w", err)
+		return agent.Outcome{}, fmt.Errorf("invalid args: %w", err)
 	}
 	if strings.TrimSpace(a.Cmd) == "" {
-		return agent.Outcome{}, errors.New("أمر فارغ")
+		return agent.Outcome{}, errors.New("empty command")
 	}
 	to := bashDefaultTimeout
 	if a.T > 0 {
@@ -78,9 +84,19 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	}
 	defer pr.Close()
 
+	// Isolated HOME per invocation: 0700, removed below even on failure,
+	// never reused. If it cannot be created, HOME is omitted — the caller's
+	// real HOME is never passed to the child.
+	env := childEnv(os.Environ())
+	home, herr := newTempHome()
+	if herr == nil {
+		defer os.RemoveAll(home)
+		env = append(env, "HOME="+home)
+	}
+
 	cmd := exec.Command("sh", "-c", a.Cmd)
 	cmd.Dir = b.root.Dir()
-	cmd.Env = scrubEnv(os.Environ())
+	cmd.Env = env
 	cmd.Stdin = null
 	cmd.Stdout, cmd.Stderr = pw, pw // one stream: interleaving is causality
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -108,11 +124,11 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	select {
 	case werr = <-wait:
 	case <-timer.C:
-		note = fmt.Sprintf("قُتل بعد %s", to)
+		note = fmt.Sprintf("killed after %s", to)
 		killGroup(pgid)
 		werr = <-wait
 	case <-ctx.Done():
-		note = "أُلغي"
+		note = "cancelled"
 		killGroup(pgid)
 		werr = <-wait
 	}
@@ -148,7 +164,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		out.OK = false
 	}
 	if out.Text == "" {
-		out.Text = "(لا مخرَج)"
+		out.Text = "(no output)"
 	}
 	out.Text = head + "\n" + out.Text
 	return out, nil
@@ -171,24 +187,109 @@ func killGroup(pgid int) {
 	syscall.Kill(-pgid, syscall.SIGKILL)
 }
 
-// scrubEnv removes the provider credentials. The agent has no business
-// reading the key that pays for it, and `env` is one command away from
-// `curl`. Everything else passes through: a shell without PATH is a toy.
-func scrubEnv(env []string) []string {
-	out := make([]string, 0, len(env)+1)
-	for _, kv := range env {
-		k, _, ok := strings.Cut(kv, "=")
-		if !ok {
+// childEnvAllowlist is the complete set of variable names a bash child may
+// inherit. Anything not listed here is absent from the child environment by
+// construction — including every credential variable (whatever its name),
+// BASH_ENV, ENV, and any startup-file or library-injection vector. This is
+// an allowlist, not a denylist: a variable is either named here or it does
+// not exist in the child. No prefix or substring heuristics are used, so an
+// unknown variable never passes merely because its name does not look like
+// a secret.
+var childEnvAllowlist = map[string]bool{
+	"PATH":        true, // command resolution; sanitized below (no empty/relative entries)
+	"TERM":        true, // terminal capabilities for interactive-ish commands
+	"LANG":        true, // locale
+	"LC_ALL":      true,
+	"LC_COLLATE":  true,
+	"LC_CTYPE":    true,
+	"LC_MESSAGES": true,
+	"LC_MONETARY": true,
+	"LC_NUMERIC":  true,
+	"LC_TIME":     true,
+	"TMPDIR":      true, // temp dir for tools that honor it
+	"TMP":         true,
+	"TEMP":        true,
+}
+
+// childEnv builds the environment for a spawned child from the explicit
+// allowlist above, starting from an empty slice. Order is deterministic:
+// names are emitted in sorted order so repeated runs of the same command
+// see a byte-identical environment. HOME is deliberately not copied from
+// the caller; see homeEnv below. Values are sanitized: any entry whose
+// value contains a NUL byte is dropped, and malformed entries (no '=') are
+// skipped.
+func childEnv(parent []string) []string {
+	src := make(map[string]string, len(parent))
+	for _, kv := range parent {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
 			continue
 		}
-		u := strings.ToUpper(k)
-		if strings.HasSuffix(u, "_API_KEY") || strings.HasSuffix(u, "_TOKEN") ||
-			strings.HasSuffix(u, "_SECRET") || strings.HasSuffix(u, "_PASSWORD") {
-			continue
+		if strings.IndexByte(v, 0) >= 0 {
+			continue // NUL byte: reject, never forward
 		}
-		out = append(out, kv)
+		src[k] = v
 	}
-	return append(out, "NABD=1")
+
+	names := make([]string, 0, len(childEnvAllowlist))
+	for name := range childEnvAllowlist {
+		if _, ok := src[name]; ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	out := make([]string, 0, len(names)+1)
+	for _, name := range names {
+		v := src[name]
+		if name == "PATH" {
+			v = sanitizePath(v)
+			if v == "" {
+				continue // PATH entirely stripped: omit rather than inherit cwd risk
+			}
+		}
+		out = append(out, name+"="+v)
+	}
+	out = append(out, "NABD=1")
+	return out
+}
+
+// sanitizePath strips empty and relative entries from a PATH value. An
+// empty entry means the current working directory on Unix, which would let
+// an attacker-planted binary in the project dir shadow real commands; a
+// relative entry has the same class of risk from wherever the child runs.
+// Only absolute, non-empty entries survive.
+func sanitizePath(p string) string {
+	parts := strings.Split(p, ":")
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		if !strings.HasPrefix(part, "/") {
+			continue // relative entry: drop
+		}
+		kept = append(kept, part)
+	}
+	return strings.Join(kept, ":")
+}
+
+// newTempHome creates the isolated HOME directory for one child invocation:
+// application-owned, 0700 permissions, removed after the invocation even on
+// failure, never reused across invocations. If it cannot be created, the
+// child runs without HOME rather than with the caller's real HOME (whose
+// startup files, ssh keys, and credential stores must never reach the
+// shell).
+func newTempHome() (string, error) {
+	dir, err := os.MkdirTemp("", "nabd-home-*")
+	if err != nil {
+		return "", err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	return dir, nil
 }
 
 // headTail keeps the opening and the ending. The middle of a long build log
@@ -200,22 +301,27 @@ type headTail struct {
 }
 
 func (h *headTail) Write(p []byte) (int, error) {
-	h.total += len(p)
-	if n := bashHead - len(h.head); n > 0 {
-		if n > len(p) {
-			n = len(p)
+	// io.Writer contract: return the number of bytes consumed from the
+	// original slice, not the number appended to tail. Returning less than
+	// len(p) without an error signals a short write and may cause io.Copy to
+	// retry or lose data.
+	n := len(p)
+	h.total += n
+	if remaining := bashHead - len(h.head); remaining > 0 {
+		if remaining > n {
+			remaining = n
 		}
-		h.head = append(h.head, p[:n]...)
-		p = p[n:]
+		h.head = append(h.head, p[:remaining]...)
+		p = p[remaining:]
 	}
 	if len(p) == 0 {
-		return len(p), nil
+		return n, nil
 	}
 	h.tail = append(h.tail, p...)
 	if len(h.tail) > bashTail {
 		h.tail = h.tail[len(h.tail)-bashTail:]
 	}
-	return len(p), nil
+	return n, nil
 }
 
 func (h *headTail) String() string {
@@ -223,7 +329,7 @@ func (h *headTail) String() string {
 		return string(h.head)
 	}
 	cut := h.total - len(h.head) - len(h.tail)
-	return fmt.Sprintf("%s\n… حُذف %d بايت من الوسط …\n%s",
+	return fmt.Sprintf("%s\n… %d bytes cut from the middle …\n%s",
 		h.head, cut, trimToRune(h.tail))
 }
 

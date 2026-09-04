@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"nabd/internal/agent"
 	"nabd/internal/perm"
@@ -22,14 +23,24 @@ type Tool interface {
 // Registry is the agent.Tools implementation. Read-only at v0.4: nothing
 // here can change a byte on disk, which is why no permission gate exists
 // yet. That gate arrives with write.go, not before.
+// metadata is the per-invocation read state with Consume ownership: exactly
+// one consumer may take it, and it resets on take so no later unrelated call
+// can inherit a stale value. Protected by mu so concurrent tool calls cannot
+// tear or double-consume it.
+type metadata struct {
+	mu         sync.Mutex
+	linesRead  int  // set by read_file, consumed by the next commit()
+	truncated  bool // set by read_file, consumed by RunDetailed
+	nextOffset int  // set by read_file on truncation, consumed by RunDetailed
+}
+
 type Registry struct {
-	root      *Root
-	sh        *snap.Shadow
-	edits     *editLog
-	list      []Tool
-	byName    map[string]Tool
-	linesRead int // set by read_file, consumed by the next commit()
-	truncated bool // set by read_file, consumed by RunDetailed
+	root   *Root
+	sh     *snap.Shadow
+	edits  *editLog
+	list   []Tool
+	byName map[string]Tool
+	meta   metadata
 }
 
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
@@ -44,16 +55,52 @@ func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 // SetLinesRead records how many lines read_file just showed the model. The
 // next commit() stamps that number on the EditRecord: a blind write (no
 // read before it) carries ReadLines=0.
-func (r *Registry) SetLinesRead(n int) { r.linesRead = n }
+func (r *Registry) SetLinesRead(n int) {
+	r.meta.mu.Lock()
+	r.meta.linesRead = n
+	r.meta.mu.Unlock()
+}
 
-// SetTruncated records that the last read_file call hit the byte cap.
-func (r *Registry) SetTruncated() { r.truncated = true }
+// ConsumeLinesRead atomically returns the pending line count and resets it
+// to zero. Ownership is strict: one consumer takes it, and anything after
+// it sees 0 — a stale count can never bleed into a later unrelated write.
+func (r *Registry) ConsumeLinesRead() int {
+	r.meta.mu.Lock()
+	defer r.meta.mu.Unlock()
+	n := r.meta.linesRead
+	r.meta.linesRead = 0
+	return n
+}
 
-// ConsumeTruncated returns and clears the truncation flag.
-func (r *Registry) ConsumeTruncated() bool {
-	t := r.truncated
-	r.truncated = false
-	return t
+// SetTruncated records that the last read_file call hit the byte cap, with
+// the exact line to continue from.
+func (r *Registry) SetTruncated(next int) {
+	r.meta.mu.Lock()
+	r.meta.truncated = true
+	r.meta.nextOffset = next
+	r.meta.mu.Unlock()
+}
+
+// ConsumeTruncated returns and clears the truncation flag plus the offset.
+func (r *Registry) ConsumeTruncated() (bool, int) {
+	r.meta.mu.Lock()
+	defer r.meta.mu.Unlock()
+	t := r.meta.truncated
+	n := r.meta.nextOffset
+	r.meta.truncated = false
+	r.meta.nextOffset = 0
+	return t, n
+}
+
+// ClearReadState drops any pending read metadata. Called when an invocation
+// failed or was cancelled so its partial state cannot contaminate the next
+// call.
+func (r *Registry) ClearReadState() {
+	r.meta.mu.Lock()
+	r.meta.linesRead = 0
+	r.meta.truncated = false
+	r.meta.nextOffset = 0
+	r.meta.mu.Unlock()
 }
 
 // LastEdit returns the persisted record of the newest mutation, or nil if
@@ -70,15 +117,19 @@ func (r *Registry) Edits() []Edit {
 	return r.edits.all()
 }
 
+type Classified interface {
+	Class() perm.Class
+}
+
 func (r *Registry) Class(tool string) (perm.Class, bool) {
-	switch tool {
-	case "write_file", "edit_file":
-		return perm.Mutating, true
-	case "read_file", "glob", "grep":
-		return perm.ReadOnly, true
-	default:
+	t, ok := r.byName[tool]
+	if !ok {
 		return 0, false
 	}
+	if c, ok := t.(Classified); ok {
+		return c.Class(), true
+	}
+	return 0, false
 }
 
 func (r *Registry) add(ts ...Tool) {
@@ -101,7 +152,7 @@ func (r *Registry) Specs() []provider.ToolSpec {
 func (r *Registry) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
 	t, found := r.byName[c.Name]
 	if !found {
-		return "", false, fmt.Errorf("أداة مجهولة: %s", c.Name)
+		return "", false, fmt.Errorf("unknown tool: %s", c.Name)
 	}
 	args := c.Input
 	if len(args) == 0 {
@@ -145,7 +196,7 @@ var (
 func (r *Registry) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
 	t, ok := r.byName[name]
 	if !ok {
-		return agent.Outcome{}, fmt.Errorf("أداة غير معروفة: %s", name)
+		return agent.Outcome{}, fmt.Errorf("unknown tool: %s", name)
 	}
 	if d, ok := t.(Detailed); ok {
 		return d.RunDetailed(ctx, raw)

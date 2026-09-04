@@ -3,7 +3,9 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -100,5 +102,117 @@ func TestNeverWrites(t *testing.T) {
 	ents, _ := os.ReadDir(dir)
 	if len(ents) != 0 {
 		t.Fatalf("config created files: %v", ents)
+	}
+}
+
+// TestConfigRejectsInsecurePermissions complements TestParseFileRefusesLoosePerms
+// by asserting the new ParseFile explicitly names the perm-based refusal and
+// accepts a tightly-permissioned file in the same run.
+func TestConfigRejectsInsecurePermissions(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(p, []byte("K=v\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(p); err == nil && fi.Mode().Perm()&0o077 == 0 {
+		t.Skip("filesystem or umask does not support loose permission bits")
+	}
+	if _, err := ParseFile(p); err == nil {
+		t.Fatalf("0644 accepted; want refusal")
+	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := ParseFile(p); err != nil || m["K"] != "v" {
+		t.Fatalf("0600: %v %v", m, err)
+	}
+}
+
+// TestConfigRejectsSymlink proves ParseFile uses os.Lstat and refuses a symlink
+// to a valid 0600 file — an attacker swapping a symlink in front of the open
+// must not reach a file the victim would otherwise trust.
+func TestConfigRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real-config")
+	if err := os.WriteFile(target, []byte("K=v\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "config")
+	if err := os.Symlink(target, link); err != nil {
+		t.Skip("symlinks not supported in this environment")
+	}
+	if _, err := ParseFile(link); err == nil {
+		t.Fatalf("symlink to a valid 0600 file was accepted; want refusal")
+	}
+	// The real file is still accepted directly.
+	if m, err := ParseFile(target); err != nil || m["K"] != "v" {
+		t.Fatalf("direct file refused: %v %v", m, err)
+	}
+}
+
+// TestConfigRejectsNonRegularFile proves ParseFile refuses anything that is not
+// a regular file (device, socket, fifo) even if it is tightly owned.
+func TestConfigRejectsNonRegularFile(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config")
+	// A named pipe (FIFO) is the most portable non-regular file that is not a
+	// symlink, so IsRegular() is false while the earlier symlink check passes.
+	if err := syscall.Mkfifo(p, 0o600); err != nil {
+		t.Skipf("mkfifo not supported: %v", err)
+	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseFile(p); err == nil {
+		t.Fatalf("FIFO accepted; want refusal (only regular files allowed)")
+	}
+}
+
+// TestLoadDoesNotMutateProcessEnv pins the Phase 3 environment-isolation
+// contract: loading a config file must never merge its values into the
+// process-global environment. A key read via Get() is served from the
+// private map, and os.Getenv must stay untouched — otherwise provider
+// credentials would leak into every later child process that inherits the
+// parent environment.
+func TestLoadDoesNotMutateProcessEnv(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config")
+	os.WriteFile(p, []byte("NABD_TEST_LEAK=secret-value\n"), 0o600)
+	t.Setenv(EnvVar, p)
+	t.Setenv("NABD_TEST_LEAK", "") // ensure absent in the process env
+	reset()
+	if g := Get("NABD_TEST_LEAK"); g != "secret-value" {
+		t.Fatalf("Get = %q, want secret-value from the file", g)
+	}
+	if g := os.Getenv("NABD_TEST_LEAK"); g != "" {
+		t.Fatalf("config leaked into process env: NABD_TEST_LEAK=%q", g)
+	}
+}
+
+// TestConfigRejectsWrongOwnership (Unix only): the config file must be owned by
+// the current user. The happy path (file owned by the current user) is always
+// verified; when the test runs as root it also checks that a file chowned to
+// another uid is refused. On Windows the ownership check is a documented
+// no-op (NT ACLs), so it is skipped there. A non-root Unix run stops at the
+// happy path because it cannot chown to another uid.
+func TestConfigRejectsWrongOwnership(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ownership check is a documented no-op on Windows (NT ACLs)")
+	}
+	p := filepath.Join(t.TempDir(), "config")
+	if err := os.WriteFile(p, []byte("K=v\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Happy path: owned by the current user → accepted.
+	if m, err := ParseFile(p); err != nil || m["K"] != "v" {
+		t.Fatalf("file owned by current user refused: %v %v", m, err)
+	}
+	// Rejection path: only verifiable when we can chown to another uid, which
+	// requires privilege. Non-root runs stop at the happy path above.
+	if os.Getuid() != 0 {
+		t.Skip("cannot chown to another uid without privilege; happy path verified")
+	}
+	if err := os.Chown(p, 1, 1); err != nil { // chown to daemon
+		t.Skipf("chown not permitted: %v", err)
+	}
+	if _, err := ParseFile(p); err == nil {
+		t.Fatalf("file owned by another uid was accepted; want refusal")
 	}
 }

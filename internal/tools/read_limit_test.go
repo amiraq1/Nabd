@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"nabd/internal/config"
 )
 
 // TestReadFileLargeFile: what does read_file return for a file over the
@@ -45,7 +47,7 @@ func TestReadFileSmallFileUntouched(t *testing.T) {
 	if strings.Contains(out, "TRUNCATED") {
 		t.Errorf("small file must not be truncated, got: %q", out)
 	}
-	if r.ConsumeTruncated() {
+	if trunc, _ := r.ConsumeTruncated(); trunc {
 		t.Error("truncation flag set for a small file")
 	}
 	if !strings.Contains(out, "1|سطر واحد") || !strings.Contains(out, "3|سطر ثلاثة") {
@@ -70,18 +72,28 @@ func TestReadFileByteCapTruncates(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("read_file: ok=%v err=%v", ok, err)
 	}
-	if !r.ConsumeTruncated() {
+	trunc, next := r.ConsumeTruncated()
+	if !trunc {
 		t.Fatal("truncation flag not set for an oversized file")
+	}
+	if next <= 0 {
+		t.Errorf("next_offset not recorded: %d", next)
 	}
 	if !strings.Contains(out, "[TRUNCATED:") {
 		t.Fatalf("missing explicit truncation tail in tool_result: %q", out)
 	}
-	if !strings.Contains(out, "use offset=") {
+	if !strings.Contains(out, "continue with offset=") {
 		t.Errorf("tail must say how to continue (offset): %q", out)
+	}
+	if !strings.Contains(out, "next_offset=") {
+		t.Errorf("tail must carry explicit next_offset=: %q", out)
+	}
+	if !strings.Contains(out, "lines_read=") || !strings.Contains(out, "total_lines=") {
+		t.Errorf("tail must carry lines_read and total_lines: %q", out)
 	}
 	// The cut must be at a line boundary: every emitted line is whole.
 	for _, ln := range strings.Split(out, "\n") {
-		if ln == "" || strings.HasPrefix(ln, "[TRUNCATED") {
+		if ln == "" || strings.HasPrefix(ln, "[TRUNCATED") || strings.Contains(ln, "lines_read=") {
 			continue
 		}
 		if !strings.HasSuffix(ln, "x") && !strings.Contains(ln, "|") {
@@ -115,23 +127,179 @@ func TestReadFileOffsetContinues(t *testing.T) {
 	}
 }
 
-// TestEnvMaxReadBounds: out-of-range NABD_MAX_READ values fall back to the
+// TestRunDetailedConsumesTruncationOnce: the rich read path must consume
+// the registry flag exactly once; a later read cannot lose or duplicate it.
+func TestRunDetailedConsumesTruncationOnce(t *testing.T) {
+	r, dir := newReg(t)
+	path := filepath.Join(dir, "detailed.go")
+	var b strings.Builder
+	for i := 0; i < 300; i++ {
+		b.WriteString(strings.Repeat("d", 120) + "\n")
+	}
+	if err := os.WriteFile(path, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := json.Marshal(map[string]any{"path": "detailed.go"})
+	out, err := r.RunDetailed(context.Background(), "read_file", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.OK || !out.Truncated {
+		t.Fatalf("RunDetailed outcome=%+v, want successful truncation", out)
+	}
+	if out.NextOffset <= 1 {
+		t.Fatalf("RunDetailed next_offset=%d, want progress", out.NextOffset)
+	}
+	if !strings.Contains(out.Text, "[TRUNCATED:") {
+		t.Fatalf("RunDetailed text lacks truncation tail: %q", out.Text)
+	}
+	if trunc, next := r.ConsumeTruncated(); trunc || next != 0 {
+		t.Fatalf("second truncation consume returned flag=%v offset=%d", trunc, next)
+	}
+}
+
 // default; a zero value must never produce an empty read.
 func TestEnvMaxReadBounds(t *testing.T) {
 	t.Setenv("NABD_MAX_READ", "0")
-	if got := envMaxRead(); got != defaultMaxRead {
-		t.Errorf("NABD_MAX_READ=0 → %d, want default %d", got, defaultMaxRead)
+	if got := envMaxRead(); got != defaultMaxRead() {
+		t.Errorf("NABD_MAX_READ=0 → %d, want default %d", got, defaultMaxRead())
 	}
 	t.Setenv("NABD_MAX_READ", "not-a-number")
-	if got := envMaxRead(); got != defaultMaxRead {
-		t.Errorf("NABD_MAX_READ=text → %d, want default %d", got, defaultMaxRead)
+	if got := envMaxRead(); got != defaultMaxRead() {
+		t.Errorf("NABD_MAX_READ=text → %d, want default %d", got, defaultMaxRead())
 	}
 	t.Setenv("NABD_MAX_READ", "999999999")
-	if got := envMaxRead(); got != defaultMaxRead {
-		t.Errorf("NABD_MAX_READ=huge → %d, want default %d", got, defaultMaxRead)
+	if got := envMaxRead(); got != defaultMaxRead() {
+		t.Errorf("NABD_MAX_READ=huge → %d, want default %d", got, defaultMaxRead())
 	}
 	t.Setenv("NABD_MAX_READ", "2048")
 	if got := envMaxRead(); got != 2048 {
 		t.Errorf("NABD_MAX_READ=2048 → %d, want 2048", got)
 	}
+}
+
+// TestEnvMaxReadRoutesThroughConfig proves the read limit reads through the
+// application configuration layer (config.Get), so a value set in
+// ~/.ag/config is honored and takes precedence over the environment — the same
+// contract every other limit uses. The package-level var is computed once at
+// init with the default; these tests exercise the functions directly so they
+// remain testable.
+func TestEnvMaxReadRoutesThroughConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config")
+
+	// Env-only (no config file): value is honored via config.Get's env fallback.
+	t.Setenv("NABD_CONFIG", path)
+	t.Setenv("NABD_MAX_READ", "2048")
+	config.ResetForTest()
+	if got := envMaxRead(); got != 2048 {
+		t.Fatalf("env NABD_MAX_READ=2048 → %d, want 2048", got)
+	}
+
+	// Config file value honored.
+	os.WriteFile(path, []byte("NABD_MAX_READ=7777\n"), 0o600)
+	config.ResetForTest()
+	if got := envMaxRead(); got != 7777 {
+		t.Fatalf("file NABD_MAX_READ=7777 → %d, want 7777", got)
+	}
+
+	// Config file takes precedence over the environment.
+	t.Setenv("NABD_MAX_READ", "1111")
+	config.ResetForTest()
+	if got := envMaxRead(); got != 7777 {
+		t.Fatalf("file should win over env: got %d, want 7777", got)
+	}
+
+	// Malformed file value falls back to default.
+	os.WriteFile(path, []byte("NABD_MAX_READ=not-a-number\n"), 0o600)
+	config.ResetForTest()
+	if got := envMaxRead(); got != defaultMaxRead() {
+		t.Fatalf("malformed → %d, want default %d", got, defaultMaxRead())
+	}
+
+	// Out-of-range (too large) falls back to default.
+	os.WriteFile(path, []byte("NABD_MAX_READ=999999999\n"), 0o600)
+	config.ResetForTest()
+	if got := envMaxRead(); got != defaultMaxRead() {
+		t.Fatalf("out-of-range → %d, want default %d", got, defaultMaxRead())
+	}
+
+	// Zero/negative fall back to default.
+	os.WriteFile(path, []byte("NABD_MAX_READ=0\n"), 0o600)
+	config.ResetForTest()
+	if got := envMaxRead(); got != defaultMaxRead() {
+		t.Fatalf("zero → %d, want default %d", got, defaultMaxRead())
+	}
+
+	// Missing value (neither file nor env) uses the documented default.
+	os.Remove(path)
+	t.Setenv("NABD_MAX_READ", "")
+	config.ResetForTest()
+	if got := envMaxRead(); got != defaultMaxRead() {
+		t.Fatalf("unset → %d, want default %d", got, defaultMaxRead())
+	}
+}
+
+// TestReadMaxTokensRoutesThroughConfig proves NABD_MAX_TOKENS also routes
+// through config.Get with file-over-env precedence and documented bounds.
+func TestReadMaxTokensRoutesThroughConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config")
+
+	// Env-only.
+	t.Setenv("NABD_CONFIG", path)
+	t.Setenv("NABD_MAX_TOKENS", "2048")
+	config.ResetForTest()
+	if got := readMaxTokens(); got != 2048 {
+		t.Fatalf("env NABD_MAX_TOKENS=2048 → %d, want 2048", got)
+	}
+
+	// Config file wins over env.
+	os.WriteFile(path, []byte("NABD_MAX_TOKENS=4096\n"), 0o600)
+	t.Setenv("NABD_MAX_TOKENS", "1024")
+	config.ResetForTest()
+	if got := readMaxTokens(); got != 4096 {
+		t.Fatalf("file should win over env: got %d, want 4096", got)
+	}
+
+	// Out-of-range falls back to default.
+	os.WriteFile(path, []byte("NABD_MAX_TOKENS=99999\n"), 0o600)
+	config.ResetForTest()
+	if got := readMaxTokens(); got != defaultMaxTok {
+		t.Fatalf("out-of-range → %d, want default %d", got, defaultMaxTok)
+	}
+}
+
+// TestDefaultMaxReadDerivesFromMaxTok: the derived read cap must move when
+// NABD_MAX_TOKENS moves — a single derivation, not two hardcoded numbers.
+// The shipped default stays at the live-calibrated 3072 until the derived
+// value is measured on disk (STEP 1 follow-up).
+func TestDefaultMaxReadDerivesFromMaxTok(t *testing.T) {
+	// readMaxTokens now routes through config.Get, which loads once and caches.
+	// Point NABD_CONFIG at an empty file and reset the Once so the derivation
+	// reads the environment (the documented fallback) deterministically.
+	dir := t.TempDir()
+	t.Setenv("NABD_CONFIG", filepath.Join(dir, "config"))
+	os.WriteFile(filepath.Join(dir, "config"), []byte(""), 0o600)
+	config.ResetForTest()
+
+	// NABD_MAX_READ unset; the derivation recomputes with MaxTok.
+	t.Setenv("NABD_MAX_READ", "")
+	t.Setenv("NABD_MAX_TOKENS", "")
+	at1024 := defaultMaxReadDerived()
+
+	t.Setenv("NABD_MAX_TOKENS", "2048")
+	config.ResetForTest() // re-read so the new env takes effect
+	at2048 := defaultMaxReadDerived()
+
+	// Higher output reservation → smaller read cap.
+	if at2048 >= at1024 {
+		t.Errorf("derivation must shrink when MaxTok grows: MaxTok=1024→%d, MaxTok=2048→%d", at1024, at2048)
+	}
+	// The shipped default is the conservative live-calibrated value.
+	if got := defaultMaxRead(); got != 3072 {
+		t.Errorf("defaultMaxRead() = %d, want 3072 (live-calibrated)", got)
+	}
+	t.Logf("derived at MaxTok=1024: %d bytes; at 2048: %d; shipped default: %d", at1024, at2048, defaultMaxRead())
 }

@@ -7,6 +7,7 @@ import (
 	"nabd/internal/agent"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // maxGap caps dead air. The fixture has a four second pause; nobody sits
@@ -23,6 +24,7 @@ type Replay struct {
 	speed  float64
 	paused bool
 	done   bool
+	buf    *string // text deltas in flight; pointer because Replay is a value model
 }
 
 // NewReplay takes the live branch, not the raw file: a compacted session
@@ -35,6 +37,7 @@ func NewReplay(events []agent.Event, speed float64) Replay {
 		events: agent.Live(events),
 		width:  DefaultWidth,
 		speed:  speed,
+		buf:    new(string),
 	}
 }
 
@@ -49,7 +52,9 @@ func (m Replay) step() tea.Cmd {
 	i := m.next
 
 	var cmds []tea.Cmd
-	if s := RenderEvent(e, m.width); s != "" {
+	if e.Type == agent.TextDelta {
+		*m.buf += e.Text // same coalescing as Chat: one block, not one line per delta
+	} else if s := flushJoin(m.buf, e, m.width); s != "" {
 		cmds = append(cmds, tea.Println(s))
 	}
 	cmds = append(cmds, tea.Tick(m.delay(i), func(time.Time) tea.Msg {
@@ -97,7 +102,7 @@ func (m Replay) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// and quitting are different intents and deserve two keys.
 			if !m.done {
 				m.done = true
-				return m, tea.Println(dim.Render("⊘ توقّفت · مرة أخرى للخروج"))
+				return m, tea.Println(dim.Render("⊘ stopped · press again to exit"))
 			}
 			return m, tea.Quit
 
@@ -131,6 +136,11 @@ func (m Replay) advance() (tea.Model, tea.Cmd) {
 	m.next++
 	if m.next >= len(m.events) {
 		m.done = true
+		if *m.buf != "" { // a session whose last event is text
+			s := block(" ", *m.buf, m.width, lipgloss.NewStyle())
+			*m.buf = ""
+			return m, tea.Sequence(tea.Println(s), tea.Quit)
+		}
 		return m, tea.Quit
 	}
 	return m, m.step()
@@ -155,7 +165,10 @@ func (m Replay) View() string {
 	case m.done:
 		s += " · q"
 	case m.paused:
-		s += " · موقوف · مسافة/→"
+		s += " · paused · space/→"
+	}
+	if p := partialTail(*m.buf, 6, m.width); p != "" {
+		return p + "\n" + dim.Render(s)
 	}
 	return dim.Render(s)
 }

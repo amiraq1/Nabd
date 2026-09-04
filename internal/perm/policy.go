@@ -70,12 +70,12 @@ func (p *Policy) YOLO() bool {
 // Check returns the verdict for one call, plus a short reason to show.
 func (p *Policy) Check(tool string) (Verdict, string) {
 	if strings.TrimSpace(tool) == "" {
-		return Deny, "أداة بلا اسم"
+		return Deny, "tool with no name"
 	}
 
 	class, known := p.cls.Class(tool)
 	if !known {
-		return Deny, "أداة مجهولة"
+		return Deny, "unknown tool"
 	}
 	if class == ReadOnly {
 		return Allow, ""

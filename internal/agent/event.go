@@ -5,32 +5,37 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"time"
 	"unicode/utf8"
 )
 
 // MaxPersistedOutput caps tool output on disk, not on screen.
-const MaxPersistedOutput = 4096
+const MaxPersistedOutput = 16384
 
 type EventType string
 
 const (
-	RunStart    EventType = "run_start"
-	UserMsg     EventType = "user_msg"
-	TurnStart   EventType = "turn_start"
-	TextDelta   EventType = "text_delta"
-	ToolStart   EventType = "tool_start"
-	PermAsk     EventType = "perm_ask"
-	PermReply   EventType = "perm_reply"
-	ToolEnd     EventType = "tool_end"
-	Notice      EventType = "notice"
-	RunError    EventType = "run_error"
-	Interrupted EventType = "interrupted"
-	TurnEnd     EventType = "turn_end"
-	Compact     EventType = "compact"
-	Rewind      EventType = "rewind"
-	EventEdit   EventType = "edit_record"
-	EventRead   EventType = "read_record"
+	RunStart           EventType = "run_start"
+	UserMsg            EventType = "user_msg"
+	TurnStart          EventType = "turn_start"
+	TextDelta          EventType = "text_delta"
+	ToolStart          EventType = "tool_start"
+	PermAsk            EventType = "perm_ask"
+	PermReply          EventType = "perm_reply"
+	ToolEnd            EventType = "tool_end"
+	Notice             EventType = "notice"
+	RunError           EventType = "run_error"
+	Interrupted        EventType = "interrupted"
+	TurnEnd            EventType = "turn_end"
+	Compact            EventType = "compact"
+	Rewind             EventType = "rewind"
+	EventEdit          EventType = "edit_record"
+	EventRead          EventType = "read_record"
+	EventCalib         EventType = "calibration"
+	EventRateLimit     EventType = "rate_limit"
+	EventProviderUsage EventType = "provider_usage"
+	RunEnd             EventType = "run_end"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.
@@ -40,28 +45,93 @@ const (
 // or a fork writes a new event whose Parent is an older Seq, which makes
 // the file a tree without ever touching a byte already written.
 type Event struct {
-	Seq    int       `json:"seq"`
-	Parent int       `json:"parent,omitempty"`
-	Time   time.Time `json:"t"`
-	Type   EventType `json:"type"`
+	Seq         int       `json:"seq"`
+	Parent      int       `json:"parent,omitempty"`
+	Time        time.Time `json:"t"`
+	Type        EventType `json:"type"`
+	ProjectRoot string    `json:"project_root,omitempty"`
 
-	Text      string      `json:"text,omitempty"`
-	Call      *ToolCall   `json:"call,omitempty"`
-	Decision  Decision    `json:"decision,omitempty"`
-	Err       string      `json:"err,omitempty"`
-	Edit      *EditRecord `json:"edit,omitempty"`
-	Read      *ReadRecord `json:"read,omitempty"`
+	Text     string    `json:"text,omitempty"`
+	Call     *ToolCall `json:"call,omitempty"`
+	Decision Decision  `json:"decision,omitempty"`
+	// RawDecision preserves the user's raw click (e.g. AllowSession for bash)
+	// when the policy downgrades it (e.g. to AllowOnce). If missing (zero/deny),
+	// it means this is an old record where Decision holds the only known value.
+	RawDecision Decision `json:"raw_decision,omitempty"`
+	Err         string   `json:"err,omitempty"`
+	Code        int      `json:"code,omitempty"`
+	Limit       int      `json:"limit,omitempty"`
+	Used        int      `json:"used,omitempty"`
+	Requested   int      `json:"requested,omitempty"`
+	WaitSec     float64  `json:"wait_s,omitempty"`
+	Attempt     int      `json:"attempt,omitempty"`
+	// RetryAfter preserves the raw wait the provider declared (seconds,
+	// float64), and RawMessage the exact body that came with the 429, so a
+	// later measurement can re-derive Limit/Used/Requested or the wait
+	// without losing source precision (0.1s ≈ ±13 tokens). Storage keeps
+	// these verbatim; only display may round. RawRetryAfter is the verbatim
+	// Retry-After header or body text.
+	RetryAfter    float64 `json:"retry_after,omitempty"`
+	RawMessage    string  `json:"raw_message,omitempty"`
+	RawRetryAfter string  `json:"raw_retry_after,omitempty"`
+	// RequestMaxTokens is the max_tokens the client sent with this request.
+	RequestMaxTokens int `json:"request_max_tokens,omitempty"`
+	// PromptTokens/CompletionTokens/FinishReason capture the provider's
+	// measured usage and stop reason for a successful request, so the
+	// charge model can be derived from raw observations, not estimates.
+	PromptTokens     int          `json:"prompt_tokens,omitempty"`
+	CompletionTokens int          `json:"completion_tokens,omitempty"`
+	FinishReason     string       `json:"finish_reason,omitempty"`
+	NormalizedStop   string       `json:"normalized_stop,omitempty"`
+	Edit             *EditRecord  `json:"edit,omitempty"`
+	Read             *ReadRecord  `json:"read,omitempty"`
+	Calib            *Calibration `json:"calib,omitempty"`
 
-	// FirstKept is set on Compact only: the oldest Seq that survives.
-	FirstKept int `json:"first_kept,omitempty"`
+	FirstKept int              `json:"first_kept,omitempty"`
+	Compact   *CompactionStats `json:"compact,omitempty"`
+	Usage     *ProviderUsage   `json:"usage,omitempty"`
+}
+
+// ProviderUsage records the provider's measured token usage and stop reason
+// for one successful request, alongside the max_tokens the client requested.
+// Absent fields are zero/empty; a nil Usage means the provider did not report.
+type ProviderUsage struct {
+	PromptTokens     int    `json:"prompt_tokens"`
+	CompletionTokens int    `json:"completion_tokens"`
+	FinishReason     string `json:"finish_reason"`
+	RequestMaxTokens int    `json:"request_max_tokens"`
+	NormalizedStop   string `json:"normalized_stop"`
+}
+
+// CompactionStats records the context measurements at each actual compaction.
+type CompactionStats struct {
+	MessagesBefore int `json:"messages_before"`
+	MessagesAfter  int `json:"messages_after"`
+	TokensBefore   int `json:"tokens_before"`
+	TokensAfter    int `json:"tokens_after"`
+	BoundaryIndex  int `json:"boundary_index"`
+	Stubs          int `json:"stubs"`
+}
+
+// Calibration is one measurement point for the budget regression: the
+// encoded request bytes, the provider's measured prompt tokens, and the
+// message count sent. Two such points solve ratio and overhead by
+// regression. It is journal-only — Messages() ignores it, so it never
+// reaches the model or the human screen.
+type Calibration struct {
+	EncodedBytes int `json:"encoded_bytes"`
+	PromptTokens int `json:"prompt_tokens"`
+	Messages     int `json:"messages"`
 }
 
 // ReadRecord describes one read_file call. Truncated is true only when the
 // byte cap cut the file short — the model must be able to tell "full read"
-// from "partial read" from the event itself.
+// from "partial read" from the event itself. NextOffset is the exact line
+// to continue from, in the same unit read_file's offset param accepts.
 type ReadRecord struct {
-	Path      string `json:"path"`
-	Truncated bool   `json:"truncated"`
+	Path       string `json:"path"`
+	Truncated  bool   `json:"truncated"`
+	NextOffset int    `json:"next_offset,omitempty"`
 }
 
 // EditRecord is the persisted fingerprint of one file mutation. It is the
@@ -77,8 +147,9 @@ type EditRecord struct {
 	// BlobBefore/BlobAfter are the shadow's content keys (git oid or
 	// s256:…). They are what a restarted /undo needs to pull content back;
 	// the SHA-256 hashes alone cannot address git's object store.
-	BlobBefore string `json:"blob_before,omitempty"`
-	BlobAfter  string `json:"blob_after,omitempty"`
+	ModeBefore os.FileMode `json:"mode_before,omitempty"`
+	BlobBefore string      `json:"blob_before,omitempty"`
+	BlobAfter  string      `json:"blob_after,omitempty"`
 }
 
 // ToolCall carries both the request and its outcome.
@@ -199,5 +270,14 @@ type Outcome struct {
 	OK        bool
 	Exit      int
 	Signal    string
-	Truncated bool // read_file set this: the byte cap cut the file short
+	Truncated bool // read_file reports this via the Outcome: the byte cap cut the file short
+	// NextOffset is the exact line to continue from (read_file truncation).
+	NextOffset int
+	// LinesRead is how many lines read_file showed the model. It is carried
+	// in the Outcome (per-invocation) rather than read back from a shared
+	// registry slot, so concurrent reads through one Registry can never
+	// exchange counts. The loop threads it forward to the next write via
+	// Registry.SetLinesRead, preserving the read→write audit for edit_record
+	// events without a cross-call mutable slot on the read side.
+	LinesRead int
 }

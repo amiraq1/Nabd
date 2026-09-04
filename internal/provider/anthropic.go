@@ -126,7 +126,7 @@ func (a *Anthropic) attempt(ctx context.Context, body []byte, out chan<- Chunk, 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
-			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).", a.Model, resp.StatusCode)
+			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d)", a.Model, resp.StatusCode)
 		}
 		ra := parseRetryAfter(resp.Header.Get("retry-after"))
 		return ra, &httpError{Status: resp.StatusCode, Body: apiMessage(msg)}
@@ -265,7 +265,7 @@ type sseEvent struct {
 func (a *Anthropic) encode(req Request) ([]byte, error) {
 	maxTok := req.MaxTok
 	if maxTok <= 0 {
-		maxTok = 4096
+		maxTok = DefaultMaxTokens()
 	}
 	w := wire{
 		Model:  a.Model,
@@ -338,6 +338,14 @@ func (e *httpError) Error() string {
 // transient decides whether trying again could plausibly help. A 401 or
 // a 400 will fail identically forever; retrying them only wastes battery.
 func transient(err error) bool {
+	var tpm *TPMError
+	if errors.As(err, &tpm) {
+		return false
+	}
+	var rle *RateLimitError
+	if errors.As(err, &rle) {
+		return true
+	}
 	var he *httpError
 	if errors.As(err, &he) {
 		return he.Status == 408 || he.Status == 409 || he.Status == 429 || he.Status >= 500
