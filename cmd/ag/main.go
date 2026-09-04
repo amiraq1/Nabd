@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/config"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
@@ -470,35 +471,61 @@ func die(err error) {
 	os.Exit(1)
 }
 
-// loadEnv reads ~/.ag/env and populates missing environment variables.
+// loadEnv is the legacy path: ~/.ag/env, populated into the process
+// environment before ~/.ag/config existed. It stays for people who have
+// not moved yet, with the same rule config enforces: a file readable by
+// others is refused, not read, because a key that leaks is worse than a
+// key that is missing. The user is told once to migrate. config.Load
+// runs after this and wins on any key present in both.
 func loadEnv() {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return
 	}
-	b, err := os.ReadFile(filepath.Join(home, ".ag", "env"))
+	path := filepath.Join(home, ".ag", "env")
+	fi, err := os.Stat(path)
 	if err != nil {
 		return
 	}
+	if fi.Mode().Perm()&0o077 != 0 {
+		fmt.Fprintf(os.Stderr, "ag: %s is readable by others (%04o); refusing to read it. Run: chmod 600 %s\n",
+			path, fi.Mode().Perm(), path)
+		return
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	loaded := 0
 	for _, line := range strings.Split(string(b), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		line = strings.TrimPrefix(line, "export ")
 		if idx := strings.IndexByte(line, '='); idx > 0 {
 			k := strings.TrimSpace(line[:idx])
-			v := strings.TrimSpace(line[idx+1:])
-			v = strings.Trim(v, `"'`)
+			v := strings.Trim(strings.TrimSpace(line[idx+1:]), `"'`)
 			if os.Getenv(k) == "" {
 				os.Setenv(k, v)
+				loaded++
 			}
 		}
 	}
+	if loaded > 0 {
+		fmt.Fprintln(os.Stderr, "ag: ~/.ag/env is legacy; move its contents to ~/.ag/config (same format) and delete it")
+	}
 }
 
-// pickProvider prefers whatever key is present. NABD_PROVIDER forces one.
+// pickProvider prefers whatever key is present, in ~/.ag/config first and
+// the environment second. NABD_PROVIDER forces one. A config file with loose
+// permissions is a hard error here rather than a silent fallback: the user
+// wrote a key down and believes it is protected.
 func pickProvider() (provider.Provider, error) {
-	switch os.Getenv("NABD_PROVIDER") {
+	if err := config.Load(); err != nil {
+		return nil, err
+	}
+	switch config.Get("NABD_PROVIDER") {
 	case "nvidia":
 		return provider.NewNVIDIA()
 	case "anthropic":
@@ -508,13 +535,13 @@ func pickProvider() (provider.Provider, error) {
 	case "groq":
 		return provider.NewGroq(), nil
 	}
-	if os.Getenv("GROQ_API_KEY") != "" {
+	if config.Has("GROQ_API_KEY") {
 		return provider.NewGroq(), nil
 	}
-	if os.Getenv("OPENROUTER_API_KEY") != "" {
+	if config.Has("OPENROUTER_API_KEY") {
 		return provider.NewOpenRouter()
 	}
-	if os.Getenv("NVIDIA_API_KEY") != "" {
+	if config.Has("NVIDIA_API_KEY") {
 		return provider.NewNVIDIA()
 	}
 	return provider.NewAnthropic()

@@ -9,11 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"nabd/internal/config"
 )
 
 const (
@@ -31,17 +32,14 @@ type Anthropic struct {
 	Client *http.Client
 }
 
-// NewAnthropic reads the key from the environment. The key is never
+// NewAnthropic reads the key from ~/.ag/config, then the environment. The key is never
 // stored in the repo, never logged, and never written to the journal.
 func NewAnthropic() (*Anthropic, error) {
-	k := strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+	k := config.Get("ANTHROPIC_API_KEY")
 	if k == "" {
-		return nil, errors.New("ANTHROPIC_API_KEY is not set")
+		return nil, errors.New("ANTHROPIC_API_KEY is not set (env or ~/.ag/config)")
 	}
-	m := os.Getenv("NABD_MODEL")
-	if m == "" {
-		m = defaultModel
-	}
+	m := config.GetOr("NABD_MODEL", defaultModel)
 	// No overall client timeout: a long turn is not a hung turn. The
 	// deadline belongs to ctx, which ctrl+c cancels.
 	return &Anthropic{Key: k, Model: m, Client: &http.Client{}}, nil
@@ -267,7 +265,7 @@ type sseEvent struct {
 func (a *Anthropic) encode(req Request) ([]byte, error) {
 	maxTok := req.MaxTok
 	if maxTok <= 0 {
-		maxTok = 4096
+		maxTok = DefaultMaxTokens()
 	}
 	w := wire{
 		Model:  a.Model,

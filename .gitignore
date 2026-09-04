@@ -1,6 +1,8 @@
 /ag
 *.tmp
 test_*.go
+test_*.py
+test_*.md
 *.local.*
 fix_*.py
 

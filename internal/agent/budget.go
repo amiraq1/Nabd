@@ -6,11 +6,11 @@ package agent
 
 import (
 	"math"
-	"os"
 	"strconv"
 	"sync"
 	"unicode"
 
+	"nabd/internal/config"
 	"nabd/internal/provider"
 )
 
@@ -58,7 +58,7 @@ type Budget struct {
 
 func NewBudget() *Budget {
 	b := &Budget{Limit: 120000, Reserve: 16000, ratio: 1}
-	if v := os.Getenv("NABD_CTX"); v != "" {
+	if v := config.Get("NABD_CTX"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 8000 {
 			b.Limit = n
 		}
@@ -77,7 +77,7 @@ const (
 )
 
 func maxOutputTokens() int {
-	if v := os.Getenv("NABD_MAX_TOKENS"); v != "" {
+	if v := config.Get("NABD_MAX_TOKENS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= minMaxTokens && n <= maxMaxTokens {
 			return n
 		}

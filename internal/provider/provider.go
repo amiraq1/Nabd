@@ -5,6 +5,9 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"strconv"
+
+	"nabd/internal/config"
 )
 
 type Role string
@@ -120,4 +123,19 @@ type Request struct {
 type Provider interface {
 	Name() string
 	Stream(ctx context.Context, req Request) (<-chan Chunk, error)
+}
+
+// DefaultMaxTokens is the per-reply output cap sent when a Request does not
+// set one. Providers that meter tokens-per-minute (Groq: 8000 on the free
+// key) count max_tokens against the budget *before* generation, so a large
+// default starves file reads. The loop always sets Request.MaxTok from
+// agent.maxOutputTokens(); this fallback mirrors that resolution (same
+// variable, same default, same bounds) so a bare Request behaves the same.
+func DefaultMaxTokens() int {
+	if v := config.Get("NABD_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 128 && n <= 8192 {
+			return n
+		}
+	}
+	return 1024
 }

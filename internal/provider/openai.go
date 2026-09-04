@@ -9,12 +9,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"nabd/internal/config"
 )
 
 // OpenAICompat speaks the OpenAI chat-completions dialect, which NVIDIA
@@ -69,52 +70,45 @@ func parseTPMCounts(s string) (limit, requested int) {
 
 const nvidiaBase = "https://integrate.api.nvidia.com/v1"
 
+// nvidiaDefaultModel is a catalog entry verified live on 2026-09-03 and
+// known to call tools. Defaults on NIM rot (Friction 1: the previous one
+// answered 410); when this one goes, the 404/410 branch below tells the
+// user how to pick another instead of guessing for them.
+const nvidiaDefaultModel = "moonshotai/kimi-k2.6"
+
 // NewNVIDIA reads NVIDIA_API_KEY. Pick a model that actually supports
 // tool calling -- most NIM models do not, and one that does not will
 // happily describe the tool it would have called instead of calling it.
 func NewNVIDIA() (*OpenAICompat, error) {
-	k := strings.TrimSpace(os.Getenv("NVIDIA_API_KEY"))
+	k := config.Get("NVIDIA_API_KEY")
 	if k == "" {
-		return nil, errors.New("NVIDIA_API_KEY is not set")
+		return nil, errors.New("NVIDIA_API_KEY is not set (env or ~/.ag/config)")
 	}
-	m := strings.TrimSpace(os.Getenv("NABD_MODEL"))
-	if m == "" {
-		m = "qwen/qwen3-coder-480b-a35b-instruct"
-	}
-	base := strings.TrimSpace(os.Getenv("NABD_BASE_URL"))
-	if base == "" {
-		base = nvidiaBase
-	}
+	m := config.GetOr("NABD_MODEL", nvidiaDefaultModel)
+	base := config.GetOr("NABD_BASE_URL", nvidiaBase)
 	return &OpenAICompat{
 		Key: k, Model: m, BaseURL: base,
 		Client: &http.Client{},
 	}, nil
 }
 
-func env(key, fallback string) string {
-	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
-		return v
-	}
-	return fallback
-}
-
 func NewOpenRouter() (*OpenAICompat, error) {
-	k := os.Getenv("OPENROUTER_API_KEY")
+	k := config.Get("OPENROUTER_API_KEY")
 	if k == "" {
-		return nil, errors.New("OPENROUTER_API_KEY غير مضبوط")
+		return nil, errors.New("OPENROUTER_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
 	}
 	return &OpenAICompat{
 		Key:     k,
-		Model:   env("NABD_MODEL", "anthropic/claude-3.5-haiku"),
-		BaseURL: env("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
+		Model:   config.GetOr("NABD_MODEL", "anthropic/claude-3.5-haiku"),
+		BaseURL: config.GetOr("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
 		Client:  &http.Client{},
 	}, nil
 }
 
 func NewGroq() *OpenAICompat {
 	return &OpenAICompat{
-		Key:     os.Getenv("GROQ_API_KEY"),
-		Model:   env("NABD_MODEL", "qwen/qwen3.8-27b"),
+		Key:     config.Get("GROQ_API_KEY"),
+		Model:   config.GetOr("NABD_MODEL", "qwen/qwen3.8-27b"),
 		BaseURL: "https://api.groq.com/openai/v1",
 		Client:  &http.Client{},
 	}
@@ -132,6 +126,21 @@ func (c *OpenAICompat) Label() string {
 // which read like a malformed model name — what the banner shows must be
 // what was sent.
 func (o *OpenAICompat) Name() string { return o.Label() + "/" + o.Model }
+
+// keyVar names the environment variable a user of this host would set, for
+// error messages that spell out a curl command. Unknown hosts get a
+// neutral name rather than a wrong one.
+func (o *OpenAICompat) keyVar() string {
+	switch l := o.Label(); {
+	case strings.Contains(l, "nvidia"):
+		return "NVIDIA_API_KEY"
+	case strings.Contains(l, "openrouter"):
+		return "OPENROUTER_API_KEY"
+	case strings.Contains(l, "groq"):
+		return "GROQ_API_KEY"
+	}
+	return "API_KEY"
+}
 
 func (o *OpenAICompat) Stream(ctx context.Context, req Request) (<-chan Chunk, error) {
 	body, err := o.encode(req)
@@ -310,7 +319,7 @@ func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chun
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
-			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).\nاعرض المتاح:\n  curl -s %s/models -H \"Authorization: Bearer $NVIDIA_API_KEY\" | jq -r '.data[].id'\nثم: export NABD_MODEL=<id>", o.Model, resp.StatusCode, o.BaseURL)
+			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).\nاعرض المتاح:\n  curl -s %s/models -H \"Authorization: Bearer $%s\" | jq -r '.data[].id'\nثم ضع NABD_MODEL=<id> في ~/.ag/config", o.Model, resp.StatusCode, o.BaseURL, o.keyVar())
 		}
 		// Groq reports per-minute TPM violations as http 413 with a body
 		// naming "Limit N" and "Requested M". It is a rate ceiling, not a
@@ -514,7 +523,7 @@ type oaiChunk struct {
 func (o *OpenAICompat) encode(req Request) ([]byte, error) {
 	maxTok := req.MaxTok
 	if maxTok <= 0 {
-		maxTok = 4096
+		maxTok = DefaultMaxTokens()
 	}
 	w := oaiWire{Model: o.Model, MaxTok: maxTok, Stream: true, Temperature: 0.2,
 		// Groq/OpenAI omit usage in a streaming response unless asked.

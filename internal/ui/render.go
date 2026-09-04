@@ -241,3 +241,47 @@ func wrap(s string, width int) []string {
 	}
 	return lines
 }
+
+// flushJoin is the one place text-delta buffers turn into scrollback. Both
+// Chat and Replay call it, so a session replays exactly as it was seen:
+// the buffered text block first, then the event that ended it, joined into
+// a single string because two tea.Println in one Batch race for the
+// terminal (P0-1.6). Returns "" when there is nothing to print.
+func flushJoin(buf *string, e agent.Event, width int) string {
+	var prints []string
+	if *buf != "" {
+		prints = append(prints, block(" ", *buf, width, lipgloss.NewStyle()))
+		*buf = ""
+	}
+	if s := RenderEvent(e, width); s != "" {
+		prints = append(prints, s)
+	}
+	return strings.Join(prints, "\n")
+}
+
+// partialTail is the live view of text still streaming: the last n wrapped
+// lines, marked with … when older lines were cut. A phone shows progress
+// without scrolling the answer past the reader; the scrollback gets the
+// whole block at flush time.
+func partialTail(buf string, n, width int) string {
+	s := strings.TrimSpace(buf)
+	if s == "" || n <= 0 {
+		return ""
+	}
+	if width < 20 {
+		width = DefaultWidth
+	}
+	lines := wrap(s, width-2)
+	more := len(lines) > n
+	if more {
+		lines = lines[len(lines)-n:]
+	}
+	for i := range lines {
+		pre := "  "
+		if i == 0 && more {
+			pre = "… "
+		}
+		lines[i] = pre + lines[i]
+	}
+	return strings.Join(lines, "\n")
+}

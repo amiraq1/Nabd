@@ -66,7 +66,7 @@ func TestCaptureRequestMaxTokens(t *testing.T) {
 	ctx := context.Background()
 	ch, err := o.Stream(ctx, Request{
 		Messages: []Message{{Role: User, Text: "مرحبا"}},
-		MaxTok:   0, // the loop never sets it — this is the current state
+		MaxTok:   0, // bare request: the provider fallback must mirror the loop
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestCaptureRequestMaxTokens(t *testing.T) {
 	}
 
 	t.Logf("captured max_tokens = %d", captured.MaxTokens)
-	if captured.MaxTokens != 4096 {
-		t.Errorf("effective max_tokens = %d, want 4096 (the implicit default)", captured.MaxTokens)
+	if want := DefaultMaxTokens(); captured.MaxTokens != want {
+		t.Errorf("effective max_tokens = %d, want %d (DefaultMaxTokens, mirrors agent.maxOutputTokens)", captured.MaxTokens, want)
 	}
 }
