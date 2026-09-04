@@ -220,7 +220,7 @@ func TestShadowFallbackRaceOnCorruptExisting(t *testing.T) {
 // Option 1 (Platform-specific atomic no-replace) is lock-free.
 // Therefore "Live Lock Reclamation" is inherently fixed because there are no locks.
 // This test fulfills the requirement by proving concurrent writes don't steal/overwrite.
-func TestShadowDoesNotStealOldLiveLock(t *testing.T) {
+func TestShadowConcurrentPublishDoesNotReplace(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(dir)
 	if err != nil {
@@ -247,7 +247,7 @@ func TestShadowDoesNotStealOldLiveLock(t *testing.T) {
 	}
 }
 
-func TestShadowCrashRecovery(t *testing.T) {
+func TestShadowInterruptedPublishLeavesNoBlocker(t *testing.T) {
 	dir := t.TempDir()
 	s, err := New(dir)
 	if err != nil {
@@ -263,5 +263,79 @@ func TestShadowCrashRecovery(t *testing.T) {
 	_, err = s.Capture(target)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestShadowPublishIdempotentOnMatchingContent(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "idem.txt")
+	os.WriteFile(target, []byte("same data"), 0644)
+	
+	// First publish
+	_, err = s.Capture(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Second publish matches content, should be idempotent success
+	_, err = s.Capture(target)
+	if err != nil {
+		t.Fatalf("expected idempotent success on matching content, got %v", err)
+	}
+}
+
+func TestShadowPublishRejectsOnMismatchedContent(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(dir, "mismatch.txt")
+	os.WriteFile(target, []byte("new data"), 0644)
+	
+	sum := sha256.Sum256([]byte("new data"))
+	id := "s256:" + hex.EncodeToString(sum[:])
+	p := filepath.Join(s.store, id[5:7], id[7:])
+
+	// Manually place a mismatching file at the expected location
+	os.MkdirAll(filepath.Dir(p), 0755)
+	os.WriteFile(p, []byte("different data"), 0644)
+
+	// Publish should reject
+	_, err = s.Capture(target)
+	if !errors.Is(err, ErrShadowCorruption) {
+		t.Fatalf("expected ErrShadowCorruption on mismatched content, got %v", err)
+	}
+}
+
+func TestTempFileCleanupOnFailurePath(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	
+	target := filepath.Join(dir, "cleanup.txt")
+	os.WriteFile(target, []byte("data"), 0644)
+	sum := sha256.Sum256([]byte("data"))
+	id := "s256:" + hex.EncodeToString(sum[:])
+	p := filepath.Join(s.store, id[5:7], id[7:])
+
+	os.MkdirAll(filepath.Dir(p), 0755)
+	os.WriteFile(p, []byte("wrong"), 0644)
+
+	// This fails due to mismatch.
+	s.Capture(target)
+
+	// Verify no tmp files are left in the blob directory
+	entries, _ := os.ReadDir(filepath.Dir(p))
+	for _, e := range entries {
+		if e.Name() != filepath.Base(p) {
+			t.Fatalf("found unexpected file after failure path: %s", e.Name())
+		}
 	}
 }

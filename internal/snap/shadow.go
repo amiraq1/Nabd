@@ -15,6 +15,7 @@ import (
 var (
 	ErrShadowMissing    = errors.New("recovery content is missing")
 	ErrShadowCorruption = errors.New("recovery content is damaged")
+	ErrAtomicPublishUnsupported = errors.New("atomic publish unsupported")
 	ErrShadowInvalidID  = errors.New("invalid shadow identifier")
 )
 
