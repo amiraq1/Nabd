@@ -102,3 +102,23 @@ func TestNeverWrites(t *testing.T) {
 		t.Fatalf("config created files: %v", ents)
 	}
 }
+
+// TestLoadDoesNotMutateProcessEnv pins the Phase 3 environment-isolation
+// contract: loading a config file must never merge its values into the
+// process-global environment. A key read via Get() is served from the
+// private map, and os.Getenv must stay untouched — otherwise provider
+// credentials would leak into every later child process that inherits the
+// parent environment.
+func TestLoadDoesNotMutateProcessEnv(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config")
+	os.WriteFile(p, []byte("NABD_TEST_LEAK=secret-value\n"), 0o600)
+	t.Setenv(EnvVar, p)
+	t.Setenv("NABD_TEST_LEAK", "") // ensure absent in the process env
+	reset()
+	if g := Get("NABD_TEST_LEAK"); g != "secret-value" {
+		t.Fatalf("Get = %q, want secret-value from the file", g)
+	}
+	if g := os.Getenv("NABD_TEST_LEAK"); g != "" {
+		t.Fatalf("config leaked into process env: NABD_TEST_LEAK=%q", g)
+	}
+}
