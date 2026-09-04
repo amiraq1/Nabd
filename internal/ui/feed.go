@@ -408,7 +408,6 @@ func (m *Feed) onResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-
 // viewportHeight returns the number of rows the viewport may use.
 // Delegates to computeLayout for accurate visual-row accounting.
 // Kept for backward compatibility with tests.
