@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"nabd/internal/agent"
 	"nabd/internal/snap"
+	"nabd/internal/store"
 )
 
 func TestPersistedUndoModesAndLegacy(t *testing.T) {
@@ -51,19 +51,25 @@ func TestPersistedUndoModesAndLegacy(t *testing.T) {
 
 	recs := []*agent.EditRecord{recAbsent, recReg, recExec}
 
-	// Read back through REAL JSONL serialization (simulating --continue)
-	var journal []byte
+	// Write directly to a real journal file using store (simulating exact runtime)
+	journalPath := filepath.Join(dir, "journal.jsonl")
+	journal, _ := store.NewJSONL(journalPath)
 	for _, rec := range recs {
-		b, _ := json.Marshal(agent.Event{Edit: rec})
-		journal = append(journal, b...)
-		journal = append(journal, '\n')
+		journal.Append(agent.Event{Type: "edit", Edit: rec})
 	}
+	journal.Close()
 
+	// Read back (simulating --continue full path)
+	events, err := store.Read(journalPath)
+	if err != nil {
+		t.Fatalf("store read failed: %v", err)
+	}
+	// agent.Live(events) directly returns []agent.Event or we just use events
 	var loadedRecs []*agent.EditRecord
-	for _, line := range strings.Split(strings.TrimSpace(string(journal)), "\n") {
-		var ev agent.Event
-		json.Unmarshal([]byte(line), &ev)
-		loadedRecs = append(loadedRecs, ev.Edit)
+	for _, ev := range events {
+		if ev.Edit != nil {
+			loadedRecs = append(loadedRecs, ev.Edit)
+		}
 	}
 
 	regB := NewRegistry(root, sh)

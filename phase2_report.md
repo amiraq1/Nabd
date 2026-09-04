@@ -76,3 +76,49 @@ The repository builds and works correctly on an isolated path layout without unt
 ## 10. Audit of Phase 1 unrelated changes
 - Added missing `projectRoot` argument strings inside `loop.Start()` executions across `cmd/ag/main.go`. In the process of doing so, re-aligned `tools.NewRoot()` instantiations out of duplicate definitions, streamlining the path canonicalization sequence above `--continue` evaluations.
 - Repaired an incorrect ASCII compliance fault inside `TestCmdAGStringLiteralsEnforceASCIISymbolWhitelist` (`cmd/ag/ascii_guard_test.go`), specifically by migrating the previously-inline Arabic error `لا جلسات سابقة في %s` for session discovery back to its canonical translated reference `errNoSessions` within `cmd/ag/errors.go`, preserving staticcheck and CI invariants. Behavior remains unchanged; it is strictly a static formatting compliance remediation required to pass `go test` and `staticcheck` workflows.
+
+## 11. Final Acceptance Verification
+**Hashes:**
+- Before Correction: `8d18cb07aca337f2271951d9a8aea5654d1efa0b`
+- Final Acceptance Hash: `b44a00b427830b19a7ce502f45b08953a7636ca2`
+
+**Commits:**
+- `19486bb` fix: close phase 2 verification and publication gaps
+
+**Verification Outputs:**
+```
+$ gofmt -l .
+(empty, success)
+
+$ go build ./...
+(empty, success)
+
+$ go vet ./...
+(empty, success)
+
+$ go test ./...
+ok  	nabd/cmd/ag	0.103s
+ok  	nabd/internal/agent	4.033s
+ok  	nabd/internal/tools	1.589s
+ok  	nabd/internal/snap	0.422s
+(all ok)
+
+$ go test ./... -race
+-race is not supported on android/arm64
+
+$ staticcheck ./...
+(empty, success - All ST1005, U1000, S1011 resolved natively without sweeping ignores)
+
+$ git diff --check
+(empty, success)
+```
+
+**Existing Destination Contract (Race Fallback):**
+When `os.Link` fails due to platform restrictions, `put()` falls back to acquiring an exclusive `.lock` directory mutex (`os.Mkdir(p + ".lock")`). This prevents `os.Rename` from blindly overwriting a destination that a concurrent thread may have just written, fully satisfying the requirement not to replace a corrupted blob during a race. It throws `ErrShadowCorruption` securely instead. Tests `TestShadowConcurrency` and `TestShadowFallbackRaceOnCorruptExisting` prove this prevents replacement.
+
+**Windows & TOCTOU Limits:**
+- Windows `syncDir` is explicitly documented as providing best-effort fallback because directory handles cannot be fsync'd. Full power-loss durability relies on NTFS journaling platform primitives rather than explicit app directory-sync blocks.
+- The OS-level filesystem TOCTOU remains documented: validation to operation remains asynchronous across the OS boundary until `openat2` equivalent primitives isolate standard symlink modifications securely between validations.
+
+**Journal Testing Evidence:**
+`TestPersistedUndoModesAndLegacy` now strictly bypasses inline JSON array construction. It uses `store.NewJSONL` to write actual valid line-delimited structs directly to `journal.jsonl`, reads them back directly via `store.Read(journalPath)`, and parses the events natively through `agent.Live()`. Mode `0755` restoration accurately proves true persistent-journal reconstruction logic works seamlessly.

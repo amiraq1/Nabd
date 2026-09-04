@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"crypto/sha256"
+	"encoding/hex"
 	"testing"
 )
 
@@ -155,5 +157,62 @@ func TestShadowPreExistingBlob(t *testing.T) {
 	_, err = s.Capture(target)
 	if !errors.Is(err, ErrShadowCorruption) {
 		t.Fatalf("expected ErrShadowCorruption, got %v", err)
+	}
+}
+
+func TestShadowConcurrency(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target := filepath.Join(dir, "concurrent.txt")
+	os.WriteFile(target, []byte("data"), 0644)
+
+	// Run multiple captures concurrently
+	errCh := make(chan error, 10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			_, err := s.Capture(target)
+			errCh <- err
+		}()
+	}
+
+	for i := 0; i < 10; i++ {
+		if err := <-errCh; err != nil {
+			t.Errorf("concurrent capture failed: %v", err)
+		}
+	}
+}
+
+func TestShadowFallbackRaceOnCorruptExisting(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target := filepath.Join(dir, "file.txt")
+	os.WriteFile(target, []byte("new data"), 0644)
+
+	// Pre-create the shadow store blob manually to simulate an existing corrupted blob
+	sum := sha256.Sum256([]byte("new data"))
+	id := "s256:" + hex.EncodeToString(sum[:])
+	p := filepath.Join(s.store, id[5:7], id[7:])
+
+	os.MkdirAll(filepath.Dir(p), 0755)
+	os.WriteFile(p, []byte("corrupt data"), 0644)
+
+	// Now try to capture it. It should throw ErrShadowCorruption and NOT replace it.
+	_, err = s.Capture(target)
+	if !errors.Is(err, ErrShadowCorruption) {
+		t.Fatalf("expected ErrShadowCorruption, got %v", err)
+	}
+
+	// Verify it was NOT replaced
+	data, _ := os.ReadFile(p)
+	if string(data) != "corrupt data" {
+		t.Fatalf("corrupted blob was silently replaced!")
 	}
 }

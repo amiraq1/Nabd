@@ -164,9 +164,7 @@ func (s *Shadow) RestoreAt(abs string, st State) error {
 // This is where tmp+rename belongs -- not in the append-only journal,
 // where a single O_APPEND write already carries a whole line.
 
-
 // --- content store ---
-
 
 func validateID(id string) error {
 	if len(id) != 5+64 || !strings.HasPrefix(id, "s256:") {
@@ -294,17 +292,49 @@ func (s *Shadow) put(data []byte) (string, error) {
 	// Try Link first to avoid POSIX rename-over-file semantics if possible.
 	err = os.Link(name, p)
 	if err != nil {
-		// If Link fails (e.g. Android permission denied, or file exists), we fallback to Rename.
-		// Before renaming, ensure the file wasn't created by a racing process with DIFFERENT content.
+		if os.IsExist(err) {
+			// Link properly reported EEXIST
+			if existingData, readErr := os.ReadFile(p); readErr == nil {
+				if bytes.Equal(existingData, data) {
+					return id, nil
+				}
+				return "", fmt.Errorf("%w: blob collision or corruption", ErrShadowCorruption)
+			}
+			return "", fmt.Errorf("read existing blob: %w", err)
+		}
+
+		// Fallback for filesystems/OS where hard links are unsupported (e.g. Windows without admin, Android).
+		// We must avoid Rename blindly overwriting a concurrently created corrupt blob.
+		// Use O_CREATE|O_EXCL to safely claim the destination without overwriting.
+		lockPath := p + ".lock"
+		lockAcquired := false
+		for retries := 0; retries < 100; retries++ {
+			if err := os.Mkdir(lockPath, 0755); err != nil {
+				if os.IsExist(err) {
+					// Wait a tiny bit and retry (concurrent write in progress)
+					time.Sleep(5 * time.Millisecond)
+					continue
+				}
+				return "", fmt.Errorf("failed to acquire lock: %w", err)
+			}
+			lockAcquired = true
+			break
+		}
+		if !lockAcquired {
+			return "", fmt.Errorf("timeout waiting for blob lock")
+		}
+		defer os.Remove(lockPath)
+
 		if existingData, readErr := os.ReadFile(p); readErr == nil {
 			if bytes.Equal(existingData, data) {
-				return id, nil // identical race, safe
+				return id, nil
 			}
-			return "", fmt.Errorf("%w: blob collision or corruption: %s exists with different content", ErrShadowCorruption, p)
+			return "", fmt.Errorf("%w: blob collision or corruption", ErrShadowCorruption)
 		}
-		// Fallback to Rename
+
 		if renameErr := os.Rename(name, p); renameErr != nil {
-			return "", fmt.Errorf("failed to persist blob: %w", renameErr)
+			os.Remove(p)
+			return "", fmt.Errorf("failed to persist blob via rename: %w", renameErr)
 		}
 	}
 

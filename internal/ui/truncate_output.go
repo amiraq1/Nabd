@@ -68,9 +68,7 @@ func truncateDisplayLine(line string, width int) []string {
 	}
 	parts := strings.Split(wrapped, "\n")
 	var out []string
-	for _, p := range parts {
-		out = append(out, p)
-	}
+	out = append(out, parts...)
 	return out
 }
 

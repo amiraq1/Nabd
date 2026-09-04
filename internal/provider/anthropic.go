@@ -126,7 +126,7 @@ func (a *Anthropic) attempt(ctx context.Context, body []byte, out chan<- Chunk, 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
-			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).", a.Model, resp.StatusCode)
+			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d)", a.Model, resp.StatusCode)
 		}
 		ra := parseRetryAfter(resp.Header.Get("retry-after"))
 		return ra, &httpError{Status: resp.StatusCode, Body: apiMessage(msg)}

@@ -128,7 +128,7 @@ func (m *Feed) computeLayout() layoutMetrics {
 		// Try dropping bottom sep.
 		if lm.BottomSepRows > 0 {
 			lm.BottomSepRows = 0
-			chrome--
+
 			lm.ViewportRows = lm.TerminalHeight - chrome
 		}
 	}
@@ -139,7 +139,7 @@ func (m *Feed) computeLayout() layoutMetrics {
 		// Top sep.
 		if lm.TopSepRows > 0 {
 			lm.TopSepRows = 0
-			chrome--
+
 		}
 	}
 	if lm.ViewportRows < 0 {

@@ -17,9 +17,7 @@ func renderItems(items []presentation.FeedItem, width int) []string {
 		for _, l := range raw {
 			// Guarantee every stored line fits within width terminal cells.
 			if width > 0 && ansi.StringWidth(l) > width {
-				for _, sub := range strings.Split(ansi.Hardwrap(l, width, false), "\n") {
-					lines = append(lines, sub)
-				}
+				lines = append(lines, strings.Split(ansi.Hardwrap(l, width, false), "\n")...)
 			} else {
 				lines = append(lines, l)
 			}
@@ -64,9 +62,7 @@ func renderAssistant(it presentation.FeedItem, width int) []string {
 	if text == "" {
 		text = "·"
 	}
-	for _, line := range wrap(text, width) {
-		out = append(out, line)
-	}
+	out = append(out, wrap(text, width)...)
 	return out
 }
 

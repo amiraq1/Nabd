@@ -8,7 +8,6 @@ import (
 )
 
 // maxMenuCommands is the maximum number of items displayed in the menu.
-const maxMenuCommands = 8
 
 // slashMenu manages state and rendering of the slash command completion menu.
 type slashMenu struct {
@@ -68,16 +67,6 @@ func (m *slashMenu) lineCount() int {
 
 // maxItemsForHeight returns the maximum number of menu items that fit in
 // a given available height (accounting for 2 border rows).
-func maxItemsForHeight(availableRows int) int {
-	if availableRows <= 2 {
-		return 0
-	}
-	n := availableRows - 2
-	if n > maxMenuCommands {
-		return maxMenuCommands
-	}
-	return n
-}
 
 // view renders the menu popup docked above the composer.
 func (m *slashMenu) view(width int) string {

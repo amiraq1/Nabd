@@ -288,7 +288,7 @@ func (o *OpenAICompat) run(ctx context.Context, body []byte, out chan<- Chunk) {
 			return
 		case <-time.After(backoff(1, retryAfter)):
 		}
-		retryAfter, err = o.attempt(ctx, body, out, &sent)
+		_, err = o.attempt(ctx, body, out, &sent)
 		if err == nil {
 			return
 		}

@@ -408,13 +408,6 @@ func (m *Feed) onResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// pendingToolName returns the name of the tool awaiting permission, or "".
-func (m *Feed) pendingToolName() string {
-	if m.pending == nil {
-		return ""
-	}
-	return m.pending.Name
-}
 
 // viewportHeight returns the number of rows the viewport may use.
 // Delegates to computeLayout for accurate visual-row accounting.
