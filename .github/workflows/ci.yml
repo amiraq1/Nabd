@@ -27,11 +27,13 @@ jobs:
     - name: Test
       run: go test ./... -race
       
-    - name: Install staticcheck
-      run: go install honnef.co/go/tools/cmd/staticcheck@latest
-      
+    - name: Exec.Cmd.Env static audit
+      run: bash scripts/check-exec-env.sh
+
     - name: Staticcheck
-      run: staticcheck ./...
+      # GOTOOLCHAIN=local pins parser to installed go 1.27 toolchain.
+      # v0.8.1 is pinned; matches test.yml to prevent version drift.
+      run: GOTOOLCHAIN=local go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
       
     - name: Clean Clone Build Test
       run: |
