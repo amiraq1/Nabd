@@ -14,8 +14,11 @@
   - إدخال `RetryPolicy` (`RetryStandalone`, `RetrySingleAttempt`)، منع التكرار التلقائي في نمط الراوتر، التنقيح الصارم للأسرار (`Redact`, `SanitizeBody`).
 - **P3 Commit:** `fe88e96` — *feat: add deterministic pre-output provider router*
   - محرك الراوتر الكامل، الالتزام الحتمي (Commit Linearization)، التراجع الآمن قبل الإخراج فقط، إقرار التنظيف (Cleanup ACK)، ومعالجة 429 و Retry-After (RFC 9110).
-- **P4 Commit:** *(الحالي — انظر أسفل التقرير للـ hash)* — *feat: journal sanitized provider routing decisions*
-  - تسجيل أحداث التوجيه `provider_route` في الـ journal، عزلها عن رسائل النموذج، التوثيق في `README.md`، وهذا التقرير.
+- **P4 Commit:** `2cca5db` — *feat: journal sanitized provider routing decisions*
+  - تسجيل أحداث التوجيه `provider_route` في الـ journal، عزلها عن رسائل النموذج، التوثيق في `README.md`.
+- **CI Pin & Verification Commit:** (branch tip of feature/native-provider-router) — *ci: pin staticcheck and verify router under race detector*
+  - تثبيت أداة `staticcheck@v0.8.1` صراحة، إضافة بوابات سباق مكثفة للراوتر (`-race -count=100`) والوكيل (`-race -count=50`)، وتصليب بيئة CI بصلاحيات للقراءة فقط وتشخيص البيئة والتحقق عبر clean clone.
+- **FINAL_HASH:** branch tip of `feature/native-provider-router` (P4 = `2cca5db`, + ci commit)
 
 ---
 
