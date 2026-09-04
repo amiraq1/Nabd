@@ -146,7 +146,19 @@ func (readFile) Spec() provider.ToolSpec {
 		 "required":["path"]}`)
 }
 
-func (t readFile) Run(_ context.Context, raw json.RawMessage) (string, bool, error) {
+// Run wraps the read implementation so that any error path — including the
+// plain Registry.Run path that never reaches RunDetailed — clears pending
+// read metadata. A failed read must not contaminate a later unrelated call
+// with stale linesRead/truncation state.
+func (t readFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
+	text, ok, err := t.run(ctx, raw)
+	if err != nil && t.reg != nil {
+		t.reg.ClearReadState()
+	}
+	return text, ok, err
+}
+
+func (t readFile) run(_ context.Context, raw json.RawMessage) (string, bool, error) {
 	var a struct {
 		Path   string `json:"path"`
 		Offset int    `json:"offset"`
