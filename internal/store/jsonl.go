@@ -90,7 +90,6 @@ func Read(path string) ([]agent.Event, error) {
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
 	var out []agent.Event
-	var pending []byte // last decoded-and-kept raw line, for error context
 	line := 0
 	for sc.Scan() {
 		line++
@@ -100,8 +99,7 @@ func Read(path string) ([]agent.Event, error) {
 		}
 		var e agent.Event
 		if err := json.Unmarshal(raw, &e); err != nil {
-			pending = append(pending[:0], raw...)
-			// Tolerate only if this is the final line.
+			// Tolerate a truncated final line only if nothing follows it.
 			if sc.Scan() {
 				return nil, fmt.Errorf("%s:%d: %w", path, line, err)
 			}
@@ -114,6 +112,5 @@ func Read(path string) ([]agent.Event, error) {
 			return nil, err
 		}
 	}
-	_ = pending
 	return out, nil
 }
