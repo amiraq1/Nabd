@@ -9,7 +9,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.27'
       - name: Build
         run: go build ./...
       - name: Vet
@@ -19,4 +19,8 @@ jobs:
       - name: Test with Race Detector
         run: go test ./... -race -count=1
       - name: Staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+        # GOTOOLCHAIN=local pins the parser to the installed toolchain (1.27,
+        # matching go.mod). Without it, staticcheck@latest forces its own
+        # minimum (go1.26.8) while parsing the go1.27 stdlib, which fails with
+        # go/types parse errors (e.g. `rfd` in splicePipe).
+        run: GOTOOLCHAIN=local go run honnef.co/go/tools/cmd/staticcheck@latest ./...
