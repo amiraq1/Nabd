@@ -289,60 +289,22 @@ func (s *Shadow) put(data []byte) (string, error) {
 		return "", err
 	}
 
-	// Try Link first to avoid POSIX rename-over-file semantics if possible.
-	err = os.Link(name, p)
-	if err != nil {
-		if os.IsExist(err) {
-			// Link properly reported EEXIST
+	// Use platform-specific atomic no-replace publication
+	if renameErr := renameNoReplace(name, p); renameErr != nil {
+		if os.IsExist(renameErr) {
 			if existingData, readErr := os.ReadFile(p); readErr == nil {
 				if bytes.Equal(existingData, data) {
+					os.Remove(name)
 					return id, nil
 				}
+				os.Remove(name)
 				return "", fmt.Errorf("%w: blob collision or corruption", ErrShadowCorruption)
 			}
-			return "", fmt.Errorf("read existing blob: %w", err)
+			os.Remove(name)
+			return "", fmt.Errorf("read existing blob: %w", renameErr)
 		}
-
-		// Fallback for filesystems/OS where hard links are unsupported (e.g. Windows without admin, Android).
-		// We must avoid Rename blindly overwriting a concurrently created corrupt blob.
-		// Use O_CREATE|O_EXCL to safely claim the destination without overwriting.
-		lockPath := p + ".lock"
-		lockAcquired := false
-		for retries := 0; retries < 100; retries++ {
-			if err := os.Mkdir(lockPath, 0755); err != nil {
-				if os.IsExist(err) {
-					// Check for stale lock (older than 10 seconds)
-					if fi, statErr := os.Stat(lockPath); statErr == nil {
-						if time.Since(fi.ModTime()) > 10*time.Second {
-							os.Remove(lockPath) // attempt to clear stale lock
-							continue
-						}
-					}
-					// Wait a tiny bit and retry (concurrent write in progress)
-					time.Sleep(10 * time.Millisecond)
-					continue
-				}
-				return "", fmt.Errorf("failed to acquire lock: %w", err)
-			}
-			lockAcquired = true
-			break
-		}
-		if !lockAcquired {
-			return "", fmt.Errorf("timeout waiting for blob lock")
-		}
-		defer os.Remove(lockPath)
-
-		if existingData, readErr := os.ReadFile(p); readErr == nil {
-			if bytes.Equal(existingData, data) {
-				return id, nil
-			}
-			return "", fmt.Errorf("%w: blob collision or corruption", ErrShadowCorruption)
-		}
-
-		if renameErr := os.Rename(name, p); renameErr != nil {
-			os.Remove(p)
-			return "", fmt.Errorf("failed to persist blob via rename: %w", renameErr)
-		}
+		os.Remove(name)
+		return "", fmt.Errorf("failed to persist blob via renameNoReplace: %w", renameErr)
 	}
 
 	// Sync dir
