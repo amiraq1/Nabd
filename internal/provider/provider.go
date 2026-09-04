@@ -72,10 +72,31 @@ type RateLimitInfo struct {
 	// equals it, but keeping both separate guarantees float precision is
 	// never rounded when stored. RawMessage is the un-shortened body.
 	// RawRetryAfter is the verbatim Retry-After header or body text.
+	// RawMessage contains the sanitized provider response body, preserving
+	// content needed for diagnostics but never preserving secrets verbatim.
 	RetryAfter    float64
 	RawMessage    string
 	RawRetryAfter string
 }
+
+// RetryPolicy controls whether the provider may issue internal HTTP retries
+// for transient failures on a single Stream() call.
+//
+//   - RetryStandalone: the legacy direct-provider path. Anthropic retries up
+//     to maxAttempts (4); OpenAICompat retries once on transient errors.
+//     Unchanged from v1.1.0 — no regression allowed.
+//
+//   - RetrySingleAttempt: the router path. Exactly one HTTP attempt is made
+//     regardless of error type. The router owns all retry/fallback decisions.
+type RetryPolicy uint8
+
+const (
+	// RetryStandalone is the original provider retry behavior (unchanged).
+	RetryStandalone RetryPolicy = iota
+	// RetrySingleAttempt suppresses all internal retries; exactly one HTTP
+	// attempt is made per Start() call. Used by the router.
+	RetrySingleAttempt
+)
 
 // Chunk is one thing that happened during a turn.
 //

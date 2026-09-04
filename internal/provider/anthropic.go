@@ -27,9 +27,10 @@ const (
 )
 
 type Anthropic struct {
-	Key    string
-	Model  string
-	Client *http.Client
+	Key         string
+	Model       string
+	Client      *http.Client
+	retryPolicy RetryPolicy // unexported; set by constructor
 }
 
 // NewAnthropic reads the key from ~/.ag/config, then the environment. The key is never
@@ -42,7 +43,27 @@ func NewAnthropic() (*Anthropic, error) {
 	m := config.GetOr("NABD_MODEL", defaultModel)
 	// No overall client timeout: a long turn is not a hung turn. The
 	// deadline belongs to ctx, which ctrl+c cancels.
-	return &Anthropic{Key: k, Model: m, Client: &http.Client{}}, nil
+	return &Anthropic{Key: k, Model: m, Client: &http.Client{},
+		retryPolicy: RetryStandalone}, nil
+}
+
+// NewAnthropicForRoute creates an Anthropic provider for use by the router.
+// It accepts all parameters explicitly and never reads globals (F14, X12).
+// retryPolicy MUST be RetrySingleAttempt for router use; the router owns
+// all retry and fallback decisions (H2).
+func NewAnthropicForRoute(model, key string) (*Anthropic, error) {
+	if key == "" {
+		return nil, errors.New("ANTHROPIC_API_KEY: key is required for route construction (not set)")
+	}
+	if model == "" {
+		return nil, errors.New("anthropic route: model must be specified explicitly")
+	}
+	return &Anthropic{
+		Key:         key,
+		Model:       model,
+		Client:      &http.Client{},
+		retryPolicy: RetrySingleAttempt,
+	}, nil
 }
 
 func (a *Anthropic) Name() string { return "anthropic/" + a.Model }
@@ -59,9 +80,35 @@ func (a *Anthropic) Stream(ctx context.Context, req Request) (<-chan Chunk, erro
 
 // run owns the retry loop. It retries only while nothing has been sent
 // downstream; once a chunk is out, a failure is final.
+//
+// When retryPolicy == RetrySingleAttempt (router path), exactly one HTTP
+// attempt is made: the internal first-byte timer is suppressed (the router's
+// ctx deadline owns the pre-stream budget), and no retry loop is entered.
+// The router is the sole owner of all fallback decisions (H2).
+//
+// When retryPolicy == RetryStandalone (legacy path), behavior is identical
+// to v1.1.0: up to maxAttempts retries with the internal 25s first-byte
+// timer and exponential backoff (H1 — no regression).
 func (a *Anthropic) run(ctx context.Context, body []byte, out chan<- Chunk) {
 	defer close(out)
 
+	if a.retryPolicy == RetrySingleAttempt {
+		// Router path: exactly one HTTP attempt; no internal first-byte timer;
+		// no retry loop. The router's context carries the pre-stream deadline.
+		var sent atomic.Bool
+		_, err := a.attempt(ctx, body, out, &sent)
+		if err == nil {
+			return
+		}
+		if ctx.Err() != nil {
+			out <- Chunk{Kind: ChunkError, Err: ctx.Err()}
+			return
+		}
+		out <- Chunk{Kind: ChunkError, Err: err, Retryable: !sent.Load()}
+		return
+	}
+
+	// RetryStandalone path — unchanged from v1.1.0.
 	var sent atomic.Bool
 	for attempt := 1; ; attempt++ {
 		firstByte := 25 * time.Second
