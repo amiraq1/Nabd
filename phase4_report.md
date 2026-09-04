@@ -8,7 +8,7 @@ Date: 2026-09-04
 ```
 BASELINE_HEAD (start of Phase 4) = 94c9852
    - Phase 3 final hash, CI -race already PASS on ubuntu-latest
-FINAL_PHASE4_HEAD (implementation) = de3e395
+FINAL_PHASE4_HEAD (implementation) = 55ff2d6
    - the last code/test commit; the docs commit carrying this report
      sits on top (see section 2)
 ```
@@ -43,14 +43,15 @@ auto
 All Phase 4 work lives on `phase3/env-isolation`, continuing from the Phase 3
 tip `94c9852`. No Phase 1, 2, or 3 commit was rewritten, squashed, or rebased.
 
-```
 94c9852 docs: record CI -race PASS for Phase 3 hardening        (Phase 3 tip)
 33ad22b docs: align README with runtime behavior and precise security claims
 170da30 test: prove Messages() replay determinism (200× byte-equivalent)
 de3e395 refactor: remove dead pending buffer in jsonl reader; add NOTES conclusion
+b4571f0 fix: preserve journal order when closing open tool calls in Messages()
+55ff2d6 fix: route read limits through application config (config.Get)
 <docs>  docs: Phase 4 report — documentation, determinism, and truthfulness
 
-Branch tip = the docs commit; FINAL_PHASE4_HEAD (implementation) = de3e395.
+Branch tip = the docs commit; FINAL_PHASE4_HEAD (implementation) = 55ff2d6.
 ```
 
 ## 3. Inventory and disposition of every requested Phase 4 item
@@ -59,7 +60,7 @@ Branch tip = the docs commit; FINAL_PHASE4_HEAD (implementation) = de3e395.
 
 | Item | Disposition | Notes |
 |---|---|---|
-| `envMaxRead` / `readMaxTokens` read `os.Getenv` directly | PRESENT, INTENTIONAL | tools package cannot import agent; duplicating one env read is the documented cross-package contract (read.go:46-49). Both read env only, never `os.Setenv`. |
+| `envMaxRead` / `readMaxTokens` route through config.Get | FIXED | both previously read os.Getenv directly, bypassing ~/.ag/config. Now read via config.Get(key): config file honored, environment is the documented fallback. Verified by TestEnvMaxReadRoutesThroughConfig / TestReadMaxTokensRoutesThroughConfig. |
 | `config.Get` single API | PRESENT | provider keys, NABD_CTX, NABD_MAX_TOKENS, NABD_PROVIDER all route through `config.Get`. |
 | Parsing errors report key + value | PRESENT | config.go:133-138 report line number and format. |
 | Missing value uses documented default | PRESENT | defaultMaxRead, defaultMaxTokens, defaultMaxTok. |
@@ -67,12 +68,13 @@ Branch tip = the docs commit; FINAL_PHASE4_HEAD (implementation) = de3e395.
 | Phase 1 provider-key contract preserved | PRESENT | NewOpenRouter/NewGroq/NewAnthropic carry keys; TestConstructorsCarryKey/RequireKeys. |
 | Phase 3 child-env isolation not weakened | PRESENT | childEnv allowlist unchanged; bash.go:90. |
 | No `os.Setenv`/`os.Unsetenv` in production | PRESENT | only in test files. |
+| Limits remain testable (no opaque caching) | FIXED | added config.ResetForTest() to reset the package-global Once so envMaxRead/readMaxTokens can be driven through fresh config-file scenarios per test. |
 
 ### Section B — Deterministic message ordering
 
 | Item | Disposition | Notes |
 |---|---|---|
-| Map-iteration nondeterminism | NOT_APPLICABLE | `Messages()` iterates events in slice order; `open` map is only read for lookups and orphan synthesis. Orphan results are appended in map order, but `json.Marshal` of the results slice is stable for a given input, and the 200× replay test confirms byte-equivalent output. |
+| Map-iteration nondeterminism | FIXED | `flush()` ranged the `open` map directly, randomizing the order of synthesized "cancelled" results when several ToolStart are left open. Now tracks an `openOrder` slice (journal insertion order) and iterates that. New TestMessagesMultipleOpenCallsDeterministic (three opens then Interrupted, assert c1,c2,c3, 1000×) exercises the previously-untested multi-open case. |
 | ToolResult follows matching ToolCall | PRESENT | verified by TestMessagesReplayIsDeterministic and TestMessagesPairingIntegration. |
 | Replay byte-equivalence | PRESENT | new TestMessagesReplayIsDeterministic, 200×. |
 
@@ -167,6 +169,9 @@ is unchanged.
 | Test | Guards |
 |---|---|
 | `TestMessagesReplayIsDeterministic` | 200× replay byte-equivalent JSON; mixed batches; orphan synthesis; ToolResult/ToolCall pairing. |
+| `TestMessagesMultipleOpenCallsDeterministic` | Three ToolStart left open then Interrupted; asserts synthetic results always come out in journal order c1,c2,c3 (1000×). |
+| `TestEnvMaxReadRoutesThroughConfig` | NABD_MAX_READ via config.Get: file honored, file-over-env precedence, env fallback, malformed/out-of-range/zero → default. |
+| `TestReadMaxTokensRoutesThroughConfig` | NABD_MAX_TOKENS via config.Get: file honored, file-over-env, out-of-range → default. |
 
 Existing tests retained: TestMessagesPairingIntegration, TestMessagesPairsToolCalls,
 TestMessagesAnswersDeadCall, TestReplayNoticeDuringToolCallSerializesToValidOpenAIOrder,
@@ -176,10 +181,13 @@ TestFanoutOrderIsDeterministic, TestInterruptMidStreamDeterministic.
 
 ```
 $ go test ./internal/agent/ -run 'Determin|Messages|Orphan|Replay' -count=100
-ok  nabd/internal/agent  186.550s
+ok  nabd/internal/agent
+
+$ go test ./internal/agent/ -run TestMessagesMultipleOpenCallsDeterministic -count=1000
+ok  nabd/internal/agent
 
 $ go test ./internal/tools/ -run 'Config|Truncat|Metadata|Concurrent' -count=50
-ok  nabd/internal/tools  6.943s
+ok  nabd/internal/tools
 ```
 
 ## 12. Full local verification outputs
