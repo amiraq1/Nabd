@@ -83,6 +83,15 @@ func GetOr(key, fallback string) string {
 // Has reports whether key is set in either the file or the environment.
 func Has(key string) bool { return Get(key) != "" }
 
+// ResetForTest clears the load-once and cached values so a test can point
+// NABD_CONFIG at a fresh file and observe the new load. Production code never
+// calls this; the package-global Once is correct for a process lifetime.
+func ResetForTest() {
+	once = sync.Once{}
+	values = nil
+	loadErr = nil
+}
+
 func load() (map[string]string, error) {
 	p, err := Path()
 	if err != nil {

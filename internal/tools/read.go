@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"nabd/internal/agent"
+	"nabd/internal/config"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
@@ -44,11 +45,11 @@ const (
 )
 
 // readMaxTokens mirrors the agent's NABD_MAX_TOKENS resolution so the read
-// cap follows the same output reservation. Kept small and local: the tools
-// package cannot import agent, and duplicating one env read beats inventing
-// a cross-package contract for a single number.
+// cap follows the same output reservation. It reads through config.Get so a
+// value set in ~/.ag/config takes precedence, with the environment as the
+// documented fallback — the same contract every other limit uses.
 func readMaxTokens() int {
-	if v := os.Getenv(maxTokEnv); v != "" {
+	if v := config.Get(maxTokEnv); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 128 && n <= 8192 {
 			return n
 		}
@@ -97,7 +98,7 @@ const (
 var maxReadBytes = envMaxRead()
 
 func envMaxRead() int {
-	if v := os.Getenv("NABD_MAX_READ"); v != "" {
+	if v := config.Get("NABD_MAX_READ"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= minMaxRead && n <= maxMaxRead {
 			return n
 		}
