@@ -1,7 +1,6 @@
 package snap
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -9,14 +8,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
 var (
-	ErrShadowMissing    = errors.New("recovery content is missing")
-	ErrShadowCorruption = errors.New("recovery content is damaged")
+	ErrShadowMissing            = errors.New("recovery content is missing")
+	ErrShadowCorruption         = errors.New("recovery content is damaged")
 	ErrAtomicPublishUnsupported = errors.New("atomic publish unsupported")
-	ErrShadowInvalidID  = errors.New("invalid shadow identifier")
+	ErrShadowInvalidID          = errors.New("invalid shadow identifier")
 )
 
 // State is a file at one instant. Absent is a state, not an error: the
@@ -40,6 +40,12 @@ type Change struct {
 type Shadow struct {
 	root  string
 	store string
+
+	// capOnce/capErr cache the result of the runtime renameat2(RENAME_NOREPLACE)
+	// capability probe for this store's filesystem. Probed once, lazily, on
+	// first publish; never re-probed per blob.
+	capOnce sync.Once
+	capErr  error
 }
 
 // New sets up the shadow store for a root. We use .ag/shadow as a
@@ -119,6 +125,20 @@ func Unchanged(a, b State) bool {
 		return a.Absent == b.Absent
 	}
 	return a.Blob != "" && a.Blob == b.Blob
+}
+
+// ensurePublishCapable verifies once, at runtime, that the filesystem backing
+// this store honors atomic no-replace publication (renameat2 RENAME_NOREPLACE
+// on Linux/Android, MoveFile-without-replace on Windows, hard-link on others).
+// The result is a real syscall probe executed on the destination filesystem,
+// not an assumption from building on linux/amd64. If the platform cannot
+// publish atomically, ErrAtomicPublishUnsupported is returned explicitly; the
+// publish path never silently falls back to a plain replacing os.Rename.
+func (s *Shadow) ensurePublishCapable() error {
+	s.capOnce.Do(func() {
+		s.capErr = probeNoReplaceSupport(s.store)
+	})
+	return s.capErr
 }
 
 // Read fetches the content behind a recorded state. It is the hash-to-bytes
@@ -249,13 +269,27 @@ func WriteAtomic(abs string, data []byte, mode os.FileMode) error {
 
 	return nil
 }
+
+// blobMatches compares the on-disk content of an existing blob file against
+// the content being published by full-content SHA-256 digest. Size and mtime
+// are never used: two files of equal length with different bytes would pass a
+// size check and produce a false idempotent-success, which must be rejected as
+// corruption. The digest of the existing file is computed over its complete
+// bytes and compared against the digest of the new content.
+func blobMatches(existingData []byte, sum [sha256.Size]byte) bool {
+	return sha256.Sum256(existingData) == sum
+}
+
 func (s *Shadow) put(data []byte) (string, error) {
 	sum := sha256.Sum256(data)
 	id := "s256:" + hex.EncodeToString(sum[:])
 	p := filepath.Join(s.store, id[5:7], id[7:])
 
 	if existingData, err := os.ReadFile(p); err == nil {
-		if bytes.Equal(existingData, data) {
+		// Idempotent success only if the existing blob hashes to the same
+		// full content. This is a full-content SHA-256 comparison, not size
+		// or mtime, so equal-length-but-different content is rejected.
+		if blobMatches(existingData, sum) {
 			return id, nil // content-addressed: already there and matches
 		}
 		return "", fmt.Errorf("%w: blob collision or corruption: %s exists with different content", ErrShadowCorruption, p)
@@ -264,6 +298,14 @@ func (s *Shadow) put(data []byte) (string, error) {
 	}
 
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return "", err
+	}
+
+	// Runtime capability check before attempting publication: if this
+	// filesystem does not honor atomic no-replace (ENOSYS/EINVAL), fail
+	// explicitly with ErrAtomicPublishUnsupported. Never fall back to a
+	// plain replacing os.Rename in this path.
+	if err := s.ensurePublishCapable(); err != nil {
 		return "", err
 	}
 
@@ -293,8 +335,11 @@ func (s *Shadow) put(data []byte) (string, error) {
 	// Use platform-specific atomic no-replace publication
 	if renameErr := renameNoReplace(name, p); renameErr != nil {
 		if os.IsExist(renameErr) {
+			// A concurrent writer published the same blob path first. Verify
+			// by full-content SHA-256 of the existing file against the new
+			// content: match -> idempotent success, mismatch -> corruption.
 			if existingData, readErr := os.ReadFile(p); readErr == nil {
-				if bytes.Equal(existingData, data) {
+				if blobMatches(existingData, sum) {
 					os.Remove(name)
 					return id, nil
 				}
