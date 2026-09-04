@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -235,5 +236,59 @@ func TestReplayNoticeDuringToolCallSerializesToValidOpenAIOrder(t *testing.T) {
 	}
 	if ms[3].Role != "user" || ms[3].Text != "«notice» calibration: token ratio adopted 1.45" {
 		t.Fatalf("expected user notice after tool results, got %v", ms[3])
+	}
+}
+
+// TestMessagesReplayIsDeterministic verifies the core determinism contract:
+// replaying identical history any number of times yields byte-equivalent
+// messages. This exercises mixed tool batches, partial denial (orphan ToolEnd
+// synthesis over the `open` map), cancelled/interrupted rounds, and JSON
+// serialization stability (Section B requirements 1 and 8).
+func TestMessagesReplayIsDeterministic(t *testing.T) {
+	evs := []Event{
+		{Seq: 1, Type: UserMsg, Text: "inspect"},
+		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "c1", Name: "read_file"}},
+		{Seq: 3, Parent: 2, Type: ToolStart, Call: &ToolCall{ID: "c2", Name: "read_file"}},
+		{Seq: 4, Parent: 3, Type: ToolStart, Call: &ToolCall{ID: "c3", Name: "bash"}},
+		{Seq: 5, Parent: 4, Type: ToolEnd, Call: &ToolCall{ID: "c1", Name: "read_file", Output: "a", OK: true}},
+		// c2 never closes -> orphan synthesis; c3 dies on interrupt.
+		{Seq: 6, Parent: 5, Type: ToolEnd, Call: &ToolCall{ID: "c3", Name: "bash", Output: "", OK: false}},
+		{Seq: 7, Parent: 6, Type: Interrupted},
+		{Seq: 8, Parent: 7, Type: UserMsg, Text: "again"},
+		{Seq: 9, Parent: 8, Type: TextDelta, Text: "thinking"},
+		{Seq: 10, Parent: 9, Type: TurnEnd},
+	}
+
+	var first []byte
+	for i := 0; i < 200; i++ {
+		ms := Messages(evs)
+		// Every ToolResult.ID must have a preceding matching ToolCall.ID.
+		callIDs := map[string]bool{}
+		for _, m := range ms {
+			for _, c := range m.ToolCalls {
+				callIDs[c.ID] = true
+			}
+		}
+		for _, m := range ms {
+			for _, r := range m.ToolResults {
+				if r.ID == "" {
+					continue
+				}
+				if !callIDs[r.ID] {
+					t.Fatalf("replay %d: ToolResult %s has no matching ToolCall", i, r.ID)
+				}
+			}
+		}
+		b, err := json.Marshal(ms)
+		if err != nil {
+			t.Fatalf("replay %d: marshal: %v", i, err)
+		}
+		if first == nil {
+			first = b
+			continue
+		}
+		if !bytes.Equal(first, b) {
+			t.Fatalf("replay %d: nondeterministic output\n first=%s\n  this=%s", i, first, b)
+		}
 	}
 }
