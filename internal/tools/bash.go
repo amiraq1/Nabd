@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -83,9 +84,19 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	}
 	defer pr.Close()
 
+	// Isolated HOME per invocation: 0700, removed below even on failure,
+	// never reused. If it cannot be created, HOME is omitted — the caller's
+	// real HOME is never passed to the child.
+	env := childEnv(os.Environ())
+	home, herr := newTempHome()
+	if herr == nil {
+		defer os.RemoveAll(home)
+		env = append(env, "HOME="+home)
+	}
+
 	cmd := exec.Command("sh", "-c", a.Cmd)
 	cmd.Dir = b.root.Dir()
-	cmd.Env = scrubEnv(os.Environ())
+	cmd.Env = env
 	cmd.Stdin = null
 	cmd.Stdout, cmd.Stderr = pw, pw // one stream: interleaving is causality
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -176,24 +187,109 @@ func killGroup(pgid int) {
 	syscall.Kill(-pgid, syscall.SIGKILL)
 }
 
-// scrubEnv removes the provider credentials. The agent has no business
-// reading the key that pays for it, and `env` is one command away from
-// `curl`. Everything else passes through: a shell without PATH is a toy.
-func scrubEnv(env []string) []string {
-	out := make([]string, 0, len(env)+1)
-	for _, kv := range env {
-		k, _, ok := strings.Cut(kv, "=")
-		if !ok {
+// childEnvAllowlist is the complete set of variable names a bash child may
+// inherit. Anything not listed here is absent from the child environment by
+// construction — including every credential variable (whatever its name),
+// BASH_ENV, ENV, and any startup-file or library-injection vector. This is
+// an allowlist, not a denylist: a variable is either named here or it does
+// not exist in the child. No prefix or substring heuristics are used, so an
+// unknown variable never passes merely because its name does not look like
+// a secret.
+var childEnvAllowlist = map[string]bool{
+	"PATH":        true, // command resolution; sanitized below (no empty/relative entries)
+	"TERM":        true, // terminal capabilities for interactive-ish commands
+	"LANG":        true, // locale
+	"LC_ALL":      true,
+	"LC_COLLATE":  true,
+	"LC_CTYPE":    true,
+	"LC_MESSAGES": true,
+	"LC_MONETARY": true,
+	"LC_NUMERIC":  true,
+	"LC_TIME":     true,
+	"TMPDIR":      true, // temp dir for tools that honor it
+	"TMP":         true,
+	"TEMP":        true,
+}
+
+// childEnv builds the environment for a spawned child from the explicit
+// allowlist above, starting from an empty slice. Order is deterministic:
+// names are emitted in sorted order so repeated runs of the same command
+// see a byte-identical environment. HOME is deliberately not copied from
+// the caller; see homeEnv below. Values are sanitized: any entry whose
+// value contains a NUL byte is dropped, and malformed entries (no '=') are
+// skipped.
+func childEnv(parent []string) []string {
+	src := make(map[string]string, len(parent))
+	for _, kv := range parent {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
 			continue
 		}
-		u := strings.ToUpper(k)
-		if strings.HasSuffix(u, "_API_KEY") || strings.HasSuffix(u, "_TOKEN") ||
-			strings.HasSuffix(u, "_SECRET") || strings.HasSuffix(u, "_PASSWORD") {
-			continue
+		if strings.IndexByte(v, 0) >= 0 {
+			continue // NUL byte: reject, never forward
 		}
-		out = append(out, kv)
+		src[k] = v
 	}
-	return append(out, "NABD=1")
+
+	names := make([]string, 0, len(childEnvAllowlist))
+	for name := range childEnvAllowlist {
+		if _, ok := src[name]; ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	out := make([]string, 0, len(names)+1)
+	for _, name := range names {
+		v := src[name]
+		if name == "PATH" {
+			v = sanitizePath(v)
+			if v == "" {
+				continue // PATH entirely stripped: omit rather than inherit cwd risk
+			}
+		}
+		out = append(out, name+"="+v)
+	}
+	out = append(out, "NABD=1")
+	return out
+}
+
+// sanitizePath strips empty and relative entries from a PATH value. An
+// empty entry means the current working directory on Unix, which would let
+// an attacker-planted binary in the project dir shadow real commands; a
+// relative entry has the same class of risk from wherever the child runs.
+// Only absolute, non-empty entries survive.
+func sanitizePath(p string) string {
+	parts := strings.Split(p, ":")
+	kept := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		if !strings.HasPrefix(part, "/") {
+			continue // relative entry: drop
+		}
+		kept = append(kept, part)
+	}
+	return strings.Join(kept, ":")
+}
+
+// newTempHome creates the isolated HOME directory for one child invocation:
+// application-owned, 0700 permissions, removed after the invocation even on
+// failure, never reused across invocations. If it cannot be created, the
+// child runs without HOME rather than with the caller's real HOME (whose
+// startup files, ssh keys, and credential stores must never reach the
+// shell).
+func newTempHome() (string, error) {
+	dir, err := os.MkdirTemp("", "nabd-home-*")
+	if err != nil {
+		return "", err
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
+	return dir, nil
 }
 
 // headTail keeps the opening and the ending. The middle of a long build log

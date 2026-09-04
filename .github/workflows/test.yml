@@ -18,6 +18,12 @@ jobs:
         run: go test ./...
       - name: Test with Race Detector
         run: go test ./... -race -count=1
+      - name: Exec.Cmd.Env static audit
+        # Phase 3 gate: every os/exec.Command construction in non-test Go
+        # code must assign cmd.Env explicitly before Start. A nil Env makes
+        # the child inherit the full parent environment, defeating the bash
+        # tool's allowlist.
+        run: bash scripts/check-exec-env.sh
       - name: Staticcheck
         # GOTOOLCHAIN=local pins the parser to the installed toolchain (1.27,
         # matching go.mod). Without it, staticcheck@latest forces its own
