@@ -53,9 +53,14 @@ a51d357 fix: isolate per-invocation registry metadata (Consume semantics)
 4dab716 fix: clear pending read metadata on plain-Run read failure
 8874793 test: add environment and registry boundary integration coverage
 7854fd1 test: pin config load never mutates process-global environment
+2db4c66 security: make read_file metadata result-scoped (Outcome, not shared slot)
+76f9f3c security: harden ~/.ag/config loading against symlink/ownership/TOCTOU
+8a08cfc test: rewrite metadata tests for result-scoped model; add config security tests
 <docs>  docs: phase3 report — environment isolation and shared-state contracts
+<docs>  docs: finalize Phase 3 verification evidence
+<docs>  docs: Phase 3 hardening — result-scoped metadata and config security
 
-Branch tip = the docs commit; FINAL_PHASE3_HEAD (implementation) = 7854fd1.
+Branch tip = the docs commit; FINAL_PHASE3_HEAD (implementation) = 8a08cfc.
 ```
 
 The commit `bdd5f7b` is a pure `gofmt` hygiene fix for a pre-existing
@@ -230,35 +235,45 @@ ok  nabd/internal/config  0.502s
 
 ## 8. linesRead / truncated ownership model
 
-The registry keeps read metadata in a private `metadata` struct guarded by
-its own mutex, with strict one-shot **Consume** ownership:
+The previous **shared-slot + Consume** model (`metadata{linesRead,truncated,
+nextOffset}` written by `read_file`, consumed by the next write) was safe only
+because the agent loop is strictly sequential (`runCalls` is a for-loop:
+*"parallelism would gain nothing but a race"*). A mutex prevents a data race but
+not a **semantic** interleaving: `-race` cannot catch a count that bleeds across
+two genuinely concurrent invocations. The review reopened this, so read metadata
+is now **result-scoped** — it travels in the `Outcome`, not via a shared slot.
 
-```
-type metadata struct {
-    mu         sync.Mutex
-    linesRead  int  // set by read_file, consumed by the next commit()
-    truncated  bool // set by read_file, consumed by RunDetailed
-    nextOffset int  // set by read_file on truncation, consumed by RunDetailed
+`read_file.run()` returns a local `readMeta{linesRead,truncated,nextOffset}`,
+and `RunDetailed` places it in the `Outcome`:
+
+```go
+type readMeta struct {
+    linesRead  int  // shown to this model this invocation
+    truncated  bool // byte cap cut the file for this invocation only
+    nextOffset int  // where this invocation would continue from
 }
 ```
 
-- `SetLinesRead(n)` / `SetTruncated(next)`: written by the read_file
-  invocation under the mutex.
-- `ConsumeLinesRead() int`: atomically returns the current value and resets
-  it to zero. Ownership is one-shot: exactly one consumer takes a value,
-  and anything after it sees 0 — a stale count can never bleed into a later
-  unrelated write.
-- `ConsumeTruncated() (bool, int)`: same ownership for truncation state.
-- `ClearReadState()`: drops all pending metadata. Called when an invocation
-  failed or was cancelled, through both the `RunDetailed` error branch and
-  a wrapper around the plain `Run` path (so `Registry.Run` failures clear
-  too), and at the start of every read.
+Consequences:
+- **Per-invocation isolation by construction.** Concurrent reads on one
+  `Registry` each get their own `readMeta`; there is no shared slot on the
+  read side for them to race on. The `Outcome` is the single source of truth.
+- **The loop threads read→write.** Because `read_file` no longer writes the
+  shared `linesRead` slot, `loop.runCalls` stages it: after a successful
+  `read_file` it calls `reg.SetLinesRead(out.LinesRead)`. The next `commit()`
+  consumes exactly what the loop staged — never a count read_file wrote, never
+  a stale carry-over. This is sequential in production, so no race.
+- **Truncation stays result-scoped.** `Outcome.Truncated`/`NextOffset` come from
+  `readMeta`, never from the slot. The legacy truncation slot is drained inside
+  `RunDetailed` (`ConsumeTruncated`) so it cannot leak past the call that set
+  it; the loop reads truncation from the `Outcome`, not the slot.
+- **`ConsumeLinesRead` / `ClearReadState`** remain on the registry for the
+  write-side handoff and for clearing on failure/cancellation; the mutex still
+  guards that slot. `write.go commit()` still consumes `linesRead`.
 
-`write.go` `commit()` consumes `linesRead` on each write; the loop's event
-path consumes truncation through `RunDetailed`. A mutex alone would be
-insufficient if ownership stayed ambiguous; the consume-reset semantics make
-ownership unambiguous: each invocation's metadata is taken by exactly one
-consumer and deleted on take.
+The change is additive to the event path (the journal's `read_record` already
+reads `out.Truncated`/`out.NextOffset` from the `Outcome`), so no production
+behavior changes except the elimination of the cross-invocation slot window.
 
 ## 9. Files changed per concern
 
@@ -267,22 +282,37 @@ Concern A (remove global env loading):
   cmd/ag/main.go                      loadEnv() removed
 Concern B (child-env allowlist):
   internal/tools/bash.go              childEnvAllowlist, childEnv,
-                                      sanitizePath, newTempHome;
-                                      cmd.Env always set explicitly
+                                       sanitizePath, newTempHome;
+                                       cmd.Env always set explicitly
   scripts/check-exec-env.sh (new)     exec.Cmd.Env static audit
   .github/workflows/test.yml          audit step added to CI
-Concern C (registry metadata):
-  internal/tools/registry.go          metadata struct + Consume + Clear
-  internal/tools/read.go              Run wrapper clears on error; truncation
-                                      ownership unchanged
-  internal/tools/write.go             commit() consumes linesRead
-  internal/tools/edit_record_test.go  updated to ConsumeLinesRead API
+Concern C (registry metadata — result-scoped):
+  internal/tools/read.go              run() returns readMeta; RunDetailed places
+                                       linesRead/truncated/nextOffset in the
+                                       Outcome; read no longer writes the shared
+                                       linesRead slot
+  internal/agent/event.go             Outcome.LinesRead field added
+  internal/agent/loop.go              runCalls stages read→write via
+                                       SetLinesRead after each read_file
+  internal/tools/write.go             commit() consumes linesRead (unchanged)
+Concern F (config file security):
+  internal/config/config.go           ParseFile: os.Lstat, refuse symlink,
+                                       refuse non-regular, ownership check
+  internal/config/owner_unix.go (new) Unix ownership check (current-user uid)
+  internal/config/owner_other.go (new) Windows: documented no-op (NT ACLs)
 Concern D/E (tests + docs):
   internal/tools/env_isolation_test.go     (new)
-  internal/tools/registry_metadata_test.go (new)
-  internal/config/config_test.go           TestLoadDoesNotMutateProcessEnv
+  internal/tools/registry_metadata_test.go rewritten: C#1–C#3, C#6, C#10 now
+                                            assert via Outcome; C#8 replaced by
+                                            TestConcurrentToolMetadataIsInvocationScoped
+  internal/tools/edit_record_test.go       TestEditRecordEmitted stages via
+                                            SetLinesRead
+  internal/config/config_test.go           TestConfigRejectsSymlink,
+                                            TestConfigRejectsNonRegularFile,
+                                            TestConfigRejectsWrongOwnership,
+                                            TestConfigRejectsInsecurePermissions
   internal/ui/feed.go                      pre-existing gofmt fix (style
-                                           commit, §15)
+                                            commit, §15)
   phase3_report.md                         this report
 ```
 
@@ -311,17 +341,21 @@ $ git diff a191d1d...HEAD --stat -- internal/snap
 
 ### Registry metadata (internal/tools/registry_metadata_test.go)
 
+Metadata is now per-invocation (Outcome), so the slot-based assertions were
+rewritten to assert against the Outcome, and C#8 was replaced by a forced
+concurrency test:
+
 | Test | Guards |
 |---|---|
-| `TestReadReportsOwnLineCount` | read_file reports its own line count (C#1). |
-| `TestSubsequentWriteReportsZeroReadLines` | A write after a consumed read carries 0, not stale (C#2). |
-| `TestTwoSequentialReadsDoNotAccumulate` | 3 then 5 → 5, not 8 (C#3). |
-| `TestTruncatedReadReportsOnlyItsInvocation` | Truncation flag is per invocation; a following clean read is clean (C#4/5). |
-| `TestFailedReadDoesNotContaminate` | Failed read leaves 0 (C#6). |
-| `TestCancelledOperationDoesNotContaminate` | Cancelled read leaves 0 (C#7). |
-| `TestConcurrentReadsMetadataIsolated` | Under contention: values are only whole 3/0, one consumer takes the value, double consume is 0, final state 0 (C#8). |
+| `TestReadReportsOwnLineCount` | read_file reports its own line count via `Outcome.LinesRead` and writes nothing to the shared slot (C#1). |
+| `TestSubsequentWriteReportsZeroReadLines` | After the loop stages via `SetLinesRead`, a write carries the staged count; a later blind write carries 0 — no stale carry-over (C#2). |
+| `TestTwoSequentialReadsDoNotAccumulate` | 3 then 5 → 5, not 8; the loop re-stages per read so the latest wins (C#3). |
+| `TestTruncatedReadReportsOnlyItsInvocation` | `Outcome.Truncated` is per invocation; a following clean read is clean (C#4/5). |
+| `TestFailedReadDoesNotContaminate` | Failed read leaves no metadata in the Outcome and pollutes no slot (C#6). |
+| `TestCancelledOperationDoesNotContaminate` | Cancelled read leaves no metadata in the Outcome (C#7). |
+| `TestConcurrentToolMetadataIsInvocationScoped` | Forced-overlap concurrency: concurrent truncated+complete reads keep their own `LinesRead`/`Truncated`/`NextOffset`; a write racing a read never steals the read's count (replaces C#8). |
 | `TestConcurrentReadWriteRaceFree` | Concurrent read→write cycles with own registries stay race-free (C#9). |
-| `TestRegistryInstancesIsolated` | Two registries never share metadata (C#10). |
+| `TestRegistryInstancesIsolated` | Two registries never share metadata; a read writes no slot (C#10). |
 | `TestReadFailureClearsViaRunDetailed` | RunDetailed error path clears too. |
 
 ### Config process-env isolation (internal/config/config_test.go)
@@ -329,6 +363,10 @@ $ git diff a191d1d...HEAD --stat -- internal/snap
 | Test | Guards |
 |---|---|
 | `TestLoadDoesNotMutateProcessEnv` | config.Load/Get never merges file values into os.Environ. |
+| `TestConfigRejectsInsecurePermissions` | group/world permission bits are refused; 0600 accepted. |
+| `TestConfigRejectsSymlink` | ParseFile uses `os.Lstat` and refuses a symlink to a valid 0600 file. |
+| `TestConfigRejectsNonRegularFile` | only regular files are accepted (FIFO refused). |
+| `TestConfigRejectsWrongOwnership` | Unix: file must be owned by current user (non-root skips the rejection leg; Windows: documented no-op). |
 
 ### Regressions re-run (Section D)
 
@@ -372,7 +410,23 @@ DIFF_CHECK_OK
 
 $ GOTOOLCHAIN=local go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
 STATICCHECK_OK
+
+$ go test ./internal/config/ -run 'TestConfigRejects' -count=1
+--- PASS: TestConfigRejectsSymlink (0.00s)
+--- PASS: TestConfigRejectsNonRegularFile (0.00s)
+--- SKIP: TestConfigRejectsInsecurePermissions (0.00s)
+--- SKIP: TestConfigRejectsWrongOwnership (0.00s)
+ok  nabd/internal/config
+
+$ go test ./internal/tools/ -run 'TestConcurrentToolMetadataIsInvocationScoped' -count=1 -v
+--- PASS: TestConcurrentToolMetadataIsInvocationScoped (0.01s)
+ok  nabd/internal/tools
 ```
+
+(`TestConfigRejectsInsecurePermissions`/`TestConfigRejectsWrongOwnership` SKIP
+on this environment: the first because the sandbox umask strips the loose bits,
+the second because it is not running as root and so cannot chown to another
+uid — the happy path (current-user-owned file accepted) is verified in both.)
 
 ### exec.Cmd.Env static audit (Section B, mandatory)
 
@@ -437,6 +491,10 @@ Status vocabulary, per spec:
   gate passing on the Phase 2 head), but this branch has not been pushed to
   the remote, so no run exists for it yet. No configured-but-unrun CI is
   reported as PASS.
+- The new concurrency gate `TestConcurrentToolMetadataIsInvocationScoped` is
+  intended to run under `-race` on CI (it forces genuine goroutine overlap via a
+  sync barrier). Its authoritative status is therefore **PENDING_CI** until the
+  branch is pushed; locally it passes cleanly without the detector.
 
 ## 14. Remaining platform limitations
 
@@ -455,7 +513,15 @@ Status vocabulary, per spec:
   broken environment rather than document a real platform limitation.
 - **Windows**: the Phase 2 Windows no-replace path is verified by
   cross-compile and stdlib errno mapping, not by a Windows runtime in this
-  sandbox (unchanged from Phase 2; documented there).
+  sandbox (unchanged from Phase 2; documented there). Config-file ownership
+  checking is also a documented no-op on Windows: NT ACL semantics make a
+  numeric-uid ownership check meaningless, so `checkOwnerPlatform` is empty
+  there (`internal/config/owner_other.go`); the symlink / regular-file /
+  permission-bit checks still apply.
+- **Config ownership (Unix)**: `TestConfigRejectsWrongOwnership`'s rejection leg
+  (file owned by another uid is refused) is only executable by root; non-root
+  runs skip it after verifying the happy path (current-user-owned file
+  accepted). The enforcement code itself is platform-tested on unix.
 - **Termux/proot**: `uname -r` = `6.17.0-PRoot-Distro`; real `sh` is
   available and the bash integration tests run against it. The child
   environment tests execute the real bash tool, not mocks.
