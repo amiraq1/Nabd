@@ -445,6 +445,21 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 				// we return errTurnRateLimited below.
 			}
 
+		case provider.ChunkTrace:
+			if c.RouteTrace != nil {
+				_ = l.emit(Event{
+					Type: EventProviderRoute,
+					Route: &ProviderRoute{
+						StreamID: c.RouteTrace.StreamID,
+						Provider: c.RouteTrace.Provider,
+						Model:    c.RouteTrace.Model,
+						Attempt:  c.RouteTrace.Attempt,
+						Status:   c.RouteTrace.Status,
+						Reason:   c.RouteTrace.Reason,
+					},
+				})
+			}
+
 		case provider.ChunkError:
 			// Drain so the provider goroutine is never left blocked.
 			for range ch {

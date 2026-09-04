@@ -189,7 +189,7 @@ func Messages(evs []Event) []provider.Message {
 			// infrastructure noise.
 			continue
 
-		case RunStart, TurnStart, PermAsk, PermReply, Rewind, EventEdit, EventRead, EventCalib:
+		case RunStart, TurnStart, PermAsk, PermReply, Rewind, EventEdit, EventRead, EventCalib, EventProviderRoute:
 			// Known journal/audit events that produce no model messages.
 			continue
 

@@ -862,15 +862,18 @@ func TestRouterTraceEmittedAfterCommitFlipNotBefore(t *testing.T) {
 		}
 	}
 
-	// Trace "selected" must arrive before the text chunk in output stream (J.5)
-	if len(events) < 2 {
-		t.Fatalf("expected at least 2 events, got: %v", events)
+	// Events sequence: attempted, selected, text
+	if len(events) < 3 {
+		t.Fatalf("expected at least 3 events, got: %v", events)
 	}
-	if events[0] != "trace:selected" {
-		t.Fatalf("expected trace:selected first, got: %s", events[0])
+	if events[0] != "trace:attempted" {
+		t.Fatalf("expected trace:attempted first, got: %s", events[0])
 	}
-	if events[1] != "text:committed!" {
-		t.Fatalf("expected text:committed! second, got: %s", events[1])
+	if events[1] != "trace:selected" {
+		t.Fatalf("expected trace:selected second, got: %s", events[1])
+	}
+	if events[2] != "text:committed!" {
+		t.Fatalf("expected text:committed! third, got: %s", events[2])
 	}
 }
 
@@ -999,11 +1002,13 @@ func TestRouterCommitWinsWhenCancelArrivesAfterLinearizationPoint(t *testing.T) 
 	router, _ := NewRouter([]Route{r1}, 5*time.Second, RealClock{})
 	out, _ := router.Stream(parentCtx, makeValidRequest())
 
-	// Read first chunk (commit has happened)
-	c1 := <-out
-	if c1.Kind == ChunkTrace {
-		// Drain trace if any
-		c1 = <-out
+	// Read until first semantic text chunk
+	var c1 Chunk
+	for c := range out {
+		if c.Kind == ChunkText {
+			c1 = c
+			break
+		}
 	}
 	if c1.Kind != ChunkText || c1.Text != "chunk1" {
 		t.Fatalf("expected chunk1, got: %+v", c1)
@@ -1012,6 +1017,7 @@ func TestRouterCommitWinsWhenCancelArrivesAfterLinearizationPoint(t *testing.T) 
 	close(unblock)
 	for range out {
 	}
+
 	// Test passes if no panic or hang and chunk1 was successfully delivered
 }
 

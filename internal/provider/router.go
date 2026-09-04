@@ -285,6 +285,14 @@ func (r *Router) route(ctx context.Context, req Request, streamID string, out ch
 			return
 		}
 
+		sendTrace(out, ChunkRouteTrace{
+			StreamID: streamID,
+			Provider: re.Provider,
+			Model:    re.Model,
+			Attempt:  idx + 1,
+			Status:   "attempted",
+		})
+
 		routeCtx, routeCancel := context.WithTimeout(ctx, r.prestreamTimeout)
 		routeDeadline := r.clock.Now().Add(r.prestreamTimeout)
 
