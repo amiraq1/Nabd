@@ -270,7 +270,14 @@ type Outcome struct {
 	OK        bool
 	Exit      int
 	Signal    string
-	Truncated bool // read_file set this: the byte cap cut the file short
+	Truncated bool // read_file reports this via the Outcome: the byte cap cut the file short
 	// NextOffset is the exact line to continue from (read_file truncation).
 	NextOffset int
+	// LinesRead is how many lines read_file showed the model. It is carried
+	// in the Outcome (per-invocation) rather than read back from a shared
+	// registry slot, so concurrent reads through one Registry can never
+	// exchange counts. The loop threads it forward to the next write via
+	// Registry.SetLinesRead, preserving the read→write audit for edit_record
+	// events without a cross-call mutable slot on the read side.
+	LinesRead int
 }

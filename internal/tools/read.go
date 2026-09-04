@@ -116,10 +116,25 @@ func (readFile) Class() perm.Class { return perm.ReadOnly }
 
 func (readFile) Name() string { return "read_file" }
 
-// RunDetailed lets read_file report truncation through the Outcome, so the
-// loop can journal a read_record event when the byte cap cut the file.
+// readMeta is read_file's per-invocation result. Returning it through the
+// Outcome (instead of stamping it onto a shared registry slot) is what makes a
+// read's metadata ownable: concurrent reads on one Registry can never steal one
+// another's count or truncation. read_file itself no longer writes the shared
+// linesRead slot; the agent loop threads LinesRead to the next write via
+// Registry.SetLinesRead. The truncation slot is retained only for the legacy
+// plain-Run path and is drained within RunDetailed, so it cannot leak past the
+// call that produced it.
+type readMeta struct {
+	linesRead  int
+	truncated  bool
+	nextOffset int
+}
+
+// RunDetailed lets read_file report truncation and line count through the
+// Outcome, so the loop can journal a read_record event when the byte cap cut
+// the file short.
 func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.Outcome, error) {
-	text, ok, err := t.Run(ctx, raw)
+	text, meta, ok, err := t.run(ctx, raw)
 	if err != nil || ctx.Err() != nil {
 		// A failed or cancelled read must not leave partial metadata for a
 		// later unrelated call to inherit.
@@ -128,12 +143,19 @@ func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		}
 		return agent.Outcome{Text: text, OK: ok}, err
 	}
-	trunc := false
-	next := 0
+	// The truncation flag lives in the Outcome (per-invocation). Drain the
+	// legacy slot here — its recovered value is intentionally discarded in
+	// favour of meta, so a concurrent reader can never swap flags via the slot.
 	if t.reg != nil {
-		trunc, next = t.reg.ConsumeTruncated()
+		t.reg.ConsumeTruncated()
 	}
-	return agent.Outcome{Text: text, OK: ok, Truncated: trunc, NextOffset: next}, err
+	return agent.Outcome{
+		Text:       text,
+		OK:         ok,
+		Truncated:  meta.truncated,
+		NextOffset: meta.nextOffset,
+		LinesRead:  meta.linesRead,
+	}, nil
 }
 
 func (readFile) Spec() provider.ToolSpec {
@@ -149,40 +171,42 @@ func (readFile) Spec() provider.ToolSpec {
 // Run wraps the read implementation so that any error path — including the
 // plain Registry.Run path that never reaches RunDetailed — clears pending
 // read metadata. A failed read must not contaminate a later unrelated call
-// with stale linesRead/truncation state.
+// with stale linesRead/truncation state. The per-invocation line count and
+// truncation live in the Outcome (see RunDetailed); this plain path returns
+// text only and does not touch the shared slots.
 func (t readFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
-	text, ok, err := t.run(ctx, raw)
+	text, _, ok, err := t.run(ctx, raw)
 	if err != nil && t.reg != nil {
 		t.reg.ClearReadState()
 	}
 	return text, ok, err
 }
 
-func (t readFile) run(_ context.Context, raw json.RawMessage) (string, bool, error) {
+func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta, bool, error) {
 	var a struct {
 		Path   string `json:"path"`
 		Offset int    `json:"offset"`
 		Limit  int    `json:"limit"`
 	}
 	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", false, fmt.Errorf("invalid args: %w", err)
+		return "", readMeta{}, false, fmt.Errorf("invalid args: %w", err)
 	}
 
 	p, err := t.root.Resolve(a.Path)
 	if err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 	fi, err := os.Stat(p)
 	if err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 	if fi.IsDir() {
-		return "", false, fmt.Errorf("%s is a directory · use glob", t.root.Rel(p))
+		return "", readMeta{}, false, fmt.Errorf("%s is a directory · use glob", t.root.Rel(p))
 	}
 
 	f, err := os.Open(p)
 	if err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 	defer f.Close()
 
@@ -191,10 +215,10 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, bool, err
 	head := make([]byte, 8192)
 	n, _ := f.Read(head)
 	if strings.IndexByte(string(head[:n]), 0) >= 0 {
-		return "", false, fmt.Errorf("%s is binary (%d bytes)", t.root.Rel(p), fi.Size())
+		return "", readMeta{}, false, fmt.Errorf("%s is binary (%d bytes)", t.root.Rel(p), fi.Size())
 	}
 	if _, err := f.Seek(0, 0); err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 
 	from := a.Offset
@@ -218,12 +242,13 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, bool, err
 		total++
 	}
 	if _, err := f.Seek(0, 0); err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 
+	var meta readMeta
 	line, shown, capped := 0, 0, ""
 	for sc.Scan() {
 		line++
@@ -252,12 +277,16 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, bool, err
 				fmt.Fprintf(&b, "%d|%s [LINE_TRUNCATED: line longer than maxReadBytes=%d; remainder of this line is not readable with this tool]\n", line, clip(sc.Text(), maxLineRunes), maxReadBytes)
 				shown++
 				capped = TruncTail(from, line, total, line+1)
+				meta.truncated = true
+				meta.nextOffset = line + 1
 				if t.reg != nil {
 					t.reg.SetTruncated(line + 1)
 				}
 				break
 			}
 			capped = TruncTail(from, line-1, total, line)
+			meta.truncated = true
+			meta.nextOffset = line
 			if t.reg != nil {
 				t.reg.SetTruncated(line)
 			}
@@ -267,22 +296,20 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, bool, err
 		shown++
 	}
 	if err := sc.Err(); err != nil {
-		return "", false, err
+		return "", readMeta{}, false, err
 	}
 
 	if shown == 0 {
 		if line == 0 {
-			return fmt.Sprintf("%s is empty", t.root.Rel(p)), true, nil
+			return fmt.Sprintf("%s is empty", t.root.Rel(p)), readMeta{}, true, nil
 		}
-		return fmt.Sprintf("no lines at offset=%d · file has %d lines", from, line), true, nil
+		return fmt.Sprintf("no lines at offset=%d · file has %d lines", from, line), readMeta{}, true, nil
 	}
 	if capped != "" {
 		b.WriteString(capped + "\n")
 	}
-	if t.reg != nil {
-		t.reg.SetLinesRead(shown)
-	}
-	return b.String(), true, nil
+	meta.linesRead = shown
+	return b.String(), meta, true, nil
 }
 
 func clip(s string, n int) string {
