@@ -191,7 +191,7 @@ Session evidence discipline: no item is marked PASS without raw outputs attached
 ```
 FINAL_COMMIT_HASH=4e7d27c70b3f163f9834615e123a0c864d8b8f19
 ```
-Note: the instruction named commit `2dc6cc3fe8733683282d892086ab753ce931d5ec`; that commit is an ancestor of the pushed branch head. CI runs on the branch head, so the commit actually pushed and CI-verified in this session is `4e7d27c`, which contains `2dc6cc3` in its history (`git merge-base --is-ancestor 2dc6cc3 4e7d27c` = true).
+Note: the instruction named commit `2dc6cc3fe8733683282d892086ab753ce931d5ec`; that commit is an ancestor of the pushed branch head. CI runs on the branch head, so the commit actually pushed and CI-verified for all code changes in this session is `4e7d27c`, which contains `2dc6cc3` in its history (`git merge-base --is-ancestor 2dc6cc3 4e7d27c` = true). The final branch head after this evidence section was added, `7363324` (docs-only: report + gh_log.txt), also passed the same five-step CI (run 33883497397, all steps ✓).
 
 ### 14.1 CI push and run (item 1)
 
