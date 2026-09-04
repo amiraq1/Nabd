@@ -23,21 +23,18 @@ func TestEditRecordEmitted(t *testing.T) {
 	path := filepath.Join(dir, "notes.md")
 	os.WriteFile(path, []byte("سطر واحد\nسطر اثنان\nسطر ثلاثة\n"), 0o644)
 	raw, _ := json.Marshal(map[string]any{"path": "notes.md"})
-	if _, ok, err := r.Run(ctx, providerToolCall("read_file", raw)); err != nil || !ok {
-		t.Fatalf("read_file: ok=%v err=%v", ok, err)
+	out, err := r.RunDetailed(ctx, "read_file", raw)
+	if err != nil || !out.OK {
+		t.Fatalf("read_file: ok=%v err=%v", out.OK, err)
 	}
-	if got := r.ConsumeLinesRead(); got != 3 {
-		t.Fatalf("ConsumeLinesRead=%d, want 3 (the read must be recorded)", got)
+	if out.LinesRead != 3 {
+		t.Fatalf("out.LinesRead=%d, want 3 (the read must be recorded)", out.LinesRead)
 	}
+	// reads are result-scoped; the loop stages the count for the next write.
+	r.SetLinesRead(out.LinesRead)
 
-	// 2. Re-arm the count the way the real loop does (read sets, write
-	// consumes): read again, then write and check the EditRecord. The
-	// consumed read above proves the value resets; this cycle proves it
-	// flows read → write without stale carry-over.
-	raw, _ = json.Marshal(map[string]any{"path": "notes.md"})
-	if _, ok, err := r.Run(ctx, providerToolCall("read_file", raw)); err != nil || !ok {
-		t.Fatalf("read_file: ok=%v err=%v", ok, err)
-	}
+	// 2. write and check the EditRecord. The staged count flows read → write
+	// without stale carry-over (the write consumes exactly what the loop staged).
 	raw, _ = json.Marshal(map[string]any{
 		"path":    "notes.md",
 		"content": "سطر واحد\nسطر معدّل\n",

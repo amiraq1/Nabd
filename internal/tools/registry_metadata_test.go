@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -24,35 +25,45 @@ func writeVia(t *testing.T, r *Registry, name, content string) *agent.EditRecord
 	return r.LastEdit()
 }
 
-// TestReadReportsOwnLineCount (C#1): read_file records its own line count.
+// TestReadReportsOwnLineCount (C#1): read_file records its own line count in
+// the Outcome; it never writes the shared linesRead slot (proven by a consume
+// that stays 0 after the read).
 func TestReadReportsOwnLineCount(t *testing.T) {
 	r, dir := newReg(t)
 	f := filepath.Join(dir, "five.md")
 	os.WriteFile(f, []byte("1\n2\n3\n4\n5\n"), 0o644)
 	raw, _ := json.Marshal(map[string]any{"path": "five.md"})
-	if _, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw)); err != nil || !ok {
-		t.Fatalf("read_file: ok=%v err=%v", ok, err)
+	out, err := r.RunDetailed(context.Background(), "read_file", raw)
+	if err != nil || !out.OK {
+		t.Fatalf("read_file: ok=%v err=%v", out.OK, err)
 	}
-	if got := r.ConsumeLinesRead(); got != 5 {
-		t.Fatalf("ConsumeLinesRead=%d, want 5", got)
+	if out.LinesRead != 5 {
+		t.Fatalf("out.LinesRead=%d, want 5", out.LinesRead)
 	}
+	// The read must not have polluted the write-side slot.
 	if got := r.ConsumeLinesRead(); got != 0 {
-		t.Fatalf("second consume=%d, want 0 (consumed once)", got)
+		t.Fatalf("read wrote the shared slot=%d, want 0 (reads are result-scoped)", got)
 	}
 }
 
-// TestSubsequentWriteReportsZeroReadLines (C#2): after a read is consumed by
-// one write, a later blind write must carry 0 — the count cannot survive to
-// an unrelated later operation.
+// TestSubsequentWriteReportsZeroReadLines (C#2): after a read is staged for the
+// next write by the loop (SetLinesRead) and consumed, a later blind write must
+// carry 0 — the count cannot survive to an unrelated later operation.
 func TestSubsequentWriteReportsZeroReadLines(t *testing.T) {
 	r, _ := newReg(t)
 	// read 3 lines
 	f := filepath.Join(r.root.Dir(), "a.md")
 	os.WriteFile(f, []byte("a\nb\nc\n"), 0o644)
 	raw, _ := json.Marshal(map[string]any{"path": "a.md"})
-	if _, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw)); err != nil || !ok {
-		t.Fatalf("read_file: ok=%v err=%v", ok, err)
+	out, err := r.RunDetailed(context.Background(), "read_file", raw)
+	if err != nil || !out.OK {
+		t.Fatalf("read_file: ok=%v err=%v", out.OK, err)
 	}
+	if out.LinesRead != 3 {
+		t.Fatalf("out.LinesRead=%d, want 3", out.LinesRead)
+	}
+	// The loop stages the count for the next write; the write consumes it.
+	r.SetLinesRead(out.LinesRead)
 	// first write consumes the 3
 	if rec := writeVia(t, r, "a.md", "x\n"); rec.ReadLines != 3 {
 		t.Fatalf("first write ReadLines=%d, want 3", rec.ReadLines)
@@ -64,16 +75,20 @@ func TestSubsequentWriteReportsZeroReadLines(t *testing.T) {
 }
 
 // TestTwoSequentialReadsDoNotAccumulate (C#3): read 3 then read 5, a write
-// must carry 5 (the latest), not 8.
+// must carry 5 (the latest), not 8. The loop re-stages the count on every
+// read via SetLinesRead, so the latest read wins — exactly what the next commit
+// consumes.
 func TestTwoSequentialReadsDoNotAccumulate(t *testing.T) {
 	r, dir := newReg(t)
 	os.WriteFile(filepath.Join(dir, "a.md"), []byte("1\n2\n3\n"), 0o644)
 	os.WriteFile(filepath.Join(dir, "b.md"), []byte("1\n2\n3\n4\n5\n"), 0o644)
 	for _, p := range []string{"a.md", "b.md"} {
 		raw, _ := json.Marshal(map[string]any{"path": p})
-		if _, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw)); err != nil || !ok {
-			t.Fatalf("read %s: ok=%v err=%v", p, ok, err)
+		out, err := r.RunDetailed(context.Background(), "read_file", raw)
+		if err != nil || !out.OK {
+			t.Fatalf("read %s: ok=%v err=%v", p, out.OK, err)
 		}
+		r.SetLinesRead(out.LinesRead) // the loop re-stages per read; latest wins
 	}
 	if rec := writeVia(t, r, "b.md", "x\n"); rec.ReadLines != 5 {
 		t.Fatalf("ReadLines=%d, want 5 (latest read, not accumulated 8)", rec.ReadLines)
@@ -116,23 +131,34 @@ func TestTruncatedReadReportsOnlyItsInvocation(t *testing.T) {
 	}
 }
 
-// TestFailedReadDoesNotContaminate (C#6): a read that errors must leave no
-// metadata for the next action.
+// TestFailedReadDoesNotContaminate (C#6): a failed read must leave no metadata
+// — its Outcome carries nothing, and it must not pollute the shared slots a
+// later call could inherit.
 func TestFailedReadDoesNotContaminate(t *testing.T) {
 	r, _ := newReg(t)
-	// set a pending count first
+	// a successful read records its count in the Outcome (not the slot)
 	f := filepath.Join(r.root.Dir(), "ok.md")
 	os.WriteFile(f, []byte("1\n2\n3\n"), 0o644)
 	raw, _ := json.Marshal(map[string]any{"path": "ok.md"})
-	if _, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw)); err != nil || !ok {
-		t.Fatalf("read_file: ok=%v err=%v", ok, err)
+	out, err := r.RunDetailed(context.Background(), "read_file", raw)
+	if err != nil || !out.OK {
+		t.Fatalf("read_file: ok=%v err=%v", out.OK, err)
+	}
+	if out.LinesRead != 3 {
+		t.Fatalf("out.LinesRead=%d, want 3", out.LinesRead)
+	}
+	if got := r.ConsumeLinesRead(); got != 0 {
+		t.Fatalf("successful read polluted the shared slot=%d, want 0", got)
 	}
 
-	// failed read (missing file) must clear pending state
+	// failed read (missing file) must leave no metadata in the Outcome either
 	rawBad, _ := json.Marshal(map[string]any{"path": "nope.md"})
-	_, _, err := r.Run(context.Background(), providerToolCall("read_file", rawBad))
-	if err == nil {
+	bad, err := r.RunDetailed(context.Background(), "read_file", rawBad)
+	if err == nil || bad.OK {
 		t.Fatal("expected error reading missing file")
+	}
+	if bad.LinesRead != 0 || bad.Truncated || bad.NextOffset != 0 {
+		t.Fatalf("failed read left metadata in Outcome: %+v", bad)
 	}
 	if got := r.ConsumeLinesRead(); got != 0 {
 		t.Fatalf("failed read left linesRead=%d, want 0", got)
@@ -165,60 +191,138 @@ func TestCancelledOperationDoesNotContaminate(t *testing.T) {
 	}
 }
 
-// TestConcurrentReadsMetadataIsolated (C#8): concurrent reads through one
-// Registry exercise the Consume contract under contention. The slot is
-// shared, so consumers race with one another — the invariants that must
-// hold are: every observed value is a whole 3 or 0 (never torn or garbage),
-// at least one consumer actually takes the recorded value, a second consume
-// always returns 0 (ownership is one-shot), and after all goroutines finish
-// no state survives. The test's main job is staying quiet under -race.
-func TestConcurrentReadsMetadataIsolated(t *testing.T) {
+// TestConcurrentToolMetadataIsInvocationScoped (replaces C#8): under the
+// result-scoped model, a shared Registry MUST keep each invocation's metadata
+// isolated even when reads and a write overlap. The metadata lives in the
+// Outcome (computed locally in run()), so it cannot cross between concurrent
+// invocations — no shared-slot read-side handoff to race on. Four scenarios,
+// all forced through a tight sync barrier so goroutines actually overlap (no
+// time.Sleep), and every assertion stays quiet under -race:
+//  1. two concurrent reads on different files (one truncated, one complete)
+//     each report their OWN count + next_offset.
+//  2. a truncated read and a complete read running together do not exchange
+//     their Truncated flag.
+//  3. a read and a write racing: the write never steals the read's count,
+//     because the read no longer writes the shared linesRead slot at all.
+func TestConcurrentToolMetadataIsInvocationScoped(t *testing.T) {
 	r, dir := newReg(t)
-	f := filepath.Join(dir, "n.md")
-	os.WriteFile(f, []byte("1\n2\n3\n"), 0o644)
+	// File A: large enough to truncate at the byte cap.
+	big := filepath.Join(dir, "big.go")
+	var bb strings.Builder
+	for i := 0; i < 400; i++ {
+		bb.WriteString(strings.Repeat("a", 120) + "\n")
+	}
+	if err := os.WriteFile(big, []byte(bb.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// File B: small, complete read (5 lines, no truncation).
+	small := filepath.Join(dir, "small.md")
+	if err := os.WriteFile(small, []byte("1\n2\n3\n4\n5\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// File C: read+write race scenario.
+	mid := filepath.Join(dir, "mid.md")
+	if err := os.WriteFile(mid, []byte("x\ny\nz\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
+	// --- Scenarios 1 & 2: concurrent read A (truncated) vs read B (complete) ---
 	var (
-		wg     sync.WaitGroup
-		mu     sync.Mutex
-		seens  int // goroutines whose first consume returned 3
-		zeroes int // goroutines whose first consume returned 0
-		bad    []string
+		mu       sync.Mutex
+		problems []string
+		readAOut agent.Outcome
+		readBOut agent.Outcome
 	)
-	for i := 0; i < 8; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			raw, _ := json.Marshal(map[string]any{"path": "n.md"})
-			if _, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw)); err != nil || !ok {
-				t.Errorf("read_file: ok=%v err=%v", ok, err)
-				return
-			}
-			first := r.ConsumeLinesRead()
-			second := r.ConsumeLinesRead()
-			mu.Lock()
-			defer mu.Unlock()
-			switch first {
-			case 3:
-				seens++
-			case 0:
-				zeroes++
-			default:
-				bad = append(bad, fmt.Sprintf("first consume=%d", first))
-			}
-			if second != 0 {
-				bad = append(bad, fmt.Sprintf("second consume=%d, want 0", second))
-			}
-		}()
-	}
+	gate := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-gate
+		raw, _ := json.Marshal(map[string]any{"path": "big.go"})
+		out, err := r.RunDetailed(context.Background(), "read_file", raw)
+		mu.Lock()
+		readAOut, _ = out, err
+		mu.Unlock()
+	}()
+	go func() {
+		defer wg.Done()
+		<-gate
+		raw, _ := json.Marshal(map[string]any{"path": "small.md"})
+		out, err := r.RunDetailed(context.Background(), "read_file", raw)
+		mu.Lock()
+		readBOut, _ = out, err
+		mu.Unlock()
+	}()
+	close(gate)
 	wg.Wait()
-	if len(bad) > 0 {
-		t.Fatalf("consume contract violated: %v", bad)
+
+	if readAOut.Truncated != true {
+		problems = append(problems, "readA: Truncated=false, want true")
 	}
-	if seens == 0 {
-		t.Fatalf("no consumer ever observed the recorded value (seens=0, zeroes=%d)", zeroes)
+	if readAOut.LinesRead == 0 {
+		problems = append(problems, "readA: LinesRead=0")
 	}
-	if got := r.ConsumeLinesRead(); got != 0 {
-		t.Fatalf("final consume=%d, want 0 (no state survived the goroutines)", got)
+	if readAOut.NextOffset <= 0 {
+		problems = append(problems, "readA: NextOffset<=0")
+	}
+	if readBOut.Truncated != false {
+		problems = append(problems, "readB: Truncated=true, want false (no exchange)")
+	}
+	if readBOut.LinesRead != 5 {
+		problems = append(problems, fmt.Sprintf("readB: LinesRead=%d, want 5 (no exchange)", readBOut.LinesRead))
+	}
+	if readBOut.NextOffset != 0 {
+		problems = append(problems, fmt.Sprintf("readB: NextOffset=%d, want 0", readBOut.NextOffset))
+	}
+	if len(problems) != 0 {
+		t.Fatalf("scenario 1/2 isolation failed: %v", problems)
+	}
+
+	// --- Scenario 3: concurrent read + write on the shared slot.
+	// The read must not write the shared linesRead slot, so the write can never
+	// steal the read's count.
+	gate2 := make(chan struct{})
+	var (
+		wg2     sync.WaitGroup
+		readOut agent.Outcome
+		writeOK bool
+	)
+	wg2.Add(2)
+	go func() {
+		defer wg2.Done()
+		<-gate2
+		raw, _ := json.Marshal(map[string]any{"path": "mid.md"})
+		out, _ := r.RunDetailed(context.Background(), "read_file", raw)
+		mu.Lock()
+		readOut = out
+		mu.Unlock()
+	}()
+	go func() {
+		defer wg2.Done()
+		<-gate2
+		raw, _ := json.Marshal(map[string]any{"path": "mid.md", "content": "z\ny\nx\n"})
+		_, ok, err := r.Run(context.Background(), providerToolCall("write_file", raw))
+		mu.Lock()
+		writeOK = ok && err == nil
+		mu.Unlock()
+	}()
+	close(gate2)
+	wg2.Wait()
+
+	if readOut.LinesRead != 3 {
+		t.Errorf("scenario 3 read Outcome.LinesRead=%d, want 3 (read count preserved)", readOut.LinesRead)
+	}
+	if !writeOK {
+		t.Fatal("scenario 3 write failed")
+	}
+	rec := r.LastEdit()
+	if rec == nil {
+		t.Fatal("scenario 3: no edit record")
+	}
+	// read does not write the shared slot, so a blind write carries 0 here.
+	if rec.ReadLines != 0 {
+		t.Errorf("scenario 3: write stole read metadata ReadLines=%d, want 0", rec.ReadLines)
 	}
 }
 
@@ -277,7 +381,8 @@ func TestConcurrentReadWriteRaceFree(t *testing.T) {
 }
 
 // TestRegistryInstancesIsolated (C#10): two Registries never share read
-// metadata; a consume on one cannot affect the other.
+// metadata; a consume on one cannot affect the other. Reads are result-scoped
+// (Outcome), and neither reads writes the other's write-slot.
 func TestRegistryInstancesIsolated(t *testing.T) {
 	r1, _ := newReg(t)
 	r2, _ := newReg(t)
@@ -285,15 +390,19 @@ func TestRegistryInstancesIsolated(t *testing.T) {
 	f := filepath.Join(r1.root.Dir(), "x.md")
 	os.WriteFile(f, []byte("1\n2\n3\n"), 0o644)
 	raw, _ := json.Marshal(map[string]any{"path": "x.md"})
-	if _, ok, err := r1.Run(context.Background(), providerToolCall("read_file", raw)); err != nil || !ok {
-		t.Fatalf("r1 read: %v", err)
+	out, err := r1.RunDetailed(context.Background(), "read_file", raw)
+	if err != nil || !out.OK {
+		t.Fatalf("r1 read: ok=%v err=%v", out.OK, err)
+	}
+	if out.LinesRead != 3 {
+		t.Fatalf("r1 out.LinesRead=%d, want 3", out.LinesRead)
 	}
 
 	if got := r2.ConsumeLinesRead(); got != 0 {
 		t.Fatalf("r2 saw r1's linesRead=%d, instances not isolated", got)
 	}
-	if got := r1.ConsumeLinesRead(); got != 3 {
-		t.Fatalf("r1 ConsumeLinesRead=%d, want 3", got)
+	if got := r1.ConsumeLinesRead(); got != 0 {
+		t.Fatalf("r1 read polluted its write-slot=%d, want 0 (result-scoped)", got)
 	}
 }
 
