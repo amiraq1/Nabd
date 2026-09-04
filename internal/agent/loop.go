@@ -644,7 +644,10 @@ func pathOf(raw []byte) string {
 // tree rather than a pile. A sink failure is returned to the caller so the
 // loop does not continue as if the event was durably recorded.
 func (l *Loop) emit(e Event) error {
-	return l.emitAt(l.parent, e)
+	l.mu.Lock()
+	parent := l.parent
+	l.mu.Unlock()
+	return l.emitAt(parent, e)
 }
 
 // Note lets a human action enter the journal through the same door events
