@@ -195,6 +195,11 @@ func (o *OpenAICompat) Stream(ctx context.Context, req Request) (<-chan Chunk, e
 	return out, nil
 }
 
+// Start satisfies SingleAttempt (Section E).
+func (o *OpenAICompat) Start(ctx context.Context, req Request) (<-chan Chunk, error) {
+	return o.Stream(ctx, req)
+}
+
 // RateLimitError represents an HTTP 429 response from an upstream provider.
 type RateLimitError struct {
 	Status    int

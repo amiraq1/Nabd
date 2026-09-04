@@ -54,7 +54,11 @@ const (
 	ChunkStop
 	ChunkError
 	ChunkRateLimit
+	ChunkTrace
 )
+
+// ChunkRouteTraceKind is an alias for ChunkTrace.
+const ChunkRouteTraceKind = ChunkTrace
 
 // RateLimitInfo describes an HTTP 429 rate limit encounter and the wait
 // before retrying. RetryAfter carries the provider-declared wait (seconds,
@@ -112,6 +116,9 @@ type Chunk struct {
 	Err       error
 	Retryable bool
 	RateLimit *RateLimitInfo
+	// RouteTrace carries routing metadata for diagnostic/journal trace events.
+	// Never carries prompt or completion tokens; not a semantic chunk.
+	RouteTrace *ChunkRouteTrace
 	// PromptTokens is the provider's measured input count for the request,
 	// from usage.prompt_tokens. Zero when the provider does not report it.
 	// Carried on the final chunk of a turn.

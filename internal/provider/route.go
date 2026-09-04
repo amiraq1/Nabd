@@ -13,11 +13,25 @@
 package provider
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
 )
+
+// Route is an executable route containing an initialized SingleAttempt provider client (Section E).
+type Route struct {
+	Provider string        // normalized, lowercase, allow-listed
+	Model    string        // case-preserved, may contain ':'
+	Client   SingleAttempt // constructed with explicit model, no globals
+}
+
+// SingleAttempt defines the contract for a single route attempt (Section E).
+type SingleAttempt interface {
+	Start(ctx context.Context, req Request) (out <-chan Chunk, err error)
+	Name() string
+}
 
 // RouteEntry is a parsed, validated (provider, model) pair from NABD_ROUTES.
 // It holds no key material and is safe to log after redaction.

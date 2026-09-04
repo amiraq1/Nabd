@@ -78,6 +78,11 @@ func (a *Anthropic) Stream(ctx context.Context, req Request) (<-chan Chunk, erro
 	return out, nil
 }
 
+// Start satisfies SingleAttempt (Section E).
+func (a *Anthropic) Start(ctx context.Context, req Request) (<-chan Chunk, error) {
+	return a.Stream(ctx, req)
+}
+
 // run owns the retry loop. It retries only while nothing has been sent
 // downstream; once a chunk is out, a failure is final.
 //

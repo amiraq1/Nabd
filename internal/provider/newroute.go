@@ -15,6 +15,7 @@
 package provider
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -60,6 +61,39 @@ func BuildRouteProvider(entry RouteEntry) (Provider, error) {
 	default:
 		return nil, fmt.Errorf("route provider %q: no constructor registered", entry.Provider)
 	}
+}
+
+// AsSingleAttempt ensures p satisfies SingleAttempt.
+func AsSingleAttempt(p Provider) SingleAttempt {
+	if sa, ok := p.(SingleAttempt); ok {
+		return sa
+	}
+	return &singleAttemptAdapter{p: p}
+}
+
+type singleAttemptAdapter struct {
+	p Provider
+}
+
+func (s *singleAttemptAdapter) Start(ctx context.Context, req Request) (<-chan Chunk, error) {
+	return s.p.Stream(ctx, req)
+}
+
+func (s *singleAttemptAdapter) Name() string {
+	return s.p.Name()
+}
+
+// BuildRoute constructs a Route with its SingleAttempt client for a single RouteEntry.
+func BuildRoute(entry RouteEntry) (Route, error) {
+	prov, err := BuildRouteProvider(entry)
+	if err != nil {
+		return Route{}, err
+	}
+	return Route{
+		Provider: entry.Provider,
+		Model:    entry.Model,
+		Client:   AsSingleAttempt(prov),
+	}, nil
 }
 
 // ValidateRouteKeys checks that every configured route has a non-empty API key.
