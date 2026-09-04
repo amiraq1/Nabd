@@ -41,7 +41,11 @@ var (
 )
 
 func main() {
-	loadEnv()
+	// NOTE: no legacy ~/.ag/env loading here. Environment-isolation policy
+	// (Phase 3) removed it: the only config source is ~/.ag/config, parsed by
+	// config.Load() into a private map — never merged into os.Environ, so no
+	// provider key ever reaches the process-global environment or any child
+	// process spawned by the bash tool.
 	replay := flag.String("replay", "", "replay a session.jsonl and exit")
 	speed := flag.Float64("speed", 1, "replay multiplier; 0 is instant")
 	sessDir := flag.String("dir", "", "session directory (default ~/.ag/sessions)")
@@ -470,52 +474,6 @@ func sessionPath(dir string) (string, error) {
 func die(err error) {
 	fmt.Fprintln(os.Stderr, "ag:", err)
 	os.Exit(1)
-}
-
-// loadEnv is the legacy path: ~/.ag/env, populated into the process
-// environment before ~/.ag/config existed. It stays for people who have
-// not moved yet, with the same rule config enforces: a file readable by
-// others is refused, not read, because a key that leaks is worse than a
-// key that is missing. The user is told once to migrate. config.Load
-// runs after this and wins on any key present in both.
-func loadEnv() {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return
-	}
-	path := filepath.Join(home, ".ag", "env")
-	fi, err := os.Stat(path)
-	if err != nil {
-		return
-	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		fmt.Fprintf(os.Stderr, "ag: %s is readable by others (%04o); refusing to read it. Run: chmod 600 %s\n",
-			path, fi.Mode().Perm(), path)
-		return
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return
-	}
-	loaded := 0
-	for _, line := range strings.Split(string(b), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		line = strings.TrimPrefix(line, "export ")
-		if idx := strings.IndexByte(line, '='); idx > 0 {
-			k := strings.TrimSpace(line[:idx])
-			v := strings.Trim(strings.TrimSpace(line[idx+1:]), `"'`)
-			if os.Getenv(k) == "" {
-				os.Setenv(k, v)
-				loaded++
-			}
-		}
-	}
-	if loaded > 0 {
-		fmt.Fprintln(os.Stderr, "ag: ~/.ag/env is legacy; move its contents to ~/.ag/config (same format) and delete it")
-	}
 }
 
 // pickProvider prefers whatever key is present, in ~/.ag/config first and
