@@ -265,7 +265,7 @@ func (w writeFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	if err != nil {
 		return "", false, err
 	}
-	before, after, err := commit(w.root, w.sh, w.log, "write_file", abs, []byte(a.Content), w.reg.linesRead)
+	before, after, err := commit(w.root, w.sh, w.log, "write_file", abs, []byte(a.Content), w.reg.ConsumeLinesRead())
 	if err != nil {
 		return "", false, err
 	}
@@ -346,7 +346,7 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 		out = strings.Replace(string(src), a.Old, a.New, 1)
 		reps = 1
 	}
-	if _, _, err := commit(w.root, w.sh, w.log, "edit_file", abs, []byte(out), w.reg.linesRead); err != nil {
+	if _, _, err := commit(w.root, w.sh, w.log, "edit_file", abs, []byte(out), w.reg.ConsumeLinesRead()); err != nil {
 		return "", false, err
 	}
 	return fmt.Sprintf("edited %s (%d replacements, %d lines → %d)",

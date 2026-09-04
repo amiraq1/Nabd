@@ -120,6 +120,14 @@ func (readFile) Name() string { return "read_file" }
 // loop can journal a read_record event when the byte cap cut the file.
 func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.Outcome, error) {
 	text, ok, err := t.Run(ctx, raw)
+	if err != nil || ctx.Err() != nil {
+		// A failed or cancelled read must not leave partial metadata for a
+		// later unrelated call to inherit.
+		if t.reg != nil {
+			t.reg.ClearReadState()
+		}
+		return agent.Outcome{Text: text, OK: ok}, err
+	}
 	trunc := false
 	next := 0
 	if t.reg != nil {

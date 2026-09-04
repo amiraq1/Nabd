@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 
 	"nabd/internal/agent"
 	"nabd/internal/perm"
@@ -22,15 +23,24 @@ type Tool interface {
 // Registry is the agent.Tools implementation. Read-only at v0.4: nothing
 // here can change a byte on disk, which is why no permission gate exists
 // yet. That gate arrives with write.go, not before.
-type Registry struct {
-	root       *Root
-	sh         *snap.Shadow
-	edits      *editLog
-	list       []Tool
-	byName     map[string]Tool
+// metadata is the per-invocation read state with Consume ownership: exactly
+// one consumer may take it, and it resets on take so no later unrelated call
+// can inherit a stale value. Protected by mu so concurrent tool calls cannot
+// tear or double-consume it.
+type metadata struct {
+	mu         sync.Mutex
 	linesRead  int  // set by read_file, consumed by the next commit()
 	truncated  bool // set by read_file, consumed by RunDetailed
 	nextOffset int  // set by read_file on truncation, consumed by RunDetailed
+}
+
+type Registry struct {
+	root   *Root
+	sh     *snap.Shadow
+	edits  *editLog
+	list   []Tool
+	byName map[string]Tool
+	meta   metadata
 }
 
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
@@ -45,22 +55,52 @@ func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 // SetLinesRead records how many lines read_file just showed the model. The
 // next commit() stamps that number on the EditRecord: a blind write (no
 // read before it) carries ReadLines=0.
-func (r *Registry) SetLinesRead(n int) { r.linesRead = n }
+func (r *Registry) SetLinesRead(n int) {
+	r.meta.mu.Lock()
+	r.meta.linesRead = n
+	r.meta.mu.Unlock()
+}
+
+// ConsumeLinesRead atomically returns the pending line count and resets it
+// to zero. Ownership is strict: one consumer takes it, and anything after
+// it sees 0 — a stale count can never bleed into a later unrelated write.
+func (r *Registry) ConsumeLinesRead() int {
+	r.meta.mu.Lock()
+	defer r.meta.mu.Unlock()
+	n := r.meta.linesRead
+	r.meta.linesRead = 0
+	return n
+}
 
 // SetTruncated records that the last read_file call hit the byte cap, with
 // the exact line to continue from.
 func (r *Registry) SetTruncated(next int) {
-	r.truncated = true
-	r.nextOffset = next
+	r.meta.mu.Lock()
+	r.meta.truncated = true
+	r.meta.nextOffset = next
+	r.meta.mu.Unlock()
 }
 
 // ConsumeTruncated returns and clears the truncation flag plus the offset.
 func (r *Registry) ConsumeTruncated() (bool, int) {
-	t := r.truncated
-	n := r.nextOffset
-	r.truncated = false
-	r.nextOffset = 0
+	r.meta.mu.Lock()
+	defer r.meta.mu.Unlock()
+	t := r.meta.truncated
+	n := r.meta.nextOffset
+	r.meta.truncated = false
+	r.meta.nextOffset = 0
 	return t, n
+}
+
+// ClearReadState drops any pending read metadata. Called when an invocation
+// failed or was cancelled so its partial state cannot contaminate the next
+// call.
+func (r *Registry) ClearReadState() {
+	r.meta.mu.Lock()
+	r.meta.linesRead = 0
+	r.meta.truncated = false
+	r.meta.nextOffset = 0
+	r.meta.mu.Unlock()
 }
 
 // LastEdit returns the persisted record of the newest mutation, or nil if

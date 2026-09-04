@@ -26,11 +26,18 @@ func TestEditRecordEmitted(t *testing.T) {
 	if _, ok, err := r.Run(ctx, providerToolCall("read_file", raw)); err != nil || !ok {
 		t.Fatalf("read_file: ok=%v err=%v", ok, err)
 	}
-	if r.linesRead != 3 {
-		t.Fatalf("linesRead=%d, want 3 (the read must be recorded)", r.linesRead)
+	if got := r.ConsumeLinesRead(); got != 3 {
+		t.Fatalf("ConsumeLinesRead=%d, want 3 (the read must be recorded)", got)
 	}
 
-	// 2. write_file: rewrite the file, must emit an EditRecord.
+	// 2. Re-arm the count the way the real loop does (read sets, write
+	// consumes): read again, then write and check the EditRecord. The
+	// consumed read above proves the value resets; this cycle proves it
+	// flows read → write without stale carry-over.
+	raw, _ = json.Marshal(map[string]any{"path": "notes.md"})
+	if _, ok, err := r.Run(ctx, providerToolCall("read_file", raw)); err != nil || !ok {
+		t.Fatalf("read_file: ok=%v err=%v", ok, err)
+	}
 	raw, _ = json.Marshal(map[string]any{
 		"path":    "notes.md",
 		"content": "سطر واحد\nسطر معدّل\n",
