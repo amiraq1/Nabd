@@ -244,6 +244,37 @@ func TestReplayNoticeDuringToolCallSerializesToValidOpenAIOrder(t *testing.T) {
 // messages. This exercises mixed tool batches, partial denial (orphan ToolEnd
 // synthesis over the `open` map), cancelled/interrupted rounds, and JSON
 // serialization stability (Section B requirements 1 and 8).
+// TestMessagesMultipleOpenCallsDeterministic targets the specific hole the
+// replay test leaves: when several ToolStart are left open (no ToolEnd) and a
+// flush synthesizes "cancelled" results, the order MUST follow the journal's
+// original call order — never the randomized order of map iteration. Three
+// opens then Interrupted; assert the results always come out c1, c2, c3.
+func TestMessagesMultipleOpenCallsDeterministic(t *testing.T) {
+	evs := []Event{
+		{Seq: 1, Type: UserMsg, Text: "run"},
+		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "c1", Name: "read_file"}},
+		{Seq: 3, Parent: 2, Type: ToolStart, Call: &ToolCall{ID: "c2", Name: "read_file"}},
+		{Seq: 4, Parent: 3, Type: ToolStart, Call: &ToolCall{ID: "c3", Name: "bash"}},
+		{Seq: 5, Parent: 4, Type: Interrupted},
+	}
+	for i := 0; i < 1000; i++ {
+		ms := Messages(evs)
+		// The synthesized round carries the three cancelled results.
+		var results []string
+		for _, m := range ms {
+			for _, r := range m.ToolResults {
+				results = append(results, r.ID)
+			}
+		}
+		if len(results) != 3 {
+			t.Fatalf("replay %d: expected 3 results, got %d (%v)", i, len(results), results)
+		}
+		if results[0] != "c1" || results[1] != "c2" || results[2] != "c3" {
+			t.Fatalf("replay %d: order not journal-ordered: %v", i, results)
+		}
+	}
+}
+
 func TestMessagesReplayIsDeterministic(t *testing.T) {
 	evs := []Event{
 		{Seq: 1, Type: UserMsg, Text: "inspect"},

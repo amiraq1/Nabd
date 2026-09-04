@@ -33,6 +33,7 @@ func Messages(evs []Event) []provider.Message {
 		calls          []provider.ToolCall
 		toolResults    []toolResultItem
 		open           = map[string]string{} // id -> name, still awaiting a result
+		openOrder      []string              // journal insertion order of open ids; map iteration is not deterministic
 		pendingNotices []string
 	)
 
@@ -58,7 +59,13 @@ func Messages(evs []Event) []provider.Message {
 	flush := func() {
 		// A tool_use with no tool_result poisons the next request on every
 		// provider. If the branch was cut mid-turn, answer for the dead call.
-		for id, name := range open {
+		// Iterate openOrder (not the map) so the synthetic results keep the
+		// journal's original call order — map iteration in Go is randomized.
+		for _, id := range openOrder {
+			name, ok := open[id]
+			if !ok {
+				continue
+			}
 			toolResults = append(toolResults, toolResultItem{
 				result: provider.ToolResult{
 					ID: id, Output: "cancelled: " + name, IsErr: true,
@@ -68,6 +75,7 @@ func Messages(evs []Event) []provider.Message {
 			delete(open, id)
 		}
 		open = map[string]string{}
+		openOrder = nil
 
 		var results []provider.ToolResult
 		for _, tr := range toolResults {
@@ -136,6 +144,9 @@ func Messages(evs []Event) []provider.Message {
 			appendUniqueCall(provider.ToolCall{
 				ID: ev.Call.ID, Name: ev.Call.Name, Input: ev.Call.Args,
 			})
+			if _, ok := open[ev.Call.ID]; !ok {
+				openOrder = append(openOrder, ev.Call.ID)
+			}
 			open[ev.Call.ID] = ev.Call.Name
 
 		case ToolEnd:
