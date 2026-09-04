@@ -15,6 +15,7 @@ import (
 var (
 	ErrShadowMissing    = errors.New("recovery content is missing")
 	ErrShadowCorruption = errors.New("recovery content is damaged")
+	ErrShadowInvalidID  = errors.New("invalid shadow identifier")
 )
 
 // State is a file at one instant. Absent is a state, not an error: the
@@ -163,87 +164,19 @@ func (s *Shadow) RestoreAt(abs string, st State) error {
 // This is where tmp+rename belongs -- not in the append-only journal,
 // where a single O_APPEND write already carries a whole line.
 
-func WriteAtomic(abs string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(abs)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".ag-*.tmp")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-
-	// Ensure cleanup on failure
-	defer os.Remove(name)
-
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(name, mode.Perm()); err != nil {
-		return err
-	}
-	if err := os.Rename(name, abs); err != nil {
-		return err
-	}
-
-	// Destination-directory sync for full power-loss durability on POSIX
-	if d, err := os.Open(dir); err == nil {
-		d.Sync()
-		d.Close()
-	}
-
-	return nil
-}
 
 // --- content store ---
 
-// put stores content and returns its identifier.
-func (s *Shadow) put(data []byte) (string, error) {
-	sum := sha256.Sum256(data)
-	id := "s256:" + hex.EncodeToString(sum[:])
-	p := filepath.Join(s.store, id[5:7], id[7:])
-
-	// handle an already-existing identical blob safely.
-	if existingData, err := os.ReadFile(p); err == nil {
-		if bytes.Equal(existingData, data) {
-			return id, nil // content-addressed: already there and matches
-		}
-		// Do not overwrite an existing blob with different content. (Corruption!)
-		// The prompt says: "Do not overwrite an existing blob with different content."
-		// But practically, if sha256 matches, it should be the same.
-		// If it exists but is DIFFERENT data, it's corrupted on disk. We shouldn't overwrite it here maybe,
-		// but returning id is fine, or we could return an error. Let's just return id if identical.
-		// Wait, if it exists and is different, we can either error out or overwrite it. The prompt explicitly says: "Do not overwrite an existing blob with different content."
-		return "", fmt.Errorf("blob collision or corruption: %s exists with different content", p)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return "", err
-	}
-	if err := WriteAtomic(p, data, 0o400); err != nil {
-		return "", err
-	}
-	return id, nil
-}
 
 func validateID(id string) error {
 	if len(id) != 5+64 || !strings.HasPrefix(id, "s256:") {
-		return fmt.Errorf("%w: invalid format: %s", ErrShadowMissing, id)
+		return fmt.Errorf("%w: invalid format: %s", ErrShadowInvalidID, id)
 	}
 	hexPart := id[5:]
 	for i := 0; i < len(hexPart); i++ {
 		c := hexPart[i]
 		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
-			return fmt.Errorf("%w: invalid character in digest: %q", ErrShadowMissing, c)
+			return fmt.Errorf("%w: invalid character in digest: %q", ErrShadowInvalidID, c)
 		}
 	}
 	return nil
@@ -251,7 +184,7 @@ func validateID(id string) error {
 
 func (s *Shadow) get(id string) ([]byte, error) {
 	if id == "" {
-		return nil, fmt.Errorf("%w: empty blob id", ErrShadowMissing)
+		return nil, fmt.Errorf("%w: empty blob id", ErrShadowInvalidID)
 	}
 	if err := validateID(id); err != nil {
 		return nil, err
@@ -272,4 +205,113 @@ func (s *Shadow) get(id string) ([]byte, error) {
 	}
 
 	return data, nil
+}
+func WriteAtomic(abs string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(abs)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(dir, ".ag-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+
+	// Ensure cleanup on failure
+	defer os.Remove(name)
+
+	// 1. write all content and verify write errors
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	// 2. apply the intended file mode
+	if err := os.Chmod(name, mode.Perm()); err != nil {
+		tmp.Close()
+		return err
+	}
+	// 3. sync the temporary file
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	// 4. close it and check the close error
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	// 5. rename it into place
+	if err := os.Rename(name, abs); err != nil {
+		return err
+	}
+	// 6. sync the destination directory
+	if err := syncDir(dir); err != nil {
+		return err // Propagate supported directory-sync failures
+	}
+
+	return nil
+}
+func (s *Shadow) put(data []byte) (string, error) {
+	sum := sha256.Sum256(data)
+	id := "s256:" + hex.EncodeToString(sum[:])
+	p := filepath.Join(s.store, id[5:7], id[7:])
+
+	if existingData, err := os.ReadFile(p); err == nil {
+		if bytes.Equal(existingData, data) {
+			return id, nil // content-addressed: already there and matches
+		}
+		return "", fmt.Errorf("%w: blob collision or corruption: %s exists with different content", ErrShadowCorruption, p)
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("read existing blob: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		return "", err
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(p), ".ag-*.tmp")
+	if err != nil {
+		return "", err
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	if err := os.Chmod(name, 0o400); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+
+	// Try Link first to avoid POSIX rename-over-file semantics if possible.
+	err = os.Link(name, p)
+	if err != nil {
+		// If Link fails (e.g. Android permission denied, or file exists), we fallback to Rename.
+		// Before renaming, ensure the file wasn't created by a racing process with DIFFERENT content.
+		if existingData, readErr := os.ReadFile(p); readErr == nil {
+			if bytes.Equal(existingData, data) {
+				return id, nil // identical race, safe
+			}
+			return "", fmt.Errorf("%w: blob collision or corruption: %s exists with different content", ErrShadowCorruption, p)
+		}
+		// Fallback to Rename
+		if renameErr := os.Rename(name, p); renameErr != nil {
+			return "", fmt.Errorf("failed to persist blob: %w", renameErr)
+		}
+	}
+
+	// Sync dir
+	if err := syncDir(filepath.Dir(p)); err != nil {
+		return "", err
+	}
+
+	return id, nil
 }

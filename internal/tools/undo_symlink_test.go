@@ -26,10 +26,8 @@ func TestUndoSymlinkSafety(t *testing.T) {
 		t.Skip("symlinks not supported")
 	}
 
-	// We shouldn't be able to edit a symlink, but let's test if the agent somehow writes to it
-	// and we undo. Wait, agent edit to a symlink is refused by containment or it overwrites the symlink?
-	// The problem is TOCTOU. If `link.txt` is a regular file when recorded, but later turned into a symlink.
-	// 1. Record edit on `file.txt` (regular file).
+	// Test TOCTOU scenario limitation: OS-level TOCTOU remains out-of-scope until openat2.
+	// The substitution occurs *after* recording the file edit, simulating a user changing the target later.
 	filePath := filepath.Join(dir, "file.txt")
 	os.WriteFile(filePath, []byte("regular"), 0644)
 

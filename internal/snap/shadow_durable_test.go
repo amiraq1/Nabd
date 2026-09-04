@@ -99,8 +99,61 @@ func TestShadowInvalidIdentifiers(t *testing.T) {
 
 	for _, id := range invalidIDs {
 		_, err := s.Read(id)
-		if !errors.Is(err, ErrShadowMissing) {
-			t.Errorf("expected ErrShadowMissing for id %q, got: %v", id, err)
+		if !errors.Is(err, ErrShadowInvalidID) {
+			t.Errorf("expected ErrShadowInvalidID for id %q, got: %v", id, err)
 		}
+	}
+}
+
+func TestShadowEmptyBlob(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target := filepath.Join(dir, "empty.txt")
+	os.WriteFile(target, []byte{}, 0644)
+	st, err := s.Capture(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = s.Restore(st)
+	if err != nil {
+		t.Fatalf("restoring empty blob failed: %v", err)
+	}
+}
+
+func TestShadowPreExistingBlob(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// First run
+	target := filepath.Join(dir, "test.txt")
+	os.WriteFile(target, []byte("data"), 0644)
+	st, err := s.Capture(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture again, should be idempotent success
+	_, err = s.Capture(target)
+	if err != nil {
+		t.Fatalf("repeated capture failed: %v", err)
+	}
+
+	// Corrupt it manually
+	blobPath := filepath.Join(s.store, st.Blob[5:7], st.Blob[7:])
+	os.Chmod(blobPath, 0644)
+	os.WriteFile(blobPath, []byte("corrupt"), 0644)
+
+	// Capture again, should throw ErrShadowCorruption
+	_, err = s.Capture(target)
+	if !errors.Is(err, ErrShadowCorruption) {
+		t.Fatalf("expected ErrShadowCorruption, got %v", err)
 	}
 }

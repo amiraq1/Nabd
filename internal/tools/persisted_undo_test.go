@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"nabd/internal/agent"
@@ -48,14 +49,23 @@ func TestPersistedUndoModesAndLegacy(t *testing.T) {
 
 	// Serialize and deserialize to ensure mode survives JSON
 
-	// Read back (simulating --continue)
 	recs := []*agent.EditRecord{recAbsent, recReg, recExec}
-	var loadedRecs []*agent.EditRecord
-	// parse jsonl... but wait, we can just marshal/unmarshal slice
-	b, _ := json.Marshal(recs)
-	json.Unmarshal(b, &loadedRecs)
 
-	// Recreate runtime objects
+	// Read back through REAL JSONL serialization (simulating --continue)
+	var journal []byte
+	for _, rec := range recs {
+		b, _ := json.Marshal(agent.Event{Edit: rec})
+		journal = append(journal, b...)
+		journal = append(journal, '\n')
+	}
+
+	var loadedRecs []*agent.EditRecord
+	for _, line := range strings.Split(strings.TrimSpace(string(journal)), "\n") {
+		var ev agent.Event
+		json.Unmarshal([]byte(line), &ev)
+		loadedRecs = append(loadedRecs, ev.Edit)
+	}
+
 	regB := NewRegistry(root, sh)
 	res := regB.PersistedUndo(loadedRecs, 3)
 	if len(res) != 3 || !res[0].OK || !res[1].OK || !res[2].OK {
