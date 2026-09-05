@@ -434,7 +434,7 @@ func unifiedDiff(ctx context.Context, before, after []byte, path string) (string
 	bl := splitLines(before)
 	al := splitLines(after)
 
-	n, m := len(bl), len(al)
+	n, m := len(bl.lines), len(al.lines)
 	// Bound the input sides.
 	if n > maxDiffLines || m > maxDiffLines {
 		return "", fmt.Errorf("diff input too large: %d×%d lines exceeds %d", n, m, maxDiffLines)
@@ -455,7 +455,7 @@ func unifiedDiff(ctx context.Context, before, after []byte, path string) (string
 			return "", err
 		}
 		for j := m - 1; j >= 0; j-- {
-			if bl[i] == al[j] {
+			if bl.lines[i] == al.lines[j] {
 				lcs[i][j] = lcs[i+1][j+1] + 1
 			} else {
 				if lcs[i+1][j] >= lcs[i][j+1] {
@@ -480,15 +480,15 @@ func unifiedDiff(ctx context.Context, before, after []byte, path string) (string
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
-		if i > 0 && j > 0 && bl[i-1] == al[j-1] {
-			ops = append(ops, op{'=', bl[i-1]})
+		if i > 0 && j > 0 && bl.lines[i-1] == al.lines[j-1] {
+			ops = append(ops, op{'=', bl.lines[i-1]})
 			i--
 			j--
 		} else if j > 0 && (i == 0 || lcs[i-1][j] >= lcs[i][j-1]) {
-			ops = append(ops, op{'+', al[j-1]})
+			ops = append(ops, op{'+', al.lines[j-1]})
 			j--
 		} else {
-			ops = append(ops, op{'-', bl[i-1]})
+			ops = append(ops, op{'-', bl.lines[i-1]})
 			i--
 		}
 	}
@@ -582,6 +582,57 @@ func unifiedDiff(ctx context.Context, before, after []byte, path string) (string
 		}
 	}
 
+	// Emit "\ No newline at end of file" markers for files that lack a trailing
+	// newline. The marker follows the last line from each affected side in the
+	// last hunk, so git apply round-trips byte-for-byte (NBD-011 Task 5).
+	if len(hunks) > 0 && (bl.noNL || al.noNL) {
+		last := &hunks[len(hunks)-1]
+		oldNoNL := bl.noNL && len(bl.lines) > 0
+		newNoNL := al.noNL && len(al.lines) > 0
+		// If the last line of one file is a context line shared with the other
+		// file, but the NL statuses differ, split the context line into
+		// delete + add so the \ No newline marker lands on the correct side.
+		if oldNoNL != newNoNL {
+			oIdx, nIdx := lastOldNewIdx(last.lines)
+			if oIdx >= 0 && oIdx == nIdx {
+				// Shared context line is the last for both sides.
+				content := last.lines[oIdx][1:]
+				last.lines = spliceContext(last.lines, oIdx, content)
+			} else if oIdx >= 0 && nIdx >= 0 && oIdx != nIdx {
+				// Last old and new lines differ; check for a shared context
+				// line at the end of one side that lacks NL while the other
+				// side has NL.
+				if last.lines[oIdx][0] == ' ' && oldNoNL && !newNoNL {
+					content := last.lines[oIdx][1:]
+					last.lines = spliceContext(last.lines, oIdx, content)
+				} else if last.lines[nIdx][0] == ' ' && newNoNL && !oldNoNL {
+					content := last.lines[nIdx][1:]
+					last.lines = spliceContext(last.lines, nIdx, content)
+				}
+			}
+		}
+		// Find the last old and new line indices (after potential split).
+		lastOldIdx, lastNewIdx := lastOldNewIdx(last.lines)
+		var marked []string
+		for i, l := range last.lines {
+			marked = append(marked, l)
+			isLastOld := i == lastOldIdx && oldNoNL
+			isLastNew := i == lastNewIdx && newNoNL
+			if isLastOld && isLastNew && lastOldIdx == lastNewIdx {
+				// Same line ends both files; one marker suffices.
+				marked = append(marked, "\\ No newline at end of file")
+			} else {
+				if isLastOld {
+					marked = append(marked, "\\ No newline at end of file")
+				}
+				if isLastNew {
+					marked = append(marked, "\\ No newline at end of file")
+				}
+			}
+		}
+		last.lines = marked
+	}
+
 	for _, h := range hunks {
 		oldCnt, newCnt := 0, 0
 		for _, l := range h.lines {
@@ -590,6 +641,8 @@ func unifiedDiff(ctx context.Context, before, after []byte, path string) (string
 				oldCnt++
 			case '+':
 				newCnt++
+			case '\\':
+				// \ No newline at end of file marker — not a content line.
 			default:
 				oldCnt++
 				newCnt++
@@ -608,15 +661,56 @@ func unifiedDiff(ctx context.Context, before, after []byte, path string) (string
 	return out, nil
 }
 
-func splitLines(b []byte) []string {
+// lineSet is the result of splitting bytes into lines, tracking whether the
+// original data lacked a trailing newline. splitLines strips the trailing
+// newline before splitting, so the noNL flag is needed to emit the
+// "\ No newline at end of file" marker in unifiedDiff.
+type lineSet struct {
+	lines []string
+	noNL  bool // true if the original data did not end with '\n'
+}
+
+func splitLines(b []byte) lineSet {
 	if len(b) == 0 {
-		return nil
+		return lineSet{}
 	}
+	noNL := !strings.HasSuffix(string(b), "\n")
 	s := strings.TrimSuffix(string(b), "\n")
 	if s == "" {
-		return nil
+		return lineSet{noNL: noNL}
 	}
-	return strings.Split(s, "\n")
+	return lineSet{lines: strings.Split(s, "\n"), noNL: noNL}
+}
+
+// lastOldNewIdx returns the indices of the last old-side line ('-'/ ' ') and
+// the last new-side line ('+'/ ' ') in the hunk lines.
+func lastOldNewIdx(lines []string) (oldIdx, newIdx int) {
+	oldIdx, newIdx = -1, -1
+	for i, l := range lines {
+		switch l[0] {
+		case '-':
+			oldIdx = i
+		case '+':
+			newIdx = i
+		case ' ':
+			oldIdx = i
+			newIdx = i
+		}
+	}
+	return
+}
+
+// spliceContext replaces the context line at index idx (prefixed with ' ')
+// with a delete + add pair, preserving the line content. This is used to
+// split shared context lines when the old and new sides have different
+// trailing-newline status, so that "\ No newline at end of file" markers
+// can be placed on the correct side.
+func spliceContext(lines []string, idx int, content string) []string {
+	result := make([]string, 0, len(lines)+1)
+	result = append(result, lines[:idx]...)
+	result = append(result, "-"+content, "+"+content)
+	result = append(result, lines[idx+1:]...)
+	return result
 }
 
 type writeFile struct {

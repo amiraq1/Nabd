@@ -432,6 +432,179 @@ func runGitApplyCheck(t *testing.T) error {
 	return nil
 }
 
+// gitApply applies a patch to before-content in a temp dir and returns the
+// resulting file content. Used for round-trip fidelity tests.
+func gitApply(t *testing.T, before, patch string) (string, error) {
+	t.Helper()
+	dir := t.TempDir()
+	base := patchBaseName(patch)
+	target := filepath.Join(dir, base)
+	if err := os.WriteFile(target, []byte(before), 0o644); err != nil {
+		return "", err
+	}
+	patchPath := filepath.Join(dir, "file.patch")
+	if err := os.WriteFile(patchPath, []byte(patch), 0o644); err != nil {
+		return "", err
+	}
+	cmd := exec.Command("git", "apply", patchPath)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("%v: %s", err, strings.TrimSpace(string(out)))
+	}
+	result, err := os.ReadFile(target)
+	if err != nil {
+		return "", err
+	}
+	return string(result), nil
+}
+
+// TestPatchRoundTripNoTrailingNewline verifies NBD-011 Task 5: a file without
+// a trailing newline produces a patch that, when applied to the before content,
+// yields a byte-for-byte match with HashAfter. Without the
+// "\ No newline at end of file" marker, git apply either fails or inserts a
+// spurious trailing newline, breaking the round trip.
+//
+// RED: before the fix, the patch omits the marker and git apply fails on a
+// no-newline file.
+func TestPatchRoundTripNoTrailingNewline(t *testing.T) {
+	if err := runGitApplyCheck(t); err != nil {
+		t.Skipf("git apply not usable in this environment: %v", err)
+	}
+
+	r, dir := newReg(t)
+	ctx := context.Background()
+
+	path := filepath.Join(dir, "nonl.txt")
+	before := "hello" // no trailing newline
+	after := "world"  // no trailing newline
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := json.Marshal(map[string]any{
+		"path":    "nonl.txt",
+		"content": after,
+	})
+	if _, ok, err := r.Run(ctx, providerToolCall("write_file", raw)); err != nil || !ok {
+		t.Fatalf("write_file failed: ok=%v err=%v", ok, err)
+	}
+
+	rec := r.LastEdit()
+	if rec == nil || rec.Patch == "" {
+		t.Fatal("no patch produced")
+	}
+
+	// Round-trip: apply the patch to the before content.
+	result, err := gitApply(t, before, rec.Patch)
+	if err != nil {
+		t.Fatalf("git apply failed:\n--- patch ---\n%s\n--- error ---\n%v", rec.Patch, err)
+	}
+	if result != after {
+		t.Errorf("round-trip content mismatch: got %q, want %q", result, after)
+	}
+	// SHA256 of the applied result must equal HashAfter.
+	resultHash := sha256hex([]byte(result))
+	if resultHash != rec.HashAfter {
+		t.Errorf("round-trip hash mismatch: got %s, want %s", resultHash, rec.HashAfter)
+	}
+}
+
+// TestPatchRoundTripWithTrailingNewline verifies the round-trip also holds
+// when both before and after have trailing newlines (no marker needed).
+func TestPatchRoundTripWithTrailingNewline(t *testing.T) {
+	if err := runGitApplyCheck(t); err != nil {
+		t.Skipf("git apply not usable in this environment: %v", err)
+	}
+
+	r, dir := newReg(t)
+	ctx := context.Background()
+
+	path := filepath.Join(dir, "nl.txt")
+	before := "hello\n"
+	after := "world\n"
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := json.Marshal(map[string]any{
+		"path":    "nl.txt",
+		"content": after,
+	})
+	if _, ok, err := r.Run(ctx, providerToolCall("write_file", raw)); err != nil || !ok {
+		t.Fatalf("write_file failed: ok=%v err=%v", ok, err)
+	}
+
+	rec := r.LastEdit()
+	if rec == nil || rec.Patch == "" {
+		t.Fatal("no patch produced")
+	}
+
+	result, err := gitApply(t, before, rec.Patch)
+	if err != nil {
+		t.Fatalf("git apply failed:\n--- patch ---\n%s\n--- error ---\n%v", rec.Patch, err)
+	}
+	if result != after {
+		t.Errorf("round-trip content mismatch: got %q, want %q", result, after)
+	}
+	resultHash := sha256hex([]byte(result))
+	if resultHash != rec.HashAfter {
+		t.Errorf("round-trip hash mismatch: got %s, want %s", resultHash, rec.HashAfter)
+	}
+}
+
+// TestPatchRoundTripMixedNewline verifies the marker appears on the correct
+// side: old without newline, new with newline (and vice versa).
+func TestPatchRoundTripMixedNewline(t *testing.T) {
+	if err := runGitApplyCheck(t); err != nil {
+		t.Skipf("git apply not usable in this environment: %v", err)
+	}
+
+	type tc struct {
+		name   string
+		before string
+		after  string
+	}
+	cases := []tc{
+		{"old_no_nl_new_nl", "hello", "hello\nworld\n"},
+		{"old_nl_new_no_nl", "hello\nworld\n", "hello"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r, dir := newReg(t)
+			ctx := context.Background()
+			path := filepath.Join(dir, c.name+".txt")
+			if err := os.WriteFile(path, []byte(c.before), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(map[string]any{
+				"path":    c.name + ".txt",
+				"content": c.after,
+			})
+			if _, ok, err := r.Run(ctx, providerToolCall("write_file", raw)); err != nil || !ok {
+				t.Fatalf("write_file failed: ok=%v err=%v", ok, err)
+			}
+			rec := r.LastEdit()
+			if rec == nil || rec.Patch == "" {
+				t.Fatal("no patch produced")
+			}
+
+			result, err := gitApply(t, c.before, rec.Patch)
+			if err != nil {
+				t.Fatalf("git apply failed:\n--- patch ---\n%s\n--- error ---\n%v", rec.Patch, err)
+			}
+			if result != c.after {
+				t.Errorf("round-trip content mismatch: got %q, want %q", result, c.after)
+			}
+			resultHash := sha256hex([]byte(result))
+			if resultHash != rec.HashAfter {
+				t.Errorf("round-trip hash mismatch: got %s, want %s", resultHash, rec.HashAfter)
+			}
+		})
+	}
+}
+
 // BenchmarkUnifiedDiff measures the worst-case LCS matrix cost: two inputs
 // of N lines each with NO shared lines, so every cell in the (n+1)*(m+1)
 // table is computed. This is the calibration benchmark recorded in
