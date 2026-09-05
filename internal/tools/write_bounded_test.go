@@ -106,6 +106,67 @@ func TestDiffWorkBudgetBounded(t *testing.T) {
 	}
 }
 
+// TestDiffBudgetRejectionLeavesFileWrittenAndRecordIntact verifies NBD-011:
+// when the diff budget is exceeded, the diff aborts (Patch is empty) but the
+// write still succeeds and the EditRecord retains all audit fields
+// (hashes, blobs). This is a regression test for the move-diff-before-write
+// restructure: the diff failure must NOT block the write, and the record must
+// remain complete for /undo.
+func TestDiffBudgetRejectionLeavesFileWrittenAndRecordIntact(t *testing.T) {
+	// Tiny cell budget so the diff aborts, but the write must still proceed.
+	setDiffBounds(t, 1<<20, 100000, 10, 1<<20, 1<<22)
+	r, dir := newReg(t)
+	ctx := context.Background()
+
+	path := filepath.Join(dir, "budget.txt")
+	before := "line one\nline two\nline three\n"
+	after := "completely\ndifferent\ncontent\nhere\n"
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	beforeHash := fileSHA256(t, path)
+
+	raw, _ := json.Marshal(map[string]any{
+		"path":    "budget.txt",
+		"content": after,
+	})
+	_, ok, err := r.Run(ctx, providerToolCall("write_file", raw))
+	if err != nil || !ok {
+		t.Fatalf("write_file must succeed even when diff budget is exceeded: ok=%v err=%v", ok, err)
+	}
+
+	// File must be correctly written on disk — diff failure doesn't abort the write.
+	b, _ := os.ReadFile(path)
+	if string(b) != after {
+		t.Fatalf("file content mismatch after diff-budget rejection: got %q, want %q", string(b), after)
+	}
+	if got := fileSHA256(t, path); got == beforeHash {
+		t.Error("file hash unchanged; content was not written despite success")
+	}
+
+	// The record must retain all audit fields even though the patch was dropped.
+	rec := r.LastEdit()
+	if rec == nil {
+		t.Fatal("no EditRecord persisted after diff-budget rejection")
+	}
+	if rec.HashBefore == "" {
+		t.Error("HashBefore empty; must survive diff failure")
+	}
+	if rec.HashAfter == "" {
+		t.Error("HashAfter empty; must survive diff failure")
+	}
+	if rec.BlobBefore == "" {
+		t.Error("BlobBefore empty; must survive diff failure")
+	}
+	if rec.BlobAfter == "" {
+		t.Error("BlobAfter empty; must survive diff failure")
+	}
+	// Patch must be empty (the diff was rejected, not the write).
+	if rec.Patch != "" {
+		t.Errorf("Patch should be empty after diff-budget rejection, got %d bytes", len(rec.Patch))
+	}
+}
+
 // TestDiffRespectsCancellation verifies NBD-011: a cancelled context terminates
 // expensive diff work promptly instead of running to completion.
 func TestDiffRespectsCancellation(t *testing.T) {

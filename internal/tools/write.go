@@ -249,6 +249,12 @@ func (e *editLog) all() []Edit {
 // NBD-011: ctx is threaded through to the diff work so cancellation can stop
 // it. The record is always persisted (even if the diff fails) so /undo keeps
 // its hashes and blobs; a failed diff simply leaves Patch empty.
+//
+// NBD-011: the "after" state and the diff (buildRecord) are computed BEFORE
+// WriteAtomic, so the expensive LCS matrix allocation happens where failure
+// leaves no on-disk trace. The critical window — between WriteAtomic and
+// log.add — contains only log.add, shrinking the interruption window that
+// the Android lowmemorykiller could exploit.
 func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []byte, readLines int) (snap.State, snap.State, error) {
 	before, err := sh.Capture(abs)
 	if err != nil {
@@ -261,22 +267,29 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, tool
 	if !before.Absent && before.Mode != 0 {
 		mode = before.Mode
 	}
-	if err := snap.WriteAtomic(abs, data, mode); err != nil {
+	// Compute the "after" state from the in-memory data before any project-file
+	// write. CaptureBytes stores content in the shadow (a separate dir), not
+	// on the project disk path, so a diff failure leaves no on-disk trace.
+	after, err := sh.CaptureBytes(abs, data, mode)
+	if err != nil {
 		return before, snap.State{}, err
+	}
+	// The diff (LCS matrix allocation) runs here — BEFORE WriteAtomic. If it
+	// aborts (budget exceeded, ctx cancelled), the project file is untouched.
+	rec := buildRecord(ctx, sh, before, after, data, readLines)
+	if err := snap.WriteAtomic(abs, data, mode); err != nil {
+		return before, after, err
 	}
 	// From here the disk has already changed. Every exit below must leave a
 	// record behind, or /undo goes blind exactly when it is needed most.
-	after, aerr := sh.Capture(abs)
-	rec := buildRecord(ctx, sh, before, after, data, readLines)
 	log.add(Edit{Tool: tool, Rel: root.Rel(abs), Before: before, After: after, Record: rec})
+	// Verify the write by reading back from disk and comparing against the
+	// expected state computed from data above.
+	actual, aerr := sh.Capture(abs)
 	if aerr != nil {
 		return before, after, aerr
 	}
-	want, err := sh.CaptureBytes(abs, data, mode)
-	if err != nil {
-		return before, after, err
-	}
-	if !snap.Unchanged(want, after) {
+	if !snap.Unchanged(after, actual) {
 		return before, after, errors.New("write did not verify on disk as-is")
 	}
 	return before, after, nil
