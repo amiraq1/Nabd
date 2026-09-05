@@ -49,8 +49,9 @@ func renderItem(it presentation.FeedItem, width int) []string {
 }
 
 func renderUserMsg(it presentation.FeedItem, width int) []string {
+	clean := SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: true, AllowTab: true, Redact: false})
 	var out []string
-	for _, line := range wrap("› "+it.Text, width) {
+	for _, line := range wrap("› "+clean, width) {
 		out = append(out, bold.Render(line))
 	}
 	return out
@@ -62,7 +63,8 @@ func renderAssistant(it presentation.FeedItem, width int) []string {
 	if text == "" {
 		text = "·"
 	}
-	out = append(out, wrap(text, width)...)
+	clean := SanitizeForDisplay(text, DisplayPolicy{AllowNewline: true, AllowTab: true, Redact: false})
+	out = append(out, wrap(clean, width)...)
 	return out
 }
 
@@ -75,9 +77,11 @@ func renderTool(it presentation.FeedItem, width int) []string {
 
 	// Status symbol + name.
 	sym := toolStatusSymbol(t.Status)
-	head := fmt.Sprintf("%s %s", sym, t.Name)
+	cleanName := SanitizeForDisplay(t.Name, DisplayPolicy{AllowNewline: false, Redact: false})
+	head := fmt.Sprintf("%s %s", sym, cleanName)
 	if t.Args != "" {
-		head += " " + truncate(t.Args, width/3)
+		cleanArgs := SanitizeForDisplay(t.Args, DisplayPolicy{AllowNewline: false, Redact: true})
+		head += " " + truncate(cleanArgs, width/3)
 	}
 	out = append(out, truncateToWidth(head, width, "…"))
 
@@ -92,7 +96,7 @@ func renderTool(it presentation.FeedItem, width int) []string {
 		out = append(out, bad.Render(truncateToWidth("  · "+t.Signal, width, "…")))
 	}
 
-	// Output (truncated).
+	// Output (truncated and sanitized).
 	if t.Output != "" {
 		out = append(out, truncateOutput(t.Output, width)...)
 	}
@@ -114,9 +118,11 @@ func renderPerm(it presentation.FeedItem, width int) []string {
 	default:
 		sym = warn.Render("?")
 	}
-	head := fmt.Sprintf("%s %s", sym, p.Name)
+	cleanName := SanitizeForDisplay(p.Name, DisplayPolicy{AllowNewline: false, Redact: false})
+	head := fmt.Sprintf("%s %s", sym, cleanName)
 	if p.Args != "" {
-		head += " " + truncate(p.Args, width/3)
+		cleanArgs := SanitizeForDisplay(p.Args, DisplayPolicy{AllowNewline: false, Redact: true})
+		head += " " + truncate(cleanArgs, width/3)
 	}
 	out = append(out, truncateToWidth(head, width, "…"))
 	if p.Status == presentation.PermAllow && p.Effective != p.Decision {
@@ -127,7 +133,8 @@ func renderPerm(it presentation.FeedItem, width int) []string {
 }
 
 func renderNotice(it presentation.FeedItem, width int) []string {
-	return []string{warn.Render(truncateToWidth("⚑ "+it.Text, width, "…"))}
+	clean := SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: false, Redact: true})
+	return []string{warn.Render(truncateToWidth("⚑ "+clean, width, "…"))}
 }
 
 func renderError(it presentation.FeedItem, width int) []string {
@@ -135,11 +142,13 @@ func renderError(it presentation.FeedItem, width int) []string {
 	if text == "" {
 		text = "error"
 	}
-	return []string{bad.Render(truncateToWidth("✗ "+text, width, "…"))}
+	clean := SanitizeForDisplay(text, DisplayPolicy{AllowNewline: false, Redact: true})
+	return []string{bad.Render(truncateToWidth("✗ "+clean, width, "…"))}
 }
 
 func renderRunBoundary(it presentation.FeedItem, width int) []string {
-	return []string{dim.Render(truncateToWidth("── "+it.Text, width, "…"))}
+	clean := SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: false, Redact: false})
+	return []string{dim.Render(truncateToWidth("── "+clean, width, "…"))}
 }
 
 // toolStatusSymbol returns a status glyph for a tool card.

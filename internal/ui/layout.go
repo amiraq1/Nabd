@@ -55,14 +55,16 @@ func (m *Feed) computeLayout() layoutMetrics {
 	// Header row.
 	if m.header != "" {
 		lm.HeaderRows = 1
-		lm.headerLine = truncateToWidth(m.header, w, "…")
+		cleanHeader := SanitizeForDisplay(m.header, DisplayPolicy{AllowNewline: false, Redact: false})
+		lm.headerLine = truncateToWidth(cleanHeader, w, "…")
 	}
 
 	// Runtime status (above top separator) — 1 row or 0.
 	rtText := m.runtimeStatusText()
 	if rtText != "" {
 		lm.RuntimeStatusRows = 1
-		lm.runtimeStatusLine = truncateToWidth("· "+rtText, w, "…")
+		cleanRt := SanitizeForDisplay(rtText, DisplayPolicy{AllowNewline: false, Redact: true})
+		lm.runtimeStatusLine = truncateToWidth("· "+cleanRt, w, "…")
 	}
 
 	// Separators — always present when width is sufficient.

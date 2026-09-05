@@ -93,19 +93,22 @@ func (m *PermissionModal) prevChoice() {
 }
 
 // safeArgs formats arguments for display without splitting runes or leaking secrets.
+// Enforces: Sanitize -> Redact -> Truncate.
 func safeArgs(args string, maxRunes int) string {
 	if args == "" || maxRunes <= 0 {
 		return ""
 	}
-	// Normalize multiline to single readable preview
-	single := strings.ReplaceAll(args, "\r", "")
-	single = strings.ReplaceAll(single, "\n", " ")
-	single = strings.TrimSpace(single)
+	clean := SanitizeForDisplay(args, DisplayPolicy{
+		AllowNewline: false,
+		AllowTab:     false,
+		Redact:       true,
+	})
+	clean = strings.TrimSpace(clean)
 
-	if utf8.RuneCountInString(single) <= maxRunes {
-		return single
+	if utf8.RuneCountInString(clean) <= maxRunes {
+		return clean
 	}
-	runes := []rune(single)
+	runes := []rune(clean)
 	if maxRunes <= 1 {
 		return "…"
 	}
