@@ -142,7 +142,7 @@ func rejectDuplicateKeys(raw json.RawMessage) error {
 		return nil
 	}
 	// Count raw top-level keys by tokenizing; maps collapse duplicates.
-	if raw != nil && len(raw) > 0 && raw[0] == '{' {
+	if len(raw) > 0 && raw[0] == '{' {
 		n := 0
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		tok, err := dec.Token()
