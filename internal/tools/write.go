@@ -50,10 +50,12 @@ var (
 	maxDiffLines = 3000
 	// maxDiffCells caps the matrix work (n*m). If n*m would exceed it, the diff
 	// aborts rather than allocate quadratic state. 4M cells * 8 B/int (arm64)
-	// = 32 MB, matching the G1 measurement where a 2000x2000 diff allocated
-	// 33.6 MB and ran in ~24 ms. This keeps the worst-case matrix on a phone
-	// well under per-app memory limits; larger edits are rejected before alloc.
-	// Chosen with ~2x safety margin below the 2000x2000 observed cost.
+	// = 32 MB, calibrated AT the G1 measurement: a 2000x2000 diff allocated
+	// 33.6 MB and ran in ~24 ms. The ceiling is set at the measured worst case
+	// (0x margin), not below it: 2000*2000 == 4_000_000 exactly. The (n*m)
+	// guard `m > maxDiffCells/n` therefore rejects 2001x2000 and larger
+	// BEFORE allocating. Larger edits are rejected before alloc; this ceiling
+	// is the deterministic boundary, not a soft target.
 	maxDiffCells = 4_000_000
 	// maxPatchBytes caps the raw unified-diff output string. A 2000-line
 	// complete rewrite is well under 100 KB; 1 MB gives >10x headroom.

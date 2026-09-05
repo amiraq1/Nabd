@@ -298,3 +298,28 @@ func runGitApplyCheck(t *testing.T) error {
 	}
 	return nil
 }
+
+// BenchmarkUnifiedDiff measures the worst-case LCS matrix cost: two inputs
+// of N lines each with NO shared lines, so every cell in the (n+1)*(m+1)
+// table is computed. This is the calibration benchmark recorded in
+// docs/TECH_DEBT.md (G1). It uses the package-default limits (maxDiffCells
+// = 4_000_000), which permits the 2000x2000 case exactly.
+func BenchmarkUnifiedDiff(b *testing.B) {
+	for _, n := range []int{100, 500, 1000, 2000} {
+		var before, after strings.Builder
+		for i := 0; i < n; i++ {
+			fmt.Fprintf(&before, "before-line-%d\n", i)
+			fmt.Fprintf(&after, "after-line-%d\n", i)
+		}
+		bb := []byte(before.String())
+		ba := []byte(after.String())
+		b.Run(fmt.Sprintf("lines-%d", n), func(b *testing.B) {
+			ctx := context.Background()
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				_, _ = unifiedDiff(ctx, bb, ba, "bench.txt")
+			}
+		})
+	}
+}

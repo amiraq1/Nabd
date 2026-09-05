@@ -37,9 +37,25 @@ that is ~32 MB of matrix alone, matching the 33.6 MB total observed.
 - `maxDiffLines = 3000` — per-side line cap. Far above a typical single edit.
 - `maxDiffCells = 4_000_000` — matrix-work cap (n*m). 4M cells * 8 B = 32 MB,
   the measured 2000x2000 cost. Rejects larger edits BEFORE allocating the matrix.
-  Safety margin: ~2x below the 2000x2000 observed cost; keeps the worst case
-  well under phone per-app memory limits. Any edit exceeding it is rejected
-  deterministically rather than risking OOM.
+  The ceiling is calibrated AT the measured worst case (0x margin), not below
+  it: 2000*2000 == 4_000_000 exactly, so the guard `m > maxDiffCells/n` rejects
+  2001x2000 and any larger input before allocation. Any edit exceeding it is
+  rejected deterministically rather than risking OOM.
+- **peak memory note**: the 32 MB figure is a LOWER BOUND on peak allocation.
+  The LCS `int` table dominates, but the diff also allocates: the `ops` slice
+  (capacity n+m), per-hunk `lines []string` slices, and the `strings.Builder`
+  that buffers the full unified diff. Total peak exceeds the matrix by a
+  non-trivial margin. The G1 benchmark B/op column (33.6 MB at 2000x2000)
+  captures this real total, not just the matrix.
+- **per-call budget**: these limits are PER CALL, not global. Concurrent
+  mutations multiply the allocation — N parallel edits each at the ceiling
+  consume N× the budget. There is currently no aggregate ceiling across
+  concurrent tool calls. [DEFERRED]
+- **cancellation bounds time, not memory**: the LCS row-allocation loop
+  (`lcs := make([][]int, n+1)`) runs BEFORE the first `ctx.Err()` check. A
+  cancellation therefore bounds COMPLETION TIME but not PEAK MEMORY — the
+  goroutine must still allocate the full matrix before it can observe the
+  cancellation. The `maxDiffCells` guard, not ctx, is what prevents the OOM.
 - `maxPatchBytes = 1 << 20` (1 MB) — raw unified-diff output. A 2000-line full
   rewrite is well under 100 KB; 1 MB gives >10x headroom.
 - `maxEventBytes = 1 << 22` (4 MB) — serialized edit-event JSON. Embeds the 1 MB
@@ -53,7 +69,9 @@ the on-disk output ceilings; edit_file additionally rejects a replacement whose
 RESULT would exceed `maxEditBytes` (e.g. `all=true` with `new` larger than
 `old`). edit_file input is also bounded by `maxEditBytes` (pre-read stat).
 
-The 2000x2000 measurement is the calibration point; limits were chosen to keep
-the matrix at or below that observed cost with margin, since cost grows as
-O(n*m) beyond it. These values should be re-measured if workload characteristics
-change.
+The 2000x2000 measurement is the calibration point; `maxDiffCells` is set
+AT that observed cost (0x margin — 2000*2000 == 4_000_000 exactly), so the
+n*m guard rejects any input larger than 2000x2000 before allocation. Since
+cost grows as O(n*m) beyond it, this ceiling is the deterministic boundary
+below which cost has been measured and above which it is not allowed.
+Re-measure if workload characteristics change.
