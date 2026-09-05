@@ -352,7 +352,7 @@ func toolName(e agent.Event) string {
 	return "tool"
 }
 
-// callErr extracts a concise error indication from a tool result.
+// callErr extracts a concise, sanitized error indication from a tool result.
 func callErr(output string, ok bool) string {
 	if ok {
 		return ""
@@ -363,8 +363,12 @@ func callErr(output string, ok bool) string {
 	}
 	lines := strings.Split(trimmed, "\n")
 	for _, l := range lines {
-		l = strings.TrimSpace(l)
+		l = strings.TrimSpace(strings.ReplaceAll(l, "\r", ""))
 		if l != "" {
+			// Length bound to 200 bytes to prevent UI overflows/secret leakage.
+			if len(l) > 200 {
+				return l[:197] + "..."
+			}
 			return l
 		}
 	}

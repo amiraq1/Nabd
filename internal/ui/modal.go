@@ -152,6 +152,7 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	if tool == "" {
 		tool = "unknown"
 	}
+	tool = SanitizeForDisplay(tool, DisplayPolicy{AllowNewline: false, Redact: false})
 
 	targetRows := m.lineCount(maxRows...)
 
