@@ -131,7 +131,7 @@ func (m *Feed) computeLayout() layoutMetrics {
 	// The Feed UI gracefully degrades when vertical space is scarce, sacrificing
 	// chrome to maximize the viewport and preserve critical interactions.
 	// 1. reserve composer (>=1 row) and footer (1 row)  — never sacrificed
-	// 2. reserve modal minimum (3 rows: title+tool, selected choice, confirm hint) 
+	// 2. reserve modal minimum (3 rows: title+tool, selected choice, confirm hint)
 	//    — This 3-row compression is a deliberate UX decision to keep the UI
 	//    functional on extremely short terminals (e.g., 5-6 rows).
 	// 3. drop bottom separator

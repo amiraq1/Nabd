@@ -2,9 +2,9 @@ package ui
 
 import (
 	"encoding/json"
+	"nabd/internal/agent"
 	"strings"
 	"testing"
-	"nabd/internal/agent"
 )
 
 func TestHostilePayload(t *testing.T) {
@@ -27,29 +27,29 @@ func TestHostilePayload(t *testing.T) {
 	f.BuildFromEvents(events)
 	f.addDiagnostic(hostile)
 	f.status = hostile
-	
+
 	// Composer content could be hostile, we test if textarea escapes it?
 	// The standard textarea does NOT escape ANSI, but our View shouldn't leak it in our custom UI elements.
-	// Actually, wait, if the composer itself leaks ANSI, then we should fail? 
+	// Actually, wait, if the composer itself leaks ANSI, then we should fail?
 	// The textarea is typed in by the user. If the user pastes ANSI, it enters the textarea.
 	// The user prompt says "including constructor echos, status, diagnostics, command list".
 	f.composer.setValue("/" + hostile)
 	f.menu.open(supportedSlashCommands)
-	
+
 	view := f.View()
-	
+
 	leaks := []string{
-		"\x1b]8;;", // hyperlink start
+		"\x1b]8;;",   // hyperlink start
 		"link\x1b\\", // hyperlink end with text
-		"\x07beep", // bell
+		"\x07beep",   // bell
 	}
-	
+
 	for _, leak := range leaks {
 		if strings.Contains(view, leak) {
 			t.Errorf("View() leaked hostile payload sequence %q", leak)
 		}
 	}
-	
+
 	// Check literal string
 	if strings.Contains(view, "\x1b[31mred\x1b[0m") {
 		t.Errorf("View() leaked ANSI color from payload")
