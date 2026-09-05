@@ -32,9 +32,31 @@ import (
 	"nabd/internal/snap"
 )
 
-const (
+// NBD-011: maxWriteBytes/maxEditBytes are the per-tool output ceilings. They
+// are vars (not const) so tests can inject small limits and production limits
+// can be tuned after G1 measurement (Task 7).
+var (
 	maxWriteBytes = 1 << 20
 	maxEditBytes  = 2 << 20
+)
+
+// NBD-011: configurable bounds for diff work and output. They are vars (not
+// const) so tests can inject small budgets without constructing huge fixtures,
+// and so production limits can be tuned after G1 measurement (Task 7). The
+// values below are the safety-reviewed starting ceilings.
+var (
+	// maxDiffLines caps each side of the diff; inputs larger than this are not
+	// fed to the LCS matrix.
+	maxDiffLines = 100000
+	// maxDiffCells caps the matrix work (n*m). If n*m would exceed it, the diff
+	// aborts rather than allocate quadratic state.
+	maxDiffCells = 1 << 24
+	// maxPatchBytes caps the raw unified-diff output string.
+	maxPatchBytes = 1 << 20
+	// maxEventBytes caps the serialized JSON of an edit event. If the event
+	// would exceed it, the Patch is dropped so the record (hashes, blobs)
+	// survives within budget.
+	maxEventBytes = 1 << 22
 )
 
 // --- NBD-010 strict request validation -------------------------------------
@@ -184,7 +206,11 @@ func (e *editLog) all() []Edit {
 // commit is the shared tail of both tools: shadow, write, verify, log.
 // readLines is the number of lines the model actually read before writing
 // (0 for a blind write), recorded in the persisted EditRecord.
-func commit(root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []byte, readLines int) (snap.State, snap.State, error) {
+//
+// NBD-011: ctx is threaded through to the diff work so cancellation can stop
+// it. The record is always persisted (even if the diff fails) so /undo keeps
+// its hashes and blobs; a failed diff simply leaves Patch empty.
+func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []byte, readLines int) (snap.State, snap.State, error) {
 	before, err := sh.Capture(abs)
 	if err != nil {
 		return before, snap.State{}, err
@@ -202,7 +228,7 @@ func commit(root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []
 	// From here the disk has already changed. Every exit below must leave a
 	// record behind, or /undo goes blind exactly when it is needed most.
 	after, aerr := sh.Capture(abs)
-	rec := buildRecord(sh, before, after, data, readLines)
+	rec := buildRecord(ctx, sh, before, after, data, readLines)
 	log.add(Edit{Tool: tool, Rel: root.Rel(abs), Before: before, After: after, Record: rec})
 	if aerr != nil {
 		return before, after, aerr
@@ -220,7 +246,12 @@ func commit(root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []
 // buildRecord fingerprints one mutation for the journal: SHA-256 of the
 // content on both sides, a unified diff, and the number of lines read.
 // HashBefore is empty only when the file did not exist before (creation).
-func buildRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLines int) *agent.EditRecord {
+//
+// NBD-011: the diff can fail (budget exceeded, cancellation). The record is
+// always returned with its hashes and blobs intact; on diff failure Patch is
+// empty. The record is then passed through boundEditEvent so the serialized
+// event stays within the configured budget (dropping only Patch if needed).
+func buildRecord(ctx context.Context, sh *snap.Shadow, before, after snap.State, data []byte, readLines int) *agent.EditRecord {
 	rec := &agent.EditRecord{
 		Path:       after.Rel,
 		HashAfter:  sha256hex(data),
@@ -232,11 +263,37 @@ func buildRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLin
 	if !before.Absent {
 		if b, err := sh.Read(before.Blob); err == nil {
 			rec.HashBefore = sha256hex(b)
-			rec.Patch = unifiedDiff(b, data, rec.Path)
+			// A diff failure must not lose the record: keep hashes/blobs and
+			// simply leave Patch empty.
+			if patch, err := unifiedDiff(ctx, b, data, rec.Path); err == nil {
+				rec.Patch = patch
+			}
 		}
 	} else {
-		rec.Patch = unifiedDiff(nil, data, rec.Path)
+		if patch, err := unifiedDiff(ctx, nil, data, rec.Path); err == nil {
+			rec.Patch = patch
+		}
 	}
+	return boundEditEvent(rec)
+}
+
+// boundEditEvent enforces the event-size budget (NBD-011) on the serialized
+// edit event. The Patch is the only unbounded field: if marshaling the event
+// would exceed maxEventBytes, the Patch is dropped so the audit fields
+// (hashes, blobs) survive within budget. Sizing uses the actual encoded JSON
+// bytes, which accounts for escaping.
+func boundEditEvent(rec *agent.EditRecord) *agent.EditRecord {
+	if maxEventBytes <= 0 {
+		return rec
+	}
+	b, err := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: rec})
+	if err != nil {
+		return rec
+	}
+	if len(b) <= maxEventBytes {
+		return rec
+	}
+	rec.Patch = ""
 	return rec
 }
 
@@ -247,17 +304,40 @@ func sha256hex(b []byte) string {
 
 // unifiedDiff renders before→after as a unified diff. It is line-based and
 // minimal: unchanged lines are shared context. A nil before means creation.
-func unifiedDiff(before, after []byte, path string) string {
+//
+// NBD-011: unifiedDiff now respects a work budget (maxDiffLines, maxDiffCells)
+// and ctx cancellation. If the inputs are too large or the context is cancelled,
+// it returns an error and no patch. The caller (buildRecord) must persist the
+// record without the patch so hashes and blobs survive. Hunk headers track the
+// new-file line position independently so the patch is syntactically valid.
+func unifiedDiff(ctx context.Context, before, after []byte, path string) (string, error) {
+	// Check cancellation before doing any work.
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	bl := splitLines(before)
 	al := splitLines(after)
 
-	// LCS table for the two line sequences.
 	n, m := len(bl), len(al)
+	// Bound the input sides.
+	if n > maxDiffLines || m > maxDiffLines {
+		return "", fmt.Errorf("diff input too large: %d×%d lines exceeds %d", n, m, maxDiffLines)
+	}
+	// Bound the matrix work and detect integer overflow in n*m. If the product
+	// would overflow int or exceed the cell budget, abort before allocating.
+	if n != 0 && m > maxDiffCells/n {
+		return "", fmt.Errorf("diff work budget exceeded: %d×%d exceeds %d cells", n, m, maxDiffCells)
+	}
+	// LCS table for the two line sequences. Cancellation is checked once per
+	// outer iteration so a cancelled context terminates the build promptly.
 	lcs := make([][]int, n+1)
 	for i := range lcs {
 		lcs[i] = make([]int, m+1)
 	}
 	for i := n - 1; i >= 0; i-- {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		for j := m - 1; j >= 0; j-- {
 			if bl[i] == al[j] {
 				lcs[i][j] = lcs[i+1][j+1] + 1
@@ -271,77 +351,145 @@ func unifiedDiff(before, after []byte, path string) string {
 		}
 	}
 
+	// Backtrack the LCS into an edit script: ('=',line) unchanged,
+	// ('-',line) deleted, ('+',line) inserted. Cancellation is checked during
+	// the backtrack so a cancelled context terminates it.
+	type op struct {
+		kind byte
+		line string
+	}
+	ops := make([]op, 0, n+m)
+	i, j := n, m
+	for i > 0 || j > 0 {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if i > 0 && j > 0 && bl[i-1] == al[j-1] {
+			ops = append(ops, op{'=', bl[i-1]})
+			i--
+			j--
+		} else if j > 0 && (i == 0 || lcs[i-1][j] >= lcs[i][j-1]) {
+			ops = append(ops, op{'+', al[j-1]})
+			j--
+		} else {
+			ops = append(ops, op{'-', bl[i-1]})
+			i--
+		}
+	}
+	for l, r := 0, len(ops)-1; l < r; l, r = l+1, r-1 {
+		ops[l], ops[r] = ops[r], ops[l]
+	}
+
+	const ctxSize = 3
 	var b strings.Builder
 	fmt.Fprintf(&b, "--- a/%s\n+++ b/%s\n", path, path)
-	i, j := 0, 0
-	var hunk []string
-	hunkStart, hunkOld, hunkNew := 0, 0, 0
-	flush := func() {
-		if len(hunk) == 0 {
+	oldLine, newLine := 1, 1
+	type hunk struct {
+		oldStart, newStart int
+		lines              []string
+	}
+	var hunks []hunk
+	cur := -1
+	startHunk := func() {
+		if cur < 0 {
+			hunks = append(hunks, hunk{})
+			cur = len(hunks) - 1
+		}
+	}
+	var pending []string
+	flushPendingTo := func(idx int) {
+		if len(pending) == 0 {
 			return
 		}
-		// Count old/new lines in the hunk for the @@ header.
-		old, new := 0, 0
-		for _, l := range hunk {
+		hunks[idx].lines = append(hunks[idx].lines, pending...)
+		pending = nil
+	}
+	for _, o := range ops {
+		switch o.kind {
+		case '=':
+			if cur < 0 {
+				if len(pending) < ctxSize {
+					pending = append(pending, " "+o.line)
+				}
+				oldLine++
+				newLine++
+				continue
+			}
+			pending = append(pending, " "+o.line)
+			oldLine++
+			newLine++
+			if len(pending) > ctxSize {
+				trailing := pending
+				if len(trailing) > ctxSize {
+					trailing = trailing[len(trailing)-ctxSize:]
+				}
+				hunks[cur].lines = append(hunks[cur].lines, trailing...)
+				cur = -1
+				pending = nil
+			}
+		case '-':
+			if cur < 0 && len(pending) > 0 {
+				startHunk()
+				hunks[cur].oldStart = oldLine - len(pending)
+				hunks[cur].newStart = newLine - len(pending)
+				flushPendingTo(cur)
+			}
+			startHunk()
+			if len(hunks[cur].lines) == 0 && hunks[cur].oldStart == 0 {
+				hunks[cur].oldStart = oldLine
+				hunks[cur].newStart = newLine
+			}
+			hunks[cur].lines = append(hunks[cur].lines, "-"+o.line)
+			oldLine++
+		case '+':
+			if cur < 0 && len(pending) > 0 {
+				startHunk()
+				hunks[cur].oldStart = oldLine - len(pending)
+				hunks[cur].newStart = newLine - len(pending)
+				flushPendingTo(cur)
+			}
+			startHunk()
+			if len(hunks[cur].lines) == 0 && hunks[cur].oldStart == 0 {
+				hunks[cur].oldStart = oldLine
+				hunks[cur].newStart = newLine
+			}
+			hunks[cur].lines = append(hunks[cur].lines, "+"+o.line)
+			newLine++
+		}
+	}
+	if cur >= 0 {
+		if len(pending) > ctxSize {
+			pending = pending[len(pending)-ctxSize:]
+		}
+		if len(pending) > 0 {
+			hunks[cur].lines = append(hunks[cur].lines, pending...)
+		}
+	}
+
+	for _, h := range hunks {
+		oldCnt, newCnt := 0, 0
+		for _, l := range h.lines {
 			switch l[0] {
 			case '-':
-				old++
+				oldCnt++
 			case '+':
-				new++
+				newCnt++
 			default:
-				old, new = old+1, new+1
+				oldCnt++
+				newCnt++
 			}
 		}
-		fmt.Fprintf(&b, "@@ -%d,%d +%d,%d @@\n", hunkStart, old, hunkStart+hunkOld, new)
-		for _, l := range hunk {
+		fmt.Fprintf(&b, "@@ -%d,%d +%d,%d @@\n", h.oldStart, oldCnt, h.newStart, newCnt)
+		for _, l := range h.lines {
 			b.WriteString(l)
 			b.WriteByte('\n')
 		}
-		hunk = nil
 	}
-	for i < n && j < m {
-		switch {
-		case bl[i] == al[j]:
-			if len(hunk) > 0 {
-				if len(hunk) >= 3 { // flush a substantial hunk
-					flush()
-				} else {
-					hunk = append(hunk, " "+bl[i])
-				}
-			}
-			i, j = i+1, j+1
-		case lcs[i+1][j] >= lcs[i][j+1]:
-			if len(hunk) == 0 {
-				hunkStart, hunkOld, hunkNew = i, 0, 0
-			}
-			hunk = append(hunk, "-"+bl[i])
-			hunkOld++
-			i++
-		default:
-			if len(hunk) == 0 {
-				hunkStart, hunkOld, hunkNew = i, 0, 0
-			}
-			hunk = append(hunk, "+"+al[j])
-			hunkNew++
-			j++
-		}
+	out := b.String()
+	if len(out) > maxPatchBytes {
+		return "", fmt.Errorf("patch output exceeds %d bytes", maxPatchBytes)
 	}
-	for ; i < n; i++ {
-		if len(hunk) == 0 {
-			hunkStart, hunkOld, hunkNew = i, 0, 0
-		}
-		hunk = append(hunk, "-"+bl[i])
-		hunkOld++
-	}
-	for ; j < m; j++ {
-		if len(hunk) == 0 {
-			hunkStart, hunkOld, hunkNew = i, 0, 0
-		}
-		hunk = append(hunk, "+"+al[j])
-		hunkNew++
-	}
-	flush()
-	return b.String()
+	return out, nil
 }
 
 func splitLines(b []byte) []string {
@@ -393,7 +541,7 @@ func (w writeFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	// Consume read-credit only after the request passed validation, and before
 	// the mutation boundary that legitimately spends it.
 	readLines := w.reg.ConsumeLinesRead()
-	before, after, err := commit(w.root, w.sh, w.log, "write_file", abs, []byte(content), readLines)
+	before, after, err := commit(ctx, w.root, w.sh, w.log, "write_file", abs, []byte(content), readLines)
 	if err != nil {
 		return "", false, err
 	}
@@ -447,7 +595,7 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 	if err != nil {
 		return "", false, err
 	}
-	if st.Size() > maxEditBytes {
+	if st.Size() > int64(maxEditBytes) {
 		return "", false, fmt.Errorf("file is %d bytes, limit is %d", st.Size(), maxEditBytes)
 	}
 	src, err := os.ReadFile(abs)
@@ -472,10 +620,16 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 		out = strings.Replace(string(src), old, new, 1)
 		reps = 1
 	}
+	// NBD-011: bound the mutating output. edit_file may grow a file past the
+	// edit ceiling when new is larger than old (especially with all=true);
+	// reject before the write so the limit is a hard ceiling on disk.
+	if len(out) > maxEditBytes {
+		return "", false, fmt.Errorf("edit output is %d bytes, limit is %d", len(out), maxEditBytes)
+	}
 	// Consume read-credit only after the request passed validation, and before
 	// the mutation boundary that legitimately spends it.
 	readLines := w.reg.ConsumeLinesRead()
-	if _, _, err := commit(w.root, w.sh, w.log, "edit_file", abs, []byte(out), readLines); err != nil {
+	if _, _, err := commit(ctx, w.root, w.sh, w.log, "edit_file", abs, []byte(out), readLines); err != nil {
 		return "", false, err
 	}
 	return fmt.Sprintf("edited %s (%d replacements, %d lines → %d)",
