@@ -388,3 +388,109 @@ func TestReplayFromFixture(t *testing.T) {
 		}
 	}
 }
+
+// TestSliceReallocationStrandsAssistantText verifies that appending items
+// during streaming deltas does not strand assistant text due to stale slice pointers.
+func TestSliceReallocationStrandsAssistantText(t *testing.T) {
+	p := presentation.NewProjector()
+	_ = p.Apply(agent.Event{Seq: 1, Type: agent.TextDelta, Text: "part1 "})
+	// Force slice reallocation by appending many notices
+	for i := 0; i < 100; i++ {
+		_ = p.Apply(agent.Event{Seq: 10 + i, Type: agent.Notice, Text: "n"})
+	}
+	// Append another delta to the same assistant message
+	_ = p.Apply(agent.Event{Seq: 200, Type: agent.TextDelta, Text: "part2"})
+	_ = p.Apply(agent.Event{Seq: 201, Type: agent.TurnEnd})
+
+	items := p.Items()
+	var asst *presentation.FeedItem
+	for i := range items {
+		if items[i].Type == presentation.ItemAssistant {
+			asst = &items[i]
+			break
+		}
+	}
+	if asst == nil {
+		t.Fatal("no assistant item found")
+	}
+	if asst.Text != "part1 part2" {
+		t.Fatalf("expected 'part1 part2', got %q", asst.Text)
+	}
+}
+
+// TestSliceReallocationToolEnd verifies that ToolEnd updates the correct item
+// even after many intervening events force slice reallocations.
+func TestSliceReallocationToolEnd(t *testing.T) {
+	p := presentation.NewProjector()
+	_ = p.Apply(agent.Event{
+		Seq:  1,
+		Type: agent.ToolStart,
+		Call: &agent.ToolCall{ID: "call_realloc_1", Name: "bash", Args: []byte(`{"cmd":"ls"}`)},
+	})
+	// Force slice reallocation
+	for i := 0; i < 150; i++ {
+		_ = p.Apply(agent.Event{Seq: 10 + i, Type: agent.Notice, Text: "n"})
+	}
+	// ToolEnd for the initial tool call
+	_ = p.Apply(agent.Event{
+		Seq:  300,
+		Type: agent.ToolEnd,
+		Call: &agent.ToolCall{ID: "call_realloc_1", Name: "bash", Output: "done_ls", OK: true},
+	})
+
+	items := p.Items()
+	var tool *presentation.FeedItem
+	for i := range items {
+		if items[i].Type == presentation.ItemTool && items[i].ID == "tool_call_realloc_1" {
+			tool = &items[i]
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatal("tool item not found")
+	}
+	if tool.Tool.Status != presentation.ToolDone {
+		t.Fatalf("expected ToolDone, got %v", tool.Tool.Status)
+	}
+	if tool.Tool.Output != "done_ls" {
+		t.Fatalf("expected 'done_ls', got %q", tool.Tool.Output)
+	}
+}
+
+// TestSliceReallocationPermReply verifies that PermReply updates the correct item
+// even after many intervening events force slice reallocations.
+func TestSliceReallocationPermReply(t *testing.T) {
+	p := presentation.NewProjector()
+	_ = p.Apply(agent.Event{
+		Seq:  1,
+		Type: agent.PermAsk,
+		Call: &agent.ToolCall{ID: "perm_realloc_1", Name: "bash", Args: []byte(`{"cmd":"rm"}`)},
+	})
+	// Force slice reallocation
+	for i := 0; i < 150; i++ {
+		_ = p.Apply(agent.Event{Seq: 10 + i, Type: agent.Notice, Text: "n"})
+	}
+	// PermReply
+	_ = p.Apply(agent.Event{
+		Seq:         300,
+		Type:        agent.PermReply,
+		Call:        &agent.ToolCall{ID: "perm_realloc_1", Name: "bash"},
+		Decision:    agent.AllowOnce,
+		RawDecision: agent.AllowOnce,
+	})
+
+	items := p.Items()
+	var perm *presentation.FeedItem
+	for i := range items {
+		if items[i].Type == presentation.ItemPermission && items[i].ID == "tool_perm_realloc_1" {
+			perm = &items[i]
+			break
+		}
+	}
+	if perm == nil {
+		t.Fatal("perm item not found")
+	}
+	if perm.Perm.Status != presentation.PermAllow {
+		t.Fatalf("expected PermAllow, got %v", perm.Perm.Status)
+	}
+}
