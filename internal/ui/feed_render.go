@@ -77,7 +77,7 @@ func renderTool(it presentation.FeedItem, width int) []string {
 
 	// Status symbol + name.
 	sym := toolStatusSymbol(t.Status)
-	cleanName := SanitizeForDisplay(t.Name, DisplayPolicy{AllowNewline: false, Redact: false})
+	cleanName := SanitizeForDisplay(t.Name, DisplayPolicy{AllowNewline: false, Redact: true})
 	head := fmt.Sprintf("%s %s", sym, cleanName)
 	if t.Args != "" {
 		cleanArgs := SanitizeForDisplay(t.Args, DisplayPolicy{AllowNewline: false, Redact: true})
@@ -118,7 +118,7 @@ func renderPerm(it presentation.FeedItem, width int) []string {
 	default:
 		sym = warn.Render("?")
 	}
-	cleanName := SanitizeForDisplay(p.Name, DisplayPolicy{AllowNewline: false, Redact: false})
+	cleanName := SanitizeForDisplay(p.Name, DisplayPolicy{AllowNewline: false, Redact: true})
 	head := fmt.Sprintf("%s %s", sym, cleanName)
 	if p.Args != "" {
 		cleanArgs := SanitizeForDisplay(p.Args, DisplayPolicy{AllowNewline: false, Redact: true})
