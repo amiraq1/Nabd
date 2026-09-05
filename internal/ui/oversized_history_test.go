@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -54,18 +55,23 @@ func TestOversizedHistoryRecallEditableDown(t *testing.T) {
 // found in U1, where 101 backspaces on a +100 oversized string without spaces
 // causes O(N) wrap recalculations in bubbles/textarea. This remains as tech debt.
 func BenchmarkComposerBackspaceOversized(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		f := NewFeed()
-		f.width = 80
-		f.height = 24
-		big := strings.Repeat("م", maxInputRunes+100)
-		f.history.add(big)
-		_, _ = f.Update(tea.KeyMsg{Type: tea.KeyUp})
+	sizes := []int{2, 100, 400}
+	for _, size := range sizes {
+		b.Run(fmt.Sprintf("Plus%d", size), func(b *testing.B) {
+			for i := 0; i < b.N; i++ {
+				f := NewFeed()
+				f.width = 80
+				f.height = 24
+				big := strings.Repeat("م", maxInputRunes+size)
+				f.history.add(big)
+				_, _ = f.Update(tea.KeyMsg{Type: tea.KeyUp})
 
-		b.StartTimer()
-		for j := 0; j < 101; j++ {
-			_, _ = f.Update(tea.KeyMsg{Type: tea.KeyBackspace})
-		}
-		b.StopTimer()
+				b.StartTimer()
+				for j := 0; j < 101; j++ {
+					_, _ = f.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+				}
+				b.StopTimer()
+			}
+		})
 	}
 }
