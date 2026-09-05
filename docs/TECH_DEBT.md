@@ -114,3 +114,16 @@ CI run ids and head SHAs live in PR comments, never in tracked files,
 because recording them in a commit moves the head and invalidates the record.
 Each limit and its measurement is stated in exactly one tracked file (this
 file, `docs/TECH_DEBT.md`).
+
+## U1: UI Performance Bottleneck (bubbles/textarea)
+
+- **Component:** `internal/ui` (`composer`, `feed_render`)
+- **Issue:** Pushing large payloads (e.g., thousands of runes without spaces) into the composer causes O(N) word-wrapping recalculations on every keystroke in `bubbles/textarea`. A 16KB payload can make a single keystroke take >30ms locally, which becomes fatal under race-detector overhead.
+- **ROOT_CAUSE (corrected):**
+  - [OBSERVED] The ~+2 and ~+100 payload cases have nearly identical runtime under the fixed 101-backspace workload, so the small payload-length delta above maxInputRunes does not explain the observed cost.
+  - [OBSERVED] The long unbroken payload (~8000 runes) combined with repeated Backspace updates produces expensive repeated wrapping/editing work locally without -race.
+  - [INFERRED] The previous CI timeout was primarily averted by reducing the number of Backspace updates from 101 to 3, rather than by reducing the payload delta from +100 to +2.
+- **Resolution Plan (U3):** Implement a line-wrap cache and update only the actively flowing element rather than forcing a full re-wrap of the entire history buffer.
+- **OPEN QUESTIONS:**
+  - [UNKNOWN] The exact growth shape of the per-keystroke re-wrap cost (quadratic vs linear) is not established by the current benchmark.
+  - [DEFERRED] U3 must establish the growth shape using an independent keystroke-count axis or an independent payload-length axis.
