@@ -46,16 +46,21 @@ var (
 // values below are the safety-reviewed starting ceilings.
 var (
 	// maxDiffLines caps each side of the diff; inputs larger than this are not
-	// fed to the LCS matrix.
-	maxDiffLines = 100000
+	// fed to the LCS matrix. 3000 lines is far above typical single edits.
+	maxDiffLines = 3000
 	// maxDiffCells caps the matrix work (n*m). If n*m would exceed it, the diff
-	// aborts rather than allocate quadratic state.
-	maxDiffCells = 1 << 24
-	// maxPatchBytes caps the raw unified-diff output string.
+	// aborts rather than allocate quadratic state. 4M cells * 8 B/int (arm64)
+	// = 32 MB, matching the G1 measurement where a 2000x2000 diff allocated
+	// 33.6 MB and ran in ~24 ms. This keeps the worst-case matrix on a phone
+	// well under per-app memory limits; larger edits are rejected before alloc.
+	// Chosen with ~2x safety margin below the 2000x2000 observed cost.
+	maxDiffCells = 4_000_000
+	// maxPatchBytes caps the raw unified-diff output string. A 2000-line
+	// complete rewrite is well under 100 KB; 1 MB gives >10x headroom.
 	maxPatchBytes = 1 << 20
 	// maxEventBytes caps the serialized JSON of an edit event. If the event
 	// would exceed it, the Patch is dropped so the record (hashes, blobs)
-	// survives within budget.
+	// survives within budget. 4 MB embeds the 1 MB patch with JSON overhead.
 	maxEventBytes = 1 << 22
 )
 
