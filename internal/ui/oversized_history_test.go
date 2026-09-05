@@ -52,8 +52,10 @@ func TestOversizedHistoryRecallEditableDown(t *testing.T) {
 }
 
 // BenchmarkComposerBackspaceOversized records the original performance bottleneck
-// found in U1, where 101 backspaces on a +100 oversized string without spaces
-// causes O(N) wrap recalculations in bubbles/textarea. This remains as tech debt.
+// found in U1, where 101 backspaces on an oversized string without spaces
+// causes O(N) wrap recalculations in bubbles/textarea. The sub-benchmarks vary
+// the payload delta above maxInputRunes (+2, +100, +400) to isolate whether the
+// payload-length delta drives the cost. This remains as tech debt.
 func BenchmarkComposerBackspaceOversized(b *testing.B) {
 	sizes := []int{2, 100, 400}
 	for _, size := range sizes {
