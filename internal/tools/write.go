@@ -1,6 +1,16 @@
 // Package tools: write.go holds the only two tools that change the disk.
 // Every mutation is shadowed first, written atomically, then re-read and
 // compared by hash. A write that cannot be proven did not happen.
+//
+// Mutation request policy (NBD-010): both mutating tools validate their
+// arguments through a shared, parse-then-validate boundary BEFORE any
+// filesystem side effect (Resolve, Stat, ReadFile, MkdirAll, Capture,
+// ConsumeLinesRead). The request representation distinguishes absent, null,
+// explicit empty string, and non-empty string, so null/absent required fields
+// are rejected while explicit empty values are accepted. Wrong types, unknown
+// fields, duplicate keys, and invalid JSON are all rejected at this boundary.
+// The read-credit is consumed only after validation passes and before the
+// mutation, so a rejected request never spends it.
 package tools
 
 import (
@@ -26,6 +36,123 @@ const (
 	maxWriteBytes = 1 << 20
 	maxEditBytes  = 2 << 20
 )
+
+// --- NBD-010 strict request validation -------------------------------------
+// A mutating request must prove it is well-formed before it touches the disk.
+// The representation below distinguishes absent (nil) from present (non-nil);
+// a present string may be empty (""), which is a valid explicit value. Null
+// and absent are both nil and are rejected for required fields. Wrong JSON
+// types, unknown fields, and duplicate keys are rejected by the decoder.
+
+// mutatingRequest is the shared shape both tools decode into. Every field is
+// a pointer so absent and null both read as nil (rejected when required),
+// while an explicit "" reads as a non-nil pointer to "" (accepted).
+type mutatingRequest struct {
+	Path    *string `json:"path"`
+	Content *string `json:"content"` // write_file
+	Old     *string `json:"old"`     // edit_file
+	New     *string `json:"new"`     // edit_file
+	All     *bool   `json:"all"`     // edit_file, optional
+}
+
+// parseMutatingRequest decodes raw into a validated mutatingRequest. It
+// rejects invalid JSON, duplicate keys, unknown fields, wrong types, and
+// absent/null required fields. It performs NO filesystem access, so it is
+// safe to call before any side effect. The required string fields are the
+// ones named in required.
+func parseMutatingRequest(raw json.RawMessage, required ...string) (mutatingRequest, error) {
+	var m mutatingRequest
+	if err := decodeStrict(raw, &m); err != nil {
+		return m, err
+	}
+	for _, name := range required {
+		switch name {
+		case "path":
+			if m.Path == nil {
+				return m, errors.New("path is required")
+			}
+		case "content":
+			if m.Content == nil {
+				return m, errors.New("content is required")
+			}
+		case "old":
+			if m.Old == nil {
+				return m, errors.New("old is required")
+			}
+		case "new":
+			if m.New == nil {
+				return m, errors.New("new is required")
+			}
+		}
+	}
+	return m, nil
+}
+
+// decodeStrict decodes raw into dst while rejecting duplicate keys and unknown
+// fields. It uses a *string/*bool target so absent and null both yield nil.
+func decodeStrict(raw json.RawMessage, dst interface{}) error {
+	// Duplicate-key detection: encoding/json silently takes the last value.
+	// We decode into a map once and compare key counts; a mismatch means a
+	// key appeared more than once.
+	if err := rejectDuplicateKeys(raw); err != nil {
+		return err
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	return nil
+}
+
+// rejectDuplicateKeys reports an error if raw (a JSON object) contains any key
+// more than once. Non-object top-level values are ignored here (the typed
+// decode will reject them).
+func rejectDuplicateKeys(raw json.RawMessage) error {
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		// Not an object or invalid JSON: let the typed decoder report it.
+		return nil
+	}
+	// Count raw top-level keys by tokenizing; maps collapse duplicates.
+	if raw != nil && len(raw) > 0 && raw[0] == '{' {
+		n := 0
+		dec := json.NewDecoder(bytes.NewReader(raw))
+		tok, err := dec.Token()
+		if err == nil {
+			if d, ok := tok.(json.Delim); ok && d == '{' {
+				for dec.More() {
+					_, _ = dec.Token() // key
+					var skip json.RawMessage
+					_ = dec.Decode(&skip) // value
+					n++
+				}
+			}
+		}
+		if n > len(probe) {
+			return errors.New("duplicate key in request")
+		}
+	}
+	return nil
+}
+
+// deref returns the string value of a present pointer, or "" if absent.
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// derefBool returns the bool value of a present pointer, or false if absent.
+func derefBool(b *bool) bool {
+	if b == nil {
+		return false
+	}
+	return *b
+}
+
+// --- end NBD-010 strict request validation ---------------------------------
 
 // Edit is what the shadow recorded around one mutation, kept in order so a
 // later /undo has something to walk backwards through.
@@ -251,21 +378,22 @@ func (writeFile) Spec() provider.ToolSpec {
 }
 
 func (w writeFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
-	var a struct {
-		Path    string `json:"path"`
-		Content string `json:"content"`
-	}
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", false, fmt.Errorf("invalid args: %w", err)
-	}
-	if len(a.Content) > maxWriteBytes {
-		return "", false, fmt.Errorf("content is %d bytes, limit is %d", len(a.Content), maxWriteBytes)
-	}
-	abs, err := w.root.Resolve(a.Path)
+	m, err := parseMutatingRequest(raw, "path", "content")
 	if err != nil {
 		return "", false, err
 	}
-	before, after, err := commit(w.root, w.sh, w.log, "write_file", abs, []byte(a.Content), w.reg.ConsumeLinesRead())
+	content := deref(m.Content)
+	if len(content) > maxWriteBytes {
+		return "", false, fmt.Errorf("content is %d bytes, limit is %d", len(content), maxWriteBytes)
+	}
+	abs, err := w.root.Resolve(deref(m.Path))
+	if err != nil {
+		return "", false, err
+	}
+	// Consume read-credit only after the request passed validation, and before
+	// the mutation boundary that legitimately spends it.
+	readLines := w.reg.ConsumeLinesRead()
+	before, after, err := commit(w.root, w.sh, w.log, "write_file", abs, []byte(content), readLines)
 	if err != nil {
 		return "", false, err
 	}
@@ -273,7 +401,7 @@ func (w writeFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	if before.Absent {
 		verb = "created"
 	}
-	return fmt.Sprintf("%s %s (%d bytes, %d lines)", verb, w.root.Rel(abs), after.Size, linesIn(a.Content)), true, nil
+	return fmt.Sprintf("%s %s (%d bytes, %d lines)", verb, w.root.Rel(abs), after.Size, linesIn(content)), true, nil
 }
 
 type editFile struct {
@@ -301,19 +429,17 @@ func (editFile) Spec() provider.ToolSpec {
 }
 
 func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
-	var a struct {
-		Path string `json:"path"`
-		Old  string `json:"old"`
-		New  string `json:"new"`
-		All  bool   `json:"all"`
+	m, err := parseMutatingRequest(raw, "path", "old", "new")
+	if err != nil {
+		return "", false, err
 	}
-	if err := json.Unmarshal(raw, &a); err != nil {
-		return "", false, fmt.Errorf("invalid args: %w", err)
-	}
-	if a.Old == "" {
+	old := deref(m.Old)
+	new := deref(m.New)
+	all := derefBool(m.All)
+	if old == "" {
 		return "", false, errors.New("old text is empty; use write_file for a new file")
 	}
-	abs, err := w.root.Resolve(a.Path)
+	abs, err := w.root.Resolve(deref(m.Path))
 	if err != nil {
 		return "", false, err
 	}
@@ -331,22 +457,25 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 	if hasNUL(src) {
 		return "", false, errors.New("binary file")
 	}
-	n := strings.Count(string(src), a.Old)
+	n := strings.Count(string(src), old)
 	switch {
 	case n == 0:
 		return "", false, errors.New("old text not found in " + w.root.Rel(abs))
-	case n > 1 && !a.All:
+	case n > 1 && !all:
 		return "", false, fmt.Errorf("old text occurs %d times; widen the snippet to make it unique or pass all=true", n)
 	}
 	reps := n
 	var out string
-	if a.All {
-		out = strings.ReplaceAll(string(src), a.Old, a.New)
+	if all {
+		out = strings.ReplaceAll(string(src), old, new)
 	} else {
-		out = strings.Replace(string(src), a.Old, a.New, 1)
+		out = strings.Replace(string(src), old, new, 1)
 		reps = 1
 	}
-	if _, _, err := commit(w.root, w.sh, w.log, "edit_file", abs, []byte(out), w.reg.ConsumeLinesRead()); err != nil {
+	// Consume read-credit only after the request passed validation, and before
+	// the mutation boundary that legitimately spends it.
+	readLines := w.reg.ConsumeLinesRead()
+	if _, _, err := commit(w.root, w.sh, w.log, "edit_file", abs, []byte(out), readLines); err != nil {
 		return "", false, err
 	}
 	return fmt.Sprintf("edited %s (%d replacements, %d lines → %d)",
