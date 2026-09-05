@@ -97,7 +97,8 @@ type Feed struct {
 
 	// prog is the live Bubble Tea program (wired by the CLI) used to
 	// deliver event batches from the batcher goroutine.
-	prog *tea.Program
+	prog             *tea.Program
+	testSyncDispatch bool
 }
 
 // FeedCallbacks holds the hooks the feed uses to talk back to the loop.
@@ -284,6 +285,9 @@ func (m *Feed) SendBatch(events []agent.Event) {
 	if m.prog != nil {
 		m.prog.Send(agentEventBatchMsg{Events: events})
 		return
+	}
+	if !m.testSyncDispatch {
+		panic("SendBatch called without a running program (m.prog == nil) outside of tests")
 	}
 	// Test path: no live program; apply directly. Tests call SendBatch from
 	// the test goroutine only, so this is safe.
