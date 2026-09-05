@@ -25,7 +25,9 @@ func TestPTYLongOutputKeepsComposerVisible(t *testing.T) {
 		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
 	})
 
-	err := sess.WaitForText("Feed line 10", 3*time.Second)
+	// Follow mode anchors to the newest lines (bottom), so the latest output lines
+	// are visible on screen, while line 10 is scrolled above the viewport.
+	err := sess.WaitForText("Feed line 60", 3*time.Second)
 	if err != nil {
 		t.Fatalf("long output failed to appear: %v", err)
 	}
@@ -50,7 +52,8 @@ func TestPTYTypingAfterFeedFillAppearsInComposer(t *testing.T) {
 		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
 	})
 
-	err := sess.WaitForText("Feed line 10", 3*time.Second)
+	// Follow mode anchors to the newest lines (bottom), so line 40 is visible.
+	err := sess.WaitForText("Feed line 40", 3*time.Second)
 	if err != nil {
 		t.Fatalf("feed filling text did not appear: %v", err)
 	}
@@ -470,7 +473,8 @@ func TestPTYResizeFilledFeedKeepsBottomChrome(t *testing.T) {
 		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
 	})
 
-	err := sess.WaitForText("Feed line 10", 3*time.Second)
+	// Follow mode anchors to the newest lines (bottom), so line 50 is visible.
+	err := sess.WaitForText("Feed line 50", 3*time.Second)
 	if err != nil {
 		t.Fatalf("feed output did not appear: %v", err)
 	}

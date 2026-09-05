@@ -264,8 +264,12 @@ func (m *Feed) View() string {
 		emitted := 0
 		if len(m.lines) > 0 {
 			start := m.scrollTop
-			if start >= len(m.lines) {
-				start = max(0, len(m.lines)-lm.ViewportRows)
+			bs := m.bottomStart(lm.ViewportRows)
+			if start > bs {
+				start = bs
+			}
+			if start < 0 {
+				start = 0
 			}
 			end := min(start+lm.ViewportRows, len(m.lines))
 			for i := start; i < end; i++ {

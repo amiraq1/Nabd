@@ -247,8 +247,10 @@ func TestFeedFollowMode(t *testing.T) {
 	if !f.follow {
 		t.Error("follow mode should remain active when appending at bottom")
 	}
-	if f.scrollTop != 0 {
-		t.Errorf("scrollTop = %d, want 0 (at bottom)", f.scrollTop)
+	lm := f.computeLayout()
+	want := f.bottomStart(lm.ViewportRows)
+	if f.scrollTop != want {
+		t.Errorf("scrollTop = %d, want %d (at bottom)", f.scrollTop, want)
 	}
 }
 

@@ -377,18 +377,51 @@ func mergeNotices(items, notices []presentation.FeedItem) []presentation.FeedIte
 }
 
 // refresh rebuilds the visible lines from the projector plus UI notices.
+// bottomStart returns the canonical index of the first visible line when
+// the viewport is anchored at the bottom (newest rendered line).
+func (m *Feed) bottomStart(vh int) int {
+	if vh <= 0 || len(m.lines) <= vh {
+		return 0
+	}
+	return len(m.lines) - vh
+}
+
+// clampScroll enforces canonical bounds: 0 <= scrollTop <= bottomStart.
+// If follow is active, it re-anchors scrollTop to bottomStart and clears unseen.
+func (m *Feed) clampScroll() {
+	lm := m.computeLayout()
+	bs := m.bottomStart(lm.ViewportRows)
+	if m.follow && !m.modalVisible && !m.decisionPending {
+		m.scrollTop = bs
+		m.unseen = 0
+		return
+	}
+	if m.scrollTop < 0 {
+		m.scrollTop = 0
+	}
+	if m.scrollTop > bs {
+		m.scrollTop = bs
+	}
+}
+
+// refresh rebuilds the visible lines from the projector plus UI notices.
 func (m *Feed) refresh() {
 	items := mergeNotices(m.proj.Items(), m.notices)
+	// DOCUMENTED DECISION: Vertical trimming at maxVisibleFeedItems shifts the
+	// anchor under from-top index convention when buffer exceeds the cap.
 	if len(items) > maxVisibleFeedItems {
 		items = items[len(items)-maxVisibleFeedItems:]
 	}
 	m.lines = renderItems(items, m.width)
+	m.clampScroll()
 }
 
-// scrollToEnd moves the viewport to show the latest items.
+// scrollToEnd moves the viewport to show the latest items and re-arms follow.
 func (m *Feed) scrollToEnd() {
-	m.scrollTop = 0
+	m.follow = true
 	m.unseen = 0
+	lm := m.computeLayout()
+	m.scrollTop = m.bottomStart(lm.ViewportRows)
 }
 
 // onResize recomputes the layout: composer first, then the viewport. Focus
@@ -405,6 +438,7 @@ func (m *Feed) onResize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.composer.resize(m.width, maxComposerHeight)
 	m.syncSlashMenu()
 	m.refresh()
+	m.clampScroll()
 	return m, nil
 }
 
@@ -935,37 +969,38 @@ func (m *Feed) syncSlashMenu() {
 func (m *Feed) viewportKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	lm := m.computeLayout()
 	vh := lm.ViewportRows
+	bs := m.bottomStart(vh)
 	switch k.Type {
 	case tea.KeyPgUp:
 		m.follow = false
-		m.scrollTop = min(m.scrollTop+vh, max(0, len(m.lines)-vh))
+		m.scrollTop = max(0, m.scrollTop-vh)
 		return m, nil
 	case tea.KeyPgDown:
-		m.scrollTop = max(m.scrollTop-vh, 0)
-		if m.scrollTop == 0 {
+		m.scrollTop = min(bs, m.scrollTop+vh)
+		if m.scrollTop == bs {
 			m.follow = true
 			m.unseen = 0
 		}
 		return m, nil
 	case tea.KeyUp:
 		m.follow = false
-		m.scrollTop = min(m.scrollTop+1, max(0, len(m.lines)-vh))
+		m.scrollTop = max(0, m.scrollTop-1)
 		return m, nil
 	case tea.KeyDown:
-		m.scrollTop = max(m.scrollTop-1, 0)
-		if m.scrollTop == 0 {
+		m.scrollTop = min(bs, m.scrollTop+1)
+		if m.scrollTop == bs {
 			m.follow = true
 			m.unseen = 0
 		}
 		return m, nil
 	case tea.KeyHome:
 		m.follow = false
-		m.scrollTop = max(0, len(m.lines)-vh)
+		m.scrollTop = 0
 		return m, nil
 	case tea.KeyEnd:
 		m.follow = true
 		m.unseen = 0
-		m.scrollTop = 0
+		m.scrollTop = bs
 		return m, nil
 	default:
 		return m, nil
