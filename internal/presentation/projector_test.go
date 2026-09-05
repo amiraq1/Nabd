@@ -494,3 +494,149 @@ func TestSliceReallocationPermReply(t *testing.T) {
 		t.Fatalf("expected PermAllow, got %v", perm.Perm.Status)
 	}
 }
+
+// TestItemsDeepCopyToolAndPerm verifies that mutating ToolCard or PermCard
+// returned by Items() does not mutate the projector's internal state.
+func TestItemsDeepCopyToolAndPerm(t *testing.T) {
+	p := presentation.NewProjector()
+	_ = p.Apply(agent.Event{
+		Seq:  1,
+		Type: agent.ToolStart,
+		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+	})
+	_ = p.Apply(agent.Event{
+		Seq:  2,
+		Type: agent.PermAsk,
+		Call: &agent.ToolCall{ID: "c2", Name: "bash"},
+	})
+	items := p.Items()
+	for i := range items {
+		if items[i].Tool != nil {
+			items[i].Tool.Status = presentation.ToolFailed
+		}
+		if items[i].Perm != nil {
+			items[i].Perm.Status = presentation.PermDeny
+		}
+	}
+	fresh := p.Items()
+	for _, it := range fresh {
+		if it.Tool != nil && it.Tool.Status == presentation.ToolFailed {
+			t.Errorf("ToolCard mutation leaked into projector internal state")
+		}
+		if it.Perm != nil && it.Perm.Status == presentation.PermDeny {
+			t.Errorf("PermCard mutation leaked into projector internal state")
+		}
+	}
+}
+
+// TestSortBySeqStableOrder verifies that items with identical Seq preserve their
+// insertion order rather than being sorted by arbitrary ID.
+func TestSortBySeqStableOrder(t *testing.T) {
+	p := presentation.NewProjector()
+	// Insert item with "z_id" first, then "a_id", with same Seq
+	_ = p.Apply(agent.Event{Seq: 10, Type: agent.Notice, Text: "first_inserted"})
+	_ = p.Apply(agent.Event{Seq: 10, Type: agent.Notice, Text: "second_inserted"})
+
+	items := p.Items()
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[0].Text != "first_inserted" || items[1].Text != "second_inserted" {
+		t.Fatalf("stable order violated: items[0]=%q, items[1]=%q", items[0].Text, items[1].Text)
+	}
+}
+
+// TestIsTruncatedRealMarker verifies that the real store marker is detected.
+func TestIsTruncatedRealMarker(t *testing.T) {
+	p := presentation.NewProjector()
+	output := "some output\n...[truncated 100 bytes]"
+	_ = p.Apply(agent.Event{
+		Seq:  1,
+		Type: agent.ToolStart,
+		Call: &agent.ToolCall{ID: "c_trunc", Name: "bash"},
+	})
+	_ = p.Apply(agent.Event{
+		Seq:  2,
+		Type: agent.ToolEnd,
+		Call: &agent.ToolCall{ID: "c_trunc", Name: "bash", Output: output, OK: true},
+	})
+	items := p.Items()
+	var tool *presentation.FeedItem
+	for i := range items {
+		if items[i].Type == presentation.ItemTool && items[i].ID == "tool_c_trunc" {
+			tool = &items[i]
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatal("tool not found")
+	}
+	if !tool.Tool.Truncated {
+		t.Errorf("expected tool.Truncated to be true for real store marker %q", output)
+	}
+}
+
+// TestCallErrMeaningfulMessage verifies that tool failure populates Tool.Err with a meaningful message.
+func TestCallErrMeaningfulMessage(t *testing.T) {
+	p := presentation.NewProjector()
+	_ = p.Apply(agent.Event{
+		Seq:  1,
+		Type: agent.ToolStart,
+		Call: &agent.ToolCall{ID: "c_err", Name: "bash"},
+	})
+	_ = p.Apply(agent.Event{
+		Seq:  2,
+		Type: agent.ToolEnd,
+		Call: &agent.ToolCall{ID: "c_err", Name: "bash", Output: "command not found: abc\nexit status 127", OK: false, Exit: 127},
+	})
+	items := p.Items()
+	var tool *presentation.FeedItem
+	for i := range items {
+		if items[i].Type == presentation.ItemTool && items[i].ID == "tool_c_err" {
+			tool = &items[i]
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatal("tool not found")
+	}
+	if tool.Tool.Err != "command not found: abc" {
+		t.Errorf("tool.Err = %q, want 'command not found: abc'", tool.Tool.Err)
+	}
+}
+
+// TestEventProviderRouteDeferredToU2 verifies that router decision events
+// are ignored by the presentation projector without creating items or incrementing unhandled events.
+func TestEventProviderRouteDeferredToU2(t *testing.T) {
+	p := presentation.NewProjector()
+	err := p.Apply(agent.Event{
+		Seq:  1,
+		Type: agent.EventProviderRoute,
+		Text: "router selected provider",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(p.Items()) != 0 {
+		t.Errorf("expected 0 items, got %d", len(p.Items()))
+	}
+	if p.UnhandledEventTypes != nil && p.UnhandledEventTypes[agent.EventProviderRoute] > 0 {
+		t.Errorf("EventProviderRoute should not be counted as unhandled")
+	}
+}
+
+// TestUnhandledEventTypesCounter verifies that unknown event types are tracked in UnhandledEventTypes.
+func TestUnhandledEventTypesCounter(t *testing.T) {
+	p := presentation.NewProjector()
+	unk := agent.EventType("future_unknown_event")
+	err := p.Apply(agent.Event{
+		Seq:  1,
+		Type: unk,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if p.UnhandledEventTypes == nil || p.UnhandledEventTypes[unk] != 1 {
+		t.Errorf("expected UnhandledEventTypes[%q] == 1, got %v", unk, p.UnhandledEventTypes)
+	}
+}

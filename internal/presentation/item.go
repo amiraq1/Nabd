@@ -95,34 +95,15 @@ func (it FeedItem) key() string {
 	return fmt.Sprintf("%s:%s", it.Type, it.ID)
 }
 
-// sortableItems is a private type used only for deterministic ordering.
-type sortableItems struct {
-	items []FeedItem
-	seqs  map[string]int
-}
-
-func (s sortableItems) Len() int      { return len(s.items) }
-func (s sortableItems) Swap(i, j int) { s.items[i], s.items[j] = s.items[j], s.items[i] }
-func (s sortableItems) Less(i, j int) bool {
-	// Preserve source event order when we have seq info.
-	si, sok := s.seqs[s.items[i].key()]
-	sj, sokj := s.seqs[s.items[j].key()]
-	if sok && sokj && si != sj {
-		return si < sj
-	}
-	return s.items[i].ID < s.items[j].ID
-}
-
 // sortBySeq orders items using their Seq field, preserving the original
-// event order. Items without Seq (0) keep their relative positions.
+// event order. Items without Seq (0) or with identical Seq keep their relative positions.
 func sortBySeq(items []FeedItem) {
-	seqs := map[string]int{}
-	for _, it := range items {
-		if it.Seq != 0 {
-			seqs[it.key()] = it.Seq
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Seq != 0 && items[j].Seq != 0 && items[i].Seq != items[j].Seq {
+			return items[i].Seq < items[j].Seq
 		}
-	}
-	sort.Sort(sortableItems{items: items, seqs: seqs})
+		return false
+	})
 }
 
 // argSummary produces a one-line human-readable summary of a tool call's

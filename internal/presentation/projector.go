@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"strconv"
+	"strings"
 
 	"nabd/internal/agent"
 )
@@ -14,13 +15,17 @@ type Projector struct {
 	// Internal indices for incremental assembly.
 	byID         map[string]int // key -> index in items
 	assistantIdx int            // index in items of current assistant message (-1 if none)
+
+	// UnhandledEventTypes tracks counts of unexpected event types encountered by Apply.
+	UnhandledEventTypes map[agent.EventType]int
 }
 
 // NewProjector creates an empty projector.
 func NewProjector() *Projector {
 	return &Projector{
-		byID:         map[string]int{},
-		assistantIdx: -1,
+		byID:                map[string]int{},
+		assistantIdx:        -1,
+		UnhandledEventTypes: map[agent.EventType]int{},
 	}
 }
 
@@ -78,17 +83,37 @@ func (p *Projector) Apply(e agent.Event) error {
 		// the conversation feed. They live in the journal, not on the screen.
 		return nil
 
+	case agent.EventProviderRoute:
+		// Router decision events: UI presentation is deferred to Phase U2 per scope boundaries.
+		return nil
+
 	default:
-		// Unknown type: skip rather than risk sending garbage to the model.
+		// Unknown event type: record in observable counter and skip.
+		if p.UnhandledEventTypes == nil {
+			p.UnhandledEventTypes = map[agent.EventType]int{}
+		}
+		p.UnhandledEventTypes[e.Type]++
 		return nil
 	}
 }
 
-// Items returns the current feed. The returned slice is a copy so callers
-// cannot mutate projector state. Order is stable and deterministic.
+// Items returns the current feed. The returned slice is a deep copy of tool
+// and permission cards so callers cannot mutate internal projector state.
+// Order is stable and deterministic.
 func (p *Projector) Items() []FeedItem {
 	out := make([]FeedItem, len(p.items))
-	copy(out, p.items)
+	for i := range p.items {
+		it := p.items[i]
+		if it.Tool != nil {
+			card := *it.Tool
+			it.Tool = &card
+		}
+		if it.Perm != nil {
+			perm := *it.Perm
+			it.Perm = &perm
+		}
+		out[i] = it
+	}
 	sortBySeq(out)
 	return out
 }
@@ -98,6 +123,7 @@ func (p *Projector) reset() {
 	p.items = nil
 	p.byID = map[string]int{}
 	p.assistantIdx = -1
+	p.UnhandledEventTypes = map[agent.EventType]int{}
 }
 
 // appendRunBoundary adds a run start/end marker.
@@ -331,13 +357,21 @@ func callErr(output string, ok bool) string {
 	if ok {
 		return ""
 	}
-	if output == "" {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
 		return "failed"
 	}
-	return "" // detailed output already in .Output
+	lines := strings.Split(trimmed, "\n")
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" {
+			return l
+		}
+	}
+	return "failed"
 }
 
 // isTruncated detects the truncation marker ForStore appends.
 func isTruncated(s string) bool {
-	return len(s) > 12 && s[len(s)-12:] == "truncated %d bytes]" // rough heuristic
+	return strings.HasSuffix(s, " bytes]") && strings.Contains(s, "...[truncated ")
 }
