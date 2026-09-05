@@ -66,6 +66,36 @@ var (
 	maxEventBytes = 1 << 22
 )
 
+// --- NBD-011 event-size estimation constants ---------------------------------
+//
+// boundEditEvent estimates the serialized size of the edit event that the
+// journal will write, so it can decide whether to drop the Patch before the
+// full encode. The estimate uses two conservative allowances:
+//
+// jsonEscapeWorstCaseFactor: every byte of the Patch may become \u0000 (6
+// bytes) in JSON. This is the absolute worst case; typical text patches
+// escape far less (control chars, " and \ double, newlines become \n).
+// Using 6x guarantees we never UNDER-estimate and keep a patch that would
+// push the event over budget.
+//
+// eventEnvelopeAllowance: the journal (agent.Loop.emitAt) adds Seq, Parent,
+// and Time to the Event before serializing — fields absent from the bare
+// agent.Event{Type, Edit: rec} that boundEditEvent marshals for the baseline.
+// Worst-case JSON contributions:
+//   - "seq":NNNNNNNN (8 digits int64): ~13 bytes
+//   - "parent":NNNNNNNN: ~17 bytes
+//   - "t":"2006-01-02T15:04:05.999999999Z07:00" (RFC3339Nano): ~35 bytes
+//
+// Total worst case: ~65 bytes. Rounded up to 128 for margin.
+//
+// The actual journal encodes once (store.JSONL.Append → json.Marshal(e));
+// boundEditEvent's own marshal of the bare record is cheap (bounded audit
+// fields), so no 4 MB encode runs on the phone per edit.
+const (
+	jsonEscapeWorstCaseFactor = 6
+	eventEnvelopeAllowance    = 128
+)
+
 // --- NBD-010 strict request validation -------------------------------------
 // A mutating request must prove it is well-formed before it touches the disk.
 // The representation below distinguishes absent (nil) from present (non-nil);
@@ -276,7 +306,10 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, tool
 	}
 	// The diff (LCS matrix allocation) runs here — BEFORE WriteAtomic. If it
 	// aborts (budget exceeded, ctx cancelled), the project file is untouched.
-	rec := buildRecord(ctx, sh, before, after, data, readLines)
+	rec, rerr := buildRecord(ctx, sh, before, after, data, readLines)
+	if rerr != nil {
+		return before, after, rerr
+	}
 	if err := snap.WriteAtomic(abs, data, mode); err != nil {
 		return before, after, err
 	}
@@ -303,7 +336,9 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, tool
 // always returned with its hashes and blobs intact; on diff failure Patch is
 // empty. The record is then passed through boundEditEvent so the serialized
 // event stays within the configured budget (dropping only Patch if needed).
-func buildRecord(ctx context.Context, sh *snap.Shadow, before, after snap.State, data []byte, readLines int) *agent.EditRecord {
+// If the event still exceeds the budget after dropping Patch, an error is
+// returned so commit() can abort before WriteAtomic.
+func buildRecord(ctx context.Context, sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*agent.EditRecord, error) {
 	rec := &agent.EditRecord{
 		Path:       after.Rel,
 		HashAfter:  sha256hex(data),
@@ -330,23 +365,52 @@ func buildRecord(ctx context.Context, sh *snap.Shadow, before, after snap.State,
 }
 
 // boundEditEvent enforces the event-size budget (NBD-011) on the serialized
-// edit event. The Patch is the only unbounded field: if marshaling the event
-// would exceed maxEventBytes, the Patch is dropped so the audit fields
-// (hashes, blobs) survive within budget. Sizing uses the actual encoded JSON
-// bytes, which accounts for escaping.
-func boundEditEvent(rec *agent.EditRecord) *agent.EditRecord {
+// edit event. The Patch is the only unbounded field: if the event would exceed
+// maxEventBytes, the Patch is dropped so the audit fields (hashes, blobs)
+// survive within budget.
+//
+// The measurement accounts for the journal envelope: emitAt (in the agent
+// loop) adds Seq, Parent, and Time to the Event before serializing, fields
+// absent from the bare agent.Event{Type, Edit: rec} that this function
+// marshals. The eventEnvelopeAllowance constant covers those fields. The
+// Patch contribution is estimated with jsonEscapeWorstCaseFactor (6x, the
+// worst case for \uXXXX encoding) rather than fully serialized, so the phone
+// never encodes up to 4 MB of patch text just to make a decision. The actual
+// journal encodes once (store.JSONL.Append).
+//
+// After dropping Patch, the size is re-checked: if the bare record still
+// exceeds the budget, an error is returned so commit() can abort before
+// WriteAtomic instead of writing an oversized event.
+func boundEditEvent(rec *agent.EditRecord) (*agent.EditRecord, error) {
 	if maxEventBytes <= 0 {
-		return rec
+		return rec, nil
 	}
-	b, err := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: rec})
+	// Baseline: marshal the audit fields without the patch. This is cheap —
+	// the audit fields are bounded (two 64-char hashes, two blob IDs, path,
+	// read_lines, mode_before) — to get the exact encoded size of the
+	// non-patch portion.
+	bare := *rec
+	bare.Patch = ""
+	baseline, err := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: &bare})
 	if err != nil {
-		return rec
+		return rec, nil
 	}
-	if len(b) <= maxEventBytes {
-		return rec
+	// Estimate the full event: baseline + worst-case patch escaping + envelope.
+	patchEstimate := len(rec.Patch) * jsonEscapeWorstCaseFactor
+	if len(baseline)+patchEstimate+eventEnvelopeAllowance <= maxEventBytes {
+		return rec, nil
 	}
+	// The patch (with escaping + envelope) would exceed the budget. Drop it.
 	rec.Patch = ""
-	return rec
+	// Re-check after dropping: if the bare record + envelope still exceeds
+	// the budget, return an error rather than writing an oversized event.
+	if len(baseline)+eventEnvelopeAllowance > maxEventBytes {
+		return rec, fmt.Errorf(
+			"edit event exceeds %d bytes even without patch "+
+				"(bare=%d + envelope_allowance=%d)",
+			maxEventBytes, len(baseline), eventEnvelopeAllowance)
+	}
+	return rec, nil
 }
 
 func sha256hex(b []byte) string {

@@ -240,8 +240,10 @@ func TestEventSizeBounded(t *testing.T) {
 	if len(fullBytes) <= len(bareBytes) {
 		t.Fatalf("patch added no size; cannot exercise bounding (bare=%d full=%d)", len(bareBytes), len(fullBytes))
 	}
-	// Budget fits the bare record but not the full one.
-	setDiffBounds(t, 1<<20, 100000, 1<<30, 1<<20, len(bareBytes))
+	// Budget fits the bare record (plus envelope allowance) but not the full
+	// one. The envelope allowance accounts for the journal's Seq/Parent/Time
+	// fields that boundEditEvent does not measure directly.
+	setDiffBounds(t, 1<<20, 100000, 1<<30, 1<<20, len(bareBytes)+eventEnvelopeAllowance)
 
 	// Repeat the write under the tight budget; the record must be bounded.
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
@@ -268,6 +270,76 @@ func TestEventSizeBounded(t *testing.T) {
 	}
 	if len(b) > maxEventBytes {
 		t.Fatalf("event exceeds budget: serialized %d bytes, budget %d", len(b), maxEventBytes)
+	}
+}
+
+// TestEventSizeUnderBudgetKeepsPatch verifies NBD-011 Task 3: when the budget
+// is large enough to hold the full event (patch included) after the envelope
+// allowance and worst-case escaping estimate, the Patch is NOT dropped.
+// This exercises the "just under budget" boundary with the new estimation
+// logic. If the estimate over-drops, this test catches it.
+func TestEventSizeUnderBudgetKeepsPatch(t *testing.T) {
+	r, dir := newReg(t)
+	ctx := context.Background()
+
+	path := filepath.Join(dir, "under.txt")
+	content := "one\ntwo\nthree\nfour\nfive\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"path":    "under.txt",
+		"content": "uno\ndos\ntres\n",
+	})
+
+	// First write at default budget to get the record and patch.
+	if _, ok, err := r.Run(ctx, providerToolCall("write_file", raw)); err != nil || !ok {
+		t.Fatalf("write_file failed: ok=%v err=%v", ok, err)
+	}
+	full := r.LastEdit()
+	if full == nil || full.Patch == "" {
+		t.Fatal("expected non-empty patch from first write")
+	}
+
+	// Budget set to exactly accommodate the estimation:
+	// baseline + 6*len(patch) + envelope + 1 (one byte of headroom).
+	bare := *full
+	bare.Patch = ""
+	bareBytes, err := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: &bare})
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := len(bareBytes) + len(full.Patch)*jsonEscapeWorstCaseFactor + eventEnvelopeAllowance + 1
+	setDiffBounds(t, 1<<20, 100000, 1<<30, 1<<20, budget)
+
+	// Reset and rewrite the same change.
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, ok, err := r.Run(ctx, providerToolCall("write_file", raw))
+	if err != nil || !ok {
+		t.Fatalf("write_file under generous budget failed: ok=%v err=%v", ok, err)
+	}
+
+	rec := r.LastEdit()
+	if rec == nil {
+		t.Fatal("no EditRecord persisted")
+	}
+	// Patch must survive — the budget accommodated the estimate.
+	if rec.Patch == "" {
+		t.Fatal("patch should survive under generous budget, got empty patch")
+	}
+	// Audit fields must survive.
+	if rec.HashBefore == "" || rec.HashAfter == "" {
+		t.Errorf("audit hashes lost: before=%q after=%q", rec.HashBefore, rec.HashAfter)
+	}
+	if rec.BlobBefore == "" || rec.BlobAfter == "" {
+		t.Errorf("recovery blobs lost: before=%q after=%q", rec.BlobBefore, rec.BlobAfter)
+	}
+	// The serialized event (bare + envelope allowance) must not exceed budget.
+	b, _ := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: rec})
+	if len(b)+eventEnvelopeAllowance > budget {
+		t.Errorf("event+%d envelope = %d bytes exceeds budget %d", eventEnvelopeAllowance, len(b)+eventEnvelopeAllowance, budget)
 	}
 }
 
@@ -382,5 +454,44 @@ func BenchmarkUnifiedDiff(b *testing.B) {
 				_, _ = unifiedDiff(ctx, bb, ba, "bench.txt")
 			}
 		})
+	}
+}
+
+// TestEventSizeExceedsBudgetAfterPatchDrop verifies NBD-011 Task 3: when the
+// event budget is so small that even the bare record (audit fields without
+// Patch) exceeds it — after accounting for the journal envelope allowance —
+// boundEditEvent must return an explicit error instead of writing an oversized
+// event. The current code (which does not account for the envelope and never
+// returns an error) passes this through silently.
+//
+// RED proof: before the fix, write_file returns ok=true err=<nil> even with
+// maxEventBytes=10 (the bare record alone is ~200+ bytes).
+func TestEventSizeExceedsBudgetAfterPatchDrop(t *testing.T) {
+	r, dir := newReg(t)
+	ctx := context.Background()
+
+	path := filepath.Join(dir, "tiny.txt")
+	seed := []byte("original\n")
+	if err := os.WriteFile(path, seed, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"path":    "tiny.txt",
+		"content": "changed\n",
+	})
+
+	// Budget far below the bare-record size. Even without a Patch, the audit
+	// fields + envelope exceed this.
+	setDiffBounds(t, 1<<20, 100000, 1<<30, 1<<20, 10)
+
+	_, ok, err := r.Run(ctx, providerToolCall("write_file", raw))
+	if ok || err == nil {
+		t.Fatalf("expected error when bare record exceeds event budget, got ok=%v err=%v", ok, err)
+	}
+	// The file must not have been written — commit() returns before WriteAtomic
+	// when buildRecord fails.
+	b, _ := os.ReadFile(path)
+	if string(b) != "original\n" {
+		t.Errorf("file modified despite rejection: got %q, want %q", string(b), "original\n")
 	}
 }
