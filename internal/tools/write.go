@@ -87,10 +87,42 @@ type mutatingRequest struct {
 // absent/null required fields. It performs NO filesystem access, so it is
 // safe to call before any side effect. The required string fields are the
 // ones named in required.
-func parseMutatingRequest(raw json.RawMessage, required ...string) (mutatingRequest, error) {
+//
+// allowed is the per-tool field set: only those JSON keys may be present.
+// Because mutatingRequest is the shared struct (the union of both tools'
+// schemas), DisallowUnknownFields alone cannot reject a field that is a
+// member of the struct but belongs to the OTHER tool — e.g. write_file
+// carrying "old"/"new"/"all", or edit_file carrying "content". The allowed
+// set enforces the per-tool boundary: any non-nil field outside it is
+// rejected as an unknown field.
+func parseMutatingRequest(raw json.RawMessage, allowed []string, required ...string) (mutatingRequest, error) {
 	var m mutatingRequest
 	if err := decodeStrict(raw, &m); err != nil {
 		return m, err
+	}
+	perm := make(map[string]struct{}, len(allowed))
+	for _, f := range allowed {
+		perm[f] = struct{}{}
+	}
+	if m.Content != nil {
+		if _, ok := perm["content"]; !ok {
+			return m, errors.New("unknown field: content")
+		}
+	}
+	if m.Old != nil {
+		if _, ok := perm["old"]; !ok {
+			return m, errors.New("unknown field: old")
+		}
+	}
+	if m.New != nil {
+		if _, ok := perm["new"]; !ok {
+			return m, errors.New("unknown field: new")
+		}
+	}
+	if m.All != nil {
+		if _, ok := perm["all"]; !ok {
+			return m, errors.New("unknown field: all")
+		}
 	}
 	for _, name := range required {
 		switch name {
@@ -531,7 +563,7 @@ func (writeFile) Spec() provider.ToolSpec {
 }
 
 func (w writeFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
-	m, err := parseMutatingRequest(raw, "path", "content")
+	m, err := parseMutatingRequest(raw, []string{"path", "content"}, "path", "content")
 	if err != nil {
 		return "", false, err
 	}
@@ -582,7 +614,7 @@ func (editFile) Spec() provider.ToolSpec {
 }
 
 func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
-	m, err := parseMutatingRequest(raw, "path", "old", "new")
+	m, err := parseMutatingRequest(raw, []string{"path", "old", "new", "all"}, "path", "old", "new")
 	if err != nil {
 		return "", false, err
 	}

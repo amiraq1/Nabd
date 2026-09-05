@@ -265,3 +265,66 @@ func runEditOK(r *Registry, ctx context.Context, raw json.RawMessage) (bool, err
 	_, ok, err := r.Run(ctx, providerToolCall("edit_file", raw))
 	return ok, err
 }
+
+// TestWriteValidationRejectsCrossToolFields verifies NBD-010: a mutating
+// request carrying a field that belongs to the OTHER tool (write_file carrying
+// old/new/all; edit_file carrying content) is rejected at the validation
+// boundary, not silently ignored. DisallowUnknownFields only catches fields
+// outside the shared struct; cross-tool fields ARE in the struct, so they
+// must be rejected per-tool. Every rejection must occur BEFORE any filesystem
+// side effect: file SHA256 unchanged, mode unchanged, no directory created,
+// read-credit NOT consumed.
+func TestWriteValidationRejectsCrossToolFields(t *testing.T) {
+	ctx := context.Background()
+	seedContent := []byte("original content\nline two\n")
+
+	type tc struct {
+		tool string
+		raw  string
+	}
+	cases := []tc{
+		// write_file must not accept fields that belong to edit_file.
+		{"write_file", `{"path":"target.txt","content":"x","old":"original"}`},
+		{"write_file", `{"path":"target.txt","content":"x","new":"replacement"}`},
+		{"write_file", `{"path":"target.txt","content":"x","all":true}`},
+		// edit_file must not accept fields that belong to write_file.
+		{"edit_file", `{"path":"target.txt","old":"original","new":"x","content":"extra"}`},
+		// Genuinely unknown key is already rejected by DisallowUnknownFields,
+		// but include it for completeness on both tools.
+		{"write_file", `{"path":"target.txt","content":"x","bogus":1}`},
+		{"edit_file", `{"path":"target.txt","old":"x","new":"y","bogus":1}`},
+	}
+
+	for _, c := range cases {
+		t.Run(c.tool+"_"+string(c.raw[0]), func(t *testing.T) {
+			r, dir := newReg(t)
+			target := filepath.Join(dir, "target.txt")
+			if err := os.WriteFile(target, seedContent, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			const stagedCredit = 7
+			r.SetLinesRead(stagedCredit)
+
+			beforeHash := fileSHA256(t, target)
+			beforeMode := fileMode(t, target)
+
+			var raw json.RawMessage = json.RawMessage(c.raw)
+			_, ok, err := r.Run(ctx, providerToolCall(c.tool, raw))
+			if ok || err == nil {
+				t.Fatalf("%s: expected rejection (ok=false, err!=nil), got ok=%v err=%v", c.tool, ok, err)
+			}
+			// Invariant 1: file SHA256 unchanged.
+			if got := fileSHA256(t, target); got != beforeHash {
+				t.Errorf("file SHA256 changed: before=%s after=%s", beforeHash, got)
+			}
+			// Invariant 2: file mode unchanged.
+			if got := fileMode(t, target); got != beforeMode {
+				t.Errorf("file mode changed: before=%04o after=%04o", beforeMode, got)
+			}
+			// Invariant 3: read-credit not consumed.
+			if got := r.ConsumeLinesRead(); got != stagedCredit {
+				t.Errorf("read-credit consumed: got %d, want %d", got, stagedCredit)
+			}
+		})
+	}
+}
