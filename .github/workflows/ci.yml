@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ "master", "main", "feature/**" ]
+    branches: [ "master", "main", "feature/**", "fix/**" ]
   pull_request:
     branches: [ "master", "main" ]
 
@@ -52,6 +52,9 @@ jobs:
 
     - name: Agent intensive race test
       run: go test ./internal/agent/... -run 'Router|Replay|Messages|ToolCall' -race -count=50
+
+    - name: UI and Presentation intensive race test
+      run: go test ./internal/ui/... ./internal/presentation/... -race -count=50
 
     - name: Exec.Cmd.Env static audit
       run: bash scripts/check-exec-env.sh
