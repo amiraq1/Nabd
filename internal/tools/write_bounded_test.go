@@ -377,6 +377,53 @@ func TestPatchHeaderValidity(t *testing.T) {
 	}
 }
 
+// TestPatchTrailingContextAfterChange is a regression test for the trailing-context
+// bug in unifiedDiff: when a hunk has more than ctxSize (3) unchanged lines after
+// the last edit, the old code kept the LAST ctxSize lines and dropped the first one
+// (the line closest to the change). That produced a patch whose hunk header range
+// did not cover the dropped context line, so git apply --check rejected it.
+//
+// The trigger is >=4 trailing context lines after an edit. Existing tests had at most
+// one trailing context line (keep3), so the buggy branch never executed.
+func TestPatchTrailingContextAfterChange(t *testing.T) {
+	if err := runGitApplyCheck(t); err != nil {
+		t.Skipf("git apply not usable in this environment: %v", err)
+	}
+
+	r, dir := newReg(t)
+	ctx := context.Background()
+
+	path := filepath.Join(dir, "trail.txt")
+	// One edit (C→NEW) followed by 7 unchanged lines. The trailing context exceeds
+	// ctxSize (3), which exercises the buggy branch: when pending reaches length 4,
+	// the old code kept pending[1:4] and dropped pending[0] (the line closest to the
+	// change). The fix keeps pending[:3] instead.
+	before := "A\nB\nC\nD\nE\nF\nG\nH\nI\nJ\n"
+	after := "A\nB\nNEW\nD\nE\nF\nG\nH\nI\nJ\n"
+	if err := os.WriteFile(path, []byte(before), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(map[string]any{"path": "trail.txt", "content": after})
+	if _, ok, err := r.Run(ctx, providerToolCall("write_file", raw)); err != nil || !ok {
+		t.Fatalf("write_file failed: ok=%v err=%v", ok, err)
+	}
+	rec := r.LastEdit()
+	if rec == nil || rec.Patch == "" {
+		t.Fatal("no patch produced")
+	}
+	if err := gitApplyCheck(t, before, rec.Patch); err != nil {
+		t.Fatalf("patch failed git apply --check (trailing context bug):\n--- patch ---\n%s\n--- error ---\n%v", rec.Patch, err)
+	}
+	// Round-trip: applying the patch must reproduce the after content exactly.
+	result, err := gitApply(t, before, rec.Patch)
+	if err != nil {
+		t.Fatalf("git apply failed: %v", err)
+	}
+	if result != after {
+		t.Errorf("round-trip mismatch:\n got=%q\nwant=%q", result, after)
+	}
+}
+
 // gitApplyCheck writes before to a temp file named to match the patch path,
 // applies the patch with git apply --check, and returns any error. The patch
 // references a/<base> and b/<base>; git strips the a/ b/ prefix and applies

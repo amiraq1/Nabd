@@ -565,11 +565,7 @@ func unifiedDiff(ctx context.Context, before, after []byte, path string) (string
 			oldLine++
 			newLine++
 			if len(pending) > ctxSize {
-				trailing := pending
-				if len(trailing) > ctxSize {
-					trailing = trailing[len(trailing)-ctxSize:]
-				}
-				hunks[cur].lines = append(hunks[cur].lines, trailing...)
+				hunks[cur].lines = append(hunks[cur].lines, pending[:ctxSize]...)
 				cur = -1
 				pending = nil
 			}
