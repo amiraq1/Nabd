@@ -190,5 +190,5 @@ documented above: TEST_YML_ON_MASTER is REMOVED_ON_BRANCH/PENDING_MERGE
 android/arm64 CGO_ENABLED=0, and G0 was deliberately SKIPPED. See
 docs/TECH_DEBT.md for the [DEFERRED] aggregate-memory ceiling (NBD-020).
 
-**CI**: run 34000898936 (completed, success) on head `de9abaa`.
-**Verified SHAs on origin**: `de9abaa`, `1e0676e`, `13526e8`, `fa173f5`, `89c70bd`, `598753b`.
+**CI**: run 34001266388 (completed, success) on head `995780b`.
+**Verified SHAs on origin**: `995780b`, `de9abaa`, `1e0676e`, `13526e8`, `fa173f5`, `89c70bd`, `598753b`.
