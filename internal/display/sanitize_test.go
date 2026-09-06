@@ -54,6 +54,7 @@ func TestSanitizeRedactsCredentials(t *testing.T) {
 		{"Groq", "prefix gsk_abcdef1234567890 suffix", "gsk_abcdef1234567890"},
 		{"NVIDIA", "prefix nvapi-abcdef1234567890 suffix", "nvapi-abcdef1234567890"},
 		{"GitHub", "prefix ghp_12345678901234567890 suffix", "ghp_12345678901234567890"},
+		{"GitHubFineGrained", "prefix github_pat_11AA0_exampleToken123456789 suffix", "github_pat_11AA0_exampleToken123456789"},
 		{"Bearer", "prefix Bearer secrettoken12345678 suffix", "secrettoken12345678"},
 		{"AuthorizationHeader", "prefix Authorization: secrettoken12345678 suffix", "secrettoken12345678"},
 	}

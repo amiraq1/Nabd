@@ -255,6 +255,7 @@ func TestFormatRouteNoticeSecurityMatrix(t *testing.T) {
 		{"Groq", "gsk_abcdef1234567890"},
 		{"NVIDIA", "nvapi-abcdef1234567890"},
 		{"GitHub", "ghp_12345678901234567890"},
+		{"GitHubFineGrained", "github_pat_11AA0_exampleToken123456789"},
 		{"Bearer", "Bearer mysecrettoken12345678"},
 		{"AuthHeader", "Authorization: mysecrettoken12345678"},
 	}

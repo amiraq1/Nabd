@@ -29,6 +29,8 @@ var displaySecretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9_\-\.]{8,}`),
 	// Authorization headers
 	regexp.MustCompile(`(?i)authorization[:\s]+[A-Za-z0-9_\-\.]{8,}`),
+	// GitHub fine-grained personal access tokens
+	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{16,}`),
 	// GitHub personal access tokens
 	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]{16,}`),
 	// GitLab personal access tokens
