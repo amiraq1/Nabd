@@ -123,7 +123,9 @@ func TestSmallScreenKeepsComposerAndFooter(t *testing.T) {
 }
 
 func TestSmallScreenKeepsModalTitleAndSelectedChoice(t *testing.T) {
-	// At small sizes with modal open, the modal title and choice must remain visible
+	// At small sizes with modal open, the modal title and choice must remain
+	// visible. The default selection is Deny, so the narrow view must show
+	// Deny as the selected choice — not Allow Once or Allow Session.
 	for _, sz := range []termSize{{"20x10", 20, 10}, {"20x12", 20, 12}, {"24x10", 24, 10}} {
 		t.Run(sz.name, func(t *testing.T) {
 			f := newFeedAt(t, sz.width, sz.height)
@@ -134,8 +136,13 @@ func TestSmallScreenKeepsModalTitleAndSelectedChoice(t *testing.T) {
 			if !strings.Contains(v, "Permission") {
 				t.Fatalf("[%s] modal title 'Permission' was cut from View():\n%s", sz.name, v)
 			}
-			if !strings.Contains(v, "Allow") && !strings.Contains(v, "submitting") {
-				t.Fatalf("[%s] modal choices were cut from View():\n%s", sz.name, v)
+			// Strip ANSI before inspecting the selection marker.
+			plain := ansi.Strip(v)
+			if !strings.Contains(plain, "[*] Deny") {
+				t.Fatalf("[%s] expected [*] Deny as the default selection, got:\n%s", sz.name, plain)
+			}
+			if strings.Contains(plain, "[*] Allow Once") || strings.Contains(plain, "[*] Allow Session") {
+				t.Fatalf("[%s] [*] appears on a non-Deny choice (default should be Deny):\n%s", sz.name, plain)
 			}
 		})
 	}

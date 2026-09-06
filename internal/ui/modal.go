@@ -25,23 +25,50 @@ type PermissionModal struct {
 	decisionPending bool
 }
 
+// choiceIndex returns the index of the given decision in choices, or -1 if
+// the decision is absent. This is the single source of truth for locating a
+// decision's position without assuming ordering.
+func choiceIndex(choices []PermissionChoice, decision agent.Decision) int {
+	for i, c := range choices {
+		if c.Decision == decision {
+			return i
+		}
+	}
+	return -1
+}
+
+// denyIndex returns the index of the Deny choice in choices(), or -1 if Deny
+// is somehow missing. newPermissionModal/open/selectedChoice rely on this for
+// a fail-closed default: selected=-1 combined with currentDecision()'s -1 guard
+// yields Deny both in logic and in display.
+func denyIndex() int {
+	return choiceIndex((&PermissionModal{}).choices(), agent.Deny)
+}
+
+// fallbackChoice returns an explicit Deny choice for display when the Deny
+// option is absent from choices(). This keeps rendering fail-closed without
+// picking an arbitrary element.
+func fallbackChoice() PermissionChoice {
+	return PermissionChoice{Decision: agent.Deny, Label: "Deny", KeyHint: "n / esc"}
+}
+
 func newPermissionModal() *PermissionModal {
 	return &PermissionModal{
-		selected: -1,
+		selected: denyIndex(),
 	}
 }
 
 func (m *PermissionModal) open(call *agent.ToolCall) {
 	m.visible = true
 	m.call = call
-	m.selected = -1
+	m.selected = denyIndex()
 	m.decisionPending = false
 }
 
 func (m *PermissionModal) close() {
 	m.visible = false
 	m.call = nil
-	m.selected = -1
+	m.selected = denyIndex()
 	m.decisionPending = false
 }
 
@@ -290,11 +317,17 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	}
 
 	// selectedChoice returns the choice to show when only one row is available.
+	// Fail-closed: any invalid selection resolves to Deny, matching
+	// currentDecision() and the default selection set by newPermissionModal/open.
 	selectedChoice := func() PermissionChoice {
 		ch := m.choices()
 		idx := m.selected
 		if idx < 0 || idx >= len(ch) {
-			idx = 0
+			// selected is invalid: try Deny, then render an explicit fallback.
+			idx = choiceIndex(ch, agent.Deny)
+			if idx < 0 {
+				return fallbackChoice()
+			}
 		}
 		return ch[idx]
 	}

@@ -130,10 +130,13 @@ func TestIntegrationPhase3AFullSequence(t *testing.T) {
 
 	// 15. Keys while the modal is open: composer must not change. The typed
 	// text must avoid y/a/n (modal answer keys: allow/session/deny).
+	// NOTE: Enter is intentionally omitted here — it now submits the default
+	// Deny decision and closes the modal (fail-closed). Up/Down navigate the
+	// modal without closing it and without reaching the composer.
 	before := f.composer.value()
 	typeIntoFeed(t, f, "1234!@")
-	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyUp})
+	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if got := f.composer.value(); got != before {
 		t.Fatalf("composer changed during modal: %q → %q (modalVisible=%v, focused=%v)",
 			before, got, f.modalVisible, f.composer.focused())

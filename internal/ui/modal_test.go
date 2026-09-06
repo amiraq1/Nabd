@@ -2,12 +2,14 @@ package ui
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
 	"nabd/internal/agent"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // TestModalRenderingAndChoices verifies that the modal renders the required elements
@@ -108,29 +110,31 @@ func TestBashAllowSessionCoreOwnedRawDecision(t *testing.T) {
 
 // TestModalArrowSelectionAndEnter confirms that Up/Down/Left/Right navigate choices
 // and Enter confirms the currently selected decision.
+// The default selection is Deny (fail-closed), so navigation wraps around it.
 func TestModalArrowSelectionAndEnter(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	f.width = 80
 	f.height = 24
-	openModal(f) // bash: [0: Allow Once, 1: Deny]
+	openModal(f) // choices: [0: Allow Once, 1: Allow Session, 2: Deny]
 
-	if f.permModal.selected != -1 {
-		t.Fatalf("initial selected = %d, want -1", f.permModal.selected)
+	// Default selection must be Deny.
+	if f.permModal.selected != denyIndex() {
+		t.Fatalf("initial selected = %d, want denyIndex=%d", f.permModal.selected, denyIndex())
 	}
 
-	// First Down arrow selects Allow Once (index 0)
+	// Down from Deny wraps to Allow Once (index 0)
 	f.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if f.permModal.selected != 0 {
-		t.Fatalf("after first Down, selected = %d, want 0", f.permModal.selected)
+		t.Fatalf("after Down from Deny, selected = %d, want 0", f.permModal.selected)
 	}
 
-	// Second Down arrow moves to Allow Session (index 1)
+	// Second Down moves to Allow Session (index 1)
 	f.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if f.permModal.selected != 1 {
 		t.Fatalf("after second Down, selected = %d, want 1", f.permModal.selected)
 	}
 
-	// Third Down arrow moves to Deny (index 2)
+	// Third Down moves to Deny (index 2)
 	f.Update(tea.KeyMsg{Type: tea.KeyDown})
 	if f.permModal.selected != 2 {
 		t.Fatalf("after third Down, selected = %d, want 2", f.permModal.selected)
@@ -148,6 +152,163 @@ func TestModalArrowSelectionAndEnter(t *testing.T) {
 	}
 	if reply.Decision != agent.Deny {
 		t.Fatalf("expected Decision=Deny, got %v", reply.Decision)
+	}
+}
+
+// TestModalDefaultSelectionIsDeny verifies that a freshly opened modal starts on
+// Deny, currentDecision reflects Deny, and selected points at the Deny choice.
+func TestModalDefaultSelectionIsDeny(t *testing.T) {
+	f, _ := feedWithRunner(t)
+	openModal(f)
+
+	if f.permModal.selected != denyIndex() {
+		t.Fatalf("initial selected = %d, want denyIndex=%d", f.permModal.selected, denyIndex())
+	}
+	if f.permModal.currentDecision() != agent.Deny {
+		t.Fatalf("currentDecision = %v, want Deny", f.permModal.currentDecision())
+	}
+	choices := f.permModal.choices()
+	if choices[f.permModal.selected].Decision != agent.Deny {
+		t.Fatalf("selected choice has Decision=%v, want Deny", choices[f.permModal.selected].Decision)
+	}
+}
+
+// TestModalEnterWithoutNavigationSubmitsDeny verifies that pressing Enter
+// immediately after opening the modal produces a Deny decision without invoking
+// the runner or modifying the composer.
+func TestModalEnterWithoutNavigationSubmitsDeny(t *testing.T) {
+	f, r := feedWithRunner(t)
+	typeIntoFeed(t, f, "pending message")
+	openModal(f)
+
+	_, cmd := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("Enter on default modal must produce reply command")
+	}
+
+	// Runner must never be invoked.
+	if r.textsLen() != 0 {
+		t.Fatalf("runner invoked %d times, want 0", r.textsLen())
+	}
+
+	// Composer text must be preserved.
+	if got := f.composer.value(); got != "pending message" {
+		t.Fatalf("composer changed: %q", got)
+	}
+
+	// The produced command must yield a Deny permission reply.
+	msg := cmd()
+	reply, ok := msg.(permReplyMsg)
+	if !ok {
+		t.Fatalf("expected permReplyMsg, got %T", msg)
+	}
+	if reply.Decision != agent.Deny {
+		t.Fatalf("expected Decision=Deny, got %v", reply.Decision)
+	}
+}
+
+// TestModalVisibleSelectionMatchesDecision verifies, across all rendering
+// levels, that the visibly marked choice ([*]) matches currentDecision().
+func TestModalVisibleSelectionMatchesDecision(t *testing.T) {
+	// maxRows values chosen to force each degradation level:
+	// full (>=8), compact (5-6), toolrow (4), minimum (3).
+	for _, maxRows := range []int{100, 5, 4, 3} {
+		t.Run(fmt.Sprintf("maxRows=%d", maxRows), func(t *testing.T) {
+			f, _ := feedWithRunner(t)
+			f.width = 80
+			f.height = 24
+			openModal(f)
+
+			// Strip ANSI to inspect plain text.
+			plain := ansi.Strip(f.permModal.view(80, maxRows))
+
+			// The visible selection marker must be on Deny, never Allow.
+			if !strings.Contains(plain, "[*] Deny") {
+				t.Fatalf("maxRows=%d: expected [*] Deny in view, got:\n%s", maxRows, plain)
+			}
+			if strings.Contains(plain, "[*] Allow Once") || strings.Contains(plain, "[*] Allow Session") {
+				t.Fatalf("maxRows=%d: [*] appears on a non-Deny choice:\n%s", maxRows, plain)
+			}
+
+			// Exactly one [*] marker in the modal.
+			if strings.Count(plain, "[*]") != 1 {
+				t.Fatalf("maxRows=%d: expected exactly one [*] marker, got %d:\n%s",
+					maxRows, strings.Count(plain, "[*]"), plain)
+			}
+
+			// currentDecision must agree with the visible selection.
+			if f.permModal.currentDecision() != agent.Deny {
+				t.Fatalf("maxRows=%d: currentDecision=%v, want Deny", maxRows, f.permModal.currentDecision())
+			}
+		})
+	}
+}
+
+// TestModalInvalidSelectionFallsBackToDeny verifies that injected invalid
+// selected values resolve to Deny both in decision and display.
+func TestModalInvalidSelectionFallsBackToDeny(t *testing.T) {
+	for _, sel := range []int{-1, -5, 99} {
+		t.Run(fmt.Sprintf("selected=%d", sel), func(t *testing.T) {
+			f, _ := feedWithRunner(t)
+			openModal(f)
+			f.permModal.selected = sel
+
+			if f.permModal.currentDecision() != agent.Deny {
+				t.Fatalf("selected=%d: currentDecision=%v, want Deny", sel, f.permModal.currentDecision())
+			}
+
+			plain := ansi.Strip(f.permModal.view(80, 3))
+			if !strings.Contains(plain, "[*] Deny") {
+				t.Fatalf("selected=%d: expected [*] Deny in narrow view, got:\n%s", sel, plain)
+			}
+			if strings.Contains(plain, "[*] Allow Once") || strings.Contains(plain, "[*] Allow Session") {
+				t.Fatalf("selected=%d: [*] on non-Deny choice:\n%s", sel, plain)
+			}
+		})
+	}
+}
+
+// TestModalReopenResetsToDeny verifies that closing and reopening the modal
+// resets the selection to Deny regardless of the previous choice.
+func TestModalReopenResetsToDeny(t *testing.T) {
+	f, _ := feedWithRunner(t)
+	openModal(f)
+
+	// Move to Allow Once and answer.
+	f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if f.modalVisible {
+		t.Fatal("modal must close after y")
+	}
+
+	// Reopen.
+	openModal(f)
+	if f.permModal.selected != denyIndex() {
+		t.Fatalf("after reopen, selected=%d, want denyIndex=%d", f.permModal.selected, denyIndex())
+	}
+	if f.permModal.currentDecision() != agent.Deny {
+		t.Fatalf("after reopen, currentDecision=%v, want Deny", f.permModal.currentDecision())
+	}
+}
+
+// TestChoiceIndexReturnsMinusOneForMissingDecision verifies that choiceIndex
+// returns -1 when the requested decision is absent from the choices list. This
+// protects fail-closed behavior: if Deny were ever removed from choices,
+// denyIndex() returns -1 and currentDecision() still yields Deny.
+func TestChoiceIndexReturnsMinusOneForMissingDecision(t *testing.T) {
+	got := choiceIndex([]PermissionChoice{
+		{Decision: agent.AllowOnce},
+		{Decision: agent.AllowSession},
+	}, agent.Deny)
+	if got != -1 {
+		t.Fatalf("choiceIndex(Deny absent) = %d, want -1", got)
+	}
+
+	// Sanity: present decisions are found correctly.
+	if idx := choiceIndex((&PermissionModal{}).choices(), agent.Deny); idx < 0 {
+		t.Fatalf("choiceIndex(Deny present) = %d, want >= 0", idx)
+	}
+	if denyIndex() < 0 {
+		t.Fatalf("denyIndex() = %d, want >= 0", denyIndex())
 	}
 }
 
