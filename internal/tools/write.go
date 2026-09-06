@@ -338,6 +338,10 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, tool
 	// aborts (budget exceeded, ctx cancelled), the project file is untouched.
 	rec, rerr := buildRecord(ctx, sh, before, after, data, readLines)
 	if rerr != nil {
+		// Clean up the orphan blob that CaptureBytes wrote to the shadow
+		// store. The mutation is aborted, so no Edit will ever reference it;
+		// leaving it would accumulate garbage across repeated rejections.
+		_ = sh.Discard(after.Blob)
 		return before, after, rerr
 	}
 	if err := snap.WriteAtomic(abs, data, mode); err != nil {
