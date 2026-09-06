@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -82,6 +83,38 @@ func GetOr(key, fallback string) string {
 
 // Has reports whether key is set in either the file or the environment.
 func Has(key string) bool { return Get(key) != "" }
+
+// Conflict is a key that the user set in both the process environment and the
+// config file, with different values after trimming. The file wins, so the
+// environment value is silently ignored — Conflict exposes the key name so the
+// UI can tell the user. It never carries a value: a printed key name is a fact
+// about the user's intent, but a printed value is a secret on the screen.
+type Conflict struct{ Key string }
+
+// Conflicts returns the keys present in both the loaded file and the process
+// environment with different non-empty trimmed values — the keys the file
+// silently overrode. The environment is observed at conflict-query time.
+// The result is sorted alphabetically for deterministic output. It calls
+// Load(), which is guarded by sync.Once, so the file is parsed at most once
+// and never reloaded on subsequent calls. It never writes and never exposes
+// a value.
+func Conflicts() []Conflict {
+	_ = Load()
+	var out []Conflict
+	for k, fv := range values {
+		fv = strings.TrimSpace(fv)
+		if fv == "" {
+			continue
+		}
+		ev := strings.TrimSpace(os.Getenv(k))
+		if ev == "" || ev == fv {
+			continue
+		}
+		out = append(out, Conflict{Key: k})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out
+}
 
 // ResetForTest clears the load-once and cached values so a test can point
 // NABD_CONFIG at a fresh file and observe the new load. Production code never
