@@ -286,12 +286,22 @@ func (m *Feed) SendBatch(events []agent.Event) {
 		m.prog.Send(agentEventBatchMsg{Events: events})
 		return
 	}
-	if !m.testSyncDispatch {
-		panic("SendBatch called without a running program (m.prog == nil) outside of tests")
+	if m.testSyncDispatch {
+		// Test path: no live program; apply directly. Tests call SendBatch
+		// from the test goroutine only, so this is safe.
+		m.applyBatch(events)
+		return
 	}
-	// Test path: no live program; apply directly. Tests call SendBatch from
-	// the test goroutine only, so this is safe.
-	m.applyBatch(events)
+	// No program wired and not a test: drop the batch. The window is narrow
+	// (a flush landing before the CLI calls SetProgram, or a Batcher.Stop()
+	// flush after a failed launch) and losing it is recoverable — the journal
+	// is the source of truth and the feed is rebuilt from it by
+	// BuildFromEvents. Crashing the binary is not recoverable, so this path
+	// must never panic.
+	//
+	// Nothing is mutated here on purpose: SendBatch runs on the batcher
+	// goroutine, so recording a diagnostic would be a cross-goroutine write
+	// to model state and a genuine data race.
 }
 
 // SetProgram wires the running program so batcher flushes are delivered as
