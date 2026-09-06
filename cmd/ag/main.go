@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -482,16 +483,32 @@ func sessionPath(dir string) (string, error) {
 
 // conflictLine formats the conflict notice for the UI. It returns "" when
 // there is no conflict, so callers can skip the Notice entirely. The key
-// names are joined with conflictSep; no value is ever carried, only names.
+// names are defensively sorted and joined with conflictSep; no value is
+// ever carried, only names.
 func conflictLine(cs []config.Conflict) string {
 	if len(cs) == 0 {
 		return ""
 	}
-	names := make([]string, len(cs))
-	for i, c := range cs {
-		names[i] = c.Key
+	names := make([]string, 0, len(cs))
+	for _, c := range cs {
+		clean := sanitizeKey(c.Key)
+		if clean != "" {
+			names = append(names, clean)
+		}
 	}
+	if len(names) == 0 {
+		return ""
+	}
+	slices.Sort(names)
+	names = slices.Compact(names)
 	return fmt.Sprintf(conflictNotice, strings.Join(names, conflictSep))
+}
+
+func sanitizeKey(k string) string {
+	k = strings.ReplaceAll(k, "\r", "")
+	k = strings.ReplaceAll(k, "\n", "")
+	clean := ui.SanitizeForDisplay(k, ui.DisplayPolicy{AllowNewline: false})
+	return strings.TrimSpace(clean)
 }
 
 func die(err error) {

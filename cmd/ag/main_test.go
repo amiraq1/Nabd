@@ -7,6 +7,7 @@ import (
 	"testing"
 	"unicode"
 
+	"nabd/internal/agent"
 	"nabd/internal/config"
 )
 
@@ -122,35 +123,137 @@ func TestLatestSessionProjectIsolation(t *testing.T) {
 	}
 }
 
-// TestConflictLine proves conflictLine formats the notice correctly and never
-// leaks a value — only key names reach the UI.
+// TestConflictLine proves conflictLine formats the notice correctly, sorts defensively,
+// deduplicates, sanitizes control characters, and never leaks secrets.
 func TestConflictLine(t *testing.T) {
-	// Empty list → no notice.
+	// Empty / nil list → no notice.
 	if s := conflictLine(nil); s != "" {
-		t.Fatalf("nil → %q, want empty", s)
+		t.Fatalf("nil input gave non-empty notice")
 	}
 	if s := conflictLine([]config.Conflict{}); s != "" {
-		t.Fatalf("empty → %q, want empty", s)
+		t.Fatalf("empty slice gave non-empty notice")
+	}
+	if s := conflictLine([]config.Conflict{{Key: ""}, {Key: "\n\t"}}); s != "" {
+		t.Fatalf("empty/whitespace keys gave non-empty notice")
 	}
 
-	// One key → the line carries the name, no value.
+	// One key → the line carries the name, exactly once.
 	got := conflictLine([]config.Conflict{{Key: "NABD_ROUTES"}})
-	if !strings.Contains(got, "NABD_ROUTES") {
-		t.Fatalf("single key = %q, want NABD_ROUTES", got)
+	if count := strings.Count(got, "NABD_ROUTES"); count != 1 {
+		t.Fatalf("single key expected once, found %d times", count)
 	}
 
-	// Two keys → both appear, sorted, separated by conflictSep.
-	got = conflictLine([]config.Conflict{{Key: "NABD_ROUTES"}, {Key: "NABD_MODEL"}})
-	if !strings.Contains(got, "NABD_MODEL") || !strings.Contains(got, "NABD_ROUTES") {
-		t.Fatalf("two keys = %q, want both", got)
+	// Multiple keys in arbitrary order → exact deterministic alphabetical ordering.
+	callerInput := []config.Conflict{
+		{Key: "Z_KEY"},
+		{Key: "A_KEY"},
+		{Key: "M_KEY"},
 	}
+	got = conflictLine(callerInput)
+	idxA := strings.Index(got, "A_KEY")
+	idxM := strings.Index(got, "M_KEY")
+	idxZ := strings.Index(got, "Z_KEY")
+	if idxA < 0 || idxM < 0 || idxZ < 0 || !(idxA < idxM && idxM < idxZ) {
+		t.Fatalf("expected alphabetical key ordering A < M < Z")
+	}
+
+	// Correct separators.
 	if !strings.Contains(got, conflictSep) {
-		t.Fatalf("two keys = %q, want separator %q", got, conflictSep)
+		t.Fatalf("missing expected conflict separator")
 	}
 
-	// Secret case: the value must never appear in the line.
+	// Caller input is unchanged after defensive sorting.
+	if callerInput[0].Key != "Z_KEY" || callerInput[1].Key != "A_KEY" || callerInput[2].Key != "M_KEY" {
+		t.Fatalf("caller input slice was mutated by conflictLine")
+	}
+
+	// Duplicate keys are deduplicated.
+	gotDup := conflictLine([]config.Conflict{{Key: "DUP_KEY"}, {Key: "DUP_KEY"}})
+	if count := strings.Count(gotDup, "DUP_KEY"); count != 1 {
+		t.Fatalf("duplicate key expected once after deduplication, found %d times", count)
+	}
+
+	// No repeated prefix (UI layer adds ⚑, so conflictLine must not contain ⚑).
+	if strings.Contains(got, "⚑") {
+		t.Fatalf("conflictLine contains notice flag prefix ⚑")
+	}
+
+	// One logical line: no newlines or carriage returns.
+	if strings.Contains(got, "\n") || strings.Contains(got, "\r") {
+		t.Fatalf("notice contains newline characters")
+	}
+
+	// Sanitization of control characters and escape sequences.
+	gotControl := conflictLine([]config.Conflict{{Key: "BAD\x1b[31m_KEY\r\n_TEST"}})
+	if strings.Contains(gotControl, "\x1b") || strings.Contains(gotControl, "\n") || strings.Contains(gotControl, "\r") {
+		t.Fatalf("control characters or newlines were not sanitized from key")
+	}
+	if !strings.Contains(gotControl, "BAD_KEY_TEST") {
+		t.Fatalf("sanitized key content missing")
+	}
+
+	// Secret-safety: synthetic sentinels must never appear.
+	const sentinel = "synthetic-secret-sentinel-xyz"
 	got = conflictLine([]config.Conflict{{Key: "GROQ_API_KEY"}})
-	if strings.Contains(got, "secret-shhh") || strings.Contains(got, "sk-") {
-		t.Fatalf("secret leaked: %q", got)
+	if strings.Contains(got, sentinel) {
+		t.Fatalf("notice leaked a sentinel value")
+	}
+}
+
+type testNoticeSink struct {
+	events []agent.Event
+}
+
+func (s *testNoticeSink) Emit(e agent.Event) error {
+	s.events = append(s.events, e)
+	return nil
+}
+
+// TestStartupNoticeBehavior verifies that conflict notice is emitted via loop.Note
+// on successful startup when conflicts exist, and skipped when no conflicts exist.
+func TestStartupNoticeBehavior(t *testing.T) {
+	// Case 1: Conflicts exist -> notice emitted after loop.Start.
+	sink := &testNoticeSink{}
+	loop := &agent.Loop{
+		Sink: sink,
+	}
+	dir := t.TempDir()
+	if err := loop.Start("banner", dir); err != nil {
+		t.Fatalf("loop.Start failed: %v", err)
+	}
+
+	cs := []config.Conflict{{Key: "NABD_MODEL"}}
+	if s := conflictLine(cs); s != "" {
+		loop.Note(s)
+	}
+
+	var foundNotice bool
+	for _, e := range sink.events {
+		if e.Type == agent.Notice && strings.Contains(e.Text, "NABD_MODEL") {
+			foundNotice = true
+			break
+		}
+	}
+	if !foundNotice {
+		t.Fatalf("expected conflict notice event after startup")
+	}
+
+	// Case 2: No conflicts -> loop.Note not called.
+	sinkEmpty := &testNoticeSink{}
+	loopEmpty := &agent.Loop{
+		Sink: sinkEmpty,
+	}
+	if err := loopEmpty.Start("banner", dir); err != nil {
+		t.Fatalf("loop.Start failed: %v", err)
+	}
+
+	if s := conflictLine(nil); s != "" {
+		loopEmpty.Note(s)
+	}
+
+	for _, e := range sinkEmpty.events {
+		if e.Type == agent.Notice {
+			t.Fatalf("unexpected notice emitted when conflicts slice is empty")
+		}
 	}
 }

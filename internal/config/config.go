@@ -93,10 +93,11 @@ type Conflict struct{ Key string }
 
 // Conflicts returns the keys present in both the loaded file and the process
 // environment with different non-empty trimmed values — the keys the file
-// silently overrode. The result is sorted alphabetically for deterministic
-// output. It calls Load(), which is guarded by sync.Once, so the file is
-// parsed at most once and never reloaded on the second call. It never writes
-// and never exposes a value.
+// silently overrode. The environment is observed at conflict-query time.
+// The result is sorted alphabetically for deterministic output. It calls
+// Load(), which is guarded by sync.Once, so the file is parsed at most once
+// and never reloaded on subsequent calls. It never writes and never exposes
+// a value.
 func Conflicts() []Conflict {
 	_ = Load()
 	var out []Conflict

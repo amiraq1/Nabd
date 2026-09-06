@@ -233,8 +233,11 @@ func TestConflictsNamesIgnoredEnvKeys(t *testing.T) {
 	t.Cleanup(ResetForTest)
 
 	got := Conflicts()
-	if len(got) != 1 || got[0].Key != "NABD_TEST_CONF_KEY" {
-		t.Fatalf("Conflicts = %+v, want [{Key:NABD_TEST_CONF_KEY}]", got)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 conflict, got %d", len(got))
+	}
+	if got[0].Key != "NABD_TEST_CONF_KEY" {
+		t.Fatalf("expected key NABD_TEST_CONF_KEY, got %q", got[0].Key)
 	}
 }
 
@@ -252,7 +255,25 @@ func TestConflictsIgnoresMatchingValues(t *testing.T) {
 	t.Cleanup(ResetForTest)
 
 	if got := Conflicts(); len(got) != 0 {
-		t.Fatalf("Conflicts = %+v, want []", got)
+		t.Fatalf("expected 0 conflicts, got %d", len(got))
+	}
+}
+
+// TestConflictsEqualityAfterTrimming proves that values equal after whitespace
+// trimming do not trigger a conflict notice.
+func TestConflictsEqualityAfterTrimming(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config")
+	if err := os.WriteFile(p, []byte("NABD_TEST_TRIM=  value  \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVar, p)
+	t.Setenv("NABD_TEST_TRIM", "value")
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	if got := Conflicts(); len(got) != 0 {
+		t.Fatalf("expected 0 conflicts for trimmed equal values, got %d", len(got))
 	}
 }
 
@@ -270,32 +291,188 @@ func TestConflictsIgnoresEnvOnlyAndFileOnly(t *testing.T) {
 	t.Cleanup(ResetForTest)
 
 	if got := Conflicts(); len(got) != 0 {
-		t.Fatalf("Conflicts = %+v, want []", got)
+		t.Fatalf("expected 0 conflicts for single-source keys, got %d", len(got))
 	}
 }
 
-// TestConflictsNeverExposesValues proves the security boundary: Conflict carries
-// no value, and the rendered line must never contain the secret.
-func TestConflictsNeverExposesValues(t *testing.T) {
+// TestConflictsEmptyAndWhitespaceValues proves that empty or whitespace-only
+// values in either file or environment do not produce a conflict.
+func TestConflictsEmptyAndWhitespaceValues(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "config")
-	if err := os.WriteFile(p, []byte("GROQ_API_KEY=secret-shhh\n"), 0o600); err != nil {
+	content := "EMPTY_FILE=\"   \"\nNONEMPTY_FILE=actual\n"
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(EnvVar, p)
-	t.Setenv("GROQ_API_KEY", "other-secret")
+	t.Setenv("EMPTY_FILE", "fromenv")
+	t.Setenv("NONEMPTY_FILE", "   ")
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	if got := Conflicts(); len(got) != 0 {
+		t.Fatalf("expected 0 conflicts when values are empty/whitespace, got %d", len(got))
+	}
+}
+
+// TestConflictsAlphabeticalOrdering proves that multiple conflicts are returned
+// in deterministic alphabetical key order regardless of insertion order.
+func TestConflictsAlphabeticalOrdering(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config")
+	content := "Z_KEY=f1\nA_KEY=f2\nM_KEY=f3\n"
+	if err := os.WriteFile(p, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVar, p)
+	t.Setenv("Z_KEY", "e1")
+	t.Setenv("A_KEY", "e2")
+	t.Setenv("M_KEY", "e3")
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	got := Conflicts()
+	if len(got) != 3 {
+		t.Fatalf("expected 3 conflicts, got %d", len(got))
+	}
+	wantOrder := []string{"A_KEY", "M_KEY", "Z_KEY"}
+	for i, want := range wantOrder {
+		if got[i].Key != want {
+			t.Fatalf("index %d: expected key %q, got %q", i, want, got[i].Key)
+		}
+	}
+}
+
+// TestConflictsStability proves that repeated calls under unchanged inputs produce
+// equivalent results.
+func TestConflictsStability(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config")
+	if err := os.WriteFile(p, []byte("KEY_B=fb\nKEY_A=fa\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVar, p)
+	t.Setenv("KEY_B", "eb")
+	t.Setenv("KEY_A", "ea")
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	first := Conflicts()
+	second := Conflicts()
+	if len(first) != len(second) {
+		t.Fatalf("stability failed: first call len=%d, second call len=%d", len(first), len(second))
+	}
+	for i := range first {
+		if first[i].Key != second[i].Key {
+			t.Fatalf("stability failed at index %d: first=%q second=%q", i, first[i].Key, second[i].Key)
+		}
+	}
+}
+
+// TestConflictsCallerMutationIsolation proves that mutating the returned slice
+// does not affect subsequent calls.
+func TestConflictsCallerMutationIsolation(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config")
+	if err := os.WriteFile(p, []byte("NABD_ISOLATION_KEY=fromfile\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVar, p)
+	t.Setenv("NABD_ISOLATION_KEY", "fromenv")
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	first := Conflicts()
+	if len(first) != 1 || first[0].Key != "NABD_ISOLATION_KEY" {
+		t.Fatalf("unexpected initial conflict count=%d", len(first))
+	}
+	first[0].Key = "MUTATED_KEY"
+
+	second := Conflicts()
+	if len(second) != 1 || second[0].Key != "NABD_ISOLATION_KEY" {
+		t.Fatalf("caller mutation affected subsequent call: got key=%q", second[0].Key)
+	}
+}
+
+// TestConflictsSyncOncePreserved proves that the sync.Once loading contract is
+// preserved: file modifications after initial load do not trigger a reload.
+func TestConflictsSyncOncePreserved(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config")
+	if err := os.WriteFile(p, []byte("INITIAL_KEY=fileval\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVar, p)
+	t.Setenv("INITIAL_KEY", "envval")
+	t.Setenv("NEW_KEY", "newenv")
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	got1 := Conflicts()
+	if len(got1) != 1 || got1[0].Key != "INITIAL_KEY" {
+		t.Fatalf("expected initial conflict, got len=%d", len(got1))
+	}
+
+	// Modify file on disk; sync.Once must prevent reloading.
+	if err := os.WriteFile(p, []byte("NEW_KEY=newfile\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got2 := Conflicts()
+	if len(got2) != 1 || got2[0].Key != "INITIAL_KEY" {
+		t.Fatalf("sync.Once violated: file was reloaded after disk modification")
+	}
+}
+
+// TestConflictTypeStructure verifies the structural contract of Conflict:
+// exactly one exported string field named Key, with no embedded fields.
+func TestConflictTypeStructure(t *testing.T) {
+	typ := reflect.TypeOf(Conflict{})
+	if typ.Kind() != reflect.Struct {
+		t.Fatalf("Conflict is kind %v, want struct", typ.Kind())
+	}
+	if typ.NumField() != 1 {
+		t.Fatalf("Conflict has %d fields, want exactly 1", typ.NumField())
+	}
+	f := typ.Field(0)
+	if f.Name != "Key" {
+		t.Fatalf("field name is %q, want Key", f.Name)
+	}
+	if f.Type.Kind() != reflect.String {
+		t.Fatalf("field type is %v, want string", f.Type.Kind())
+	}
+	if !f.IsExported() {
+		t.Fatalf("field Key is not exported")
+	}
+	if f.Anonymous {
+		t.Fatalf("field Key is embedded (anonymous), want non-embedded")
+	}
+}
+
+// TestConflictsNeverExposesValues proves the security boundary: synthetic
+// sentinel values are never exposed through Conflict or conflict reporting.
+func TestConflictsNeverExposesValues(t *testing.T) {
+	const sentinelFile = "synthetic-file-secret-abc123xyz"
+	const sentinelEnv = "synthetic-env-secret-def456uvw"
+
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config")
+	if err := os.WriteFile(p, []byte("GROQ_API_KEY="+sentinelFile+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVar, p)
+	t.Setenv("GROQ_API_KEY", sentinelEnv)
 	ResetForTest()
 	t.Cleanup(ResetForTest)
 
 	got := Conflicts()
 	if len(got) != 1 {
-		t.Fatalf("Conflicts = %+v, want one conflict", got)
+		t.Fatalf("expected 1 conflict, got %d", len(got))
 	}
 	if got[0].Key != "GROQ_API_KEY" {
-		t.Fatalf("key = %q, want GROQ_API_KEY", got[0].Key)
+		t.Fatalf("unexpected key name")
 	}
-	// The struct must carry exactly one field — the key name, never a value.
-	if n := reflect.TypeOf(Conflict{}).NumField(); n != 1 {
-		t.Fatalf("Conflict has %d fields, want 1 (Key only)", n)
+	if strings.Contains(got[0].Key, sentinelFile) || strings.Contains(got[0].Key, sentinelEnv) {
+		t.Fatal("Conflict.Key leaked a sentinel value")
 	}
 }
