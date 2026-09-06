@@ -7,6 +7,7 @@ import (
 	"testing"
 	"unicode"
 
+	"nabd/internal/config"
 	"nabd/internal/provider"
 )
 
@@ -136,6 +137,14 @@ func noProviderEnv(t *testing.T) {
 	// A real ~/.ag/config on the developer's machine would otherwise leak
 	// into these tests through config.Get's env fallback chain.
 	t.Setenv("NABD_CONFIG", filepath.Join(t.TempDir(), "missing"))
+	// Pointing NABD_CONFIG at a missing file is not enough by itself:
+	// config.Load caches its map behind a package-level sync.Once, so a value
+	// read by any earlier test in this package would survive here and the real
+	// ~/.ag/config would still decide the outcome — passing on CI, where no
+	// such file exists, and failing on a developer machine that has one.
+	// Drop the cache before, and again after, so neither direction leaks.
+	config.ResetForTest()
+	t.Cleanup(config.ResetForTest)
 }
 
 func TestPickProviderPrefersKeyPresence(t *testing.T) {
@@ -146,6 +155,7 @@ func TestPickProviderPrefersKeyPresence(t *testing.T) {
 		key, value string
 		build      func() (provider.Provider, error)
 	}{
+		{"Groq", "GROQ_API_KEY", "gqkey", func() (provider.Provider, error) { return provider.NewGroq() }},
 		{"NVIDIA", "NVIDIA_API_KEY", "nvkey", func() (provider.Provider, error) { return provider.NewNVIDIA() }},
 		{"OpenRouter", "OPENROUTER_API_KEY", "orkey", func() (provider.Provider, error) { return provider.NewOpenRouter() }},
 		{"Anthropic", "ANTHROPIC_API_KEY", "ackey", func() (provider.Provider, error) { return provider.NewAnthropic() }},
@@ -164,6 +174,58 @@ func TestPickProviderPrefersKeyPresence(t *testing.T) {
 		if p.Name() != want.Name() {
 			t.Errorf("%s key picked Name %q, want %q", c.name, p.Name(), want.Name())
 		}
+	}
+}
+
+// TestPickProviderKeyPrecedence pins the order of the ladder itself, not the
+// mere fact that a present key is honoured. One key at a time cannot catch a
+// reordering: every rung looks correct in isolation. Several keys at once can.
+func TestPickProviderKeyPrecedence(t *testing.T) {
+	cases := []struct {
+		name  string
+		keys  map[string]string
+		build func() (provider.Provider, error)
+	}{
+		{
+			"groq wins over every other key",
+			map[string]string{
+				"GROQ_API_KEY": "gqkey", "OPENROUTER_API_KEY": "orkey",
+				"NVIDIA_API_KEY": "nvkey", "ANTHROPIC_API_KEY": "ackey",
+			},
+			func() (provider.Provider, error) { return provider.NewGroq() },
+		},
+		{
+			"openrouter wins over nvidia and anthropic",
+			map[string]string{
+				"OPENROUTER_API_KEY": "orkey",
+				"NVIDIA_API_KEY":     "nvkey", "ANTHROPIC_API_KEY": "ackey",
+			},
+			func() (provider.Provider, error) { return provider.NewOpenRouter() },
+		},
+		{
+			"nvidia wins over anthropic",
+			map[string]string{"NVIDIA_API_KEY": "nvkey", "ANTHROPIC_API_KEY": "ackey"},
+			func() (provider.Provider, error) { return provider.NewNVIDIA() },
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			noProviderEnv(t)
+			for k, v := range c.keys {
+				t.Setenv(k, v)
+			}
+			p, err := pickProvider()
+			if err != nil {
+				t.Fatalf("pickProvider: %v", err)
+			}
+			want, err := c.build()
+			if err != nil {
+				t.Fatalf("build want: %v", err)
+			}
+			if p.Name() != want.Name() {
+				t.Errorf("picked Name %q, want %q", p.Name(), want.Name())
+			}
+		})
 	}
 }
 
