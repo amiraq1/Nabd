@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"nabd/internal/agent"
+	"nabd/internal/presentation"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -115,6 +116,13 @@ func RenderEvent(e agent.Event, width int) string {
 
 	case agent.RunEnd:
 		return dim.Render("── " + e.Text)
+
+	case agent.EventProviderRoute:
+		text, ok := presentation.FormatRouteNotice(e.Route)
+		if !ok {
+			return ""
+		}
+		return block("⚑", text, width, warn)
 
 	case agent.TurnStart, agent.TurnEnd, agent.EventCalib:
 		// TurnEnd and calibration are structure, not content: nothing to show.
