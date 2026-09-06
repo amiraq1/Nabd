@@ -2,6 +2,8 @@ package ui
 
 import (
 	"context"
+	"strconv"
+	"strings"
 	"testing"
 
 	"nabd/internal/agent"
@@ -86,5 +88,47 @@ func TestBufFlushOnTurnEnd(t *testing.T) {
 	m = asChat(t, mdl)
 	if m.buf != "" {
 		t.Fatalf("after turn end: buf=%q, want empty", m.buf)
+	}
+}
+
+func TestHelpMentionsRewind(t *testing.T) {
+	m := NewChat(nil, nil)
+	got := m.command("/help")
+	if !strings.Contains(got, "/rewind") {
+		t.Errorf("/help = %q, missing /rewind", got)
+	}
+	for _, want := range []string{"/undo", "/edits", "/ctx", "/compact"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("/help = %q, missing %s", got, want)
+		}
+	}
+}
+
+func TestUnknownCommandSaysSo(t *testing.T) {
+	m := NewChat(nil, nil)
+	if got := m.command("/bogus"); !strings.Contains(got, "unknown command") {
+		t.Errorf("/bogus = %q, want an unknown-command notice", got)
+	}
+}
+
+// /rewind is advertised in /help, so it must actually dispatch to its
+// handler rather than fall through to the unknown-command reply.
+func TestRewindDispatchesToHandler(t *testing.T) {
+	called := 0
+	m := NewChat(nil, nil)
+	m.OnRewind = func(n int) string {
+		called++
+		return "rewound " + strconv.Itoa(n)
+	}
+
+	if got := m.command("/rewind 2"); got != "rewound 2" || called != 1 {
+		t.Fatalf("/rewind 2 = %q (handler called %d times), want the handler to run", got, called)
+	}
+}
+
+func TestRewindWithoutHandlerIsNotUnknown(t *testing.T) {
+	m := NewChat(nil, nil)
+	if got := m.command("/rewind"); strings.Contains(got, "unknown command") {
+		t.Errorf("/rewind with no handler = %q, must not be the unknown-command reply", got)
 	}
 }
