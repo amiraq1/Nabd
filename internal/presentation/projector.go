@@ -84,8 +84,17 @@ func (p *Projector) Apply(e agent.Event) error {
 		return nil
 
 	case agent.EventProviderRoute:
-		// Router decision events: UI presentation is deferred to Phase U2 per scope boundaries.
-		return nil
+		text, ok := FormatRouteNotice(e.Route)
+		if !ok {
+			return nil
+		}
+		it := FeedItem{
+			Type: ItemNotice,
+			ID:   "notice_" + strconv.Itoa(e.Seq),
+			Seq:  e.Seq,
+			Text: text,
+		}
+		return p.append(it)
 
 	default:
 		// Unknown event type: record in observable counter and skip.

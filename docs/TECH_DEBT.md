@@ -127,3 +127,23 @@ file, `docs/TECH_DEBT.md`).
 - **OPEN QUESTIONS:**
   - [UNKNOWN] The exact growth shape of the per-keystroke re-wrap cost (quadratic vs linear) is not established by the current benchmark.
   - [DEFERRED] U3 must establish the growth shape using an independent keystroke-count axis or an independent payload-length axis.
+
+## U2: Provider-route presentation and observability (Issue #16)
+
+- **Component:** `internal/presentation`, `internal/display`, `internal/ui`
+- **Scope:** Observability of provider route failures and fallback selections across both Feed UI and Classic/Replay presentation paths.
+- **Architecture & Invariants:**
+  - Neutral sanitizer extracted into `internal/display` (`SanitizeForDisplay`, `DisplayPolicy`, secret redaction patterns) to maintain a strict unidirectional dependency graph: `internal/ui` -> `internal/presentation` -> `internal/display`, preventing package import cycles.
+  - Single source of truth formatting implemented in `internal/presentation.FormatRouteNotice`:
+    - `failed`: visible (`route failed: <provider>/<model> (attempt <N>): <reason>`).
+    - `selected`: visible only when `Attempt > 1` (`route selected: <provider>/<model> (attempt <N>)`). Reason and StreamID are strictly omitted.
+    - `attempted`, `exhausted`, `nil` route pointer, and unknown statuses: hidden (`"", false`).
+  - Feed UI (`presentation.Projector`) maps visible route notices to `ItemNotice`.
+  - Classic/Replay UI (`ui.RenderEvent`) formats visible route notices as notice blocks (`⚑`).
+  - Notice badge (`⚑`) prefix ownership is strictly held by UI renderers (`feed_render.go` and `render.go`), never prepended by `FormatRouteNotice`.
+  - Model context isolation preserved: `agent.Messages` continues to ignore `EventProviderRoute`.
+  - Immutability: `FormatRouteNotice`, `Projector`, and `RenderEvent` treat `agent.Event` and `agent.ProviderRoute` as read-only.
+- **Security & Sanitization:**
+  - All displayed fields (`Provider`, `Model`, `Reason`) undergo secret redaction (Anthropic, OpenRouter, Groq, NVIDIA, GitHub, Bearer tokens) and terminal control sequence normalization (CSI, OSC8 hyperlinks, Bidi overrides, raw newlines).
+- **Non-goals & Deferred:**
+  - Router fallback status eligibility policy (treating 401, 403, 404, 429, etc. as eligible for fallback) is left unmodified in `internal/provider/router.go`.
