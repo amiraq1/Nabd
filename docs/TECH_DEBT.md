@@ -115,18 +115,59 @@ because recording them in a commit moves the head and invalidates the record.
 Each limit and its measurement is stated in exactly one tracked file (this
 file, `docs/TECH_DEBT.md`).
 
-## U1: UI Performance Bottleneck (bubbles/textarea)
+## U1 / U3: Composer Line-Wrap Cache & Input Latency (Issue #17)
 
-- **Component:** `internal/ui` (`composer`, `feed_render`)
-- **Issue:** Pushing large payloads (e.g., thousands of runes without spaces) into the composer causes O(N) word-wrapping recalculations on every keystroke in `bubbles/textarea`. A 16KB payload can make a single keystroke take >30ms locally, which becomes fatal under race-detector overhead.
-- **ROOT_CAUSE (corrected):**
-  - [OBSERVED] The ~+2 and ~+100 payload cases have nearly identical runtime under the fixed 101-backspace workload, so the small payload-length delta above maxInputRunes does not explain the observed cost.
-  - [OBSERVED] The long unbroken payload (~8000 runes) combined with repeated Backspace updates produces expensive repeated wrapping/editing work locally without -race.
-  - [INFERRED] The previous CI timeout was primarily averted by reducing the number of Backspace updates from 101 to 3, rather than by reducing the payload delta from +100 to +2.
-- **Resolution Plan (U3):** Implement a line-wrap cache and update only the actively flowing element rather than forcing a full re-wrap of the entire history buffer.
-- **OPEN QUESTIONS:**
-  - [UNKNOWN] The exact growth shape of the per-keystroke re-wrap cost (quadratic vs linear) is not established by the current benchmark.
-  - [DEFERRED] U3 must establish the growth shape using an independent keystroke-count axis or an independent payload-length axis.
+- **Component:** `internal/ui` (`composer`, `feed`), `third_party/bubbles/textarea`
+- **Issue:** Pushing large payloads (e.g., thousands of runes without spaces) into the composer causes high input latency on every keystroke. In an unbroken payload of ~8,100 runes, 101 Backspace events took ~1.4s locally and ~3.0s for Arabic text, triggering CI timeouts under race-detector overhead.
+
+### Root Cause Analysis
+
+- **[CONFIRMED] Cache Miss Pattern:** Upstream `bubbles/textarea` wraps text via `memoizedWrap`, which keys an LRU cache by `sha256(fmt.Sprintf("%s:%d", string(runes), width))`. Any Backspace or keystroke mutates the string, causing a 100% cache miss on every single edit.
+- **[CONFIRMED] Quadratic Re-Wrap Work:** On every cache miss, `wrap(runes, width)` executes from rune 0 across the entire unbroken string, invoking `uniseg.StringWidth` for every character. For 8,100 unbroken runes, profiling confirmed:
+  - **CPU Profile:** 87.25% in `bubbles/textarea.wrap` (74.28% in `uniseg.StringWidth`).
+  - **Memory Profile:** 60.13% in `wrap` allocations and 24.77% in `line.Hash` (SHA-256 string hashing).
+
+### Architecture: Line-Wrap Cache & Dependency Adaptation
+
+1. **Why an External Wrapper Was Insufficient:** `textarea.Model.Update` internally invokes private methods `cursorLineNumber()`, `LineInfo()`, and `repositionView()`. Every single keystroke forces multiple internal calls to `memoizedWrap`. An external wrapper around `textarea.Model` cannot intercept or memoize these internal wrap calls.
+2. **Dependency Adaptation:** Minimal localized adaptation of `github.com/charmbracelet/bubbles` (tag `v1.0.0`, MIT licensed) vendored at `third_party/bubbles` and wired via `go.mod` replacement directive (`replace github.com/charmbracelet/bubbles => ./third_party/bubbles`). Upstream license and provenance are strictly preserved.
+3. **Incremental Wrap Algorithm:**
+   - Word-wrapping without lookahead is forward-causal: any wrapped row $i$ ends at `offsets[i+1] = offsets[i] + len(wrapped[i])`.
+   - When text changes at or after `prefixLen = commonRunesPrefix(cachedRunes, newRunes)`, any row $k$ with `offsets[k+1] <= prefixLen` is completely unaffected by changes downstream.
+   - By reusing rows $0 \dots \max(0, \text{editRow}-1)-1$ and wrapping only the remainder `newRunes[offsets[reuseRows]:]`, unchanged prefix rows are reused directly without re-measuring string widths.
+   - For an unbroken 8,100-rune payload at width 76, rows 0..104 (~7,980 runes) are reused as-is; only the final row (~120 runes) is wrapped.
+   - All prompt rendering, border padding, soft-wrap trailing spaces, and Unicode grapheme cluster rules from upstream remain 100% identical.
+
+### Benchmark Evidence (Android arm64, Linux 5.15.180, Go 1.27.0)
+
+Measured via `go test ./internal/ui -run '^$' -bench '^BenchmarkComposerBackspaceOversized$' -benchmem -count=5` and analyzed with `benchstat`:
+
+| Benchmark Case | Baseline sec/op | Optimized sec/op | Time Delta | Baseline B/op | Optimized B/op | Mem Delta | Baseline allocs/op | Optimized allocs/op | Allocs Delta |
+|---|---|---|---|---|---|---|---|---|---|
+| **Axis A: N=1000, K=101** | 169.51 ms | 26.05 ms | **-84.63% (6.5x)** | 5.36 MiB | 1.51 MiB | **-71.84%** | 58,405 | 7,387 | **-87.35%** |
+| **Axis A: N=2000, K=101** | 382.35 ms | 42.14 ms | **-88.98% (9.1x)** | 10.68 MiB | 2.60 MiB | **-75.66%** | 113,727 | 7,867 | **-93.08%** |
+| **Axis A: N=4000, K=101** | 530.04 ms | 48.53 ms | **-90.84% (10.9x)** | 21.38 MiB | 4.78 MiB | **-77.63%** | 224,365 | 8,928 | **-96.02%** |
+| **Axis A: N=8000, K=101** | 1010.99 ms | 88.64 ms | **-91.23% (11.4x)** | 42.03 MiB | 9.14 MiB | **-78.25%** | 445,380 | 11,118 | **-97.50%** |
+| **Axis A: N=8100, K=101** | 1057.81 ms | 93.51 ms | **-91.16% (11.3x)** | 42.37 MiB | 9.15 MiB | **-78.41%** | 450,940 | 11,212 | **-97.51%** |
+| **Axis B: N=8100, K=1** | 15.46 ms | 14.33 ms | ~ (p=0.222) | 736.6 KiB | 404.3 KiB | **-45.11%** | 8,857 | 4,474 | **-49.49%** |
+| **Axis B: N=8100, K=3** | 55.01 ms | 15.65 ms | **-71.54% (3.5x)** | 1.56 MiB | 584.5 KiB | **-63.30%** | 17,754 | 4,621 | **-73.97%** |
+| **Axis B: N=8100, K=20** | 136.09 ms | 28.28 ms | **-79.22% (4.8x)** | 8.65 MiB | 2.06 MiB | **-76.25%** | 93,197 | 5,694 | **-93.89%** |
+| **Axis B: N=8100, K=101** | 1404.80 ms | 114.80 ms | **-91.83% (12.3x)** | 42.37 MiB | 9.15 MiB | **-78.41%** | 450,940 | 11,211 | **-97.51%** |
+| **UpdateView: N=8100, K=101** | 1938.50 ms | 514.70 ms | **-73.45% (3.8x)** | 60.68 MiB | 29.16 MiB | **-51.94%** | 746,400 | 630,300 | **-15.56%** |
+| **Arabic: N=8100, K=101** | 2955.60 ms | 114.40 ms | **-96.13% (25.9x)** | 82.58 MiB | 14.37 MiB | **-82.60%** | 707,900 | 16,322 | **-97.69%** |
+| **Geometric Mean** | **392.70 ms** | **56.55 ms** | **-85.60%** | **14.13 MiB** | **3.85 MiB** | **-72.72%** | **152,600** | **12,180** | **-92.02%** |
+
+### Resolution of Growth Shape Questions
+
+1. **Axis A Scaling (Payload Length $N$ with fixed $K=101$ Backspaces):**
+   - In the baseline, re-wrap cost scaled strictly as $O(K \cdot N)$, leading to quadratic cumulative time across an editing session.
+   - With the line-wrap cache, repeated edits scale with only the tail row remainder rather than the full length ($O(K \cdot \text{rowWidth} + N_{\text{initial}})$). Increasing $N$ by 8x (from 1,000 to 8,000 runes) increases allocations by only 1.5x (7.39k to 11.12k) instead of 7.6x (58.4k to 445.4k).
+2. **Axis B Scaling (Keystroke Count $K$ with fixed $N=8,100$ Runes):**
+   - In the baseline, every single Backspace imposed a fixed re-wrap penalty of $\sim 14$ ms and $\sim 4,400$ allocations.
+   - With the line-wrap cache, the marginal cost per keystroke drops from **$\sim 14$ ms / 4,400 allocs** down to **$\sim 0.8$ ms / 70 allocs**. This represents a **17.5x reduction in marginal keypress latency** and a **60x reduction in marginal memory allocations**.
+3. **Severe Workload Pass:**
+   - The severe regression test `TestOversizedHistoryRecallEditableDown` ($N=8100$, $K=101$ real Backspaces through the limit boundary) passes deterministically in **$\sim 0.38$s** (down from several seconds that previously hung CI), and is guarded by `testing.Short()` when run with `-short`.
+
 
 ## U2: Provider-route presentation and observability (Issue #16)
 

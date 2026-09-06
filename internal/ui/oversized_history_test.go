@@ -10,22 +10,26 @@ import (
 
 // TestOversizedHistoryRecallEditableDown: a historical entry larger than
 // the cap may be recalled and edited DOWN (backspace works), but cannot be
-// sent until it is reduced under the cap.
+// sent until it is reduced to or under the cap.
 func TestOversizedHistoryRecallEditableDown(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping severe oversized-history edit regression test in short mode")
+	}
+
 	f := NewFeed()
 	f.width = 80
 	f.height = 24
-	// Directly seed an oversized entry into history (as if from an old
-	// journal written before the limit policy).
-	big := strings.Repeat("م", maxInputRunes+2)
+	// Directly seed an oversized entry into history (8100 runes unbroken).
+	big := strings.Repeat("م", maxInputRunes+100)
 	f.history.add(big)
 
 	// Recall via Up.
 	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyUp})
-	if got := f.composer.valueLen(); got != maxInputRunes+2 {
-		t.Fatalf("recalled len = %d, want %d (historical entries are not truncated)", got, maxInputRunes+2)
+	if got := f.composer.valueLen(); got != maxInputRunes+100 {
+		t.Fatalf("recalled len = %d, want %d (historical entries are not truncated)", got, maxInputRunes+100)
 	}
-	// Sending is blocked while over the cap.
+
+	// Sending is blocked while over the cap (8100 runes).
 	f.SetRunner(runnerFunc(func(string) error { return nil }))
 	_, cmd := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd != nil {
@@ -34,20 +38,68 @@ func TestOversizedHistoryRecallEditableDown(t *testing.T) {
 	if f.HistoryLen() != 1 {
 		t.Fatal("rejected send must not add a history entry")
 	}
-	if v := f.composer.valueLen(); v != maxInputRunes+2 {
+	if v := f.composer.valueLen(); v != maxInputRunes+100 {
 		t.Fatal("rejected send must keep the text")
 	}
-	// Editing DOWN is allowed: delete 3 runes to get under the cap.
-	for i := 0; i < 3; i++ {
+
+	// Delete 99 runes: length becomes maxInputRunes + 1 (8001 runes). Still over cap.
+	for i := 0; i < 99; i++ {
 		_, _ = f.Update(tea.KeyMsg{Type: tea.KeyBackspace})
 	}
-	if v := f.composer.valueLen(); v != maxInputRunes-1 {
-		t.Fatalf("after deleting 3 runes len = %d, want %d", v, maxInputRunes-1)
+	if v := f.composer.valueLen(); v != maxInputRunes+1 {
+		t.Fatalf("after deleting 99 runes len = %d, want %d", v, maxInputRunes+1)
 	}
-	// Now it can be sent.
+	_, cmdOver := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmdOver != nil {
+		t.Fatal("sending at maxInputRunes + 1 must be rejected")
+	}
+	if f.HistoryLen() != 1 {
+		t.Fatal("rejected send at 8001 runes must not add a history entry")
+	}
+
+	// Delete 1 more rune (100th deletion): length becomes exactly maxInputRunes (8000 runes).
+	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if v := f.composer.valueLen(); v != maxInputRunes {
+		t.Fatalf("after deleting 100 runes len = %d, want %d", v, maxInputRunes)
+	}
+	if inputTooLong(f.composer.value()) {
+		t.Fatal("at maxInputRunes (8000) inputTooLong must be false")
+	}
+
+	// Delete 1 more rune (101st deletion): length becomes maxInputRunes - 1 (7999 runes).
+	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if v := f.composer.valueLen(); v != maxInputRunes-1 {
+		t.Fatalf("after deleting 101 runes len = %d, want %d", v, maxInputRunes-1)
+	}
+
+	// Now it can be sent below cap.
 	_, cmd2 := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if cmd2 == nil {
 		t.Fatal("a reduced message must be sendable")
+	}
+	if f.HistoryLen() != 2 {
+		t.Fatalf("accepted send must add a history entry, got len = %d", f.HistoryLen())
+	}
+
+	// Verify that at exactly maxInputRunes (8000 runes, 100 deletions), sending is also accepted.
+	f2 := NewFeed()
+	f2.width = 80
+	f2.height = 24
+	f2.history.add(big)
+	_, _ = f2.Update(tea.KeyMsg{Type: tea.KeyUp})
+	f2.SetRunner(runnerFunc(func(string) error { return nil }))
+	for i := 0; i < 100; i++ {
+		_, _ = f2.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	if v := f2.composer.valueLen(); v != maxInputRunes {
+		t.Fatalf("f2 after 100 deletions len = %d, want %d", v, maxInputRunes)
+	}
+	_, cmdAtCap := f2.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmdAtCap == nil {
+		t.Fatal("sending at exactly maxInputRunes (8000) must be accepted")
+	}
+	if f2.HistoryLen() != 2 {
+		t.Fatalf("f2 accepted send must add history entry, got len = %d", f2.HistoryLen())
 	}
 }
 
