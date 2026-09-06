@@ -78,23 +78,30 @@ var (
 // Using 6x guarantees we never UNDER-estimate and keep a patch that would
 // push the event over budget.
 //
-// eventEnvelopeAllowance: the journal (agent.Loop.emitAt) adds Seq, Parent,
-// and Time to the Event before serializing — fields absent from the bare
-// agent.Event{Type, Edit: rec} that boundEditEvent marshals for the baseline.
-// Worst-case JSON contributions:
-//   - "seq":NNNNNNNN (8 digits int64): ~13 bytes
-//   - "parent":NNNNNNNN: ~17 bytes
-//   - "t":"2006-01-02T15:04:05.999999999Z07:00" (RFC3339Nano): ~35 bytes
+// Tradeoff: 6x is conservative. A 700 KB patch of plain text (escape factor
+// ~1.05) is estimated at 4.2 MB and dropped even though it would serialize
+// to ~735 KB — well within the 4 MB maxEventBytes. We accept this
+// over-dropping: the alternative (full-serializing up to 4 MB on every edit
+// to measure exactly) is costlier on a phone, and a dropped Patch still
+// preserves the audit fields (hashes, blobs). The decision favors never
+// emitting an oversized event over keeping every Patch.
 //
-// Total worst case: ~65 bytes. Rounded up to 128 for margin.
-//
-// The actual journal encodes once (store.JSONL.Append → json.Marshal(e));
-// boundEditEvent's own marshal of the bare record is cheap (bounded audit
-// fields), so no 4 MB encode runs on the phone per edit.
+// eventEnvelopeAllowance: the journal (agent.Loop.emitAt) stamps Seq, Parent,
+// and Time on the Event before serializing — fields that boundEditEvent does
+// not set when it marshals agent.Event{Type, Edit: rec} for the baseline.
+// Measured directly: marshaling the bare event (Seq=0, zero Time) vs. the full
+// journal event (Seq=MaxInt64, MaxInt64-1, RFC3339Nano Time) gives an envelope
+// of 57 bytes in the worst case (typical case ~29 bytes for 5-digit seq).
+// 128 bytes is ~2.2× the measured worst case, a conservative margin. See
+// the measurement in commit 13526e8 — the number is evidence, not an estimate.
 const (
 	jsonEscapeWorstCaseFactor = 6
 	eventEnvelopeAllowance    = 128
 )
+
+// The actual journal encodes once (store.JSONL.Append → json.Marshal(e));
+// boundEditEvent's own marshal of the bare record is cheap (bounded audit
+// fields), so no 4 MB encode runs on the phone per edit.
 
 // --- NBD-010 strict request validation -------------------------------------
 // A mutating request must prove it is well-formed before it touches the disk.

@@ -18,14 +18,16 @@ Controlled Implementation, Evidence, Measurement & Release Gate.
 ## G0 (Task 0 baseline)
 
 - **G0_STATUS**: SKIPPED — G0 produced no artifact. [DEFERRED]
-- **justification**: G0 is the baseline capture for the U1 (root-cause)
-  investigation. U1 is purely a documentation correction (stale
-  `patch.go` root-cause interpretation), with no code change committed on
-  the U1 branch. A baseline report on the master tree was therefore
-  deliberately skipped: there is no code delta to baseline against, and
-  capturing `go version` / `go vet` / `go test` on master would only
-  describe the master state, not the U1 work. [DEFERRED]
-- **intended baseline commands** (for reference, if U1 code changes resume):
+- **justification**: G0 is the pre-change baseline (Go version, gofmt, build,
+  vet, test, benchmark) captured on master BEFORE the PR's code changes.
+  This PR makes substantial code changes to `internal/tools/write.go`
+  (validation, diff bounding, event budgeting, patch markers). A G0 baseline
+  was not captured because the work began from the PR's existing state
+  (head 4d02856) rather than from a clean master checkout. The G1
+  measurement (Task 7, the diff benchmark) serves as the calibration point
+  for the diff-specific limits; a full G0 baseline across all validation
+  gates was deliberately deferred. [DEFERRED]
+- **intended baseline commands** (for reference, if a G0 capture is needed):
   `go version`, `gofmt -l .`, `go build ./...`, `go vet ./...`,
   `go test ./internal/tools -count=1`
 
@@ -92,12 +94,17 @@ Direct code evidence (`internal/tools/registry.go`):
   absence of review is recorded as a constraint, not substituted with a claim of
   independent review.
 - **RED raw output**: Tests `TestWriteValidation*` ran RED before implementation:
-  - content absent/null → succeeded (wrong: treated null as empty)
+  - content absent/null → wrongly succeeded (treated null as empty)
   - content number/object/array → file SHA256 changed (wrong: silent empty write via failed unmarshal into string field)
-  - duplicate content key → succeeded (wrong)
-  - unknown field → succeeded (wrong)
-  - write_file with `old`/`new`/`all` (cross-tool fields) → silently accepted
-  - edit_file with `content` (cross-tool field) → silently accepted
+  - duplicate content key → wrongly succeeded
+  - unknown field → wrongly succeeded
+  - write_file with `old`/`new`/`all` (cross-tool fields) → wrongly accepted (shared `mutatingRequest` struct silently accepted fields from the OTHER tool's schema)
+  - edit_file with `content` (cross-tool field) → wrongly accepted
+  RED proof: `TestWriteValidationRejectsCrossToolFields` FAILED before the fix
+  with `expected rejection (ok=false, err!=nil), got ok=true err=<nil>` on each
+  cross-tool case — the decoder accepted `old`/`new`/`all` for write_file and
+  `content` for edit_file because they ARE valid keys of the shared struct,
+  outside the per-tool allowed set.
 - **GREEN raw output**: After fix, `go test ./internal/tools -count=5` → PASS. All `TestWriteValidationRejectsBeforeSideEffects`, `TestWriteValidationAcceptsExplicitEmpty`, `TestWriteValidationDistinguishesAbsentNullEmpty`, `TestWriteValidationRejectsCrossToolFields` pass. Invariants verified: file SHA256 unchanged, file mode unchanged, no directory created, read-credit preserved at staged value.
 - **tests covered**: content absent/null/wrong-type(number,object,array)/duplicate-key/unknown-field/invalid-JSON; new absent/null/wrong-type; explicit empty accepted for both tools; absent/null/empty distinguished; cross-tool fields rejected per-tool (write_file +old/+new/+all, edit_file +content) plus genuinely unknown key; each rejection asserts file SHA256 unchanged, mode unchanged, no dir created, read-credit NOT consumed.
 - **commit hash**: `598753b` (fix(tools): reject cross-tool fields per tool schema (NBD-010)) — layered on top of `9462d2c` (reject incomplete mutating requests before side effects)
@@ -182,3 +189,6 @@ documented above: TEST_YML_ON_MASTER is REMOVED_ON_BRANCH/PENDING_MERGE
 #13), read-credit correctness is NBD-034 still OPEN, local race blocked by
 android/arm64 CGO_ENABLED=0, and G0 was deliberately SKIPPED. See
 docs/TECH_DEBT.md for the [DEFERRED] aggregate-memory ceiling (NBD-020).
+
+**CI**: run 34000898936 (completed, success) on head `de9abaa`.
+**Verified SHAs on origin**: `de9abaa`, `1e0676e`, `13526e8`, `fa173f5`, `89c70bd`, `598753b`.
