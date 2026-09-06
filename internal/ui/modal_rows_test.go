@@ -22,7 +22,10 @@ func TestPermModalRowsMatchLineCount(t *testing.T) {
 		decisionPending bool
 	}{
 		{name: "with args, first choice selected", args: `{"path":"main.go"}`, selected: 0},
-		{name: "with args, nothing selected yet", args: `{"cmd":"ls -la"}`, selected: -1},
+		// selected=-1 is no longer a valid default (now Deny), but the modal must
+		// still render cleanly for any out-of-range index: row count is driven by
+		// shape(), not by selected, so this stays a guard for that property.
+		{name: "with args, invalid selection falls back to Deny", args: `{"cmd":"ls -la"}`, selected: -1},
 		{name: "no args", args: "", selected: 1},
 		{name: "empty object args counts as no args", args: "{}", selected: 2},
 		{name: "decision pending with args", args: `{"path":"main.go"}`, selected: 2, decisionPending: true},

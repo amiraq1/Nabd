@@ -154,12 +154,10 @@ func TestModalKeyPriority(t *testing.T) {
 	}
 	before := f.composer.value()
 
-	// Ordinary keys while the modal is open must be swallowed.
+	// Ordinary non-modal keys while the modal is open must be swallowed
+	// without producing a command.
 	for _, k := range []tea.KeyMsg{
 		{Type: tea.KeyRunes, Runes: []rune("x")},
-		{Type: tea.KeyEnter},
-		{Type: tea.KeyUp},
-		{Type: tea.KeyDown},
 		{Type: tea.KeyPgUp},
 		{Type: tea.KeySpace},
 	} {
@@ -168,6 +166,24 @@ func TestModalKeyPriority(t *testing.T) {
 			t.Fatalf("key %v during modal produced a command", k)
 		}
 	}
+
+	// Up/Down change the modal selection legitimately and must not produce a
+	// command either (they do not close the modal).
+	startSelected := f.permModal.selected
+	_, cmdUp := f.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if cmdUp != nil {
+		t.Fatal("Up during modal produced a command")
+	}
+	_, cmdDown := f.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if cmdDown != nil {
+		t.Fatal("Down during modal produced a command")
+	}
+	// Net effect of Up then Down returns to the original selection.
+	if f.permModal.selected != startSelected {
+		t.Fatalf("Up then Down should restore selection: got %d, want %d",
+			f.permModal.selected, startSelected)
+	}
+
 	if got := f.composer.value(); got != before {
 		t.Fatalf("composer changed during modal: %q → %q", before, got)
 	}
@@ -179,20 +195,39 @@ func TestModalKeyPriority(t *testing.T) {
 	}
 }
 
-// TestModalEnterDoesNotSend: Enter while the modal is visible never sends.
-func TestModalEnterDoesNotSend(t *testing.T) {
+// TestModalEnterDefaultsToDenyAndNeverSendsComposer: Enter while the modal is
+// visible submits a Deny decision by default — it never starts a runner run
+// and never modifies the composer.
+// Contract change: previously selected=-1 made Enter a no-op; now the default
+// selection is Deny, so Enter must produce a Deny permReply.
+func TestModalEnterDefaultsToDenyAndNeverSendsComposer(t *testing.T) {
 	f, r := feedWithRunner(t)
 	typeIntoFeed(t, f, "would be sent")
 	openModal(f)
+
 	_, cmd := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd != nil {
-		t.Fatal("Enter during modal must not produce a command")
-	}
+
+	// Runner must never be invoked.
 	if r.textsLen() != 0 {
 		t.Fatal("runner must not be invoked during modal")
 	}
+
+	// Composer text must be preserved.
 	if got := f.composer.value(); got != "would be sent" {
 		t.Fatalf("composer text lost during modal: %q", got)
+	}
+
+	// Enter on the default selection must produce a Deny reply.
+	if cmd == nil {
+		t.Fatal("Enter during modal must produce a permission-reply command")
+	}
+	msg := cmd()
+	reply, ok := msg.(permReplyMsg)
+	if !ok {
+		t.Fatalf("expected permReplyMsg, got %T", msg)
+	}
+	if reply.Decision != agent.Deny {
+		t.Fatalf("expected Decision=Deny, got %v", reply.Decision)
 	}
 }
 
