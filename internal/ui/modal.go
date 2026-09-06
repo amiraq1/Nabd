@@ -25,23 +25,37 @@ type PermissionModal struct {
 	decisionPending bool
 }
 
+// denyIndex returns the index of the Deny choice in choices(), failing closed
+// to the last choice if Deny is somehow missing. This is the single source of
+// truth for the default selection, keeping newPermissionModal/open/selectedChoice
+// aligned on the same fail-closed invariant.
+func denyIndex() int {
+	for i, c := range (&PermissionModal{}).choices() {
+		if c.Decision == agent.Deny {
+			return i
+		}
+	}
+	// choices() always includes Deny, so this is unreachable in practice.
+	return len((&PermissionModal{}).choices()) - 1
+}
+
 func newPermissionModal() *PermissionModal {
 	return &PermissionModal{
-		selected: -1,
+		selected: denyIndex(),
 	}
 }
 
 func (m *PermissionModal) open(call *agent.ToolCall) {
 	m.visible = true
 	m.call = call
-	m.selected = -1
+	m.selected = denyIndex()
 	m.decisionPending = false
 }
 
 func (m *PermissionModal) close() {
 	m.visible = false
 	m.call = nil
-	m.selected = -1
+	m.selected = denyIndex()
 	m.decisionPending = false
 }
 
@@ -290,11 +304,13 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	}
 
 	// selectedChoice returns the choice to show when only one row is available.
+	// Fail-closed: any invalid selection resolves to Deny, matching
+	// currentDecision() and the default selection set by newPermissionModal/open.
 	selectedChoice := func() PermissionChoice {
 		ch := m.choices()
 		idx := m.selected
 		if idx < 0 || idx >= len(ch) {
-			idx = 0
+			idx = denyIndex()
 		}
 		return ch[idx]
 	}
