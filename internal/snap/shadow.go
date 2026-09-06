@@ -148,6 +148,27 @@ func (s *Shadow) Read(id string) ([]byte, error) {
 	return s.get(id)
 }
 
+// Discard removes a blob from the shadow store by its content-addressed id.
+// Used to clean up orphan blobs when a mutation is aborted after CaptureBytes
+// but before the blob is referenced by a committed Edit. A missing blob is
+// not an error: the goal is absence, and it may already have been removed.
+func (s *Shadow) Discard(id string) error {
+	if id == "" {
+		return nil
+	}
+	if err := validateID(id); err != nil {
+		return err
+	}
+	p := filepath.Join(s.store, id[5:7], id[7:])
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	// Best-effort: try to remove the now-empty two-char prefix directory.
+	// Ignored if not empty (other blobs share the prefix).
+	os.Remove(filepath.Dir(p))
+	return nil
+}
+
 // Restore puts a file back into a recorded state, atomically.
 func (s *Shadow) Restore(st State) error {
 	abs := filepath.Join(s.root, filepath.FromSlash(st.Rel))
