@@ -1,15 +1,19 @@
+# Build output
 /ag
-*.tmp
-test_*.go
-test_*.py
-test_*.md
-*.local.*
-fix_*.py
 
-test_*.py
-test_*.sh
-probe_*.sh
-input.txt
+# Temporary files
+*.tmp
+*.local.*
+
+# Local scratch / probe files (repo root only)
+/test_*.py
+/test_*.sh
+/test_*.md
+/fix_*.py
+/probe_*.sh
+/input.txt
+
+# Tooling
 .commandcode/
 
 # CI/release artifacts
