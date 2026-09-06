@@ -62,6 +62,29 @@ that is ~32 MB of matrix alone, matching the 33.6 MB total observed.
   patch with JSON escaping overhead; if exceeded, the Patch is dropped and the
   audit fields (hashes, blobs) survive.
 
+### Event-size estimation constants (NBD-011)
+
+`boundEditEvent` estimates the serialized event size rather than
+full-serializing on every edit. Two conservative allowances:
+
+- **jsonEscapeWorstCaseFactor = 6**: every byte of the Patch may become `\u0000`
+  (6 bytes) in JSON. Using 6× guarantees we never under-estimate. Tradeoff:
+  6× is conservative — a 700 KB plain-text patch (escape factor ~1.05) is
+  estimated at 4.2 MB and dropped even though it would serialize to ~735 KB,
+  well within 4 MB. Decision favors never emitting an oversized event over
+  keeping every Patch (dropped Patch still preserves hashes/blobs).
+- **eventEnvelopeAllowance = 128**: the journal (`agent.Loop.emitAt`) stamps
+  Seq, Parent, and Time before serializing — fields `boundEditEvent` does not
+  set. Measured directly by field (see `internal/agent/event.go`):
+  - `Seq    int       json:"seq"`              → `"seq":9223372036854775807` = 18 B
+  - `Parent int       json:"parent,omitempty"` → `,"parent":9223372036854775806` = 29 B (omitted when 0)
+  - `Time   time.Time json:"t"`               → `,"t":"2026-09-06T00:19:03.703040241Z"` = 10 B
+  - Total worst-case envelope = 18 + 29 + 10 = **57 bytes** (typical ~29 B for 5-digit seq).
+  - 128 B is ~2.2× the measured worst case, a conservative margin.
+
+The actual journal encodes once (`store.JSONL.Append`); `boundEditEvent`
+marshals only the bare record (bounded audit fields) for its baseline.
+
 ### Policy
 
 `maxWriteBytes = 1<<20` (write_file) and `maxEditBytes = 2<<20` (edit_file) are
@@ -75,3 +98,19 @@ n*m guard rejects any input larger than 2000x2000 before allocation. Since
 cost grows as O(n*m) beyond it, this ceiling is the deterministic boundary
 below which cost has been measured and above which it is not allowed.
 Re-measure if workload characteristics change.
+
+### Known gaps [DEFERRED]
+
+- **Null-valued cross-tool fields**: `parseMutatingRequest` rejects cross-tool
+  fields only when non-nil. A key present with JSON null (e.g.
+  `{"path":"x","content":"y","old":null}`) decodes to nil and is NOT rejected.
+  The contract is "non-nil cross-tool fields are rejected", not "cross-tool
+  keys rejected regardless of value". Practical impact is nil. Key-presence
+  detection would require decoding into a map first.
+
+### Evidence documentation rule
+
+CI run ids and head SHAs live in PR comments, never in tracked files,
+because recording them in a commit moves the head and invalidates the record.
+Each limit and its measurement is stated in exactly one tracked file (this
+file, `docs/TECH_DEBT.md`).

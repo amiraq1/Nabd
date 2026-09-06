@@ -89,11 +89,14 @@ var (
 // eventEnvelopeAllowance: the journal (agent.Loop.emitAt) stamps Seq, Parent,
 // and Time on the Event before serializing — fields that boundEditEvent does
 // not set when it marshals agent.Event{Type, Edit: rec} for the baseline.
-// Measured directly: marshaling the bare event (Seq=0, zero Time) vs. the full
-// journal event (Seq=MaxInt64, MaxInt64-1, RFC3339Nano Time) gives an envelope
-// of 57 bytes in the worst case (typical case ~29 bytes for 5-digit seq).
-// 128 bytes is ~2.2× the measured worst case, a conservative margin. See
-// the measurement in commit 13526e8 — the number is evidence, not an estimate.
+// Measured directly by field (see internal/agent/event.go for the JSON tags):
+//
+//	Seq    int       json:"seq"              → "seq":9223372036854775807 = 18 B
+//	Parent int       json:"parent,omitempty" → ,"parent":9223372036854775806 = 29 B (omitted when 0)
+//	Time   time.Time json:"t"                 → ,"t":"2026-09-06T00:19:03.703040241Z" = 10 B
+//
+// Total worst-case envelope = 18 + 29 + 10 = 57 bytes (typical ~29 B for 5-digit seq).
+// 128 bytes is ~2.2× the measured worst case, a conservative margin.
 const (
 	jsonEscapeWorstCaseFactor = 6
 	eventEnvelopeAllowance    = 128
@@ -124,66 +127,86 @@ type mutatingRequest struct {
 // parseMutatingRequest decodes raw into a validated mutatingRequest. It
 // rejects invalid JSON, duplicate keys, unknown fields, wrong types, and
 // absent/null required fields. It performs NO filesystem access, so it is
-// safe to call before any side effect. The required string fields are the
-// ones named in required.
+// safe to call before any side effect.
 //
-// allowed is the per-tool field set: only those JSON keys may be present.
-// Because mutatingRequest is the shared struct (the union of both tools'
-// schemas), DisallowUnknownFields alone cannot reject a field that is a
-// member of the struct but belongs to the OTHER tool — e.g. write_file
-// carrying "old"/"new"/"all", or edit_file carrying "content". The allowed
-// set enforces the per-tool boundary: any non-nil field outside it is
-// rejected as an unknown field.
-func parseMutatingRequest(raw json.RawMessage, allowed []string, required ...string) (mutatingRequest, error) {
+// tool selects the per-tool schema (allowed + required fields) from the
+// toolSchemas map below. Because mutatingRequest is the shared struct (the
+// union of both tools' schemas), DisallowUnknownFields alone cannot reject a
+// field that is a member of the struct but belongs to the OTHER tool — e.g.
+// write_file carrying "old"/"new"/"all", or edit_file carrying "content". The
+// allowed set enforces the per-tool boundary: any non-nil field outside it is
+// rejected as an unknown field. Required and allowed are derived from ONE
+// schema entry so they cannot drift.
+//
+// Contract note on null: a cross-tool field present with a JSON null value
+// (e.g. {"path":"x","content":"y","old":null}) decodes to nil and is NOT
+// rejected — only non-nil cross-tool fields are rejected. This is a known
+// gap: the stated contract is "non-nil cross-tool fields are rejected", not
+// "cross-tool keys are rejected regardless of value". Practical impact is nil
+// (a null carries no information). Tracked as [DEFERRED]: key-presence
+// detection would require decoding into a map first.
+func parseMutatingRequest(raw json.RawMessage, tool string) (mutatingRequest, error) {
 	var m mutatingRequest
 	if err := decodeStrict(raw, &m); err != nil {
 		return m, err
 	}
-	perm := make(map[string]struct{}, len(allowed))
-	for _, f := range allowed {
-		perm[f] = struct{}{}
+	schema, ok := toolSchemas[tool]
+	if !ok {
+		return m, fmt.Errorf("unknown tool: %s", tool)
 	}
 	if m.Content != nil {
-		if _, ok := perm["content"]; !ok {
+		if !schema.allowed["content"] {
 			return m, errors.New("unknown field: content")
 		}
 	}
 	if m.Old != nil {
-		if _, ok := perm["old"]; !ok {
+		if !schema.allowed["old"] {
 			return m, errors.New("unknown field: old")
 		}
 	}
 	if m.New != nil {
-		if _, ok := perm["new"]; !ok {
+		if !schema.allowed["new"] {
 			return m, errors.New("unknown field: new")
 		}
 	}
 	if m.All != nil {
-		if _, ok := perm["all"]; !ok {
+		if !schema.allowed["all"] {
 			return m, errors.New("unknown field: all")
 		}
 	}
-	for _, name := range required {
-		switch name {
-		case "path":
-			if m.Path == nil {
-				return m, errors.New("path is required")
-			}
-		case "content":
-			if m.Content == nil {
-				return m, errors.New("content is required")
-			}
-		case "old":
-			if m.Old == nil {
-				return m, errors.New("old is required")
-			}
-		case "new":
-			if m.New == nil {
-				return m, errors.New("new is required")
-			}
-		}
+	if m.Path == nil && schema.required["path"] {
+		return m, errors.New("path is required")
+	}
+	if m.Content == nil && schema.required["content"] {
+		return m, errors.New("content is required")
+	}
+	if m.Old == nil && schema.required["old"] {
+		return m, errors.New("old is required")
+	}
+	if m.New == nil && schema.required["new"] {
+		return m, errors.New("new is required")
 	}
 	return m, nil
+}
+
+// toolSchemas is the single source of truth for each mutating tool's field
+// policy. allowed lists the JSON keys the tool may carry; required lists the
+// keys that must be present (non-null). Both are derived from one entry per
+// tool so they cannot drift.
+type toolSchema struct {
+	allowed  map[string]bool
+	required map[string]bool
+}
+
+var toolSchemas = map[string]toolSchema{
+	"write_file": {
+		allowed:  map[string]bool{"path": true, "content": true},
+		required: map[string]bool{"path": true, "content": true},
+	},
+	"edit_file": {
+		allowed:  map[string]bool{"path": true, "old": true, "new": true, "all": true},
+		required: map[string]bool{"path": true, "old": true, "new": true},
+	},
 }
 
 // decodeStrict decodes raw into dst while rejecting duplicate keys and unknown
@@ -743,7 +766,7 @@ func (writeFile) Spec() provider.ToolSpec {
 }
 
 func (w writeFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
-	m, err := parseMutatingRequest(raw, []string{"path", "content"}, "path", "content")
+	m, err := parseMutatingRequest(raw, "write_file")
 	if err != nil {
 		return "", false, err
 	}
@@ -794,7 +817,7 @@ func (editFile) Spec() provider.ToolSpec {
 }
 
 func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
-	m, err := parseMutatingRequest(raw, []string{"path", "old", "new", "all"}, "path", "old", "new")
+	m, err := parseMutatingRequest(raw, "edit_file")
 	if err != nil {
 		return "", false, err
 	}
