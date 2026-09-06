@@ -118,6 +118,42 @@ func TestCaptureRefusesDirsAndLinks(t *testing.T) {
 	}
 }
 
+func TestDiscardRemovesOrphanBlob(t *testing.T) {
+	s := mk(t)
+	abs := filepath.Join(s.root, "f.txt")
+
+	// CaptureBytes writes a blob to the shadow store.
+	st, err := s.CaptureBytes(abs, []byte("temporary content\n"), 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Blob == "" {
+		t.Fatal("expected a blob id from CaptureBytes")
+	}
+	// Confirm the blob exists on disk.
+	blobPath := filepath.Join(s.store, st.Blob[5:7], st.Blob[7:])
+	if _, err := os.Stat(blobPath); err != nil {
+		t.Fatalf("blob not written: %v", err)
+	}
+
+	// Discard must remove it.
+	if err := s.Discard(st.Blob); err != nil {
+		t.Fatalf("Discard failed: %v", err)
+	}
+	if _, err := os.Stat(blobPath); !os.IsNotExist(err) {
+		t.Error("blob still exists after Discard")
+	}
+
+	// Discard of an already-removed id is idempotent (no error).
+	if err := s.Discard(st.Blob); err != nil {
+		t.Fatalf("second Discard should be idempotent: %v", err)
+	}
+	// Discard of an empty id is a no-op.
+	if err := s.Discard(""); err != nil {
+		t.Fatalf("Discard(\"\") should be no-op: %v", err)
+	}
+}
+
 func TestWriteAtomicLeavesNoDebris(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "sub", "f.txt")

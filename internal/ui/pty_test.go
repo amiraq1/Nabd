@@ -25,7 +25,9 @@ func TestPTYLongOutputKeepsComposerVisible(t *testing.T) {
 		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
 	})
 
-	err := sess.WaitForText("Feed line 10", 3*time.Second)
+	// Follow mode anchors to the newest lines (bottom), so the latest output lines
+	// are visible on screen, while line 10 is scrolled above the viewport.
+	err := sess.WaitForText("Feed line 60", 3*time.Second)
 	if err != nil {
 		t.Fatalf("long output failed to appear: %v", err)
 	}
@@ -50,7 +52,8 @@ func TestPTYTypingAfterFeedFillAppearsInComposer(t *testing.T) {
 		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
 	})
 
-	err := sess.WaitForText("Feed line 10", 3*time.Second)
+	// Follow mode anchors to the newest lines (bottom), so line 40 is visible.
+	err := sess.WaitForText("Feed line 40", 3*time.Second)
 	if err != nil {
 		t.Fatalf("feed filling text did not appear: %v", err)
 	}
@@ -470,7 +473,8 @@ func TestPTYResizeFilledFeedKeepsBottomChrome(t *testing.T) {
 		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
 	})
 
-	err := sess.WaitForText("Feed line 10", 3*time.Second)
+	// Follow mode anchors to the newest lines (bottom), so line 50 is visible.
+	err := sess.WaitForText("Feed line 50", 3*time.Second)
 	if err != nil {
 		t.Fatalf("feed output did not appear: %v", err)
 	}
@@ -528,4 +532,39 @@ func TestPTYTwentyByTwelveDoesNotOverflow(t *testing.T) {
 
 	snap = sess.Snapshot()
 	assertScreenBounds(t, snap)
+}
+
+// 13. TestPTYToolOutputControlPayloadDoesNotCorruptTerminal: injects raw escape codes
+// (screen wipe, cursor moves, OSC title changes) via tool output and verifies the real PTY
+// grid and composer remain intact without corruption.
+func TestPTYToolOutputControlPayloadDoesNotCorruptTerminal(t *testing.T) {
+	sess := StartPTYSession(t, 80, 24)
+
+	maliciousPayload := "Line 1: normal output\n" +
+		"\x1b[2J\x1b[H\x1b[5;10H" + // Screen clear + cursor move
+		"\x1b]0;Hacked Title\x07" + // Terminal title injection
+		"\x1b]52;c;Y2F0Cg==\x07" + // OSC 52 clipboard hijacking
+		"Line 2: safe text after attacks\n"
+
+	sess.InjectBatch([]agent.Event{
+		{Seq: 1, Type: agent.RunStart},
+		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
+		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: maliciousPayload, OK: true}},
+	})
+
+	err := sess.WaitForCondition("safe text rendered", 3*time.Second, func(s ScreenSnapshot) bool {
+		return s.Contains("safe text after attacks")
+	})
+	if err != nil {
+		t.Fatalf("sanitized tool output failed to appear: %v", err)
+	}
+
+	snap := sess.Snapshot()
+	assertScreenBounds(t, snap)
+	assertComposerNearBottom(t, snap, 3)
+
+	// Verify terminal screen does NOT contain escape sequences or injected title
+	if snap.Contains("Hacked Title") {
+		t.Fatalf("PTY screen leaked injected terminal title: %s", snap.PlainText())
+	}
 }

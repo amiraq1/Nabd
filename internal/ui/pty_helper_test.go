@@ -377,6 +377,7 @@ func (s *PTYSession) Resize(width, height int) {
 
 // InjectBatch delivers an event batch directly to the feed model through Bubble Tea's event loop.
 func (s *PTYSession) InjectBatch(events []agent.Event) {
+	s.Feed.testSyncDispatch = true
 	s.Feed.SendBatch(events)
 }
 

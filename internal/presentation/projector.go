@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"strconv"
+	"strings"
 
 	"nabd/internal/agent"
 )
@@ -12,14 +13,19 @@ type Projector struct {
 	items []FeedItem
 
 	// Internal indices for incremental assembly.
-	byID      map[string]*FeedItem // key -> live pointer
-	assistant *FeedItem            // current assistant message being streamed
+	byID         map[string]int // key -> index in items
+	assistantIdx int            // index in items of current assistant message (-1 if none)
+
+	// UnhandledEventTypes tracks counts of unexpected event types encountered by Apply.
+	UnhandledEventTypes map[agent.EventType]int
 }
 
 // NewProjector creates an empty projector.
 func NewProjector() *Projector {
 	return &Projector{
-		byID: map[string]*FeedItem{},
+		byID:                map[string]int{},
+		assistantIdx:        -1,
+		UnhandledEventTypes: map[agent.EventType]int{},
 	}
 }
 
@@ -77,17 +83,37 @@ func (p *Projector) Apply(e agent.Event) error {
 		// the conversation feed. They live in the journal, not on the screen.
 		return nil
 
+	case agent.EventProviderRoute:
+		// Router decision events: UI presentation is deferred to Phase U2 per scope boundaries.
+		return nil
+
 	default:
-		// Unknown type: skip rather than risk sending garbage to the model.
+		// Unknown event type: record in observable counter and skip.
+		if p.UnhandledEventTypes == nil {
+			p.UnhandledEventTypes = map[agent.EventType]int{}
+		}
+		p.UnhandledEventTypes[e.Type]++
 		return nil
 	}
 }
 
-// Items returns the current feed. The returned slice is a copy so callers
-// cannot mutate projector state. Order is stable and deterministic.
+// Items returns the current feed. The returned slice is a deep copy of tool
+// and permission cards so callers cannot mutate internal projector state.
+// Order is stable and deterministic.
 func (p *Projector) Items() []FeedItem {
 	out := make([]FeedItem, len(p.items))
-	copy(out, p.items)
+	for i := range p.items {
+		it := p.items[i]
+		if it.Tool != nil {
+			card := *it.Tool
+			it.Tool = &card
+		}
+		if it.Perm != nil {
+			perm := *it.Perm
+			it.Perm = &perm
+		}
+		out[i] = it
+	}
 	sortBySeq(out)
 	return out
 }
@@ -95,8 +121,9 @@ func (p *Projector) Items() []FeedItem {
 // reset clears all internal state.
 func (p *Projector) reset() {
 	p.items = nil
-	p.byID = map[string]*FeedItem{}
-	p.assistant = nil
+	p.byID = map[string]int{}
+	p.assistantIdx = -1
+	p.UnhandledEventTypes = map[agent.EventType]int{}
 }
 
 // appendRunBoundary adds a run start/end marker.
@@ -127,28 +154,23 @@ func (p *Projector) appendUserMsg(e agent.Event) error {
 // appendTextDelta appends to the current assistant message, creating it if
 // needed. Multiple deltas collapse into one FeedItem.
 func (p *Projector) appendTextDelta(e agent.Event) error {
-	if p.assistant == nil {
-		p.assistant = &FeedItem{
+	if p.assistantIdx < 0 || p.assistantIdx >= len(p.items) || p.items[p.assistantIdx].Type != ItemAssistant {
+		it := FeedItem{
 			Type: ItemAssistant,
 			ID:   "asst_turn_" + strconv.Itoa(e.Seq),
 			Seq:  e.Seq,
 		}
-		p.append(*p.assistant)
-		// Refresh pointer after append (copy).
-		p.assistant = p.byID[p.assistant.key()]
+		p.assistantIdx = len(p.items)
+		p.append(it)
 	}
-	p.assistant.Text += e.Text
-	// Update the stored copy too.
-	if ptr, ok := p.byID[p.assistant.key()]; ok {
-		ptr.Text = p.assistant.Text
-	}
+	p.items[p.assistantIdx].Text += e.Text
 	return nil
 }
 
 // finalizeAssistant commits the current streaming assistant message to the
 // feed and clears the streaming pointer.
 func (p *Projector) finalizeAssistant() {
-	p.assistant = nil
+	p.assistantIdx = -1
 }
 
 // appendToolStart adds a tool card in running state.
@@ -171,8 +193,9 @@ func (p *Projector) appendToolStart(e agent.Event) error {
 // appendToolEnd transitions the matching tool card to done/failed/denied.
 func (p *Projector) appendToolEnd(e agent.Event) error {
 	id := toolID(e)
-	ptr, ok := p.byID[FeedItem{Type: ItemTool, ID: id}.key()]
-	if !ok {
+	key := FeedItem{Type: ItemTool, ID: id}.key()
+	idx, ok := p.byID[key]
+	if !ok || idx < 0 || idx >= len(p.items) {
 		// Orphan ToolEnd (old archive, --continue): synthesize the card.
 		card := &ToolCard{
 			Name:   toolName(e),
@@ -182,25 +205,32 @@ func (p *Projector) appendToolEnd(e agent.Event) error {
 		it := FeedItem{Type: ItemTool, ID: id, Seq: e.Seq, Tool: card}
 		return p.append(it)
 	}
+	target := &p.items[idx]
+	if target.Tool == nil {
+		target.Tool = &ToolCard{
+			Name: toolName(e),
+			Args: callArgs(e.Call),
+		}
+	}
 	// Update status in place.
 	switch {
 	case e.Call != nil && !e.Call.OK:
 		if e.Call.Exit != 0 || e.Call.Signal != "" {
-			ptr.Tool.Status = ToolFailed
+			target.Tool.Status = ToolFailed
 		} else {
 			// Denied by permission gate.
-			ptr.Tool.Status = ToolDenied
+			target.Tool.Status = ToolDenied
 		}
 	default:
-		ptr.Tool.Status = ToolDone
+		target.Tool.Status = ToolDone
 	}
 	if e.Call != nil {
-		ptr.Tool.Output = e.Call.Output
-		ptr.Tool.Duration = e.Call.MS
-		ptr.Tool.ExitCode = e.Call.Exit
-		ptr.Tool.Signal = e.Call.Signal
-		ptr.Tool.Err = callErr(e.Call.Output, e.Call.OK)
-		ptr.Tool.Truncated = len(e.Call.Output) > 0 && isTruncated(e.Call.Output)
+		target.Tool.Output = e.Call.Output
+		target.Tool.Duration = e.Call.MS
+		target.Tool.ExitCode = e.Call.Exit
+		target.Tool.Signal = e.Call.Signal
+		target.Tool.Err = callErr(e.Call.Output, e.Call.OK)
+		target.Tool.Truncated = len(e.Call.Output) > 0 && isTruncated(e.Call.Output)
 	}
 	return nil
 }
@@ -225,8 +255,9 @@ func (p *Projector) appendPermAsk(e agent.Event) error {
 // appendPermReply transitions the matching permission card.
 func (p *Projector) appendPermReply(e agent.Event) error {
 	id := toolID(e)
-	ptr, ok := p.byID[FeedItem{Type: ItemPermission, ID: id}.key()]
-	if !ok {
+	key := FeedItem{Type: ItemPermission, ID: id}.key()
+	idx, ok := p.byID[key]
+	if !ok || idx < 0 || idx >= len(p.items) {
 		// Synthesize a card for orphan reply.
 		card := &PermCard{
 			Name:      toolName(e),
@@ -242,13 +273,20 @@ func (p *Projector) appendPermReply(e agent.Event) error {
 		it := FeedItem{Type: ItemPermission, ID: id, Seq: e.Seq, Perm: card}
 		return p.append(it)
 	}
-	ptr.Perm.Decision = e.Decision
-	ptr.Perm.Effective = e.RawDecision
+	target := &p.items[idx]
+	if target.Perm == nil {
+		target.Perm = &PermCard{
+			Name: toolName(e),
+			Args: callArgs(e.Call),
+		}
+	}
+	target.Perm.Decision = e.Decision
+	target.Perm.Effective = e.RawDecision
 	switch {
 	case e.RawDecision == agent.Deny:
-		ptr.Perm.Status = PermDeny
+		target.Perm.Status = PermDeny
 	default:
-		ptr.Perm.Status = PermAllow
+		target.Perm.Status = PermAllow
 	}
 	return nil
 }
@@ -292,8 +330,8 @@ func (p *Projector) appendInterrupted(e agent.Event) error {
 
 // append adds an item to the feed and registers it in the index.
 func (p *Projector) append(it FeedItem) error {
+	p.byID[it.key()] = len(p.items)
 	p.items = append(p.items, it)
-	p.byID[it.key()] = &p.items[len(p.items)-1]
 	return nil
 }
 
@@ -314,18 +352,30 @@ func toolName(e agent.Event) string {
 	return "tool"
 }
 
-// callErr extracts a concise error indication from a tool result.
+// callErr extracts a concise, sanitized error indication from a tool result.
 func callErr(output string, ok bool) string {
 	if ok {
 		return ""
 	}
-	if output == "" {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
 		return "failed"
 	}
-	return "" // detailed output already in .Output
+	lines := strings.Split(trimmed, "\n")
+	for _, l := range lines {
+		l = strings.TrimSpace(strings.ReplaceAll(l, "\r", ""))
+		if l != "" {
+			// Length bound to 200 bytes to prevent UI overflows/secret leakage.
+			if len(l) > 200 {
+				return l[:197] + "..."
+			}
+			return l
+		}
+	}
+	return "failed"
 }
 
 // isTruncated detects the truncation marker ForStore appends.
 func isTruncated(s string) bool {
-	return len(s) > 12 && s[len(s)-12:] == "truncated %d bytes]" // rough heuristic
+	return strings.HasSuffix(s, " bytes]") && strings.Contains(s, "...[truncated ")
 }
