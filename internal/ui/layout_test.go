@@ -129,7 +129,7 @@ func TestVisualHeightNeverExceedsTerminal(t *testing.T) {
 		{"long-output", func(f *Feed) {
 			f.Update(agentEventBatchMsg{Events: []agent.Event{
 				{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
-				{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash"}, Text: fix.longLsOutput},
+				{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
 			}})
 		}},
 		{"modal", func(f *Feed) {
@@ -171,7 +171,7 @@ func TestRenderedLinesNeverExceedTerminalWidth(t *testing.T) {
 				{Seq: 4, Type: agent.TextDelta, Text: fix.arabicCombine},
 				{Seq: 5, Type: agent.TurnEnd},
 				{Seq: 6, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
-				{Seq: 7, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash"}, Text: fix.longLsOutput},
+				{Seq: 7, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
 			}})
 			v := f.View()
 			for i, l := range strings.Split(v, "\n") {
@@ -276,7 +276,7 @@ func TestMobileLongWrappedOutputKeepsComposerVisible(t *testing.T) {
 				{Seq: 1, Type: agent.RunStart, Text: "session"},
 				{Seq: 2, Type: agent.UserMsg, Text: "نفّذ أمر ls -la وعاين الملفات"},
 				{Seq: 3, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
-				{Seq: 4, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash"}, Text: fix.longLsOutput},
+				{Seq: 4, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash", Output: fix.longLsOutput, OK: true}},
 				{Seq: 5, Type: agent.TextDelta, Text: "هذه قائمة الملفات في المجلد الحالي 🚀"},
 				{Seq: 6, Type: agent.TurnEnd},
 			}})
@@ -410,7 +410,7 @@ func TestTwentyByTwelveDegradationIsDeterministic(t *testing.T) {
 		{"idle", func(f *Feed) {}},
 		{"long-output", func(f *Feed) {
 			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash"}, Text: fix.longLsOutput},
+				{Seq: 1, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
 			}})
 		}},
 		{"modal", func(f *Feed) {
@@ -589,5 +589,21 @@ func TestLayoutMetricsNeverNegative(t *testing.T) {
 			// Must not panic
 			_ = f.View()
 		})
+	}
+}
+
+func TestLongToolOutputFixtureActuallyProducesLongOutput(t *testing.T) {
+	fix := newTestFixtures()
+	f := newFeedAt(t, 80, 24)
+	f.Update(agentEventBatchMsg{Events: []agent.Event{
+		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
+		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
+	}})
+	items := f.proj.Items()
+	if len(items) == 0 || items[0].Tool == nil || items[0].Tool.Output == "" {
+		t.Fatalf("expected Tool.Output to be populated from tool end event, but got empty string")
+	}
+	if len(f.lines) <= 2 {
+		t.Fatalf("expected multiple rendered lines for long output, got %d", len(f.lines))
 	}
 }

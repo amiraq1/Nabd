@@ -39,7 +39,7 @@ func TestSpinnerStopsWhenRuntimeReturnsReady(t *testing.T) {
 
 	// Tool completes, then run finishes via doneMsg
 	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash"}, Text: "/home/termux\n"},
+		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: "/home/termux\n", OK: true}},
 		{Seq: 3, Type: agent.TurnEnd},
 	}})
 

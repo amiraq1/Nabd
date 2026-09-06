@@ -152,8 +152,7 @@ func TestFeedNoticeCountsInScroll(t *testing.T) {
 	// Leave the composer so the viewport owns keys, then scroll to the top.
 	f.composer.blur()
 	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyHome})
-	vh := f.viewportHeight()
-	if want := max(0, len(f.lines)-vh); f.scrollTop != want {
-		t.Fatalf("scrollTop=%d want %d (lines=%d vh=%d)", f.scrollTop, want, len(f.lines), vh)
+	if f.scrollTop != 0 {
+		t.Fatalf("scrollTop=%d want 0 (at top after Home)", f.scrollTop)
 	}
 }

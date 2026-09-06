@@ -57,19 +57,19 @@ func (m *slashMenu) currentCommand() (SlashCommand, bool) {
 	return m.items[m.selected], true
 }
 
-func (m *slashMenu) lineCount() int {
+func (m *slashMenu) lineCount(maxRows ...int) int {
 	if !m.visible || len(m.items) == 0 {
 		return 0
 	}
-	// 1 border header + len(items) + 1 bottom border
-	return len(m.items) + 2
+	full := len(m.items) + 2
+	if len(maxRows) > 0 && maxRows[0] > 0 && maxRows[0] < full {
+		return max(2, maxRows[0])
+	}
+	return full
 }
 
-// maxItemsForHeight returns the maximum number of menu items that fit in
-// a given available height (accounting for 2 border rows).
-
 // view renders the menu popup docked above the composer.
-func (m *slashMenu) view(width int) string {
+func (m *slashMenu) view(width int, maxRows ...int) string {
 	if !m.visible || len(m.items) == 0 {
 		return ""
 	}
@@ -97,11 +97,33 @@ func (m *slashMenu) view(width int) string {
 	// Footer separator.
 	footerLine := strings.Repeat("─", menuW)
 
+	targetRows := m.lineCount(maxRows...)
+	maxItemRows := targetRows - 2
+	if maxItemRows < 1 {
+		maxItemRows = 1
+	}
+
+	start := 0
+	if len(m.items) > maxItemRows {
+		start = m.selected - maxItemRows/2
+		if start < 0 {
+			start = 0
+		}
+		if start+maxItemRows > len(m.items) {
+			start = len(m.items) - maxItemRows
+			if start < 0 {
+				start = 0
+			}
+		}
+	}
+	end := min(start+maxItemRows, len(m.items))
+
 	var b strings.Builder
 	b.WriteString(dim.Render(headerLine))
 	b.WriteByte('\n')
 
-	for i, cmd := range m.items {
+	for i := start; i < end; i++ {
+		cmd := m.items[i]
 		prefix := "  "
 		line := fmt.Sprintf("%-12s %s", cmd.Usage, cmd.Description)
 		maxLineW := menuW - ansi.StringWidth(prefix)

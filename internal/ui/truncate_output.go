@@ -28,6 +28,17 @@ func truncateOutput(output string, width int) []string {
 		width = DefaultWidth
 	}
 
+	// Sanitize untrusted tool output at the display boundary before splitting,
+	// measuring width, or truncating. Redaction runs before truncation.
+	output = SanitizeForDisplay(output, DisplayPolicy{
+		AllowNewline: true,
+		AllowTab:     true,
+		Redact:       true,
+	})
+	if output == "" {
+		return nil
+	}
+
 	lines := strings.Split(output, "\n")
 	head := lines
 	var tail []string

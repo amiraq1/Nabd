@@ -55,14 +55,16 @@ func (m *Feed) computeLayout() layoutMetrics {
 	// Header row.
 	if m.header != "" {
 		lm.HeaderRows = 1
-		lm.headerLine = truncateToWidth(m.header, w, "…")
+		cleanHeader := SanitizeForDisplay(m.header, DisplayPolicy{AllowNewline: false, Redact: false})
+		lm.headerLine = truncateToWidth(cleanHeader, w, "…")
 	}
 
 	// Runtime status (above top separator) — 1 row or 0.
 	rtText := m.runtimeStatusText()
 	if rtText != "" {
 		lm.RuntimeStatusRows = 1
-		lm.runtimeStatusLine = truncateToWidth("· "+rtText, w, "…")
+		cleanRt := SanitizeForDisplay(rtText, DisplayPolicy{AllowNewline: false, Redact: true})
+		lm.runtimeStatusLine = truncateToWidth("· "+cleanRt, w, "…")
 	}
 
 	// Separators — always present when width is sufficient.
@@ -72,6 +74,7 @@ func (m *Feed) computeLayout() layoutMetrics {
 	lm.bottomSep = separatorLine(w)
 
 	// Composer rows (modal: 1 row placeholder; normal: actual height).
+	// NOTE: computeLayout does NOT mutate the composer; geometry is managed by onResize and growToContent.
 	if m.modalVisible || m.decisionPending {
 		lm.ComposerRows = 1
 		pausedMsg := "· permission decision required — composer paused"
@@ -83,9 +86,14 @@ func (m *Feed) computeLayout() layoutMetrics {
 		}
 		lm.pausedLine = pausedMsg
 	} else {
-		// Actual composer height after content-driven resize.
-		m.composer.resize(w, maxComposerHeight)
-		lm.ComposerRows = m.composer.height
+		h := m.composer.height
+		if h < minComposerHeight {
+			h = minComposerHeight
+		}
+		if h > maxComposerHeight {
+			h = maxComposerHeight
+		}
+		lm.ComposerRows = h
 	}
 
 	// Footer row (help shortcuts).
@@ -98,7 +106,7 @@ func (m *Feed) computeLayout() layoutMetrics {
 	}
 
 	// Modal rows (below viewport in view).
-	if m.modalVisible {
+	if m.modalVisible || m.decisionPending {
 		lm.ModalRows = m.permModal.lineCount()
 	}
 
@@ -107,45 +115,68 @@ func (m *Feed) computeLayout() layoutMetrics {
 		lm.MenuRows = m.menu.lineCount()
 	}
 
-	// Viewport: remaining rows after chrome.
-	chrome := lm.HeaderRows +
-		lm.RuntimeStatusRows +
-		lm.TopSepRows +
-		lm.ModalRows +
-		lm.MenuRows +
-		lm.UnseenRows +
-		lm.ComposerRows +
-		lm.BottomSepRows +
-		lm.FooterRows
-	lm.ViewportRows = lm.TerminalHeight - chrome
-	if lm.ViewportRows < 0 {
-		lm.ViewportRows = 0
+	chrome := func() int {
+		return lm.HeaderRows +
+			lm.RuntimeStatusRows +
+			lm.TopSepRows +
+			lm.ModalRows +
+			lm.MenuRows +
+			lm.UnseenRows +
+			lm.ComposerRows +
+			lm.BottomSepRows +
+			lm.FooterRows
 	}
 
-	// Degradation: when space is very tight, sacrifice chrome in priority order.
-	// (separators → runtime status → header)
-	if lm.ViewportRows == 0 {
-		// Try dropping bottom sep.
-		if lm.BottomSepRows > 0 {
-			lm.BottomSepRows = 0
+	// Degradation ladder (DOCUMENTED UX DECISION):
+	// The Feed UI gracefully degrades when vertical space is scarce, sacrificing
+	// chrome to maximize the viewport and preserve critical interactions.
+	// 1. reserve composer (>=1 row) and footer (1 row)  — never sacrificed
+	// 2. reserve modal minimum (3 rows: title+tool, selected choice, confirm hint)
+	//    — This 3-row compression is a deliberate UX decision to keep the UI
+	//    functional on extremely short terminals (e.g., 5-6 rows).
+	// 3. drop bottom separator
+	// 4. drop top separator
+	// 5. drop unseen indicator
+	// 6. drop header
+	// 7. compress modal internally (its own documented degradation ladder)
+	// 8. drop runtime status row  — last, it carries Generating/Permission state
+	// 9. remaining rows go to the viewport (may be 0)
 
-			lm.ViewportRows = lm.TerminalHeight - chrome
+	if chrome() > lm.TerminalHeight && lm.BottomSepRows > 0 {
+		lm.BottomSepRows = 0
+	}
+	if chrome() > lm.TerminalHeight && lm.TopSepRows > 0 {
+		lm.TopSepRows = 0
+	}
+	if chrome() > lm.TerminalHeight && lm.UnseenRows > 0 {
+		lm.UnseenRows = 0
+	}
+	if chrome() > lm.TerminalHeight && lm.HeaderRows > 0 {
+		lm.HeaderRows = 0
+	}
+	if chrome() > lm.TerminalHeight && (lm.ModalRows > 0 || lm.MenuRows > 0) {
+		if lm.ModalRows > 0 {
+			other := chrome() - lm.ModalRows
+			avail := lm.TerminalHeight - other
+			if avail < 3 {
+				avail = 3 // modal minimum
+			}
+			lm.ModalRows = m.permModal.lineCount(avail)
+		}
+		if lm.MenuRows > 0 && chrome() > lm.TerminalHeight {
+			other := chrome() - lm.MenuRows
+			avail := lm.TerminalHeight - other
+			if avail < 2 {
+				avail = 2
+			}
+			lm.MenuRows = m.menu.lineCount(avail)
 		}
 	}
-	if lm.ViewportRows < 0 {
-		lm.ViewportRows = 0
-	}
-	if lm.TerminalHeight-chrome < 0 {
-		// Top sep.
-		if lm.TopSepRows > 0 {
-			lm.TopSepRows = 0
-
-		}
-	}
-	if lm.ViewportRows < 0 {
-		lm.ViewportRows = 0
+	if chrome() > lm.TerminalHeight && lm.RuntimeStatusRows > 0 {
+		lm.RuntimeStatusRows = 0
 	}
 
+	lm.ViewportRows = max(0, lm.TerminalHeight-chrome())
 	return lm
 }
 
@@ -239,8 +270,12 @@ func (m *Feed) View() string {
 		emitted := 0
 		if len(m.lines) > 0 {
 			start := m.scrollTop
-			if start >= len(m.lines) {
-				start = max(0, len(m.lines)-lm.ViewportRows)
+			bs := m.bottomStart(lm.ViewportRows)
+			if start > bs {
+				start = bs
+			}
+			if start < 0 {
+				start = 0
 			}
 			end := min(start+lm.ViewportRows, len(m.lines))
 			for i := start; i < end; i++ {
@@ -274,13 +309,13 @@ func (m *Feed) View() string {
 
 	// 5. Modal (above separator when visible — overlay in feed area).
 	if lm.ModalRows > 0 {
-		b.WriteString(m.permModal.view(w))
+		b.WriteString(m.permModal.view(w, lm.ModalRows))
 		b.WriteByte('\n')
 	}
 
 	// 6. Slash menu (directly above composer).
 	if lm.MenuRows > 0 {
-		b.WriteString(m.menu.view(w))
+		b.WriteString(m.menu.view(w, lm.MenuRows))
 		b.WriteByte('\n')
 	}
 
