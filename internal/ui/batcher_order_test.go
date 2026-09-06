@@ -41,51 +41,83 @@ func TestBatcherStopBeforeStartDoesNotPanic(t *testing.T) {
 func TestBatcherOnFlushNeverRunsConcurrently(t *testing.T) {
 	var inFlush int32
 	var concurrentCount int32
+	var enteredOnce sync.Once
 	flushEntered := make(chan struct{})
 	flushRelease := make(chan struct{})
+
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(flushRelease)
+		})
+	}
+	defer release()
 
 	b := NewBatcher(time.Hour, 2, func(batch []agent.Event) {
 		cur := atomic.AddInt32(&inFlush, 1)
 		if cur > 1 {
 			atomic.AddInt32(&concurrentCount, 1)
 		}
-		// Signal entered first time
-		select {
-		case flushEntered <- struct{}{}:
-		default:
-		}
+		enteredOnce.Do(func() {
+			close(flushEntered)
+		})
 		<-flushRelease
 		atomic.AddInt32(&inFlush, -1)
 	})
 
 	// Add 2 events to trigger maxSize flush in Goroutine 1
+	doneG1 := make(chan struct{})
 	go func() {
+		defer close(doneG1)
 		b.Add(agent.Event{Seq: 1, Type: agent.TextDelta})
 		b.Add(agent.Event{Seq: 2, Type: agent.TextDelta})
 	}()
 
 	// Wait until Goroutine 1 enters onFlush
-	<-flushEntered
+	select {
+	case <-flushEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first flush did not enter callback")
+	}
 
 	// While Goroutine 1 is inside onFlush, Goroutine 2 adds a sensitive event
+	startedG2 := make(chan struct{})
 	doneG2 := make(chan struct{})
 	go func() {
+		defer close(doneG2)
+		close(startedG2)
 		b.Add(agent.Event{Seq: 3, Type: agent.PermAsk})
-		close(doneG2)
 	}()
 
-	// Let Goroutine 2 run briefly
+	select {
+	case <-startedG2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine 2 did not start")
+	}
+
+	// Let Goroutine 2 attempt to flush while Goroutine 1 is inside onFlush
 	select {
 	case <-doneG2:
 	case <-time.After(20 * time.Millisecond):
 	}
 
 	// Release all flushes
-	close(flushRelease)
-	<-doneG2
+	release()
 
-	if atomic.LoadInt32(&concurrentCount) > 0 {
-		t.Fatalf("onFlush ran concurrently with itself!")
+	select {
+	case <-doneG1:
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine 1 did not finish")
+	}
+
+	select {
+	case <-doneG2:
+	case <-time.After(2 * time.Second):
+		t.Fatal("goroutine 2 did not finish")
+	}
+
+	if got := atomic.LoadInt32(&concurrentCount); got > 0 {
+		t.Fatalf("onFlush ran concurrently with itself: count=%d", got)
 	}
 }
 
