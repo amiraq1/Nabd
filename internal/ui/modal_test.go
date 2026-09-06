@@ -290,6 +290,28 @@ func TestModalReopenResetsToDeny(t *testing.T) {
 	}
 }
 
+// TestChoiceIndexReturnsMinusOneForMissingDecision verifies that choiceIndex
+// returns -1 when the requested decision is absent from the choices list. This
+// protects fail-closed behavior: if Deny were ever removed from choices,
+// denyIndex() returns -1 and currentDecision() still yields Deny.
+func TestChoiceIndexReturnsMinusOneForMissingDecision(t *testing.T) {
+	got := choiceIndex([]PermissionChoice{
+		{Decision: agent.AllowOnce},
+		{Decision: agent.AllowSession},
+	}, agent.Deny)
+	if got != -1 {
+		t.Fatalf("choiceIndex(Deny absent) = %d, want -1", got)
+	}
+
+	// Sanity: present decisions are found correctly.
+	if idx := choiceIndex((&PermissionModal{}).choices(), agent.Deny); idx < 0 {
+		t.Fatalf("choiceIndex(Deny present) = %d, want >= 0", idx)
+	}
+	if denyIndex() < 0 {
+		t.Fatalf("denyIndex() = %d, want >= 0", denyIndex())
+	}
+}
+
 // TestModalIdempotentSingleDecision confirms that repeated key presses (e.g. y twice,
 // or y then Enter) generate exactly ONE decision command and no duplicate replies.
 func TestModalIdempotentSingleDecision(t *testing.T) {

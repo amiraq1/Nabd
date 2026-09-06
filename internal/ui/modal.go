@@ -25,18 +25,31 @@ type PermissionModal struct {
 	decisionPending bool
 }
 
-// denyIndex returns the index of the Deny choice in choices(), failing closed
-// to the last choice if Deny is somehow missing. This is the single source of
-// truth for the default selection, keeping newPermissionModal/open/selectedChoice
-// aligned on the same fail-closed invariant.
-func denyIndex() int {
-	for i, c := range (&PermissionModal{}).choices() {
-		if c.Decision == agent.Deny {
+// choiceIndex returns the index of the given decision in choices, or -1 if
+// the decision is absent. This is the single source of truth for locating a
+// decision's position without assuming ordering.
+func choiceIndex(choices []PermissionChoice, decision agent.Decision) int {
+	for i, c := range choices {
+		if c.Decision == decision {
 			return i
 		}
 	}
-	// choices() always includes Deny, so this is unreachable in practice.
-	return len((&PermissionModal{}).choices()) - 1
+	return -1
+}
+
+// denyIndex returns the index of the Deny choice in choices(), or -1 if Deny
+// is somehow missing. newPermissionModal/open/selectedChoice rely on this for
+// a fail-closed default: selected=-1 combined with currentDecision()'s -1 guard
+// yields Deny both in logic and in display.
+func denyIndex() int {
+	return choiceIndex((&PermissionModal{}).choices(), agent.Deny)
+}
+
+// fallbackChoice returns an explicit Deny choice for display when the Deny
+// option is absent from choices(). This keeps rendering fail-closed without
+// picking an arbitrary element.
+func fallbackChoice() PermissionChoice {
+	return PermissionChoice{Decision: agent.Deny, Label: "Deny", KeyHint: "n / esc"}
 }
 
 func newPermissionModal() *PermissionModal {
@@ -310,7 +323,11 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 		ch := m.choices()
 		idx := m.selected
 		if idx < 0 || idx >= len(ch) {
-			idx = denyIndex()
+			// selected is invalid: try Deny, then render an explicit fallback.
+			idx = choiceIndex(ch, agent.Deny)
+			if idx < 0 {
+				return fallbackChoice()
+			}
 		}
 		return ch[idx]
 	}
