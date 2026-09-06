@@ -92,6 +92,12 @@ func (m *PermissionModal) prevChoice() {
 	m.selected = (m.selected - 1 + len(ch)) % len(ch)
 }
 
+// hasArgs reports whether the pending call carries arguments worth showing.
+func (m *PermissionModal) hasArgs() bool {
+	return m.call != nil && len(m.call.Args) > 0 &&
+		string(m.call.Args) != "{}" && string(m.call.Args) != `""`
+}
+
 // safeArgs formats arguments for display without splitting runes or leaking secrets.
 // Enforces: Sanitize -> Redact -> Truncate.
 func safeArgs(args string, maxRunes int) string {
@@ -115,11 +121,110 @@ func safeArgs(args string, maxRunes int) string {
 	return string(runes[:maxRunes-1]) + "…"
 }
 
-// view renders the modal card with ASCII-safe formatting adhering to the symbol whitelist.
-// Supports internal degradation when maxRows is specified to preserve visibility
-// on small terminals (title + selected choice + confirm hint minimum).
-func (m *PermissionModal) view(width int, maxRows ...int) string {
+// permModalLevel identifies which rendering path the modal takes. Each level
+// emits a fixed, known number of rows for a given set of optional rows.
+type permModalLevel int
+
+const (
+	// permLevelFull: top, tool, [args], [blank], choices, [blank], hint, bottom.
+	permLevelFull permModalLevel = iota
+	// permLevelCompact: top, tool, [args], selected choice, hint, bottom.
+	permLevelCompact
+	// permLevelToolRow: top, tool, selected choice, bottom (hint in the border).
+	permLevelToolRow
+	// permLevelMinimum: top (tool in the title), selected choice, bottom (hint
+	// in the border). The floor: the modal must always say what is being asked
+	// and how to answer it.
+	permLevelMinimum
+)
+
+// permModalShape is the single source of truth for modal row accounting.
+//
+// shape() decides how many rows are rendered and which optional rows are
+// included; lineCount() reports shape.rows, and view() renders exactly that
+// shape. So the rows computeLayout reserves are the rows View emits by
+// construction, not by two ladders happening to agree.
+type permModalShape struct {
+	level         permModalLevel
+	rows          int
+	includeArgs   bool
+	includeBlanks bool
+}
+
+// shape resolves the rendering shape for the available height. When maxRows is
+// absent or non-positive the modal renders at full height; otherwise the
+// tallest shape that fits is chosen. Candidates only ever claim a height their
+// rendering path actually fills, which is what makes the choice idempotent:
+// shape(shape(limit).rows) == shape(limit).
+func (m *PermissionModal) shape(maxRows ...int) permModalShape {
 	if !m.visible && !m.decisionPending {
+		return permModalShape{}
+	}
+
+	hasArgs := m.hasArgs()
+	choiceRows := 3
+	if m.decisionPending {
+		// A pending decision collapses the three choices into one status row.
+		choiceRows = 1
+	}
+	// top + tool + 2 blanks + choices + hint + bottom, plus the args row.
+	full := 6 + choiceRows
+	if hasArgs {
+		full++
+	}
+
+	limit := 0
+	if len(maxRows) > 0 {
+		limit = maxRows[0]
+	}
+	if limit <= 0 || limit >= full {
+		return permModalShape{
+			level:         permLevelFull,
+			rows:          full,
+			includeArgs:   hasArgs,
+			includeBlanks: true,
+		}
+	}
+
+	// The degradation ladder, as the set of heights that can be filled exactly:
+	// 1. drop the blank rows
+	// 2. drop the args row
+	// 3. show only the selected choice
+	// 4. drop the tool row (tool name moves into the title)
+	candidates := []permModalShape{
+		{level: permLevelFull, rows: full - 2, includeArgs: hasArgs},
+	}
+	if hasArgs {
+		candidates = append(candidates,
+			permModalShape{level: permLevelFull, rows: full - 3},
+			permModalShape{level: permLevelCompact, rows: 6, includeArgs: true},
+		)
+	}
+	candidates = append(candidates,
+		permModalShape{level: permLevelCompact, rows: 5},
+		permModalShape{level: permLevelToolRow, rows: 4},
+	)
+
+	best := permModalShape{level: permLevelMinimum, rows: 3}
+	for _, c := range candidates {
+		if c.rows <= limit && c.rows > best.rows {
+			best = c
+		}
+	}
+	return best
+}
+
+// lineCount returns the number of rows view() renders for the same maxRows.
+func (m *PermissionModal) lineCount(maxRows ...int) int {
+	return m.shape(maxRows...).rows
+}
+
+// view renders the modal card with ASCII-safe formatting adhering to the symbol whitelist.
+// It renders the shape resolved by shape(), so the row count always matches
+// lineCount() for the same arguments.
+func (m *PermissionModal) view(width int, maxRows ...int) string {
+	sh := m.shape(maxRows...)
+	if sh.rows == 0 {
 		return ""
 	}
 
@@ -154,133 +259,118 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	}
 	tool = SanitizeForDisplay(tool, DisplayPolicy{AllowNewline: false, Redact: true})
 
-	targetRows := m.lineCount(maxRows...)
+	// titleBorder renders the top border carrying the given title text.
+	titleBorder := func(title string) string {
+		dashCount := max(0, cardW-ansi.StringWidth(title)-1)
+		return warn.Render(title + strings.Repeat("-", dashCount) + "+")
+	}
 
-	// Level 4: Modal minimum (3 rows: title+tool, selected choice, bottom with hint)
-	if targetRows <= 3 {
+	// standardTitle is the top border used by every level above the minimum.
+	standardTitle := func() string {
+		title := "+-- Permission Required "
+		if ansi.StringWidth(title) > cardW-2 {
+			title = "+-- Permission "
+		}
+		return titleBorder(title)
+	}
+
+	// hintBorder is the bottom border that also carries the key hints, used by
+	// the two shortest levels where no separate hint row exists.
+	hintBorder := func() string {
+		hint := "+-- Enter confirm · y/a/n "
+		if ansi.StringWidth(hint) > cardW-2 {
+			hint = "+-- Enter · y/a/n "
+		}
+		hintDashes := max(0, cardW-ansi.StringWidth(hint)-1)
+		return dim.Render(hint + strings.Repeat("-", hintDashes) + "+")
+	}
+
+	plainBorder := func() string {
+		return dim.Render("+" + strings.Repeat("-", cardW-2) + "+")
+	}
+
+	// selectedChoice returns the choice to show when only one row is available.
+	selectedChoice := func() PermissionChoice {
+		ch := m.choices()
+		idx := m.selected
+		if idx < 0 || idx >= len(ch) {
+			idx = 0
+		}
+		return ch[idx]
+	}
+
+	argsRow := func() string {
+		return formatRow(fmt.Sprintf("Args: %s", safeArgs(string(m.call.Args), cardW-14)))
+	}
+
+	switch sh.level {
+	case permLevelMinimum:
+		// 3 rows: title carries the tool name, one choice, hint in the border.
 		title := fmt.Sprintf("+-- Permission: %s ", tool)
 		if ansi.StringWidth(title) > cardW-2 {
 			title = "+-- Perm: " + ansi.Truncate(tool, max(4, cardW-13), "…") + " "
 		}
-		dashCount := max(0, cardW-ansi.StringWidth(title)-1)
-		topBorder := warn.Render(title + strings.Repeat("-", dashCount) + "+")
-
-		ch := m.choices()
-		selIdx := m.selected
-		if selIdx < 0 || selIdx >= len(ch) {
-			selIdx = 0
-		}
-		selChoice := ch[selIdx]
+		sel := selectedChoice()
 		mark := "[*]"
 		if m.decisionPending {
 			mark = "[·]"
-			selChoice.Label = "submitting"
-			selChoice.KeyHint = "…"
+			sel.Label = "submitting"
+			sel.KeyHint = "…"
 		}
-		choiceLine := formatRow(fmt.Sprintf("%s %s (%s)", mark, selChoice.Label, selChoice.KeyHint))
+		choiceLine := formatRow(fmt.Sprintf("%s %s (%s)", mark, sel.Label, sel.KeyHint))
+		return strings.Join([]string{titleBorder(title), choiceLine, hintBorder()}, "\n")
 
-		hint := "+-- Enter confirm · y/a/n "
-		if ansi.StringWidth(hint) > cardW-2 {
-			hint = "+-- Enter · y/a/n "
-		}
-		hintDashes := max(0, cardW-ansi.StringWidth(hint)-1)
-		bottomBorder := dim.Render(hint + strings.Repeat("-", hintDashes) + "+")
-
-		return topBorder + "\n" + choiceLine + "\n" + bottomBorder
-	}
-
-	// Level 3: 4 rows (top, tool, selected choice, bottom with hint)
-	if targetRows == 4 {
-		title := "+-- Permission Required "
-		if ansi.StringWidth(title) > cardW-2 {
-			title = "+-- Permission "
-		}
-		dashCount := max(0, cardW-ansi.StringWidth(title)-1)
-		topBorder := warn.Render(title + strings.Repeat("-", dashCount) + "+")
-		toolLine := formatRow(fmt.Sprintf("Tool: %s", tool))
-
-		ch := m.choices()
-		selIdx := m.selected
-		if selIdx < 0 || selIdx >= len(ch) {
-			selIdx = 0
-		}
-		selChoice := ch[selIdx]
+	case permLevelToolRow:
+		// 4 rows: title, tool, one choice, hint in the border.
+		sel := selectedChoice()
 		mark := "[*]"
 		if m.decisionPending {
 			mark = "[·]"
-			selChoice.Label = "submitting"
-			selChoice.KeyHint = "…"
+			sel.Label = "submitting"
+			sel.KeyHint = "…"
 		}
-		choiceLine := formatRow(fmt.Sprintf("  %s %s (%s)", mark, selChoice.Label, selChoice.KeyHint))
+		return strings.Join([]string{
+			standardTitle(),
+			formatRow(fmt.Sprintf("Tool: %s", tool)),
+			formatRow(fmt.Sprintf("  %s %s (%s)", mark, sel.Label, sel.KeyHint)),
+			hintBorder(),
+		}, "\n")
 
-		hint := "+-- Enter confirm · y/a/n "
-		if ansi.StringWidth(hint) > cardW-2 {
-			hint = "+-- Enter · y/a/n "
+	case permLevelCompact:
+		// 5 or 6 rows: title, tool, [args], one choice, hint row, border.
+		lines := []string{
+			standardTitle(),
+			formatRow(fmt.Sprintf("Tool: %s (not executed yet)", tool)),
 		}
-		hintDashes := max(0, cardW-ansi.StringWidth(hint)-1)
-		bottomBorder := dim.Render(hint + strings.Repeat("-", hintDashes) + "+")
-
-		return topBorder + "\n" + toolLine + "\n" + choiceLine + "\n" + bottomBorder
-	}
-
-	// Level 2: 5 or 6 rows (top, tool, [args], selected choice, hint, bottom)
-	if targetRows <= 6 {
-		var lines []string
-		title := "+-- Permission Required "
-		if ansi.StringWidth(title) > cardW-2 {
-			title = "+-- Permission "
+		if sh.includeArgs {
+			lines = append(lines, argsRow())
 		}
-		dashCount := max(0, cardW-ansi.StringWidth(title)-1)
-		lines = append(lines, warn.Render(title+strings.Repeat("-", dashCount)+"+"))
-		lines = append(lines, formatRow(fmt.Sprintf("Tool: %s (not executed yet)", tool)))
-
-		hasArgs := m.call != nil && len(m.call.Args) > 0 && string(m.call.Args) != "{}" && string(m.call.Args) != `""`
-		if targetRows == 6 && hasArgs {
-			argDisplay := safeArgs(string(m.call.Args), cardW-14)
-			lines = append(lines, formatRow(fmt.Sprintf("Args: %s", argDisplay)))
-		}
-
-		ch := m.choices()
-		selIdx := m.selected
-		if selIdx < 0 || selIdx >= len(ch) {
-			selIdx = 0
-		}
-		selChoice := ch[selIdx]
+		sel := selectedChoice()
 		mark := "[*]"
 		if m.decisionPending {
 			mark = "[·]"
-			selChoice.Label = "submitting decision…"
-			selChoice.KeyHint = ""
+			sel.Label = "submitting decision…"
+			sel.KeyHint = ""
 		}
-		lines = append(lines, formatRow(fmt.Sprintf("  %s %s (%s)", mark, selChoice.Label, selChoice.KeyHint)))
-		lines = append(lines, formatRow("Enter confirm · Up/Down select · y/a/n direct"))
-		lines = append(lines, dim.Render("+"+strings.Repeat("-", cardW-2)+"+"))
+		lines = append(lines,
+			formatRow(fmt.Sprintf("  %s %s (%s)", mark, sel.Label, sel.KeyHint)),
+			formatRow("Enter confirm · Up/Down select · y/a/n direct"),
+			plainBorder(),
+		)
 		return strings.Join(lines, "\n")
 	}
 
-	// Level 1 or 0: 7+ rows
-	var lines []string
-	title := "+-- Permission Required "
-	if ansi.StringWidth(title) > cardW-2 {
-		title = "+-- Permission "
+	// permLevelFull: title, tool, [args], [blank], choices, [blank], hint, border.
+	lines := []string{
+		standardTitle(),
+		formatRow(fmt.Sprintf("Tool: %s (not executed yet)", tool)),
 	}
-	dashCount := max(0, cardW-ansi.StringWidth(title)-1)
-	lines = append(lines, warn.Render(title+strings.Repeat("-", dashCount)+"+"))
-	lines = append(lines, formatRow(fmt.Sprintf("Tool: %s (not executed yet)", tool)))
-
-	hasArgs := m.call != nil && len(m.call.Args) > 0 && string(m.call.Args) != "{}" && string(m.call.Args) != `""`
-	fullWithoutCompression := m.lineCount()
-	includeArgs := hasArgs && targetRows >= fullWithoutCompression-2
-	if includeArgs {
-		argDisplay := safeArgs(string(m.call.Args), cardW-14)
-		lines = append(lines, formatRow(fmt.Sprintf("Args: %s", argDisplay)))
+	if sh.includeArgs {
+		lines = append(lines, argsRow())
 	}
-
-	includeBlanks := targetRows == fullWithoutCompression
-	if includeBlanks {
+	if sh.includeBlanks {
 		lines = append(lines, formatRow(""))
 	}
-
 	if m.decisionPending {
 		lines = append(lines, formatRow("· submitting decision…"))
 	} else {
@@ -292,65 +382,17 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 			lines = append(lines, formatRow(fmt.Sprintf("  %s %s (%s)", mark, c.Label, c.KeyHint)))
 		}
 	}
-
-	if includeBlanks {
+	if sh.includeBlanks {
 		lines = append(lines, formatRow(""))
 	}
-
-	if m.decisionPending {
+	switch {
+	case m.decisionPending:
 		lines = append(lines, formatRow("waiting for decision to apply…"))
-	} else if m.selected >= 0 {
+	case m.selected >= 0:
 		lines = append(lines, formatRow("Enter confirm · Up/Down select · y/a/n direct"))
-	} else {
+	default:
 		lines = append(lines, formatRow("y/a/n direct · Up/Down select · Enter confirm"))
 	}
-
-	lines = append(lines, dim.Render("+"+strings.Repeat("-", cardW-2)+"+"))
+	lines = append(lines, plainBorder())
 	return strings.Join(lines, "\n")
-}
-
-// lineCount returns the number of rendered lines in view().
-// When maxRows is provided and positive, it applies the internal degradation ladder:
-// 1. drop blank rows
-// 2. drop arguments row
-// 3. show only selected choice
-// 4. modal minimum (3 rows: title+tool, selected choice, confirm hint+border)
-func (m *PermissionModal) lineCount(maxRows ...int) int {
-	if !m.visible && !m.decisionPending {
-		return 0
-	}
-	hasArgs := m.call != nil && len(m.call.Args) > 0 && string(m.call.Args) != "{}" && string(m.call.Args) != `""`
-	full := 7 // top, tool, blank, choices, blank, hint, bottom
-	if !m.decisionPending {
-		full += 2 // 3 choices instead of 1
-	}
-	if hasArgs {
-		full++
-	}
-
-	if len(maxRows) == 0 || maxRows[0] <= 0 || maxRows[0] >= full {
-		return full
-	}
-
-	limit := maxRows[0]
-	if limit <= 3 {
-		return 3
-	}
-	if limit == 4 {
-		return 4
-	}
-	if limit == 5 {
-		return 5
-	}
-	noBlanks := full - 2
-	if limit < noBlanks {
-		if hasArgs && limit == noBlanks-1 {
-			return limit
-		}
-		if limit < 6 {
-			return 5
-		}
-		return 6
-	}
-	return limit
 }
