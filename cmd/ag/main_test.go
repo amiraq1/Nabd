@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"unicode"
+
+	"nabd/internal/config"
 )
 
 // TestSystemModelDirection: system is model-facing text sent with every
@@ -117,5 +119,38 @@ func TestLatestSessionProjectIsolation(t *testing.T) {
 	}
 	if got != pa2 {
 		t.Errorf("expected pa2 (%s) but got %s", pa2, got)
+	}
+}
+
+// TestConflictLine proves conflictLine formats the notice correctly and never
+// leaks a value — only key names reach the UI.
+func TestConflictLine(t *testing.T) {
+	// Empty list → no notice.
+	if s := conflictLine(nil); s != "" {
+		t.Fatalf("nil → %q, want empty", s)
+	}
+	if s := conflictLine([]config.Conflict{}); s != "" {
+		t.Fatalf("empty → %q, want empty", s)
+	}
+
+	// One key → the line carries the name, no value.
+	got := conflictLine([]config.Conflict{{Key: "NABD_ROUTES"}})
+	if !strings.Contains(got, "NABD_ROUTES") {
+		t.Fatalf("single key = %q, want NABD_ROUTES", got)
+	}
+
+	// Two keys → both appear, sorted, separated by conflictSep.
+	got = conflictLine([]config.Conflict{{Key: "NABD_ROUTES"}, {Key: "NABD_MODEL"}})
+	if !strings.Contains(got, "NABD_MODEL") || !strings.Contains(got, "NABD_ROUTES") {
+		t.Fatalf("two keys = %q, want both", got)
+	}
+	if !strings.Contains(got, conflictSep) {
+		t.Fatalf("two keys = %q, want separator %q", got, conflictSep)
+	}
+
+	// Secret case: the value must never appear in the line.
+	got = conflictLine([]config.Conflict{{Key: "GROQ_API_KEY"}})
+	if strings.Contains(got, "secret-shhh") || strings.Contains(got, "sk-") {
+		t.Fatalf("secret leaked: %q", got)
 	}
 }

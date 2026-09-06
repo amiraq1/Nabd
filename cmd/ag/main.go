@@ -166,6 +166,10 @@ func doChat(dir string, cont bool) error {
 		return err
 	}
 
+	if s := conflictLine(config.Conflicts()); s != "" {
+		loop.Note(s)
+	}
+
 	chat := ui.NewChat(loop, ch)
 	chat.Approve = ap
 
@@ -378,6 +382,10 @@ func doChatWithFeed(dir string, cont bool) error {
 		return err
 	}
 
+	if s := conflictLine(config.Conflicts()); s != "" {
+		loop.Note(s)
+	}
+
 	if err := <-progDone; err != nil {
 		return err
 	}
@@ -470,6 +478,20 @@ func sessionPath(dir string) (string, error) {
 	}
 	name := time.Now().UTC().Format("20060102-150405.000") + ".jsonl"
 	return filepath.Join(dir, name), nil
+}
+
+// conflictLine formats the conflict notice for the UI. It returns "" when
+// there is no conflict, so callers can skip the Notice entirely. The key
+// names are joined with conflictSep; no value is ever carried, only names.
+func conflictLine(cs []config.Conflict) string {
+	if len(cs) == 0 {
+		return ""
+	}
+	names := make([]string, len(cs))
+	for i, c := range cs {
+		names[i] = c.Key
+	}
+	return fmt.Sprintf(conflictNotice, strings.Join(names, conflictSep))
 }
 
 func die(err error) {

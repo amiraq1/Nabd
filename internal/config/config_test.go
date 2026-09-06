@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"syscall"
@@ -214,5 +215,87 @@ func TestConfigRejectsWrongOwnership(t *testing.T) {
 	}
 	if _, err := ParseFile(p); err == nil {
 		t.Fatalf("file owned by another uid was accepted; want refusal")
+	}
+}
+
+// TestConflictsNamesIgnoredEnvKeys proves that a key present in both the file
+// and the environment with different values is reported as a conflict — the
+// file wins, so the environment value was silently ignored.
+func TestConflictsNamesIgnoredEnvKeys(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config")
+	if err := os.WriteFile(p, []byte("NABD_TEST_CONF_KEY=fromfile\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVar, p)
+	t.Setenv("NABD_TEST_CONF_KEY", "fromenv")
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	got := Conflicts()
+	if len(got) != 1 || got[0].Key != "NABD_TEST_CONF_KEY" {
+		t.Fatalf("Conflicts = %+v, want [{Key:NABD_TEST_CONF_KEY}]", got)
+	}
+}
+
+// TestConflictsIgnoresMatchingValues proves that when the file and environment
+// agree, there is no conflict — the user gets no noise.
+func TestConflictsIgnoresMatchingValues(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config")
+	if err := os.WriteFile(p, []byte("NABD_TEST_SAME=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVar, p)
+	t.Setenv("NABD_TEST_SAME", "value")
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	if got := Conflicts(); len(got) != 0 {
+		t.Fatalf("Conflicts = %+v, want []", got)
+	}
+}
+
+// TestConflictsIgnoresEnvOnlyAndFileOnly proves that a key present in only one
+// source is not a conflict — there is nothing to override.
+func TestConflictsIgnoresEnvOnlyAndFileOnly(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config")
+	if err := os.WriteFile(p, []byte("NABD_TEST_FILEONLY=abc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVar, p)
+	t.Setenv("NABD_TEST_ENVONLY", "xyz")
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	if got := Conflicts(); len(got) != 0 {
+		t.Fatalf("Conflicts = %+v, want []", got)
+	}
+}
+
+// TestConflictsNeverExposesValues proves the security boundary: Conflict carries
+// no value, and the rendered line must never contain the secret.
+func TestConflictsNeverExposesValues(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "config")
+	if err := os.WriteFile(p, []byte("GROQ_API_KEY=secret-shhh\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(EnvVar, p)
+	t.Setenv("GROQ_API_KEY", "other-secret")
+	ResetForTest()
+	t.Cleanup(ResetForTest)
+
+	got := Conflicts()
+	if len(got) != 1 {
+		t.Fatalf("Conflicts = %+v, want one conflict", got)
+	}
+	if got[0].Key != "GROQ_API_KEY" {
+		t.Fatalf("key = %q, want GROQ_API_KEY", got[0].Key)
+	}
+	// The struct must carry exactly one field — the key name, never a value.
+	if n := reflect.TypeOf(Conflict{}).NumField(); n != 1 {
+		t.Fatalf("Conflict has %d fields, want 1 (Key only)", n)
 	}
 }
