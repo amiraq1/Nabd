@@ -51,29 +51,76 @@ func TestOversizedHistoryRecallEditableDown(t *testing.T) {
 	}
 }
 
-// BenchmarkComposerBackspaceOversized records the original performance bottleneck
-// found in U1, where 101 backspaces on an oversized string without spaces
-// causes O(N) wrap recalculations in bubbles/textarea. The sub-benchmarks vary
-// the payload delta above maxInputRunes (+2, +100, +400) to isolate whether the
-// payload-length delta drives the cost. This remains as tech debt.
-func BenchmarkComposerBackspaceOversized(b *testing.B) {
-	sizes := []int{2, 100, 400}
-	for _, size := range sizes {
-		b.Run(fmt.Sprintf("Plus%d", size), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				f := NewFeed()
-				f.width = 80
-				f.height = 24
-				big := strings.Repeat("م", maxInputRunes+size)
-				f.history.add(big)
-				_, _ = f.Update(tea.KeyMsg{Type: tea.KeyUp})
+func runBackspaceBenchmark(b *testing.B, nRunes, kKeys int, payloadRune rune, withView bool) {
+	b.Helper()
+	payload := strings.Repeat(string(payloadRune), nRunes)
+	const termWidth = 80
+	const termHeight = 24
 
-				b.StartTimer()
-				for j := 0; j < 101; j++ {
-					_, _ = f.Update(tea.KeyMsg{Type: tea.KeyBackspace})
-				}
-				b.StopTimer()
+	b.ReportAllocs()
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		f := NewFeed()
+		f.width = termWidth
+		f.height = termHeight
+		f.history.add(payload)
+		_, _ = f.Update(tea.KeyMsg{Type: tea.KeyUp})
+		if got := f.composer.valueLen(); got != nRunes {
+			b.Fatalf("setup failed: got %d runes, want %d", got, nRunes)
+		}
+
+		b.StartTimer()
+		for j := 0; j < kKeys; j++ {
+			_, _ = f.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+			if withView {
+				_ = f.composer.view()
 			}
-		})
+		}
+		b.StopTimer()
+
+		if got := f.composer.valueLen(); got != nRunes-kKeys {
+			b.Fatalf("after %d backspaces got %d runes, want %d", kKeys, got, nRunes-kKeys)
+		}
 	}
+}
+
+// BenchmarkComposerBackspaceOversized measures the input-update path latency
+// when deleting unbroken text in the composer.
+// One op = one sequence of K Backspaces on a freshly prepared N-rune payload at width W.
+func BenchmarkComposerBackspaceOversized(b *testing.B) {
+	// Axis A: Payload Size (fixed K=101 backspaces, ASCII unbroken payload)
+	b.Run("AxisA_Size", func(b *testing.B) {
+		sizes := []int{1000, 2000, 4000, 8000, maxInputRunes + 100}
+		for _, n := range sizes {
+			b.Run(fmt.Sprintf("N%d_K101", n), func(b *testing.B) {
+				runBackspaceBenchmark(b, n, 101, 'a', false)
+			})
+		}
+	})
+
+	// Axis B: Keypress Count (fixed N=8100 runes, ASCII unbroken payload)
+	b.Run("AxisB_Keys", func(b *testing.B) {
+		keys := []int{1, 3, 20, 101}
+		for _, k := range keys {
+			b.Run(fmt.Sprintf("N8100_K%d", k), func(b *testing.B) {
+				runBackspaceBenchmark(b, maxInputRunes+100, k, 'a', false)
+			})
+		}
+	})
+
+	// Representative Update-plus-View path matching real UI behavior
+	b.Run("UpdateView", func(b *testing.B) {
+		b.Run("N8100_K101", func(b *testing.B) {
+			runBackspaceBenchmark(b, maxInputRunes+100, 101, 'a', true)
+		})
+	})
+
+	// Non-ASCII Arabic performance case
+	b.Run("Arabic", func(b *testing.B) {
+		b.Run("N8100_K101", func(b *testing.B) {
+			runBackspaceBenchmark(b, maxInputRunes+100, 101, 'م', false)
+		})
+	})
 }
