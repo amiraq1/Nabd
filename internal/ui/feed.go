@@ -1157,8 +1157,8 @@ func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	isWheelUp := msg.Button == tea.MouseButtonWheelUp || msg.Type == tea.MouseWheelUp
-	isWheelDown := msg.Button == tea.MouseButtonWheelDown || msg.Type == tea.MouseWheelDown
+	isWheelUp := msg.Button == tea.MouseButtonWheelUp
+	isWheelDown := msg.Button == tea.MouseButtonWheelDown
 	if !isWheelUp && !isWheelDown {
 		return m, nil
 	}
