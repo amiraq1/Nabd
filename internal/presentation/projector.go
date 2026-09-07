@@ -302,6 +302,11 @@ func (p *Projector) appendPermReply(e agent.Event) error {
 
 // appendNotice adds a notice/status item.
 func (p *Projector) appendNotice(e agent.Event) error {
+	if e.Calib != nil {
+		// Routine calibration diagnostics are not shown in the feed,
+		// but remain in the journal.
+		return nil
+	}
 	it := FeedItem{
 		Type: ItemNotice,
 		ID:   "notice_" + strconv.Itoa(e.Seq),

@@ -381,7 +381,7 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 				// is session-varying state, and the log must show which
 				// budget the agent worked under.
 				if l.Budget.Calibrate(c.PromptTokens, l.Budget.Estimate(ms)) {
-					_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf("calibration: token ratio (observed prompt_tokens ÷ heuristic estimate) adopted %.2f · conservative ratchet, rises only (measured prompt_tokens=%d)", l.Budget.Ratio(), c.PromptTokens)})
+					_ = l.emit(Event{Type: Notice, Calib: &Calibration{PromptTokens: c.PromptTokens}, Text: fmt.Sprintf("calibration: token ratio (observed prompt_tokens ÷ heuristic estimate) adopted %.2f · conservative ratchet, rises only (measured prompt_tokens=%d)", l.Budget.Ratio(), c.PromptTokens)})
 				}
 			}
 
