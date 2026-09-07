@@ -18,14 +18,15 @@ type Batcher struct {
 	sensitive map[agent.EventType]bool
 	onFlush   func([]agent.Event)
 
-	startOnce sync.Once
-	stopOnce  sync.Once
-	started   bool
-	stopped   bool
-	done      chan struct{}
-	loopDone  chan struct{}
-	flushMu   sync.Mutex
-	timer     *time.Timer
+	startOnce      sync.Once
+	stopOnce       sync.Once
+	started        bool
+	stopped        bool
+	done           chan struct{}
+	loopDone       chan struct{}
+	flushMu        sync.Mutex
+	timer          *time.Timer
+	emptyFlushHook func() // test seam: called when Flush executes on an empty queue
 }
 
 // NewBatcher creates a batcher with the given configuration.
@@ -109,7 +110,12 @@ func (b *Batcher) Flush() {
 
 	b.mu.Lock()
 	if len(b.events) == 0 {
+		b.resetTimerLocked()
+		hook := b.emptyFlushHook
 		b.mu.Unlock()
+		if hook != nil {
+			hook()
+		}
 		return
 	}
 	batch := make([]agent.Event, len(b.events))
