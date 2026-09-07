@@ -23,16 +23,16 @@ func TestCollapsibleTool_SingleLineStatuses(t *testing.T) {
 	defer lipgloss.SetColorProfile(termenv.Ascii)
 
 	tests := []struct {
-		name      string
-		status    presentation.ToolStatus
-		toolName  string
-		args      string
-		duration  int64
-		exitCode  int
-		wantSym   string
-		wantName  string
-		wantMeta  string
-		output    string
+		name     string
+		status   presentation.ToolStatus
+		toolName string
+		args     string
+		duration int64
+		exitCode int
+		wantSym  string
+		wantName string
+		wantMeta string
+		output   string
 	}{
 		{
 			name:     "pending",

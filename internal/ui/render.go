@@ -18,12 +18,12 @@ import (
 const DefaultWidth = 50
 
 var (
-	dim  = lipgloss.NewStyle().Faint(true)
-	bold = lipgloss.NewStyle().Bold(true)
-	good = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	bad  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	warn = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	cyan = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	dim   = lipgloss.NewStyle().Faint(true)
+	bold  = lipgloss.NewStyle().Bold(true)
+	good  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	bad   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	warn  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	cyan  = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	green = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 
 	userMsgBg = lipgloss.CompleteColor{TrueColor: "#303030", ANSI256: "236", ANSI: "8"}

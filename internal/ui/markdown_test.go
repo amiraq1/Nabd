@@ -1,9 +1,9 @@
 package ui
 
 import (
+	"nabd/internal/presentation"
 	"strings"
 	"testing"
-	"nabd/internal/presentation"
 )
 
 func TestFormatMarkdown(t *testing.T) {
@@ -108,7 +108,7 @@ func TestMarkdownChunking(t *testing.T) {
 	for _, chunk := range chunks {
 		accumulated += chunk
 	}
-	
+
 	got := formatMarkdown(accumulated, 40)
 	if len(got) != len(expected) {
 		t.Fatalf("mismatch")

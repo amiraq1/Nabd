@@ -114,13 +114,13 @@ func formatInline(text string) string {
 	var sb strings.Builder
 	runes := []rune(text)
 	inCode := false
-	
+
 	// Two-pass approach or state machine for bold to ensure we don't style incomplete bold.
 	// Actually, just find pairs of `**`.
-	
-	// A bold span may become styled when its closing delimiter arrives. 
+
+	// A bold span may become styled when its closing delimiter arrives.
 	// This means if `**foo` is present, it's just `**foo`. If `**foo**`, it's bold(foo).
-	
+
 	i := 0
 	for i < len(runes) {
 		if i+1 < len(runes) && runes[i] == '*' && runes[i+1] == '*' && !inCode {
@@ -145,7 +145,7 @@ func formatInline(text string) string {
 				continue
 			}
 		}
-		
+
 		if runes[i] == '`' {
 			// Find closing `
 			closeIdx := -1
