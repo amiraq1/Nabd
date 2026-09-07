@@ -3,6 +3,9 @@ package ui
 import (
 	"context"
 	"fmt"
+	"io"
+	"os"
+	"slices"
 	"strings"
 
 	"nabd/internal/agent"
@@ -26,11 +29,12 @@ type Feed struct {
 	proj *presentation.Projector
 
 	// Viewport state.
-	width     int
-	height    int
-	scrollTop int // index of the first visible rendered line
-	follow    bool
-	unseen    int
+	width         int
+	height        int
+	scrollTop     int // index of the first visible rendered line
+	follow        bool
+	unseen        int
+	toolsExpanded bool
 
 	// Cached rendered lines for the current viewport.
 	lines []string
@@ -99,6 +103,10 @@ type Feed struct {
 	// deliver event batches from the batcher goroutine.
 	prog             *tea.Program
 	testSyncDispatch bool
+
+	// Touch and input settings.
+	touchEnabled bool
+	input        io.Reader
 }
 
 // FeedCallbacks holds the hooks the feed uses to talk back to the loop.
@@ -134,6 +142,29 @@ func (m *Feed) HistoryLen() int { return m.history.len() }
 
 // HistoryBrowsing reports whether Up/Down history recall is active (tests).
 func (m *Feed) HistoryBrowsing() bool { return m.history.browsing() }
+
+// SetToolsExpanded sets the expanded state of tool output cards.
+func (m *Feed) SetToolsExpanded(expanded bool) {
+	if m.toolsExpanded != expanded {
+		m.toolsExpanded = expanded
+		m.refresh()
+	}
+}
+
+// ToolsExpanded reports whether tool output cards are expanded.
+func (m *Feed) ToolsExpanded() bool {
+	return m.toolsExpanded
+}
+
+// hasTools reports whether any tool item exists in the feed.
+func (m *Feed) hasTools() bool {
+	for _, it := range m.proj.Items() {
+		if it.Type == presentation.ItemTool {
+			return true
+		}
+	}
+	return false
+}
 
 // NewFeed creates a feed model.
 func NewFeed() *Feed {
@@ -182,6 +213,8 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		return m.routeKey(msg)
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 	case permReplyMsg:
 		if m.Approve != nil {
 			m.Approve.Reply(msg.Decision)
@@ -199,6 +232,12 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // arrives as a Bubble Tea message on the event loop, never from a
 // goroutine, so mutating model state here is safe.
 func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
+	// Snapshot the rendered lines before projecting events to detect any display changes.
+	// Note: This snapshot and comparison incur a linear O(N) cost in the number of rendered lines,
+	// bounded by the maximum number of items in the viewport, ensuring exact detection of
+	// in-place mutations (such as earlier tool state updates) across the entire feed.
+	beforeLines := slices.Clone(m.lines)
+
 	for _, e := range events {
 		if err := m.proj.Apply(e); err != nil {
 			m.addDiagnostic(fmt.Sprintf("unable to project event %s seq=%d: %v", e.Type, e.Seq, err))
@@ -209,15 +248,19 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 		}
 	}
 	m.refresh()
-	if m.modalVisible || m.decisionPending {
-		// The feed keeps projecting behind the modal, but visible
-		// auto-scroll pauses (Phase 2 decision).
-		m.unseen++
-	} else if m.follow {
-		m.scrollToEnd()
-	} else {
-		// Browsing older output; count unseen updates.
-		m.unseen++
+
+	displayChanged := !slices.Equal(beforeLines, m.lines)
+	if displayChanged {
+		if m.modalVisible || m.decisionPending {
+			// The feed keeps projecting behind the modal, but visible
+			// auto-scroll pauses (Phase 2 decision).
+			m.unseen++
+		} else if m.follow {
+			m.scrollToEnd()
+		} else {
+			// Browsing older output; count unseen updates.
+			m.unseen++
+		}
 	}
 	return m, nil
 }
@@ -308,13 +351,33 @@ func (m *Feed) SendBatch(events []agent.Event) {
 // messages instead of mutating the model off the event loop.
 func (m *Feed) SetProgram(p *tea.Program) { m.prog = p }
 
+// SetTouch enables or disables finger-swipe touch scrolling in the Feed UI.
+func (m *Feed) SetTouch(enabled bool) { m.touchEnabled = enabled }
+
+// TouchEnabled reports whether touch scrolling is enabled.
+func (m *Feed) TouchEnabled() bool { return m.touchEnabled }
+
+// SetInput overrides the input reader used by ProgramOptions. Defaults to os.Stdin.
+func (m *Feed) SetInput(r io.Reader) { m.input = r }
+
 // ProgramOptions returns the standard Bubble Tea options for running the full-screen Feed UI.
 // It activates alternate-screen mode so full-height frames, viewport padding, and continuous
 // redraws do not leak into the terminal's primary scrollback buffer.
+// When touch scrolling is enabled via SetTouch, it enables mouse cell motion and wraps input
+// with an SGRNormalizer to decode localized Arabic-Indic digit mouse reports.
 func (m *Feed) ProgramOptions() []tea.ProgramOption {
-	return []tea.ProgramOption{
+	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
 	}
+	if m.touchEnabled {
+		opts = append(opts, tea.WithMouseCellMotion())
+		in := m.input
+		if in == nil {
+			in = os.Stdin
+		}
+		opts = append(opts, tea.WithInput(NewSGRNormalizer(in)))
+	}
+	return opts
 }
 
 // BuildFromEvents initializes the feed from a complete event list (replay
@@ -426,7 +489,7 @@ func (m *Feed) refresh() {
 	if len(items) > maxVisibleFeedItems {
 		items = items[len(items)-maxVisibleFeedItems:]
 	}
-	m.lines = renderItems(items, m.width)
+	m.lines = renderItems(items, m.width, m.toolsExpanded)
 	m.clampScroll()
 }
 
@@ -484,10 +547,62 @@ func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.menu.visible {
 		return m.menuKey(k)
 	}
+	if isToggleToolsKey(k) {
+		return m.toggleTools()
+	}
 	if m.composer.focused() {
 		return m.composerKey(k)
 	}
 	return m.viewportKey(k)
+}
+
+// toggleTools toggles between compact and expanded tool output.
+// Follow mode keeps view anchored to the bottom.
+// Browsing history preserves the visible content anchor.
+func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
+	items := mergeNotices(m.proj.Items(), m.notices)
+	if len(items) > maxVisibleFeedItems {
+		items = items[len(items)-maxVisibleFeedItems:]
+	}
+
+	if m.follow {
+		m.toolsExpanded = !m.toolsExpanded
+		m.refresh()
+		m.scrollToEnd()
+		return m, nil
+	}
+
+	// Follow is false: preserve visible content anchor.
+	_, oldOffsets := renderItemsWithOffsets(items, m.width, m.toolsExpanded)
+
+	// Find which item currently anchors scrollTop.
+	anchorIdx := 0
+	offsetWithin := 0
+	for i := len(oldOffsets) - 1; i >= 0; i-- {
+		if m.scrollTop >= oldOffsets[i] {
+			anchorIdx = i
+			offsetWithin = m.scrollTop - oldOffsets[i]
+			break
+		}
+	}
+
+	m.toolsExpanded = !m.toolsExpanded
+	newLines, newOffsets := renderItemsWithOffsets(items, m.width, m.toolsExpanded)
+	m.lines = newLines
+
+	if anchorIdx < len(newOffsets) {
+		targetTop := newOffsets[anchorIdx] + offsetWithin
+		nextItemStart := len(newLines)
+		if anchorIdx+1 < len(newOffsets) {
+			nextItemStart = newOffsets[anchorIdx+1]
+		}
+		if targetTop >= nextItemStart {
+			targetTop = newOffsets[anchorIdx]
+		}
+		m.scrollTop = targetTop
+	}
+	m.clampScroll()
+	return m, nil
 }
 
 // onCtrlC implements the deterministic cancel policy:
@@ -677,6 +792,15 @@ func isNewlineKey(k tea.KeyMsg) bool {
 		return true
 	}
 	return k.Type == tea.KeyEnter && k.Alt
+}
+
+// isToggleToolsKey reports whether the key is the tool expansion toggle:
+// Ctrl+O. It explicitly guards against bracketed paste content.
+func isToggleToolsKey(k tea.KeyMsg) bool {
+	if k.Paste {
+		return false
+	}
+	return k.Type == tea.KeyCtrlO || (k.Type == tea.KeyRunes && len(k.Runes) == 1 && k.Runes[0] == 0x0f)
 }
 
 // trySend implements the send policy:
@@ -1019,6 +1143,57 @@ func (m *Feed) viewportKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
+}
+
+// handleMouse processes mouse and touch events for the Feed viewport.
+// It handles finger-swipe scrolling via vertical wheel reports, scrolling by 3 rows.
+// It enforces strict viewport hit-testing and ignores gestures over chrome or during modal interaction.
+func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if !m.touchEnabled {
+		return m, nil
+	}
+	// Ignore gestures while permission interaction is active.
+	if m.modalVisible || m.decisionPending {
+		return m, nil
+	}
+
+	isWheelUp := msg.Button == tea.MouseButtonWheelUp
+	isWheelDown := msg.Button == tea.MouseButtonWheelDown
+	if !isWheelUp && !isWheelDown {
+		return m, nil
+	}
+
+	lm := m.computeLayout()
+	if lm.ViewportRows <= 0 {
+		return m, nil
+	}
+
+	// Hit-test: coordinates must fall strictly within the conversation viewport.
+	vpTop := lm.HeaderRows
+	vpBottom := lm.HeaderRows + lm.ViewportRows
+	if msg.Y < vpTop || msg.Y >= vpBottom || msg.X < 0 || msg.X >= lm.TerminalWidth {
+		return m, nil
+	}
+
+	const touchScrollStep = 3
+	bs := m.bottomStart(lm.ViewportRows)
+
+	if isWheelUp {
+		m.follow = false
+		m.scrollTop = max(0, m.scrollTop-touchScrollStep)
+		return m, nil
+	}
+
+	if isWheelDown {
+		m.scrollTop = min(bs, m.scrollTop+touchScrollStep)
+		if m.scrollTop == bs {
+			m.follow = true
+			m.unseen = 0
+		}
+		return m, nil
+	}
+
+	return m, nil
 }
 
 // Message types used inside the feed.

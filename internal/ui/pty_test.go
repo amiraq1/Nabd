@@ -21,8 +21,7 @@ func TestPTYLongOutputKeepsComposerVisible(t *testing.T) {
 
 	sess.InjectBatch([]agent.Event{
 		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: []byte(`"echo long"`)}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
+		{Seq: 2, Type: agent.TextDelta, Text: sb.String()},
 	})
 
 	// Follow mode anchors to the newest lines (bottom), so the latest output lines
@@ -48,8 +47,7 @@ func TestPTYTypingAfterFeedFillAppearsInComposer(t *testing.T) {
 	}
 	sess.InjectBatch([]agent.Event{
 		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
+		{Seq: 2, Type: agent.TextDelta, Text: sb.String()},
 	})
 
 	// Follow mode anchors to the newest lines (bottom), so line 40 is visible.
@@ -469,8 +467,7 @@ func TestPTYResizeFilledFeedKeepsBottomChrome(t *testing.T) {
 	}
 	sess.InjectBatch([]agent.Event{
 		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
+		{Seq: 2, Type: agent.TextDelta, Text: sb.String()},
 	})
 
 	// Follow mode anchors to the newest lines (bottom), so line 50 is visible.
@@ -552,7 +549,14 @@ func TestPTYToolOutputControlPayloadDoesNotCorruptTerminal(t *testing.T) {
 		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: maliciousPayload, OK: true}},
 	})
 
-	err := sess.WaitForCondition("safe text rendered", 3*time.Second, func(s ScreenSnapshot) bool {
+	// Wait for the tool summary row to appear, then expand details via Ctrl+O.
+	err := sess.WaitForText("Bash", 3*time.Second)
+	if err != nil {
+		t.Fatalf("tool summary failed to appear: %v", err)
+	}
+	sess.SendKey([]byte{0x0f})
+
+	err = sess.WaitForCondition("safe text rendered", 3*time.Second, func(s ScreenSnapshot) bool {
 		return s.Contains("safe text after attacks")
 	})
 	if err != nil {

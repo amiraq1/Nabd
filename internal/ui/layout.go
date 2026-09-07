@@ -206,39 +206,75 @@ func (m *Feed) runtimeStatusText() string {
 
 // footerText returns the condensed help / shortcut line adapted to the available width.
 // It degrades gracefully: drops model name first, then less-important shortcuts.
+// When tool items exist in the feed, it surfaces a Ctrl+O details/collapse hint.
 func (m *Feed) footerText(width int) string {
-	var full, mid, short, tiny string
+	var candidates []string
 	if m.modalVisible || m.decisionPending {
 		if m.decisionPending {
-			full = "submitting decision…"
-			mid = full
-			short = full
-			tiny = full
+			sub := "submitting decision…"
+			candidates = []string{sub}
 		} else {
-			full = "y once · a session · n deny · Enter confirm · Up/Down select"
-			mid = "y once · a session · n deny · Enter confirm"
-			short = "y once · a/n · Enter ok"
-			tiny = "y/a/n"
+			candidates = []string{
+				"y once · a session · n deny · Enter confirm · Up/Down select",
+				"y once · a session · n deny · Enter confirm",
+				"y once · a/n · Enter ok",
+				"y/a/n",
+			}
 		}
-	} else if m.running || m.busy {
-		full = "Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C cancel"
-		mid = "Enter send · Ctrl+J new · PgUp/PgDn · ^C cancel"
-		short = "Enter send · ^C cancel"
-		tiny = "Enter · ^C"
 	} else {
-		full = "Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit"
-		mid = "Enter send · Ctrl+J new · PgUp/PgDn · ^C quit"
-		short = "Enter send · ^C quit"
-		tiny = "Enter · ^C"
+		hasTools := m.hasTools()
+		hintFull := "Ctrl+O details"
+		hintMid := "^O details"
+		if m.toolsExpanded {
+			hintFull = "Ctrl+O collapse"
+			hintMid = "^O collapse"
+		}
+
+		if m.running || m.busy {
+			if hasTools {
+				candidates = []string{
+					"Enter send · Ctrl+J newline · " + hintFull + " · PgUp/PgDn scroll · Ctrl+C cancel",
+					"Enter send · Ctrl+J new · " + hintFull + " · PgUp/PgDn · ^C cancel",
+					"Enter send · Ctrl+J new · " + hintMid + " · PgUp/PgDn · ^C cancel",
+					"Enter send · " + hintMid + " · ^C cancel",
+					"Enter · ^C",
+				}
+			} else {
+				candidates = []string{
+					"Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C cancel",
+					"Enter send · Ctrl+J new · PgUp/PgDn · ^C cancel",
+					"Enter send · ^C cancel",
+					"Enter · ^C",
+				}
+			}
+		} else {
+			if hasTools {
+				candidates = []string{
+					"Enter send · Ctrl+J newline · " + hintFull + " · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+					"Enter send · Ctrl+J new · " + hintFull + " · PgUp/PgDn · ^C quit · ^D exit",
+					"Enter send · Ctrl+J new · " + hintMid + " · PgUp/PgDn · ^C quit",
+					"Enter send · " + hintMid + " · ^C quit",
+					"Enter · ^C",
+				}
+			} else {
+				candidates = []string{
+					"Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+					"Enter send · Ctrl+J new · PgUp/PgDn · ^C quit",
+					"Enter send · ^C quit",
+					"Enter · ^C",
+				}
+			}
+		}
 	}
 
-	for _, candidate := range []string{full, mid, short, tiny} {
+	for _, candidate := range candidates {
 		if ansi.StringWidth(candidate) <= width {
 			return candidate
 		}
 	}
-	// Last resort: hard truncate.
-	return ansi.Truncate(tiny, width, "")
+	// Last resort: hard truncate smallest candidate.
+	smallest := candidates[len(candidates)-1]
+	return ansi.Truncate(smallest, width, "")
 }
 
 // View renders the full screen using a pre-computed layout. It does NOT
