@@ -13,6 +13,7 @@ import (
 // of feed output preserves the composer at the bottom of the screen without feed overflow.
 func TestPTYLongOutputKeepsComposerVisible(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
+	sess.Feed.SetToolsExpanded(true)
 
 	var sb strings.Builder
 	for i := 1; i <= 60; i++ {
@@ -41,6 +42,7 @@ func TestPTYLongOutputKeepsComposerVisible(t *testing.T) {
 // typing keystrokes via PTY appears in the persistent composer panel.
 func TestPTYTypingAfterFeedFillAppearsInComposer(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
+	sess.Feed.SetToolsExpanded(true)
 
 	var sb strings.Builder
 	for i := 1; i <= 40; i++ {
@@ -462,6 +464,7 @@ func TestPTYModalRestoresDraftAndCursor(t *testing.T) {
 // from 80x24 to 40x20 keeps the bottom separators, composer, and footer intact.
 func TestPTYResizeFilledFeedKeepsBottomChrome(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
+	sess.Feed.SetToolsExpanded(true)
 
 	var sb strings.Builder
 	for i := 1; i <= 50; i++ {
@@ -539,6 +542,7 @@ func TestPTYTwentyByTwelveDoesNotOverflow(t *testing.T) {
 // grid and composer remain intact without corruption.
 func TestPTYToolOutputControlPayloadDoesNotCorruptTerminal(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
+	sess.Feed.SetToolsExpanded(true)
 
 	maliciousPayload := "Line 1: normal output\n" +
 		"\x1b[2J\x1b[H\x1b[5;10H" + // Screen clear + cursor move
