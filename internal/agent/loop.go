@@ -559,13 +559,15 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		if err != nil {
 			out.Text, out.OK = err.Error(), false
 		}
-		// read_file is result-scoped: its Outcome carries LinesRead, so the
-		// read itself no longer touches the shared linesRead slot. The loop is
-		// the single authoritative writer of that slot for the read→write
-		// audit, and it runs sequentially, so there is no race window for a
-		// write to steal a count it did not read.
+		// read_file is result-scoped: its Outcome carries LinesRead and ReadCredit, so
+		// the read itself no longer touches the shared slot. The loop is the
+		// single authoritative writer of that slot for the read→write audit,
+		// and it runs sequentially, so there is no race window for a write to
+		// steal a credit it did not read.
 		if c.Name == "read_file" && out.OK {
-			if sr, ok := l.Tools.(interface{ SetLinesRead(int) }); ok {
+			if sc, ok := l.Tools.(interface{ SetReadCredit(ReadCredit) }); ok {
+				sc.SetReadCredit(out.ReadCredit)
+			} else if sr, ok := l.Tools.(interface{ SetLinesRead(int) }); ok {
 				sr.SetLinesRead(out.LinesRead)
 			}
 		}

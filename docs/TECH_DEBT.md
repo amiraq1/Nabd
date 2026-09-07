@@ -194,3 +194,31 @@ Measured via `go test ./internal/ui -run '^$' -bench '^BenchmarkComposerBackspac
   - All displayed fields (`Provider`, `Model`, `Reason`) undergo secret redaction (Anthropic, OpenRouter, Groq, NVIDIA, GitHub, Bearer tokens) and terminal control sequence normalization (CSI, OSC8 hyperlinks, Bidi overrides, raw newlines).
 - **Non-goals & Deferred:**
   - Router fallback status eligibility policy (treating 401, 403, 404, 429, etc. as eligible for fallback) is left unmodified in `internal/provider/router.go`.
+
+## NBD-034: Composite read-credit key and modification-time validation (Issue #15)
+
+- **Component:** `internal/agent`, `internal/tools`
+- **Issue:** `Registry.metadata` stored a single global integer `linesRead`. When `read_file` executed, its line count was staged and subsequently consumed by the next `write_file` or `edit_file` via `ConsumeLinesRead()`. Because this credit was unbound to path, content hash, or line range:
+  1. Reading file A and then mutating file B incorrectly attributed A's read line count to B's `EditRecord.ReadLines`.
+  2. Reading a file that was subsequently modified externally on disk before mutation allowed the stale read credit to be claimed even though the model never saw the modified content.
+  3. Creating a brand new file after reading an unrelated file falsely reported a non-zero `ReadLines`.
+
+### Architecture & Resolution
+
+1. **Composite Key (`agent.ReadCredit`):**
+   - Introduced `agent.ReadCredit` containing `Path string`, `Hash string` (full-file SHA-256 hex at read time), `Offset int`, `Limit int`, and `LinesRead int`.
+   - `read_file.run` computes the SHA-256 hash of the target file at read time and populates `agent.Outcome.ReadCredit`. Reads are result-scoped and do not mutate global registry slots directly.
+2. **Audit Handoff via Agent Loop:**
+   - The sequential agent loop (`Loop.runCalls`) observes successful `read_file` outcomes and stages the full credit via `Registry.SetReadCredit(out.ReadCredit)`.
+   - Preserves `Registry.SetLinesRead(int)` for backward compatibility.
+3. **Atomic Validation at Mutation Boundary (`commit`):**
+   - In `commit()` (`internal/tools/write.go`), before committing an edit or write, the pre-mutation shadow content is inspected. If `!before.Absent`, the pre-mutation SHA-256 hash is computed.
+   - `Registry.ConsumeLinesRead(abs, beforeHash)` validates the staged credit:
+     - Target path mismatch (`credit.Path != "" && credit.Path != abs`): returns `0`.
+     - Pre-mutation content hash mismatch (`credit.Hash != "" && credit.Hash != beforeHash`): returns `0`.
+     - If both match (or if credit was unstaged), returns `credit.LinesRead`.
+     - In all cases, staged credit is atomically reset to empty so it cannot leak to subsequent mutations.
+4. **Parity and Cleanup Invariants:**
+   - `Registry.ClearReadState()` completely resets the staged credit to empty (`agent.ReadCredit{}`).
+   - Error and cancellation paths in `readFile.Run` and `readFile.RunDetailed` invoke `ClearReadState()`, preventing partial metadata leakage.
+   - Regression coverage in `internal/tools/nbd034_read_credit_test.go` and `internal/agent/edit_record_loop_test.go` guards against cross-file attribution, external disk modification, brand-new file creation, and loop propagation.

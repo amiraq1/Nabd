@@ -3,8 +3,11 @@ package tools
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -126,6 +129,7 @@ func (readFile) Name() string { return "read_file" }
 // plain-Run path and is drained within RunDetailed, so it cannot leak past the
 // call that produced it.
 type readMeta struct {
+	credit     agent.ReadCredit
 	linesRead  int
 	truncated  bool
 	nextOffset int
@@ -156,6 +160,7 @@ func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		Truncated:  meta.truncated,
 		NextOffset: meta.nextOffset,
 		LinesRead:  meta.linesRead,
+		ReadCredit: meta.credit,
 	}, nil
 }
 
@@ -219,6 +224,16 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 		return "", readMeta{}, false, fmt.Errorf("%s is binary (%d bytes)", t.root.Rel(p), fi.Size())
 	}
 	if _, err := f.Seek(0, 0); err != nil {
+		return "", readMeta{}, false, err
+	}
+
+	// Compute full-file SHA-256 hash at read time for composite key provenance (NBD-034).
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		return "", readMeta{}, false, err
+	}
+	fileHash := hex.EncodeToString(hasher.Sum(nil))
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return "", readMeta{}, false, err
 	}
 
@@ -301,15 +316,29 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 	}
 
 	if shown == 0 {
-		if line == 0 {
-			return fmt.Sprintf("%s is empty", t.root.Rel(p)), readMeta{}, true, nil
+		meta.credit = agent.ReadCredit{
+			Path:      p,
+			Hash:      fileHash,
+			Offset:    from,
+			Limit:     limit,
+			LinesRead: 0,
 		}
-		return fmt.Sprintf("no lines at offset=%d · file has %d lines", from, line), readMeta{}, true, nil
+		if line == 0 {
+			return fmt.Sprintf("%s is empty", t.root.Rel(p)), meta, true, nil
+		}
+		return fmt.Sprintf("no lines at offset=%d · file has %d lines", from, line), meta, true, nil
 	}
 	if capped != "" {
 		b.WriteString(capped + "\n")
 	}
 	meta.linesRead = shown
+	meta.credit = agent.ReadCredit{
+		Path:      p,
+		Hash:      fileHash,
+		Offset:    from,
+		Limit:     limit,
+		LinesRead: shown,
+	}
 	return b.String(), meta, true, nil
 }
 

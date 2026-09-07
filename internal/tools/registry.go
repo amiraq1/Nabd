@@ -29,9 +29,9 @@ type Tool interface {
 // tear or double-consume it.
 type metadata struct {
 	mu         sync.Mutex
-	linesRead  int  // set by read_file, consumed by the next commit()
-	truncated  bool // set by read_file, consumed by RunDetailed
-	nextOffset int  // set by read_file on truncation, consumed by RunDetailed
+	credit     agent.ReadCredit // composite key: path + content hash + range + linesRead (NBD-034)
+	truncated  bool             // set by read_file, consumed by RunDetailed
+	nextOffset int              // set by read_file on truncation, consumed by RunDetailed
 }
 
 type Registry struct {
@@ -52,24 +52,66 @@ func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 	return r
 }
 
-// SetLinesRead records how many lines read_file just showed the model. The
-// next commit() stamps that number on the EditRecord: a blind write (no
-// read before it) carries ReadLines=0.
-func (r *Registry) SetLinesRead(n int) {
+// SetReadCredit records the provenance and line count of a read_file call (NBD-034).
+// The next commit() validates this credit against the target file's path
+// and pre-mutation content hash.
+func (r *Registry) SetReadCredit(c agent.ReadCredit) {
 	r.meta.mu.Lock()
-	r.meta.linesRead = n
+	r.meta.credit = c
 	r.meta.mu.Unlock()
 }
 
-// ConsumeLinesRead atomically returns the pending line count and resets it
-// to zero. Ownership is strict: one consumer takes it, and anything after
-// it sees 0 — a stale count can never bleed into a later unrelated write.
-func (r *Registry) ConsumeLinesRead() int {
+// SetLinesRead records how many lines read_file just showed the model.
+// Kept for backward compatibility when only line count is provided.
+func (r *Registry) SetLinesRead(n int) {
+	r.meta.mu.Lock()
+	r.meta.credit = agent.ReadCredit{LinesRead: n}
+	r.meta.mu.Unlock()
+}
+
+// ReadCredit returns a copy of the currently staged read credit without consuming it.
+func (r *Registry) ReadCredit() agent.ReadCredit {
 	r.meta.mu.Lock()
 	defer r.meta.mu.Unlock()
-	n := r.meta.linesRead
-	r.meta.linesRead = 0
-	return n
+	return r.meta.credit
+}
+
+// ConsumeLinesRead atomically validates and returns the pending line count,
+// resetting the staged credit.
+//
+// If abs (and optionally hashBefore) are provided, the credit is validated:
+//   - If credit.Path is non-empty and does not match abs, the credit was for
+//     a different file: 0 is returned.
+//   - If credit.Hash is non-empty and does not match hashBefore, the file was
+//     modified since it was read: the credit is invalidated and 0 is returned.
+//
+// In all cases, ownership is strict: the staged credit is cleared so it cannot
+// leak into any later write.
+func (r *Registry) ConsumeLinesRead(args ...string) int {
+	r.meta.mu.Lock()
+	defer r.meta.mu.Unlock()
+	credit := r.meta.credit
+	r.meta.credit = agent.ReadCredit{}
+
+	if len(args) == 0 {
+		return credit.LinesRead
+	}
+	abs := args[0]
+	var hashBefore string
+	if len(args) > 1 {
+		hashBefore = args[1]
+	}
+
+	// 1. Path validation: if credit has a path and it doesn't match the target file.
+	if credit.Path != "" && credit.Path != abs {
+		return 0
+	}
+	// 2. Hash validation: if credit has a content hash and it doesn't match pre-mutation hash.
+	if credit.Hash != "" && credit.Hash != hashBefore {
+		return 0
+	}
+
+	return credit.LinesRead
 }
 
 // SetTruncated records that the last read_file call hit the byte cap, with
@@ -97,7 +139,7 @@ func (r *Registry) ConsumeTruncated() (bool, int) {
 // call.
 func (r *Registry) ClearReadState() {
 	r.meta.mu.Lock()
-	r.meta.linesRead = 0
+	r.meta.credit = agent.ReadCredit{}
 	r.meta.truncated = false
 	r.meta.nextOffset = 0
 	r.meta.mu.Unlock()

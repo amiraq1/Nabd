@@ -315,7 +315,7 @@ func (e *editLog) all() []Edit {
 // leaves no on-disk trace. The critical window — between WriteAtomic and
 // log.add — contains only log.add, shrinking the interruption window that
 // the Android lowmemorykiller could exploit.
-func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, tool, abs string, data []byte, readLines int) (snap.State, snap.State, error) {
+func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg *Registry, tool, abs string, data []byte) (snap.State, snap.State, error) {
 	before, err := sh.Capture(abs)
 	if err != nil {
 		return before, snap.State{}, err
@@ -334,6 +334,19 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, tool
 	if err != nil {
 		return before, snap.State{}, err
 	}
+
+	// NBD-034: Validate read credit against target path and pre-mutation content hash.
+	var readLines int
+	if reg != nil {
+		var beforeHash string
+		if !before.Absent {
+			if b, err := sh.Read(before.Blob); err == nil {
+				beforeHash = sha256hex(b)
+			}
+		}
+		readLines = reg.ConsumeLinesRead(abs, beforeHash)
+	}
+
 	// The diff (LCS matrix allocation) runs here — BEFORE WriteAtomic. If it
 	// aborts (budget exceeded, ctx cancelled), the project file is untouched.
 	rec, rerr := buildRecord(ctx, sh, before, after, data, readLines)
@@ -778,10 +791,7 @@ func (w writeFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	if err != nil {
 		return "", false, err
 	}
-	// Consume read-credit only after the request passed validation, and before
-	// the mutation boundary that legitimately spends it.
-	readLines := w.reg.ConsumeLinesRead()
-	before, after, err := commit(ctx, w.root, w.sh, w.log, "write_file", abs, []byte(content), readLines)
+	before, after, err := commit(ctx, w.root, w.sh, w.log, w.reg, "write_file", abs, []byte(content))
 	if err != nil {
 		return "", false, err
 	}
@@ -866,10 +876,7 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 	if len(out) > maxEditBytes {
 		return "", false, fmt.Errorf("edit output is %d bytes, limit is %d", len(out), maxEditBytes)
 	}
-	// Consume read-credit only after the request passed validation, and before
-	// the mutation boundary that legitimately spends it.
-	readLines := w.reg.ConsumeLinesRead()
-	if _, _, err := commit(ctx, w.root, w.sh, w.log, "edit_file", abs, []byte(out), readLines); err != nil {
+	if _, _, err := commit(ctx, w.root, w.sh, w.log, w.reg, "edit_file", abs, []byte(out)); err != nil {
 		return "", false, err
 	}
 	return fmt.Sprintf("edited %s (%d replacements, %d lines → %d)",
