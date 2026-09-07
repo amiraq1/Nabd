@@ -23,6 +23,14 @@ var (
 	good = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 	bad  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
 	warn = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	cyan = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	green = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+
+	userMsgBg = lipgloss.CompleteColor{TrueColor: "#303030", ANSI256: "236", ANSI: "8"}
+	userMsgFg = lipgloss.CompleteColor{TrueColor: "#E0E0E0", ANSI256: "254", ANSI: "15"}
+
+	userCardStyle = lipgloss.NewStyle().Background(userMsgBg).Foreground(userMsgFg)
+	userRoleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true).Background(userMsgBg)
 )
 
 // AllowedUISymbols is the strict whitelist of non-ASCII glyphs permitted in UI string literals
@@ -236,8 +244,8 @@ func block(sym, s string, width int, st lipgloss.Style) string {
 // ansi.StringWidth for visual measurement. This correctly handles Arabic,
 // Emoji, CJK, combining marks, and ANSI escape sequences.
 func wrap(s string, width int) []string {
-	if width < 8 {
-		width = 8
+	if width < 1 {
+		width = 1
 	}
 	if s == "" {
 		return []string{""}
