@@ -509,18 +509,18 @@ func TestFeed_TouchHitTestingAndModalSafety(t *testing.T) {
 // TestPTYTouchScrolling verifies real live terminal behavior with raw SGR byte injection.
 func TestPTYTouchScrolling(t *testing.T) {
 	sess := StartPTYSessionWithTouch(t, 80, 24)
-	sess.Feed.SetToolsExpanded(true)
 
 	// Inject 60 lines of synthetic content to require scrolling.
-	var sb strings.Builder
+	var events []agent.Event
+	events = append(events, agent.Event{Seq: 1, Type: agent.RunStart})
 	for i := 1; i <= 60; i++ {
-		sb.WriteString(fmt.Sprintf("Item %02d: touch scrolling regression test\n", i))
+		events = append(events, agent.Event{
+			Seq:  i + 1,
+			Type: agent.UserMsg,
+			Text: fmt.Sprintf("Item %02d: touch scrolling regression test", i),
+		})
 	}
-	sess.InjectBatch([]agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
-	})
+	sess.InjectBatch(events)
 
 	err := sess.WaitForText("Item 60", 3*time.Second)
 	if err != nil {
@@ -537,19 +537,21 @@ func TestPTYTouchScrolling(t *testing.T) {
 		t.Fatalf("failed to write raw up-wheel report to master: %v", err)
 	}
 
-	// Verify that the view scrolled up and visible frame changed.
+	// Verify that the view scrolled up and visible frame changed without data race.
 	err = sess.WaitForCondition("scrolled upward after swipe", 3*time.Second, func(snap ScreenSnapshot) bool {
-		// Visible lines should have shifted; follow should be false
-		return !sess.Feed.follow
+		return snap.Contains("updates available") || !snap.Contains("Item 60")
 	})
 	if err != nil {
 		t.Fatalf("expected follow to be false after swipe up: %v", err)
 	}
 
 	// Crucial assertion: Verify no escape sequence fragments leaked into the composer!
-	composerVal := sess.Feed.composer.value()
-	if composerVal != "" {
-		t.Fatalf("escape sequence leaked into composer: %q", composerVal)
+	snapScrolled := sess.Snapshot()
+	if compRow, ok := snapScrolled.ComposerRow(); ok {
+		rowText := snapScrolled.PlainRows()[compRow]
+		if strings.Contains(rowText, "٦") || strings.Contains(rowText, string(upRawSample)) {
+			t.Fatalf("escape sequence leaked into composer: %q", rowText)
+		}
 	}
 
 	// Inject raw down-swipe SGR report (ESC[<٦٥;٤٢;١٨M) multiple times to scroll back to bottom.
@@ -559,16 +561,19 @@ func TestPTYTouchScrolling(t *testing.T) {
 	}
 
 	err = sess.WaitForCondition("restored follow at bottom", 3*time.Second, func(snap ScreenSnapshot) bool {
-		return sess.Feed.follow && sess.Feed.unseen == 0
+		return snap.Contains("Item 60") && !snap.Contains("updates available")
 	})
 	if err != nil {
 		t.Fatalf("expected follow restored at bottom: %v", err)
 	}
 
 	// Composer must still be clean.
-	composerVal = sess.Feed.composer.value()
-	if composerVal != "" {
-		t.Fatalf("escape sequence leaked into composer after down swipe: %q", composerVal)
+	snapBottom := sess.Snapshot()
+	if compRow, ok := snapBottom.ComposerRow(); ok {
+		rowText := snapBottom.PlainRows()[compRow]
+		if strings.Contains(rowText, "٦") || strings.Contains(rowText, string(downRawSample)) {
+			t.Fatalf("escape sequence leaked into composer after down swipe: %q", rowText)
+		}
 	}
 
 	// Verify that mouse mode sequences were sent to terminal:

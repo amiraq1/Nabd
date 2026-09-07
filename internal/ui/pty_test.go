@@ -13,7 +13,6 @@ import (
 // of feed output preserves the composer at the bottom of the screen without feed overflow.
 func TestPTYLongOutputKeepsComposerVisible(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
-	sess.Feed.SetToolsExpanded(true)
 
 	var sb strings.Builder
 	for i := 1; i <= 60; i++ {
@@ -22,8 +21,7 @@ func TestPTYLongOutputKeepsComposerVisible(t *testing.T) {
 
 	sess.InjectBatch([]agent.Event{
 		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: []byte(`"echo long"`)}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
+		{Seq: 2, Type: agent.TextDelta, Text: sb.String()},
 	})
 
 	// Follow mode anchors to the newest lines (bottom), so the latest output lines
@@ -42,7 +40,6 @@ func TestPTYLongOutputKeepsComposerVisible(t *testing.T) {
 // typing keystrokes via PTY appears in the persistent composer panel.
 func TestPTYTypingAfterFeedFillAppearsInComposer(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
-	sess.Feed.SetToolsExpanded(true)
 
 	var sb strings.Builder
 	for i := 1; i <= 40; i++ {
@@ -50,8 +47,7 @@ func TestPTYTypingAfterFeedFillAppearsInComposer(t *testing.T) {
 	}
 	sess.InjectBatch([]agent.Event{
 		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
+		{Seq: 2, Type: agent.TextDelta, Text: sb.String()},
 	})
 
 	// Follow mode anchors to the newest lines (bottom), so line 40 is visible.
@@ -464,7 +460,6 @@ func TestPTYModalRestoresDraftAndCursor(t *testing.T) {
 // from 80x24 to 40x20 keeps the bottom separators, composer, and footer intact.
 func TestPTYResizeFilledFeedKeepsBottomChrome(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
-	sess.Feed.SetToolsExpanded(true)
 
 	var sb strings.Builder
 	for i := 1; i <= 50; i++ {
@@ -472,8 +467,7 @@ func TestPTYResizeFilledFeedKeepsBottomChrome(t *testing.T) {
 	}
 	sess.InjectBatch([]agent.Event{
 		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: sb.String(), OK: true}},
+		{Seq: 2, Type: agent.TextDelta, Text: sb.String()},
 	})
 
 	// Follow mode anchors to the newest lines (bottom), so line 50 is visible.
@@ -542,7 +536,6 @@ func TestPTYTwentyByTwelveDoesNotOverflow(t *testing.T) {
 // grid and composer remain intact without corruption.
 func TestPTYToolOutputControlPayloadDoesNotCorruptTerminal(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
-	sess.Feed.SetToolsExpanded(true)
 
 	maliciousPayload := "Line 1: normal output\n" +
 		"\x1b[2J\x1b[H\x1b[5;10H" + // Screen clear + cursor move
@@ -556,7 +549,14 @@ func TestPTYToolOutputControlPayloadDoesNotCorruptTerminal(t *testing.T) {
 		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: maliciousPayload, OK: true}},
 	})
 
-	err := sess.WaitForCondition("safe text rendered", 3*time.Second, func(s ScreenSnapshot) bool {
+	// Wait for the tool summary row to appear, then expand details via Ctrl+O.
+	err := sess.WaitForText("Bash", 3*time.Second)
+	if err != nil {
+		t.Fatalf("tool summary failed to appear: %v", err)
+	}
+	sess.SendKey([]byte{0x0f})
+
+	err = sess.WaitForCondition("safe text rendered", 3*time.Second, func(s ScreenSnapshot) bool {
 		return s.Contains("safe text after attacks")
 	})
 	if err != nil {
