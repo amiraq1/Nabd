@@ -34,7 +34,9 @@ func (l loopTools) RunDetailed(ctx context.Context, name string, raw json.RawMes
 }
 
 // LastEdit lets the loop's EventEdit emission find the persisted record.
-func (l loopTools) LastEdit() *agent.EditRecord { return l.reg.LastEdit() }
+func (l loopTools) LastEdit() *agent.EditRecord      { return l.reg.LastEdit() }
+func (l loopTools) SetReadCredit(c agent.ReadCredit) { l.reg.SetReadCredit(c) }
+func (l loopTools) SetLinesRead(n int)               { l.reg.SetLinesRead(n) }
 
 // writeOnceProvider asks for one write_file call, then on the next turn
 // (which carries the tool_result) answers with plain text and stops.
@@ -257,4 +259,139 @@ func (p *readOnceProvider) Stream(ctx context.Context, req provider.Request) (<-
 	}
 	close(ch)
 	return ch, nil
+}
+
+// readThenWriteProvider reads in.md, then writes to writePath, then finishes.
+type readThenWriteProvider struct {
+	calls     int
+	writePath string
+}
+
+func (readThenWriteProvider) Name() string { return "mock" }
+
+func (p *readThenWriteProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Chunk, error) {
+	ch := make(chan provider.Chunk, 2)
+	p.calls++
+	if p.calls == 1 {
+		raw, _ := json.Marshal(map[string]any{"path": "in.md"})
+		ch <- provider.Chunk{Kind: provider.ChunkToolCall, Call: &provider.ToolCall{
+			ID: "call_r1", Name: "read_file", Input: raw,
+		}}
+		ch <- provider.Chunk{Kind: provider.ChunkStop, Stop: "tool_calls"}
+	} else if p.calls == 2 {
+		raw, _ := json.Marshal(map[string]any{"path": p.writePath, "content": "سطر جديد تمامًا\n"})
+		ch <- provider.Chunk{Kind: provider.ChunkToolCall, Call: &provider.ToolCall{
+			ID: "call_w1", Name: "write_file", Input: raw,
+		}}
+		ch <- provider.Chunk{Kind: provider.ChunkStop, Stop: "tool_calls"}
+	} else {
+		ch <- provider.Chunk{Kind: provider.ChunkText, Text: "تم التعديل."}
+		ch <- provider.Chunk{Kind: provider.ChunkStop, Stop: "end_turn"}
+	}
+	close(ch)
+	return ch, nil
+}
+
+// TestLoopReadCreditCompositeKeyPropagation verifies that the loop properly
+// routes ReadCredit from read_file to the registry, validating credit for
+// matching mutations and rejecting cross-file mutations end-to-end (NBD-034).
+func TestLoopReadCreditCompositeKeyPropagation(t *testing.T) {
+	t.Run("matching path credits linesRead", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "in.md"), []byte("سطر 1\nسطر 2\nسطر 3\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		root, err := tools.NewRoot(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sh, err := snap.New(root.Dir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg := tools.NewRegistry(root, sh)
+
+		prov := &readThenWriteProvider{writePath: "in.md"}
+		l := &agent.Loop{
+			Provider: prov,
+			Tools:    loopTools{reg},
+			Budget:   agent.NewBudget(),
+			Gate:     loopTools{reg},
+			Human:    loopTools{reg},
+		}
+		var events []agent.Event
+		l.Sink = sinkFunc(func(e agent.Event) error {
+			events = append(events, e)
+			return nil
+		})
+
+		if err := l.Run(context.Background(), "اقرأ ثم عدّل"); err != nil {
+			t.Fatal(err)
+		}
+
+		var editEv *agent.Event
+		for i := range events {
+			if events[i].Type == agent.EventEdit {
+				editEv = &events[i]
+				break
+			}
+		}
+		if editEv == nil || editEv.Edit == nil {
+			t.Fatal("expected edit_record event with non-nil payload")
+		}
+		if editEv.Edit.ReadLines != 3 {
+			t.Errorf("editEv.Edit.ReadLines = %d, want 3 (credit matched)", editEv.Edit.ReadLines)
+		}
+	})
+
+	t.Run("cross-file write rejects credit", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "in.md"), []byte("سطر 1\nسطر 2\nسطر 3\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "other.md"), []byte("أخرى\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		root, err := tools.NewRoot(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sh, err := snap.New(root.Dir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		reg := tools.NewRegistry(root, sh)
+
+		prov := &readThenWriteProvider{writePath: "other.md"}
+		l := &agent.Loop{
+			Provider: prov,
+			Tools:    loopTools{reg},
+			Budget:   agent.NewBudget(),
+			Gate:     loopTools{reg},
+			Human:    loopTools{reg},
+		}
+		var events []agent.Event
+		l.Sink = sinkFunc(func(e agent.Event) error {
+			events = append(events, e)
+			return nil
+		})
+
+		if err := l.Run(context.Background(), "اقرأ ثم اكتب بملف آخر"); err != nil {
+			t.Fatal(err)
+		}
+
+		var editEv *agent.Event
+		for i := range events {
+			if events[i].Type == agent.EventEdit {
+				editEv = &events[i]
+				break
+			}
+		}
+		if editEv == nil || editEv.Edit == nil {
+			t.Fatal("expected edit_record event with non-nil payload")
+		}
+		if editEv.Edit.ReadLines != 0 {
+			t.Errorf("cross-file editEv.Edit.ReadLines = %d, want 0", editEv.Edit.ReadLines)
+		}
+	})
 }

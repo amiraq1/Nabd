@@ -62,8 +62,8 @@ func TestSubsequentWriteReportsZeroReadLines(t *testing.T) {
 	if out.LinesRead != 3 {
 		t.Fatalf("out.LinesRead=%d, want 3", out.LinesRead)
 	}
-	// The loop stages the count for the next write; the write consumes it.
-	r.SetLinesRead(out.LinesRead)
+	// The loop stages the credit for the next write; the write consumes it.
+	r.SetReadCredit(out.ReadCredit)
 	// first write consumes the 3
 	if rec := writeVia(t, r, "a.md", "x\n"); rec.ReadLines != 3 {
 		t.Fatalf("first write ReadLines=%d, want 3", rec.ReadLines)
@@ -75,8 +75,8 @@ func TestSubsequentWriteReportsZeroReadLines(t *testing.T) {
 }
 
 // TestTwoSequentialReadsDoNotAccumulate (C#3): read 3 then read 5, a write
-// must carry 5 (the latest), not 8. The loop re-stages the count on every
-// read via SetLinesRead, so the latest read wins — exactly what the next commit
+// must carry 5 (the latest), not 8. The loop re-stages the credit on every
+// read via SetReadCredit, so the latest read wins — exactly what the next commit
 // consumes.
 func TestTwoSequentialReadsDoNotAccumulate(t *testing.T) {
 	r, dir := newReg(t)
@@ -88,7 +88,7 @@ func TestTwoSequentialReadsDoNotAccumulate(t *testing.T) {
 		if err != nil || !out.OK {
 			t.Fatalf("read %s: ok=%v err=%v", p, out.OK, err)
 		}
-		r.SetLinesRead(out.LinesRead) // the loop re-stages per read; latest wins
+		r.SetReadCredit(out.ReadCredit) // the loop re-stages per read; latest wins
 	}
 	if rec := writeVia(t, r, "b.md", "x\n"); rec.ReadLines != 5 {
 		t.Fatalf("ReadLines=%d, want 5 (latest read, not accumulated 8)", rec.ReadLines)

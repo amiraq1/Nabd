@@ -290,7 +290,20 @@ type Outcome struct {
 	// in the Outcome (per-invocation) rather than read back from a shared
 	// registry slot, so concurrent reads through one Registry can never
 	// exchange counts. The loop threads it forward to the next write via
-	// Registry.SetLinesRead, preserving the read→write audit for edit_record
+	// Registry.SetReadCredit, preserving the read→write audit for edit_record
 	// events without a cross-call mutable slot on the read side.
 	LinesRead int
+	// ReadCredit carries the full provenance (composite key) of the read.
+	ReadCredit ReadCredit
+}
+
+// ReadCredit captures the composite key of a read operation (path, content hash,
+// line range, and lines read) so that write operations can verify that the model
+// actually read the file and content it is about to mutate (NBD-034).
+type ReadCredit struct {
+	Path      string `json:"path,omitempty"`
+	Hash      string `json:"hash,omitempty"`
+	Offset    int    `json:"offset,omitempty"`
+	Limit     int    `json:"limit,omitempty"`
+	LinesRead int    `json:"lines_read,omitempty"`
 }
