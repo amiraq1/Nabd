@@ -54,6 +54,7 @@ func main() {
 	cont := flag.Bool("continue", false, "resume the latest session")
 	showVer := flag.Bool("version", false, "print version and exit")
 	useFeed := flag.Bool("feed", false, "use the new projected feed UI (experimental)")
+	feedTouch := flag.Bool("feed-touch", false, "enable finger-swipe touch scrolling for feed UI")
 	flag.Parse()
 
 	if *showVer {
@@ -68,7 +69,7 @@ func main() {
 		return
 	}
 	if *useFeed {
-		if err := doChatWithFeed(*sessDir, *cont); err != nil {
+		if err := doChatWithFeed(*sessDir, *cont, *feedTouch); err != nil {
 			die(err)
 		}
 		return
@@ -233,7 +234,7 @@ func doChat(dir string, cont bool) error {
 // through a multiline composer and the deterministic input router. It is
 // opt-in via the -feed flag while the default Chat UI remains the stable
 // fallback.
-func doChatWithFeed(dir string, cont bool) error {
+func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 	// Install the Arabic limit notice for the composer (internal/ui keeps
 	// ASCII string literals; user-facing Arabic lives here).
 	ui.SetLimitNotice(limitNoticeArabic)
@@ -288,6 +289,7 @@ func doChatWithFeed(dir string, cont bool) error {
 
 	// Create the feed model and the event batcher.
 	feed := ui.NewFeed()
+	feed.SetTouch(feedTouch)
 
 	// Create the loop BEFORE wiring callbacks (callbacks reference it).
 	loop := &agent.Loop{
