@@ -136,11 +136,14 @@ file, `docs/TECH_DEBT.md`).
    - When text changes at or after `prefixLen = commonRunesPrefix(cachedRunes, newRunes)`, any row $k$ with `offsets[k+1] <= prefixLen` is completely unaffected by changes downstream.
    - By reusing rows $0 \dots \max(0, \text{editRow}-1)-1$ and wrapping only the remainder `newRunes[offsets[reuseRows]:]`, unchanged prefix rows are reused directly without re-measuring string widths.
    - For an unbroken 8,100-rune payload at width 76, rows 0..104 (~7,980 runes) are reused as-is; only the final row (~120 runes) is wrapped.
-   - All prompt rendering, border padding, soft-wrap trailing spaces, and Unicode grapheme cluster rules from upstream remain 100% identical.
+   - **Complexity Consideration:** While width calculation (`uniseg.StringWidth`) is bypassed for reused rows, `commonRunesPrefix`, `cloneRunes`, and row offset slice rebuilding still scan the rune slices and row offsets ($O(N)$ linear scan/copy), to which the cost of re-wrapping the affected downstream segment (`wrap(runes[reuseOffset:], width)`) is added. For trailing edits (e.g. Backspace at line end), the downstream segment is bounded by the tail wrapped row ($R_{\text{tail}}$ runes). If an edit occurs earlier in the buffer, re-wrap cost scales with the length and wrapping complexity of the unreused suffix ($N - \text{reuseOffset}$). Thus, per-operation complexity is $O(N) + \text{Cost}_{\text{wrap}}(\text{unreused suffix})$, rather than strictly bounded by tail-row width alone.
+   - **Correctness Scope:** Equivalence to standard wrap has been verified across tested Unicode classes (unbroken ASCII, Arabic with and without harakat combining marks, Latin combining accents, CJK wide characters, single emoji, emoji with skin-tone modifiers, ZWJ sequences, regional indicator flag pairs, and mixed whitespace). This applies to tested classes and grapheme break behaviors handled by the underlying `uniseg` implementation, rather than an unconstrained mathematical claim for all arbitrary or future Unicode specifications.
 
 ### Benchmark Evidence (Android arm64, Linux 5.15.180, Go 1.27.0)
 
 Measured via `go test ./internal/ui -run '^$' -bench '^BenchmarkComposerBackspaceOversized$' -benchmem -count=5` and analyzed with `benchstat`:
+- **Operation Definition:** Each iteration prepares a fresh feed and recalls the $N$-rune input payload inside the benchmark loop, pausing the timer via `b.StopTimer()` during setup and resuming via `b.StartTimer()` exclusively for the $K$ sequential Backspace keystrokes (and optional `composer.view()`). This guarantees that input allocation and history recall overhead are excluded from the measured latency and allocation numbers.
+- **UpdateView Benchmark:** Measures full keystroke handling followed by `composer.view()` (the active input field view rendering), not the outer `Feed.View()`.
 
 | Benchmark Case | Baseline sec/op | Optimized sec/op | Time Delta | Baseline B/op | Optimized B/op | Mem Delta | Baseline allocs/op | Optimized allocs/op | Allocs Delta |
 |---|---|---|---|---|---|---|---|---|---|
@@ -160,13 +163,16 @@ Measured via `go test ./internal/ui -run '^$' -bench '^BenchmarkComposerBackspac
 ### Resolution of Growth Shape Questions
 
 1. **Axis A Scaling (Payload Length $N$ with fixed $K=101$ Backspaces):**
-   - In the baseline, re-wrap cost scaled strictly as $O(K \cdot N)$, leading to quadratic cumulative time across an editing session.
-   - With the line-wrap cache, repeated edits scale with only the tail row remainder rather than the full length ($O(K \cdot \text{rowWidth} + N_{\text{initial}})$). Increasing $N$ by 8x (from 1,000 to 8,000 runes) increases allocations by only 1.5x (7.39k to 11.12k) instead of 7.6x (58.4k to 445.4k).
+   - In the baseline, re-wrap cost scaled as $O(N)$ per keystroke. For a session of $K$ edits, cumulative work scaled as $O(K \cdot N)$. When $K$ is fixed (here $K=101$), work scaled linearly in $N$; if $K$ scaled with $N$ (e.g. clearing half an input of size $N$), total session work became quadratic $O(N^2)$.
+   - With the line-wrap cache, repeated edits reuse unaffected prefix rows, avoiding $O(N)$ width re-computations. Increasing $N$ by 8x (from 1,000 to 8,000 runes) increases allocations across the 101 edits by only 1.5x (7.39k to 11.12k) instead of 7.6x (58.4k to 445.4k).
 2. **Axis B Scaling (Keystroke Count $K$ with fixed $N=8,100$ Runes):**
-   - In the baseline, every single Backspace imposed a fixed re-wrap penalty of $\sim 14$ ms and $\sim 4,400$ allocations.
-   - With the line-wrap cache, the marginal cost per keystroke drops from **$\sim 14$ ms / 4,400 allocs** down to **$\sim 0.8$ ms / 70 allocs**. This represents a **17.5x reduction in marginal keypress latency** and a **60x reduction in marginal memory allocations**.
+   - In the baseline, each additional Backspace imposed a re-wrap cost of $\sim 14$ ms and $\sim 4,400$ allocations.
+   - **Derived Estimates:** Calculating marginal slope between $K=1$ and $K=101$ (`(Value_{K=101} - Value_{K=1}) / 100`):
+     - Baseline marginal cost: $(1404.80 - 15.46) / 100 \approx \mathbf{13.9\text{ ms}}$ and $(450,940 - 8,857) / 100 \approx \mathbf{4,421\text{ allocs}}$ per keystroke.
+     - Optimized marginal cost: $(114.80 - 14.33) / 100 \approx \mathbf{1.0\text{ ms}}$ and $(11,211 - 4,474) / 100 \approx \mathbf{67\text{ allocs}}$ per keystroke.
+     - This represents a derived **$\sim 14$x reduction in marginal keypress latency** and **$\sim 66$x reduction in marginal memory allocations**.
 3. **Severe Workload Pass:**
-   - The severe regression test `TestOversizedHistoryRecallEditableDown` ($N=8100$, $K=101$ real Backspaces through the limit boundary) passes deterministically in **$\sim 0.38$s** (down from several seconds that previously hung CI), and is guarded by `testing.Short()` when run with `-short`.
+   - The severe regression test `TestOversizedHistoryRecallEditableDown` ($N=8100$, $K=101$ real Backspaces through the limit boundary) passes deterministically in **$\sim 0.25$s** locally (down from several seconds that previously hung CI), and is guarded by `testing.Short()` when run with `-short`.
 
 
 ## U2: Provider-route presentation and observability (Issue #16)
