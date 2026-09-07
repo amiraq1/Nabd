@@ -1495,6 +1495,7 @@ func (m *Model) mergeLineAbove(row int) {
 	if row <= 0 {
 		return
 	}
+	m.resetLayoutCache()
 
 	m.col = len(m.value[row-1])
 	m.row = m.row - 1
@@ -1514,6 +1515,8 @@ func (m *Model) mergeLineAbove(row int) {
 }
 
 func (m *Model) splitLine(row, col int) {
+	m.resetLayoutCache()
+
 	// To perform a split, take the current line and keep the content before
 	// the cursor, take the content after the cursor and make it the content of
 	// the line underneath, and shift the remaining lines down by one

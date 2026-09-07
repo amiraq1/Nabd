@@ -37,6 +37,10 @@ jobs:
     - name: Unit tests without race
       run: go test ./... -count=1
 
+    - name: Nested bubbles unit tests
+      working-directory: third_party/bubbles
+      run: go test ./... -count=1
+
     - name: Install pinned staticcheck
       run: |
         go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
@@ -45,6 +49,10 @@ jobs:
         staticcheck ./...
 
     - name: Race detector on all packages
+      run: go test ./... -race -count=1
+
+    - name: Nested bubbles race tests
+      working-directory: third_party/bubbles
       run: go test ./... -race -count=1
 
     - name: Router intensive race test
