@@ -98,14 +98,21 @@ func TestBatcherDeliveryAfterIdlePostDelivery(t *testing.T) {
 	b.Add(agent.Event{Seq: 2, Type: agent.UserMsg, Text: "how are you?"})
 	b.Add(agent.Event{Seq: 3, Type: agent.TextDelta, Text: "I am fine."})
 
-	// 4. Assert automatic delivery.
-	select {
-	case batch := <-delivered:
-		if len(batch) != 2 || batch[0].Seq != 2 || batch[1].Seq != 3 {
-			t.Fatalf("unexpected batch received: %+v", batch)
+	// 4. Assert automatic delivery across one or more batches. The timer may flush between
+	// the two Add calls or after both; both are valid behaviors as long as all events arrive in order.
+	var received []agent.Event
+	deadline := time.After(500 * time.Millisecond)
+	for len(received) < 2 {
+		select {
+		case batch := <-delivered:
+			received = append(received, batch...)
+		case <-deadline:
+			t.Fatalf("timeout waiting for ordinary events after post-delivery idle (got %d events, want 2)", len(received))
 		}
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("ordinary events were never delivered after post-delivery idle period (timer died)")
+	}
+
+	if len(received) != 2 || received[0].Seq != 2 || received[1].Seq != 3 {
+		t.Fatalf("unexpected events received: %+v", received)
 	}
 }
 
@@ -259,9 +266,9 @@ func TestBatcherStopFlushesPendingWithoutTimerResurrection(t *testing.T) {
 	}
 }
 
-// TestBatcherConcurrentAddFlushStop verifies that concurrent Add, Flush, and Stop operations
-// do not cause race conditions, deadlocks, or panics.
-func TestBatcherConcurrentAddFlushStop(t *testing.T) {
+// TestBatcherConcurrentAddAndFlush verifies that concurrent Add and Flush operations
+// preserve all added events without drops, corruptions, or deadlocks.
+func TestBatcherConcurrentAddAndFlush(t *testing.T) {
 	var mu sync.Mutex
 	var allDelivered []agent.Event
 
@@ -326,4 +333,67 @@ func TestBatcherConcurrentAddFlushStop(t *testing.T) {
 	if count != expectedTotal {
 		t.Fatalf("expected %d events delivered, got %d", expectedTotal, count)
 	}
+}
+
+// TestBatcherConcurrentAddFlushStopInterleaved directly verifies that calling Stop()
+// while multiple producers and flushers are actively running concurrently is safe:
+// it must not panic, deadlock, or produce data races.
+func TestBatcherConcurrentAddFlushStopInterleaved(t *testing.T) {
+	b := NewBatcher(2*time.Millisecond, 20, func(batch []agent.Event) {
+		// onFlush executes safely under concurrency
+	})
+	b.Start()
+
+	var wg sync.WaitGroup
+	stopSignal := make(chan struct{})
+
+	// 10 producers actively calling Add
+	for p := 0; p < 10; p++ {
+		wg.Add(1)
+		go func(pID int) {
+			defer wg.Done()
+			seq := pID * 10000
+			for {
+				select {
+				case <-stopSignal:
+					return
+				default:
+					seq++
+					b.Add(agent.Event{Seq: seq, Type: agent.TextDelta, Text: "concurrent"})
+					time.Sleep(50 * time.Microsecond)
+				}
+			}
+		}(p)
+	}
+
+	// 3 concurrent flushers actively calling Flush
+	for f := 0; f < 3; f++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stopSignal:
+					return
+				default:
+					b.Flush()
+					time.Sleep(100 * time.Microsecond)
+				}
+			}
+		}()
+	}
+
+	// Let concurrency actively run while events and flushes are in flight
+	time.Sleep(25 * time.Millisecond)
+
+	// Stop batcher while producers and flushers are actively calling Add and Flush!
+	b.Stop()
+
+	// Signal goroutines to finish
+	close(stopSignal)
+	wg.Wait()
+
+	// Verify post-stop idempotence and safety
+	b.Add(agent.Event{Seq: 999999, Type: agent.TextDelta, Text: "post-stop"})
+	b.Stop()
 }
