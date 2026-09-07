@@ -2136,7 +2136,8 @@ func TestActualCacheDifferential(t *testing.T) {
 
 // TestActualModelUpdateIntegration drives the full Model.Update path with real tea.KeyMsg
 // events, comparing rendered output, line info, cursor, and value against an independent
-// freshly constructed reference model at every step.
+// cold-wrap reference model at every step. The reference model explicitly bypasses the layout
+// cache (layoutCache == nil), forcing cold wrap(runes, width) on every single operation.
 func TestActualModelUpdateIntegration(t *testing.T) {
 	newPair := func(w, h int) (Model, Model) {
 		m := New()
@@ -2150,12 +2151,22 @@ func TestActualModelUpdateIntegration(t *testing.T) {
 		ref.SetHeight(h)
 		ref.Cursor.Blink = false
 		ref.Focus()
+		// ref is an independent cold-wrap reference: with layoutCache = nil,
+		// memoizedWrap unconditionally executes wrap(runes, width) on every call,
+		// never storing or consulting cached row layouts.
+		ref.layoutCache = nil
 
 		return m, ref
 	}
 
 	assertEquiv := func(t *testing.T, step string, m, ref Model) {
 		t.Helper()
+		if ref.layoutCache != nil {
+			t.Fatalf("[%s] reference model must maintain layoutCache == nil (strict cold wrap)", step)
+		}
+		if m.layoutCache == nil {
+			t.Fatalf("[%s] active model must have layoutCache enabled", step)
+		}
 		if m.Value() != ref.Value() {
 			t.Fatalf("[%s] Value mismatch:\ngot : %q\nwant: %q", step, m.Value(), ref.Value())
 		}
@@ -2240,7 +2251,28 @@ func TestActualModelUpdateIntegration(t *testing.T) {
 	ref, _ = ref.Update(tea.KeyMsg{Type: tea.KeyDelete})
 	assertEquiv(t, "after mergeLineBelow", m, ref)
 
-	// Step 7: Resize terminal width
+	// Step 7: Paste (both bracketed paste KeyMsg and clipboard pasteMsg)
+	pasteKey := tea.KeyMsg{
+		Type:  tea.KeyRunes,
+		Runes: []rune(" [bracketed paste text with words] "),
+		Paste: true,
+	}
+	m, _ = m.Update(pasteKey)
+	ref, _ = ref.Update(pasteKey)
+	assertEquiv(t, "after bracketed paste KeyMsg", m, ref)
+
+	m, _ = m.Update(pasteMsg("multi-line\npasted\ncontent"))
+	ref, _ = ref.Update(pasteMsg("multi-line\npasted\ncontent"))
+	assertEquiv(t, "after pasteMsg", m, ref)
+
+	// Backspace 10 times to delete into pasted content
+	for i := 0; i < 10; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		ref, _ = ref.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	assertEquiv(t, "after deleting into pasted content", m, ref)
+
+	// Step 8: Resize terminal width
 	m.SetWidth(45)
 	ref.SetWidth(45)
 	assertEquiv(t, "after resize to 45", m, ref)
@@ -2249,7 +2281,7 @@ func TestActualModelUpdateIntegration(t *testing.T) {
 	ref.SetWidth(20)
 	assertEquiv(t, "after resize to 20", m, ref)
 
-	// Step 8: Reset and SetValue
+	// Step 9: Reset and SetValue
 	m.Reset()
 	ref.Reset()
 	assertEquiv(t, "after Reset", m, ref)
