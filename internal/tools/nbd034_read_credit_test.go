@@ -66,13 +66,24 @@ func TestReadCreditCompositeKeyStructure(t *testing.T) {
 		t.Errorf("r.ReadCredit() = %+v, want %+v", staged, c)
 	}
 
-	// Consuming resets the staged credit
-	consumed := r.ConsumeLinesRead()
+	// Consuming with the matching path and hash returns the count and resets.
+	consumed := r.ConsumeLinesRead(c.Path, c.Hash)
 	if consumed != 3 {
-		t.Errorf("r.ConsumeLinesRead() = %d, want 3", consumed)
+		t.Errorf("r.ConsumeLinesRead(path, hash) = %d, want 3", consumed)
 	}
 	if empty := r.ReadCredit(); empty != (agent.ReadCredit{}) {
 		t.Errorf("after consume, r.ReadCredit() = %+v, want empty", empty)
+	}
+
+	// A wrong hash must invalidate rather than grant the credit.
+	r.SetReadCredit(c)
+	if got := r.ConsumeLinesRead(c.Path, "deadbeef"); got != 0 {
+		t.Errorf("hash mismatch consumed %d, want 0", got)
+	}
+	// A wrong path must invalidate too.
+	r.SetReadCredit(c)
+	if got := r.ConsumeLinesRead(filepath.Join(dir, "other.txt"), c.Hash); got != 0 {
+		t.Errorf("path mismatch consumed %d, want 0", got)
 	}
 }
 
