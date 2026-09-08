@@ -8,8 +8,7 @@ import "testing"
 // only type-checks against func(*Registry, string, string) int, so any stale
 // call site is a build error rather than a silently granted read credit.
 func TestConsumeLinesReadSignatureRequiresHash(t *testing.T) {
-	var fn func(*Registry, string, string) int = (*Registry).ConsumeLinesRead
-	if fn == nil {
-		t.Fatal("ConsumeLinesRead method value is nil")
-	}
+	// Compile-time proof: only the two-arg form type-checks. The old
+	// zero-arg and single-arg forms no longer compile.
+	var _ func(*Registry, string, string) int = (*Registry).ConsumeLinesRead
 }
