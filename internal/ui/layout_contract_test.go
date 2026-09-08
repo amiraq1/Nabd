@@ -12,9 +12,8 @@ import (
 )
 
 // menuItems builds a deterministic set of n slash menu items for accounting
-// tests. The counts 1/3/12 exercise the menu's row reservation at the small
-// terminal heights where the degradation ladder compresses the menu to its
-// 2-row floor.
+// tests. The counts 1/3/12 exercise row accounting across normal heights and
+// the small-height path where the menu is hidden below menuMinRows.
 func menuItems(n int) []SlashCommand {
 	out := make([]SlashCommand, n)
 	for i := range out {
@@ -71,13 +70,11 @@ func TestLayoutContract(t *testing.T) {
 	}
 }
 
-// TestMenuRowAccounting verifies that the slash menu's reserved rows
-// (computeLayout -> lm.MenuRows) match the rows menu.view draws. At small
-// terminal heights the degradation ladder compresses the menu to its 2-row
-// floor: lineCount() returns 2, but menu.view() draws 3 (header + 1 item +
-// footer) because maxItemRows is clamped to a minimum of 1. That
-// reservation != rendering mismatch is the documented defect in layout.go /
-// slash_menu.go.
+// TestMenuRowAccounting verifies that whenever the slash menu is reserved,
+// the number of reserved rows matches the rows menu.view draws. Small frames
+// may hide the menu when fewer than menuMinRows are available; that path is
+// covered separately by TestMenuHiddenBelowPhysicalFloor and
+// TestMenuVisibleAtPhysicalFloor.
 func TestMenuRowAccounting(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -99,13 +96,20 @@ func TestMenuRowAccounting(t *testing.T) {
 					f.permModal.open(&agent.ToolCall{ID: "m1", Name: "bash"})
 					f.modalVisible = true
 				}
-				reserved, drawn := menuReserveAndDrawn(f)
-				if reserved == 0 {
-					t.Skipf("menu not reserved at h=%d", h)
+				lm := f.computeLayout()
+				if lm.MenuRows == 0 {
+					// Menu hidden below its physical floor: verify View() omits
+					// the menu entirely, not just that reservation is zero.
+					if strings.Contains(ansi.Strip(f.View()), "Commands") {
+						t.Fatalf("%s h=%d: menu header in View() when MenuRows=0", tc.name, h)
+					}
+					return
 				}
-				if drawn != reserved {
+				viewed := f.menu.view(lm.TerminalWidth, lm.MenuRows)
+				drawn := visualRowsOf(viewed, lm.TerminalWidth)
+				if drawn != lm.MenuRows {
 					t.Errorf("menu row accounting: reserved %d rows, drawn %d rows (%d items, modal=%v)",
-						reserved, drawn, len(tc.items), tc.modal)
+						lm.MenuRows, drawn, len(tc.items), tc.modal)
 				}
 			})
 		}
@@ -216,9 +220,9 @@ func TestFrameHeightNarrowerThanMinWidth(t *testing.T) {
 }
 
 // TestFrameHeightExact asserts the rendered frame fills the terminal to
-// exactly h rows. The defensive clamp in View() trims overflow (including the
-// menu's 2->3 row overdraw) from the top, so the frame height stays exact
-// even when an individual chrome element overdraws its reservation.
+// exactly h rows. The defensive clamp in View() trims any overflow from the
+// top, so the frame height stays exact even when chrome arithmetic temporarily
+// exceeds the terminal height before the degradation ladder resolves.
 func TestFrameHeightExact(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -267,5 +271,110 @@ func TestBottomAnchor(t *testing.T) {
 				t.Fatalf("footer is blank at the bottom row:\n%s", v)
 			}
 		})
+	}
+}
+
+// requiredFloor is the documented minimum chrome for a state: the composer
+// and footer are never sacrificed, and a visible permission modal reserves
+// its 3-row minimum even when that overflows (a documented UX decision in the
+// degradation ladder). Below this floor an overflow is expected, so the case
+// is skipped rather than failed.
+func requiredFloor(f *Feed) int {
+	floor := minComposerHeight + 1 // composer + footer
+	if f.modalVisible || f.decisionPending {
+		floor += 3
+	}
+	return floor
+}
+
+// TestClampNeverFires guards the region TestMenuRowAccounting can no longer
+// reach. Once the menu is dropped below its physical floor, that test skips
+// on reserved == 0, so nothing else would notice a return to compression.
+//
+// The defensive clamp in View() is a last resort for states the matrix does
+// not model. If it fires for a modeled state above its documented floor, the
+// layout arithmetic is wrong even when every row count agrees with what its
+// renderer emits: reserving 3 rows the frame cannot fit is just as broken as
+// reserving 2 rows the renderer cannot honour. This is stricter than the
+// frame-height contract, which measures output only AFTER the clamp trimmed it.
+func TestClampNeverFires(t *testing.T) {
+	cases := []struct {
+		name  string
+		items []SlashCommand
+		modal bool
+	}{
+		{"menu_1", menuItems(1), false},
+		{"menu_3", menuItems(3), false},
+		{"menu_12", menuItems(12), false},
+		{"modal_and_menu", menuItems(3), true},
+	}
+	for _, tc := range cases {
+		for _, w := range []int{20, 50, 80} {
+			for h := 2; h <= 10; h++ {
+				tag := fmt.Sprintf("%s/w=%d/h=%d", tc.name, w, h)
+				t.Run(tag, func(t *testing.T) {
+					f := newFeedAt(t, w, h)
+					f.menu.open(tc.items)
+					if tc.modal {
+						f.permModal.open(&agent.ToolCall{ID: "m1", Name: "bash"})
+						f.modalVisible = true
+					}
+					if h < requiredFloor(f) {
+						t.Skip("below documented floor")
+					}
+					lm := f.computeLayout()
+					chrome := lm.HeaderRows + lm.RuntimeStatusRows + lm.TopSepRows +
+						lm.ComposerRows + lm.BottomSepRows + lm.FooterRows +
+						lm.UnseenRows + lm.ModalRows + lm.MenuRows
+					if chrome+lm.ViewportRows > h {
+						t.Fatalf("clamp would fire: chrome %d + viewport %d > height %d (menu=%d modal=%d)",
+							chrome, lm.ViewportRows, h, lm.MenuRows, lm.ModalRows)
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestMenuHiddenBelowPhysicalFloor proves the menu is dropped (not compressed)
+// when fewer than menuMinRows are available after accounting for the chrome
+// that is never sacrificed (composer + footer + separators).
+func TestMenuHiddenBelowPhysicalFloor(t *testing.T) {
+	// h=4: after composer(1) + footer(1) + topSep(1) + bottomSep(1) = 4 rows
+	// of mandatory chrome, the menu's 3-row floor cannot be met, so it is
+	// hidden rather than compressed into rows view() cannot honour.
+	f := newFeedAt(t, 80, 4)
+	f.menu.open(menuItems(3))
+	lm := f.computeLayout()
+	if lm.MenuRows != 0 {
+		t.Fatalf("expected menu hidden at h=4, got MenuRows=%d", lm.MenuRows)
+	}
+	// The rendered frame must not contain the menu header.
+	if strings.Contains(ansi.Strip(f.View()), "Commands") {
+		t.Fatalf("menu header present in View() when MenuRows=0:\n%s", f.View())
+	}
+}
+
+// TestMenuVisibleAtPhysicalFloor proves the menu reserves exactly menuMinRows
+// when just enough space is available, and that the reservation matches the
+// rendered rows.
+func TestMenuVisibleAtPhysicalFloor(t *testing.T) {
+	// h=5: after dropping bottomSep, chrome is composer(1) + footer(1) +
+	// topSep(1) = 3, leaving exactly menuMinRows=3 for the menu.
+	f := newFeedAt(t, 80, 5)
+	f.menu.open(menuItems(3))
+	lm := f.computeLayout()
+	if lm.MenuRows != menuMinRows {
+		t.Fatalf("expected menu reserved %d rows at h=5, got %d", menuMinRows, lm.MenuRows)
+	}
+	// Reservation must match rendering.
+	viewed := f.menu.view(lm.TerminalWidth, lm.MenuRows)
+	drawn := visualRowsOf(viewed, lm.TerminalWidth)
+	if drawn != lm.MenuRows {
+		t.Fatalf("reservation/render mismatch: reserved %d, drawn %d", lm.MenuRows, drawn)
+	}
+	// The rendered frame must contain the menu header.
+	if !strings.Contains(ansi.Strip(f.View()), "Commands") {
+		t.Fatalf("menu header missing from View() when MenuRows=%d:\n%s", lm.MenuRows, f.View())
 	}
 }
