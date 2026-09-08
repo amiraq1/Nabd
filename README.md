@@ -40,7 +40,37 @@ export NVIDIA_API_KEY=nvapi-...   # أي مزوّد يتكلّم لهجة OpenAI
 ./nabd --replay <file.jsonl>      # إعادة عرض جلسة، --speed 0 للفوري
 ./nabd -feed                      # واجهة الشاشة الكاملة (تجريبية)
 ./nabd --version                  # version · commit · date
+
+./nabd -p "task text"             # headless: answer on stdout, exit
+./nabd -p - < file                # task from stdin
+./nabd -p "..." --json            # journal JSONL on stdout
+./nabd -p "..." --max-turns 8
+./nabd -p "count the go files" --permission-mode allow-reads
 ```
+
+### Headless (`-p`)
+
+No TTY. The Asker never blocks. Default `--permission-mode` is `deny`:
+`agent.Decision(0)==Deny` is literal. A tool that would prompt is denied as a
+`tool_result` (and a journal Event); the run is not killed. `allow-reads` still
+auto-allows ReadOnly tools. `ask` still never reads a tty — it denies without
+blocking. YOLO is not used.
+
+stdout is only the final assistant text, or JSONL with `--json` (same schema as
+`session.jsonl`). Notices and `session:` go to stderr. ANSI is not emitted.
+The session is still written under `~/.ag/sessions`, so `--continue` and
+`--replay` work.
+
+Exit codes:
+
+| code | meaning |
+|---|---|
+| 0 | settled |
+| 1 | provider or tool error |
+| 2 | turn ceiling (`ErrMaxTurns`) |
+| 3 | rate-limit budget exhausted (`ErrRateLimitBudget`) |
+| 4 | permission denied and the model produced no answer |
+| 130 | interrupted |
 
 Release binaries (static, `CGO_ENABLED=0`, trimpath, ldflags-stamped) are
 published on tag `v*`. See `docs/RELEASING.md`. `v1.2.0` already exists;
