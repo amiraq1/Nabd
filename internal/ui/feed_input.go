@@ -76,6 +76,9 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	m.toolsExpanded = !m.toolsExpanded
 	newLines, newOffsets := renderItemsWithOffsets(items, m.width, m.toolsExpanded)
 	m.lines = newLines
+	// toggleTools writes m.lines directly (not via refresh), so the render
+	// signature must be resynced to avoid a stale baseline for applyBatch.
+	m.syncRenderSig()
 
 	if anchorIdx < len(newOffsets) {
 		targetTop := newOffsets[anchorIdx] + offsetWithin

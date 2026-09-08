@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
@@ -115,6 +114,13 @@ type Feed struct {
 	lineCache   map[string]cacheEntry
 	cacheWidth  int // width at which cache was populated; invalid on change
 	renderCount int // test hook: counts actual renderItem calls
+
+	// Render signature: deterministic fingerprint of the final rendered
+	// output (m.lines), used by refresh to report whether the visible
+	// output actually changed without cloning/comparing the slice.
+	renderSig      uint64
+	renderRows     int
+	renderSigValid bool
 }
 
 // cacheEntry holds rendered lines for one feed item at a specific expansion state.
@@ -237,12 +243,6 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // arrives as a Bubble Tea message on the event loop, never from a
 // goroutine, so mutating model state here is safe.
 func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
-	// Snapshot the rendered lines before projecting events to detect any display changes.
-	// Note: This snapshot and comparison incur a linear O(N) cost in the number of rendered lines,
-	// bounded by the maximum number of items in the viewport, ensuring exact detection of
-	// in-place mutations (such as earlier tool state updates) across the entire feed.
-	beforeLines := slices.Clone(m.lines)
-
 	for _, e := range events {
 		if err := m.proj.Apply(e); err != nil {
 			m.addDiagnostic(fmt.Sprintf("unable to project event %s seq=%d: %v", e.Type, e.Seq, err))
@@ -252,9 +252,11 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 			m.lastSeq = e.Seq
 		}
 	}
-	m.refresh()
 
-	displayChanged := !slices.Equal(beforeLines, m.lines)
+	// refresh() runs the full render pipeline and reports whether the final
+	// rendered output changed (fingerprint of m.lines), replacing the old
+	// slices.Clone/slices.Equal snapshot comparison.
+	displayChanged := m.refresh()
 	if displayChanged {
 		if m.modalVisible || m.decisionPending {
 			// The feed keeps projecting behind the modal, but visible

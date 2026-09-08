@@ -103,7 +103,11 @@ func (m *Feed) clampScroll() {
 }
 
 // refresh rebuilds the visible lines from the projector plus UI notices.
-func (m *Feed) refresh() {
+// It returns true when the final rendered output (m.lines) actually changed,
+// and false when it is byte-for-byte identical to the previous refresh.
+// The detection uses a deterministic fingerprint of the rendered lines, so
+// callers no longer need to clone and compare the slice themselves.
+func (m *Feed) refresh() bool {
 	items := mergeNotices(m.proj.Items(), m.notices)
 	// DOCUMENTED DECISION: Vertical trimming at maxVisibleFeedItems shifts the
 	// anchor under from-top index convention when buffer exceeds the cap.
@@ -134,7 +138,67 @@ func (m *Feed) refresh() {
 		}
 	}
 
+	// Derive dirty from the final rendered output fingerprint.
+	nextSig := renderedLinesFingerprint(m.lines)
+	nextRows := len(m.lines)
+	dirty := !m.renderSigValid ||
+		m.renderRows != nextRows ||
+		m.renderSig != nextSig
+
+	// Always keep the signature in sync, even when dirty == false, so the
+	// next refresh compares against this finalized output.
+	m.renderSig = nextSig
+	m.renderRows = nextRows
+	m.renderSigValid = true
+
 	m.clampScroll()
+	return dirty
+}
+
+// renderedLinesFingerprint returns a deterministic FNV-1a (64-bit) hash of the
+// rendered line slice. It starts by encoding the line count as a little-endian
+// uint64, then for each line its byte length (same encoding) followed by the
+// line bytes. Length-prefixing removes line-boundary ambiguity (["ab","c"]
+// differs from ["a","bc"]); it does not make collisions impossible.
+func renderedLinesFingerprint(lines []string) uint64 {
+	const offset64 uint64 = 14695981039346656037
+	var prime64 uint64 = 1099511628211
+	h := offset64
+	var buf [8]byte
+
+	// Line count.
+	putUint64LE(buf[:], uint64(len(lines)))
+	for _, b := range buf {
+		h = (h ^ uint64(b)) * prime64
+	}
+
+	for _, s := range lines {
+		putUint64LE(buf[:], uint64(len(s)))
+		for _, b := range buf {
+			h = (h ^ uint64(b)) * prime64
+		}
+		for i := 0; i < len(s); i++ {
+			h = (h ^ uint64(s[i])) * prime64
+		}
+	}
+	return h
+}
+
+// putUint64LE writes v as 8 little-endian bytes into dst (len >= 8).
+func putUint64LE(dst []byte, v uint64) {
+	for i := 0; i < 8; i++ {
+		dst[i] = byte(v >> (8 * i))
+	}
+}
+
+// syncRenderSig recomputes the render signature from the current m.lines.
+// Callers that write m.lines outside refresh (e.g. toggleTools' direct
+// line-render path) must invoke it so the next refresh compares against
+// the actual current output, not a stale signature.
+func (m *Feed) syncRenderSig() {
+	m.renderSig = renderedLinesFingerprint(m.lines)
+	m.renderRows = len(m.lines)
+	m.renderSigValid = true
 }
 
 // scrollToEnd moves the viewport to show the latest items and re-arms follow.
