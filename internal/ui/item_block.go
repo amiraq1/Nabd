@@ -55,6 +55,94 @@ func renderBlocks(items []presentation.FeedItem, width int, toolsExpanded ...boo
 	return blocks
 }
 
+// renderItemsCached is like renderItems but uses a per-item line cache.
+// The cache is keyed by FeedItem.ID; empty IDs are never cached.
+// Duplicate IDs within the same call bypass the cache for correctness.
+func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsExpanded ...bool) []string {
+	isExpanded := false
+	if len(toolsExpanded) > 0 {
+		isExpanded = toolsExpanded[0]
+	}
+
+	// Detect duplicate IDs to bypass cache for shared IDs.
+	idCount := make(map[string]int, len(items))
+	for _, it := range items {
+		if it.ID != "" {
+			idCount[it.ID]++
+		}
+	}
+
+	if m.lineCache == nil {
+		m.lineCache = make(map[string]cacheEntry)
+	}
+
+	blocks := make([]ItemUIBlock, 0, len(items))
+	var prevIsMsg bool
+	hasLines := false
+	for _, it := range items {
+		isMsg := it.Type == presentation.ItemUserMsg || it.Type == presentation.ItemAssistant
+		block := ItemUIBlock{Item: it}
+
+		fp := it.Fingerprint()
+		cached := m.lineCache[it.ID]
+		canUseCache := it.ID != "" && idCount[it.ID] == 1 &&
+			cached.fp == fp && cached.expanded == isExpanded
+
+		if canUseCache {
+			// Add separator before cached content (not included in cache).
+			if hasLines && (isMsg || prevIsMsg) {
+				block.Lines = append(block.Lines, "")
+			}
+			// Copy to prevent aliasing: consumer must not corrupt cached copy.
+			block.Lines = append(block.Lines, copyLines(cached.lines)...)
+		} else {
+			if hasLines && (isMsg || prevIsMsg) {
+				block.Lines = append(block.Lines, "")
+			}
+			raw := renderItem(it, width, isExpanded)
+			m.renderCount++
+			content := make([]string, 0, len(raw))
+			for _, l := range raw {
+				// Guarantee every stored line fits within width terminal cells.
+				if width > 0 && ansi.StringWidth(l) > width {
+					wrapped := strings.Split(ansi.Hardwrap(l, width, false), "\n")
+					content = append(content, wrapped...)
+				} else {
+					content = append(content, l)
+				}
+			}
+			block.Lines = append(block.Lines, content...)
+			// Store ONLY the hard-wrapped content (without separator) in cache.
+			// The separator is context-dependent and added at retrieval time.
+			if it.ID != "" && idCount[it.ID] == 1 {
+				m.lineCache[it.ID] = cacheEntry{
+					fp:       fp,
+					expanded: isExpanded,
+					lines:    copyLines(content),
+				}
+			}
+		}
+
+		if len(block.Lines) > 0 {
+			hasLines = true
+		}
+		blocks = append(blocks, block)
+		prevIsMsg = isMsg
+	}
+	lines, _ := flattenBlocks(blocks)
+	return lines
+}
+
+// copyLines returns a new slice with the same content.
+func copyLines(s []string) []string {
+	if s == nil {
+		return nil
+	}
+	out := make([]string, len(s))
+	copy(out, s)
+	return out
+}
+
 // flattenBlocks flattens per-item blocks back into the flat line list and
 // the starting line index of each block. This is the only consumer of the
 // block boundary: the line pipeline (renderItems/renderItemsWithOffsets)

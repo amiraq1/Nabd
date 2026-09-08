@@ -110,6 +110,18 @@ type Feed struct {
 	// Touch and input settings.
 	touchEnabled bool
 	input        io.Reader
+
+	// Per-item line cache: key is FeedItem.ID.
+	lineCache   map[string]cacheEntry
+	cacheWidth  int // width at which cache was populated; invalid on change
+	renderCount int // test hook: counts actual renderItem calls
+}
+
+// cacheEntry holds rendered lines for one feed item at a specific expansion state.
+type cacheEntry struct {
+	fp       uint64
+	expanded bool
+	lines    []string
 }
 
 // FeedCallbacks holds the hooks the feed uses to talk back to the loop.

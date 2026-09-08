@@ -110,7 +110,30 @@ func (m *Feed) refresh() {
 	if len(items) > maxVisibleFeedItems {
 		items = items[len(items)-maxVisibleFeedItems:]
 	}
-	m.lines = renderItems(items, m.width, m.toolsExpanded)
+
+	// Invalidate entire cache on width change.
+	if m.width != m.cacheWidth {
+		m.lineCache = nil
+		m.cacheWidth = m.width
+	}
+
+	m.lines = renderItemsCached(m, items, m.width, m.toolsExpanded)
+
+	// Evict cache entries for items no longer in the feed.
+	if m.lineCache != nil {
+		active := make(map[string]bool, len(items))
+		for _, it := range items {
+			if it.ID != "" {
+				active[it.ID] = true
+			}
+		}
+		for id := range m.lineCache {
+			if !active[id] {
+				delete(m.lineCache, id)
+			}
+		}
+	}
+
 	m.clampScroll()
 }
 

@@ -11,12 +11,15 @@ import (
 )
 
 func BenchmarkRefreshStreaming(b *testing.B) {
-	// 500 items; the last assistant item carries accumulated streaming text.
+	// 500 items with unique IDs (the cache key); the last assistant item
+	// carries accumulated streaming text.
 	const n = 500
+	f := &Feed{}
+	f.width = 80
 	items := make([]presentation.FeedItem, 0, n)
 	for i := 0; i < n; i++ {
-		items = append(items, presentation.FeedItem{Type: presentation.ItemUserMsg, Text: fmt.Sprintf("user %d", i)})
-		items = append(items, presentation.FeedItem{Type: presentation.ItemAssistant, Text: fmt.Sprintf("assistant reply %d", i)})
+		items = append(items, presentation.FeedItem{Type: presentation.ItemUserMsg, ID: fmt.Sprintf("u%d", i), Text: fmt.Sprintf("user %d", i)})
+		items = append(items, presentation.FeedItem{Type: presentation.ItemAssistant, ID: fmt.Sprintf("a%d", i), Text: fmt.Sprintf("assistant reply %d", i)})
 	}
 	last := &items[len(items)-1]
 	base := last.Text
@@ -25,7 +28,7 @@ func BenchmarkRefreshStreaming(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		last.Text = base + strings.Repeat(delta, 50)
-		_ = renderItems(items, 80, false)
+		_ = renderItemsCached(f, items, 80, false)
 	}
 }
 
