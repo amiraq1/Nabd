@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"os"
 	"strings"
 	"unicode/utf8"
 
@@ -80,11 +81,15 @@ func truncateToWidth(s string, w int, tail string) string {
 }
 
 // separatorLine returns a full-width horizontal separator string of exactly
-// w terminal cells. Uses the Unicode box-drawing character (─, U+2500) when
-// it can be confirmed safe; otherwise ASCII hyphens. The result never wraps.
+// w terminal cells. Uses ASCII hyphens when NABD_ASCII_ONLY is set;
+// otherwise uses the Unicode box-drawing character (─, U+2500).
+// The result never wraps.
 func separatorLine(w int) string {
 	if w <= 0 {
 		return ""
+	}
+	if os.Getenv("NABD_ASCII_ONLY") != "" {
+		return asciiSeparatorLine(w)
 	}
 	// ─ is 1 cell wide (verified by AllowedUISymbols)
 	return strings.Repeat("─", w)

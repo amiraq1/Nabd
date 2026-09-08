@@ -607,4 +607,27 @@ func TestLongToolOutputFixtureActuallyProducesLongOutput(t *testing.T) {
 	if len(f.lines) <= 2 {
 		t.Fatalf("expected multiple rendered lines for long output, got %d", len(f.lines))
 	}
+	if len(f.lines) <= 2 {
+		t.Fatalf("expected multiple rendered lines for long output, got %d", len(f.lines))
+	}
+}
+
+// TestSeparatorLineUsesASCIIWhenEnvSet verifies NABD_ASCII_ONLY forces hyphens.
+func TestSeparatorLineUsesASCIIWhenEnvSet(t *testing.T) {
+	// Without env var: Unicode box-drawing character.
+	if got := separatorLine(5); got != "─────" {
+		t.Fatalf("separatorLine(5) = %q, want %q", got, "─────")
+	}
+
+	// With env var: ASCII hyphens.
+	t.Setenv("NABD_ASCII_ONLY", "1")
+	if got := separatorLine(5); got != "-----" {
+		t.Fatalf("separatorLine(5) with NABD_ASCII_ONLY=1 = %q, want %q", got, "-----")
+	}
+
+	// Unset: back to Unicode.
+	t.Setenv("NABD_ASCII_ONLY", "")
+	if got := separatorLine(5); got != "─────" {
+		t.Fatalf("separatorLine(5) after unset = %q, want %q", got, "─────")
+	}
 }
