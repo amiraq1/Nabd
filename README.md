@@ -7,6 +7,13 @@
 default-deny permissions, git-backed undo, and a containment story that is
 written down rather than assumed.
 
+The installable binary is `nabd`. It was previously built as `ag`, which
+collides with the_silver_searcher on a typical PATH. The package path remains
+`./cmd/ag`.
+
+الثنائي الذي تُثبّته هو `nabd`. كان يُبنى سابقًا باسم `ag`، وهذا يصطدم بـ
+the_silver_searcher على معظم مسارات PATH. مسار الحزمة يبقى `./cmd/ag`.
+
 ---
 
 ## لماذا
@@ -22,16 +29,22 @@ written down rather than assumed.
 ## التشغيل
 
 ```sh
-go build -o ag ./cmd/ag
+go build -o nabd ./cmd/ag
+# or: ./build.sh
 
 export ANTHROPIC_API_KEY=...      # أو
 export NVIDIA_API_KEY=nvapi-...   # أي مزوّد يتكلّم لهجة OpenAI
 
-./ag                              # محادثة جديدة في المجلد الحالي
-./ag --continue                   # استئناف آخر جلسة
-./ag --replay <file.jsonl>        # إعادة عرض جلسة، --speed 0 للفوري
-./ag -feed                        # واجهة الشاشة الكاملة (تجريبية)
+./nabd                            # محادثة جديدة في المجلد الحالي
+./nabd --continue                 # استئناف آخر جلسة
+./nabd --replay <file.jsonl>      # إعادة عرض جلسة، --speed 0 للفوري
+./nabd -feed                      # واجهة الشاشة الكاملة (تجريبية)
+./nabd --version                  # version · commit · date
 ```
+
+Release binaries (static, `CGO_ENABLED=0`, trimpath, ldflags-stamped) are
+published on tag `v*`. See `docs/RELEASING.md`. `v1.2.0` already exists;
+the Goreleaser pipeline is for **v1.3.0** onward.
 
 الأفضل ألّا يمرّ المفتاح بالبيئة أصلًا. ضعه في `~/.ag/config` بصلاحيات `600`:
 
@@ -64,6 +77,24 @@ EOF
 داخل المحادثة: `/undo [n]` و `/edits` و `/rewind [n]` و `/ctx` و `/compact` و `/help`.
 عند سؤال الإذن: `y` مرّة واحدة، `a` لبقية الجلسة، `n` رفض. `ctrl+c` يوقف الدور،
 `ctrl+d` يخرج.
+
+## Supported platforms
+
+| GOOS/GOARCH | Status |
+|---|---|
+| android/arm64 | reference (Termux) |
+| linux/amd64 | supported |
+| linux/arm64 | supported |
+| darwin/arm64 | supported |
+| darwin/amd64 | supported |
+| windows/* | **not supported** |
+
+Windows is not a release target: the bash tool uses `syscall.Kill` and
+`Setpgid`. Snap has Windows rename/sync helpers, but the agent does not
+build or run as a supported platform. You will find out in this table,
+not at `go build` time.
+
+ويندوز غير مدعوم كمنصة تشغيل. `Setpgid` و`sh -c` و`syscall.Kill` تمنع ذلك.
 
 ## المعمار في ستّ فقرات
 
@@ -138,15 +169,15 @@ JSON، أو نصّ غير معروف — كلّها تُقرأ رفضًا، وي
 **سطرٌ أطول من الحدّ لا يُقرأ كاملًا أبدًا.** إن تجاوز سطرٌ وحده
 `NABD_MAX_READ`، يُعرض مقتطعًا ومُعلَّمًا، ويقفز `next_offset` إلى ما بعده —
 **بقية ذلك السطر غير قابلة للقراءة بهذه الأداة** (لا يوجد `offset` بايتي)،
-وتقول العلامة ذلك صراحةً. القصّ دائمًا على حدود الأحرف (UTF‑8 سليم).
+وتقول العلامة ذلك صراحةً. القصّ دائمًا على حدود الأحرف (UTF-8 سليم).
 
 **الملخّص نداء نموذج.** إن فشل، يسقط إلى ملخّص ميكانيكي يذكر طلبات المستخدم
 حرفيًا والملفات التي مُسّت. لن تفقد الخيط، لكن ستفقد التفاصيل.
 
-**عمليةٌ واحدة في المجلد الواحد.** نسختان من `ag` في نفس المستودع لن تريا
+**عمليةٌ واحدة في المجلد الواحد.** نسختان من `nabd` في نفس المستودع لن تريا
 تعديلات بعضهما أثناء التشغيل، و`/undo` في إحداهما لا تعرف شيئًا عن تعديلات
 الأخرى غير المُلحَقة بعد. لكن التراجع نفسه يعيش في سجلّ الجلسة: بعد خروج
-العملية، `ag --continue` ثم `/undo` يستعيد آخر تعديل من أحداث السجل، لا من
+العملية، `nabd --continue` ثم `/undo` يستعيد آخر تعديل من أحداث السجل، لا من
 ذاكرة كانت ستموت.
 
 **عقد التراجع.** `/undo` يتحقق أولًا أن الملف ما زال كما تركته الكتابة
@@ -159,8 +190,6 @@ JSON، أو نصّ غير معروف — كلّها تُقرأ رفضًا، وي
 انتهاء الأمر. هذا اختيار: خادمٌ يعيش بعد الأمر الذي أنشأه هو إذنٌ بلا انتهاء
 صلاحية.
 
-**Linux وmacOS فقط.** `Setpgid` و`sh -c` يمنعان ويندوز.
-
 **`-feed` تستهلك الشاشة البديلة.** الواجهة الافتراضية تطبع في الشاشة
 الأساسية، فبعد الخروج يبقى ما رأيته في تمرير الطرفية ويمكن الرجوع إليه
 بإصبعك. واجهة `-feed` تعمل بـ `tea.WithAltScreen()`: التمرير أثناء الجلسة
@@ -168,12 +197,12 @@ JSON، أو نصّ غير معروف — كلّها تُقرأ رفضًا، وي
 كانت عليه **بلا أثر للجلسة في تمرير الطرفية**. هذا مقصود، لأن إطارات
 الارتفاع الكامل في الشاشة الأساسية كانت تُغرق التمرير بنسخ من نفس الشاشة على
 Termux. ما تخسره من تمرير الطرفية يعوّضه السجل: يُطبع مسار `session:` عند
-الخروج، و`ag --replay` يعرضه حرفًا بحرف. الأخطاء التي تعود من الحلقة تدخل
+الخروج، و`nabd --replay` يعرضه حرفًا بحرف. الأخطاء التي تعود من الحلقة تدخل
 الخلاصة كسطر دائم قابل للتمرير، لا كحالة عابرة تختفي مع أول ضغطة.
 
 **ما هو مُختبَر وما ليس كذلك.** طبقات المسار والتخزين والأذونات والتراجع
 والضغط والصدفة مغطّاة باختبارات وحدة، والتراجع عبر إعادة التشغيل
-(`ag --continue` ثم `/undo`) مجرَّب آليًا على جلسة حقيقية. المسار الكامل —
+(`nabd --continue` ثم `/undo`) مجرَّب آليًا على جلسة حقيقية. المسار الكامل —
 نموذج حيّ يطلب أداة، والنتيجة تعود إليه في الدور التالي — مُجرَّب يدويًا لا
 ## موجه المزودين المتعدد (Native Multi-Provider Router)
 
@@ -218,7 +247,6 @@ NABD_ROUTES=groq:model-a,openrouter:model-b:free,nvidia:model-c
 
 ## البنية
 
-
 `internal/agent` عقد الحدث والحلقة والشجرة والضغط والميزانية.
 `internal/config` قراءة `~/.ag/config`؛ لا يكتب شيئًا أبدًا.
 `internal/store` سجلّ JSONL بإلحاق ذرّي.
@@ -227,7 +255,8 @@ NABD_ROUTES=groq:model-a,openrouter:model-b:free,nvidia:model-c
 `internal/perm` بوّابة الأذونات.
 `internal/snap` الظلّ والتراجع.
 `internal/ui` العرض والمحادثة وإعادة العرض.
-`cmd/ag` الربط، ولا شيء غيره.
+`internal/build` طوابع الإصدار (version/commit/date) لـ `--version` وراية RunStart.
+`cmd/ag` الربط، ولا شيء غيره. الثنائي الناتج اسمه `nabd`.
 
 قاعدة اتجاه واحدة: `agent` لا يستورد `tools` أبدًا.
 
