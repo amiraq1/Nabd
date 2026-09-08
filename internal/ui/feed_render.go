@@ -198,7 +198,7 @@ func renderToolSummary(t *presentation.ToolCard, width int) string {
 	sym := toolStatusSymbol(t.Status)
 	name := toolDisplayName(t.Name)
 	prefix := "  " + sym + " " + name
-	prefixWidth := ansi.StringWidth("  " + "✓" + " " + name)
+	prefixWidth := ansi.StringWidth(prefix)
 
 	// Build metadata parts: nonzero exit code / signal, then duration.
 	var metaParts []string
