@@ -1,4 +1,6 @@
 // Command ag is nabd: a coding agent that fits in a thumb's reach.
+// The installable binary is named nabd; the package path stays ./cmd/ag
+// because ag collides with the_silver_searcher on a typical PATH.
 package main
 
 import (
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/build"
 	"nabd/internal/config"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
@@ -37,11 +40,6 @@ const (
 const system = `You are nabd, a coding agent working inside a phone terminal 50 columns wide.
 Reply in Arabic. Be extremely brief: never repeat the question, never apologise, and never list anything without cause. Two lines suffice when two suffice.`
 
-var (
-	version = "dev"
-	commit  = "none" // full SHA injected at build time; "none" means a plain `go build`
-)
-
 func main() {
 	// NOTE: no legacy ~/.ag/env loading here. Environment-isolation policy
 	// (Phase 3) removed it: the only config source is ~/.ag/config, parsed by
@@ -58,7 +56,7 @@ func main() {
 	flag.Parse()
 
 	if *showVer {
-		fmt.Println(version + " · " + commit)
+		fmt.Println(build.Line())
 		return
 	}
 
@@ -163,8 +161,8 @@ func doChat(dir string, cont bool) error {
 	}
 
 	cwd, _ := os.Getwd()
-	if err := loop.Start(fmt.Sprintf("nabd %s · %s · %s · %s",
-		version, commit, prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
+	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
+		build.BannerPrefix(), prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
 		return err
 	}
 
@@ -304,7 +302,7 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		loop.Seed(prevEvs)
 	}
 
-	// Sink: journal first (durable), then batcher → feed. The batcher's
+	// Sink: journal first (durable), then batcher then feed. The batcher's
 	// flush callback delivers batches as Bubble Tea messages (prog.Send),
 	// so no goroutine ever mutates the feed model off the event loop.
 	batcher := ui.NewBatcher(eventBatchInterval, maxEventBatchSize, func(batch []agent.Event) {
@@ -380,8 +378,8 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 	// Give the program's event loop a moment to start consuming before the
 	// first event arrives. prog.Send blocks until the loop is ready, so the
 	// RunStart below will simply wait; no event is lost.
-	if err := loop.Start(fmt.Sprintf("nabd %s · %s · %s · %s",
-		version, commit, prov.Name(), filepath.Base(journalPath)), root.Dir()); err != nil {
+	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
+		build.BannerPrefix(), prov.Name(), filepath.Base(journalPath)), root.Dir()); err != nil {
 		return err
 	}
 
@@ -429,18 +427,18 @@ func fileUndo(loop *agent.Loop, reg *tools.Registry, n int) string {
 	}
 	var b strings.Builder
 	for _, r := range reg.PersistedUndo(recs, n) {
-		mark := "✗"
+		mark := "x"
 		if r.OK {
-			mark = "✓"
+			mark = "ok"
 		}
 		if r.Rel == "" {
 			fmt.Fprintf(&b, "%s %s\n", mark, r.Note)
 			continue
 		}
-		fmt.Fprintf(&b, "%s %s — %s\n", mark, r.Rel, r.Note)
+		fmt.Fprintf(&b, "%s %s - %s\n", mark, r.Rel, r.Note)
 	}
 	s := strings.TrimRight(b.String(), "\n")
-	loop.Note(fmt.Sprintf("/undo %d — %s", n, s))
+	loop.Note(fmt.Sprintf("/undo %d - %s", n, s))
 	return ""
 }
 
@@ -514,7 +512,7 @@ func sanitizeKey(k string) string {
 }
 
 func die(err error) {
-	fmt.Fprintln(os.Stderr, "ag:", err)
+	fmt.Fprintln(os.Stderr, "nabd:", err)
 	os.Exit(1)
 }
 
