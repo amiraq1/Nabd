@@ -36,7 +36,10 @@ func (l loopTools) RunDetailed(ctx context.Context, name string, raw json.RawMes
 // LastEdit lets the loop's EventEdit emission find the persisted record.
 func (l loopTools) LastEdit() *agent.EditRecord      { return l.reg.LastEdit() }
 func (l loopTools) SetReadCredit(c agent.ReadCredit) { l.reg.SetReadCredit(c) }
-func (l loopTools) SetLinesRead(n int)               { l.reg.SetLinesRead(n) }
+
+// SetLinesRead is a convenience wrapper that stages credit with no path/hash
+// binding (used by tests that don't need path-hash validation).
+func (l loopTools) SetLinesRead(n int) { l.reg.SetReadCredit(agent.ReadCredit{LinesRead: n}) }
 
 // writeOnceProvider asks for one write_file call, then on the next turn
 // (which carries the tool_result) answers with plain text and stops.
