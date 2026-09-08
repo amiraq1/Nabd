@@ -10,39 +10,19 @@ import (
 )
 
 // renderItems converts feed items to display lines, each constrained to width.
+// It delegates to the per-item block pipeline so blocks are the single unit
+// of rendering (and, in Batch 2, of memory).
 func renderItems(items []presentation.FeedItem, width int, toolsExpanded ...bool) []string {
 	lines, _ := renderItemsWithOffsets(items, width, toolsExpanded...)
 	return lines
 }
 
-// renderItemsWithOffsets converts feed items to display lines and returns
-// both the lines and the starting line index for each item.
+// renderItemsWithOffsets converts feed items to display lines via
+// renderBlocks and returns both the lines and the starting line index of
+// each block. The blank separator between adjacent message items lives
+// inside the following block.
 func renderItemsWithOffsets(items []presentation.FeedItem, width int, toolsExpanded ...bool) ([]string, []int) {
-	isExpanded := false
-	if len(toolsExpanded) > 0 {
-		isExpanded = toolsExpanded[0]
-	}
-	var lines []string
-	offsets := make([]int, len(items))
-	var prevIsMsg bool
-	for i, it := range items {
-		isMsg := it.Type == presentation.ItemUserMsg || it.Type == presentation.ItemAssistant
-		if len(lines) > 0 && (isMsg || prevIsMsg) {
-			lines = append(lines, "")
-		}
-		offsets[i] = len(lines)
-		raw := renderItem(it, width, isExpanded)
-		for _, l := range raw {
-			// Guarantee every stored line fits within width terminal cells.
-			if width > 0 && ansi.StringWidth(l) > width {
-				lines = append(lines, strings.Split(ansi.Hardwrap(l, width, false), "\n")...)
-			} else {
-				lines = append(lines, l)
-			}
-		}
-		prevIsMsg = isMsg
-	}
-	return lines, offsets
+	return flattenBlocks(renderBlocks(items, width, toolsExpanded...))
 }
 
 // renderItem renders one feed item to one or more lines.
@@ -318,9 +298,23 @@ func renderPerm(it presentation.FeedItem, width int) []string {
 	return out
 }
 
+// renderNotice renders a notice. Multi-line notice text (e.g. a /edits
+// listing with several pending edits) keeps its line structure: the ⚑ badge
+// prefixes the first line and continuation lines are indented. Every line is
+// truncated to width here; the block pipeline hard-wraps anything that still
+// overflows.
 func renderNotice(it presentation.FeedItem, width int) []string {
-	clean := SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: false, Redact: true})
-	return []string{warn.Render(truncateToWidth("⚑ "+clean, width, "…"))}
+	clean := SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: true, Redact: true})
+	lines := strings.Split(clean, "\n")
+	out := make([]string, 0, len(lines))
+	for i, raw := range lines {
+		if i == 0 {
+			out = append(out, warn.Render(truncateToWidth("⚑ "+raw, width, "…")))
+		} else {
+			out = append(out, warn.Render(truncateToWidth("  "+raw, width, "…")))
+		}
+	}
+	return out
 }
 
 func renderError(it presentation.FeedItem, width int) []string {
