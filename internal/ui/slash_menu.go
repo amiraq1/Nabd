@@ -7,6 +7,12 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// menuMinRows is the floor for the slash menu reservation. The menu always
+// renders a header, at least one item, and a footer (3 rows), so the
+// reservation must never drop below 3 — otherwise the reserved count
+// diverges from the rendered count.
+const menuMinRows = 3
+
 // maxMenuCommands is the maximum number of items displayed in the menu.
 
 // slashMenu manages state and rendering of the slash command completion menu.
@@ -80,8 +86,8 @@ func (m *slashMenu) shape(maxRows ...int) slashMenuShape {
 	if rows > full {
 		rows = full
 	}
-	if rows < 2 {
-		rows = 2
+	if rows < menuMinRows {
+		rows = menuMinRows
 	}
 	itemRows := rows - 2
 	start, end := 0, 0

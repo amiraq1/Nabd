@@ -219,6 +219,52 @@ Measured via `go test ./internal/ui -run '^$' -bench '^BenchmarkComposerBackspac
      - If both match (or if credit was unstaged), returns `credit.LinesRead`.
      - In all cases, staged credit is atomically reset to empty so it cannot leak to subsequent mutations.
 4. **Parity and Cleanup Invariants:**
-   - `Registry.ClearReadState()` completely resets the staged credit to empty (`agent.ReadCredit{}`).
-   - Error and cancellation paths in `readFile.Run` and `readFile.RunDetailed` invoke `ClearReadState()`, preventing partial metadata leakage.
-   - Regression coverage in `internal/tools/nbd034_read_credit_test.go` and `internal/agent/edit_record_loop_test.go` guards against cross-file attribution, external disk modification, brand-new file creation, and loop propagation.
+    - `Registry.ClearReadState()` completely resets the staged credit to empty (`agent.ReadCredit{}`).
+    - Error and cancellation paths in `readFile.Run` and `readFile.RunDetailed` invoke `ClearReadState()`, preventing partial metadata leakage.
+    - Regression coverage in `internal/tools/nbd034_read_credit_test.go` and `internal/agent/edit_record_loop_test.go` guards against cross-file attribution, external disk modification, brand-new file creation, and loop propagation.
+
+## NBD-xxx: BPE tokenizer, calibration error, and adaptive read budget
+
+- **Component:** `internal/token`, `internal/agent`, `internal/tools`, `cmd/ag`
+- **Issue:** Token counting used a chars/4 (ASCII) + chars/1.6 (non-ASCII) heuristic with a stated 10-20% error, and `NABD_MAX_READ` was a fixed 3072 bytes — calibrated for one provider's 8000 tokens/minute ceiling. Reading one average source file cost many round trips, each spending turns and tokens to save tokens. The user had no visibility into whether the estimate was trustworthy this session.
+
+### Architecture & Resolution
+
+1. **Pure-Go BPE tokenizer (`internal/token`):**
+    - `Tokenizer` interface with `Count(text string) int`. `HeuristicTokenizer{}` is the zero-value fallback (wraps the chars/4 rule via a registrable function — `agent.EstimateText` registers itself at init to break the import cycle).
+    - `BPETokenizer` implements the standard tiktoken merge-loop: pre-tokenize, start each unit as byte ranks (0-255), repeatedly collapse the lowest-ranked mergeable pair. Merge table stored as `[]Merge{A,B,NewRank}` (3 integers/merge), NOT a 100k-entry string map.
+    - `Registry` maps `"provider/model"` → `Tokenizer`; unknown key → `HeuristicTokenizer{}` (degrade, never fail).
+    - `Budget.SetTokenizer(t)` installs a real tokenizer; when set, `Budget.Estimate` uses it instead of the heuristic. `agent.RegisterTokenizer(provider, model, t)` registers tables for known models.
+    - **Binary-size budget:** the test encoder (`internal/token/ranks_test.go`, ~5 merges) adds ~2 KB. Production cl100k_base (~100k merges) would add ~300 KB compressed / ~10 MB uncompressed as a Go map. **Not vendored in this PR** — a phone-first project cannot ship a 40 MB binary for 15% accuracy. The architecture supports it (swap the embedded ranks table); the data is deferred.
+
+2. **Calibration error exposure (`/ctx`):**
+    - `Budget.Calibrate` now tracks `lastError` (|actual − estimated| / actual) and `worstError` (session max) for every valid observation.
+    - `Budget.LastError()`, `WorstError()`, `Calibrated()` expose them. `/ctx` appends `· cal err +N%` when calibrated, `· cal uncalibrated` otherwise.
+
+3. **Adaptive read budget:**
+    - `Loop.readBudget(ms)` derives the per-call ceiling: baseline is the live-calibrated default (3072 bytes); `fraction = clamp(remaining/usable, 0.1, 1.0)`; `scale = 0.5 + fraction`; `budget = baseline × scale`, clamped to `[512, 1<<20]`. Empty context reads at 1.5× baseline (4608 bytes → fewer round trips); near-full reads at 0.6× (1843 bytes). A 40KB file reads in ~9 calls empty vs ~14 with the old fixed default.
+    - `Loop.updateReadLimit(ms)` recomputes per turn; emits a `Notice` once when the ceiling changes (a limit that moves silently is a limit the user files a bug about).
+    - `NABD_MAX_READ` set explicitly disables adaptation (constant function installed); unset → adaptive.
+    - `readFile.limit func() int` field + `Registry.SetLimit(fn)` wire the loop's per-turn cap into the tool. Truncation logic (`TruncTail`) is unchanged — only the cap value varies.
+
+### New config keys
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `NABD_MAX_READ` | (unset) | **Override**: disables adaptation, sets a fixed cap (existing semantics) |
+
+(The TPM ceiling, overhead, and bytes-per-token are the measured constants already hardcoded in `read.go`; they are not yet exposed as config keys — the derivation converges on the fixed default without them.)
+
+### Known gaps [DEFERRED]
+
+- **Production encoder tables:** cl100k_base (~100k merges) is not vendored. The architecture supports it; the data is deferred to keep the binary phone-friendly. When a real table is available, register it via `agent.RegisterTokenizer("anthropic", "claude-sonnet-5", token.NewBPETokenizer(merges))`.
+- **Provider rate-limit header parsing:** the TPM ceiling is the hardcoded 8000 (measured Groq value). Parsing provider-specific headers (Anthropic `anthropic-ratelimit-tokens-*`, OpenAI `x-ratelimit-limit-tokens`) to set it live is a follow-up that feeds the same derivation.
+
+- **NARROW_OVR_12 — Overflow at widths below minViewportWidth:** `computeLayout`
+  raises `TerminalWidth` to `minViewportWidth` (20) when the real terminal is
+  narrower. The rendered frame (separators, footer text) is then wider than the
+  actual terminal, causing overflow/clipping. Deferred because fixing it
+  requires a design decision: clamp `m.width` to the real terminal size and let
+  all chrome degrade at 16 cells, or keep the floor. Covered by
+  `TestFrameHeightNarrowerThanMinWidth` (skipped) in
+  `internal/ui/layout_contract_test.go`.

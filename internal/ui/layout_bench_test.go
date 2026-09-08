@@ -54,6 +54,37 @@ func BenchmarkFormatMarkdown(b *testing.B) {
 	}
 }
 
+// BenchmarkRenderItems500 measures the cost of rendering 500 mixed
+// user/assistant items through renderItems (the non-cached path).
+func BenchmarkRenderItems500(b *testing.B) {
+	items := make([]presentation.FeedItem, 0, 500)
+	for i := 0; i < 250; i++ {
+		items = append(items, presentation.FeedItem{
+			Type: presentation.ItemUserMsg,
+			Text: fmt.Sprintf("user message %d with some **bold** text and `code` inline", i),
+		})
+		items = append(items, presentation.FeedItem{
+			Type: presentation.ItemAssistant,
+			Text: fmt.Sprintf("assistant reply %d with some **bold** text for emphasis", i),
+		})
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = renderItems(items, 80, false)
+	}
+}
+
+// BenchmarkFormatMarkdownLong renders a large Markdown payload repeatedly.
+func BenchmarkFormatMarkdownLong(b *testing.B) {
+	text := strings.Repeat("# Heading\n\nSome **bold** text and `inline code`.\n- first item\n- second item\n", 50)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = formatMarkdown(text, 60)
+	}
+}
+
 func BenchmarkViewFullScreen(b *testing.B) {
 	f := NewFeed()
 	f.Update(tea.WindowSizeMsg{Width: 120, Height: 40})

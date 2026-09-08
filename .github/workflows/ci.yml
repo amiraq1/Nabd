@@ -68,8 +68,25 @@ jobs:
     - name: UI row-accounting contract test
       run: go test ./internal/ui/ -run 'Contract|RowAccounting|FrameHeight|BottomAnchor' -count=1
 
-    - name: UI rendering and streaming benchmarks
+        - name: UI rendering and streaming benchmarks
       run: go test ./internal/ui/ -run '^$' -bench '^(BenchmarkRefreshStreaming|BenchmarkFormatInlineLong|BenchmarkFormatMarkdown|BenchmarkViewFullScreen)$' -benchmem -count=1
+
+    - name: UI layout benchmark baseline (non-gating)
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -o pipefail
+        go test ./internal/ui/ -run '^$' \
+          -bench '^(BenchmarkRenderItems500|BenchmarkFormatInlineLong|BenchmarkFormatMarkdownLong|BenchmarkViewFullScreen)$' \
+          -benchmem -benchtime=10x -count=5 2>&1 | tee bench-ui.txt
+
+    - name: Upload benchmark artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: bench-ui-${{ github.sha }}
+        path: bench-ui.txt
+        if-no-files-found: warn
 
     - name: Exec.Cmd.Env static audit
       run: bash scripts/check-exec-env.sh

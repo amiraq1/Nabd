@@ -40,8 +40,8 @@ func menuReserveAndDrawn(f *Feed) (reserved, drawn int) {
 
 // TestLayoutContract is the green baseline: in a non-degenerate frame the
 // menu's reservation matches its rendering, output is valid UTF-8, and the
-// row-counting helpers agree with each other. TestMenuRowAccounting violates
-// the first clause once the menu is squeezed to its floor.
+// row-counting helpers agree with each other.
+
 func TestLayoutContract(t *testing.T) {
 	f := newFeedAt(t, 80, 12)
 	f.menu.open(menuItems(3))
@@ -160,6 +160,59 @@ func TestModalRowAccounting(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestFrameNeverOverflows is a diagnostic guard that proves the rendered
+// frame never exceeds the terminal height, even under adversarial menu/modal
+// states. It prints the layout and dimensions on failure.
+func TestFrameNeverOverflows(t *testing.T) {
+	for _, sz := range allTermSizes {
+		for _, tc := range []struct {
+			name  string
+			items []SlashCommand
+			modal bool
+			menu  bool
+		}{
+			{"idle", nil, false, false},
+			{"menu_12", menuItems(12), false, true},
+			{"modal", nil, true, false},
+			{"modal_and_menu", menuItems(12), true, true},
+		} {
+			t.Run(fmt.Sprintf("%s/%s/h=%d", tc.name, sz.name, sz.height), func(t *testing.T) {
+				f := newFeedAt(t, sz.width, sz.height)
+				if tc.items != nil && tc.menu {
+					f.menu.open(tc.items)
+				}
+				if tc.modal {
+					f.permModal.open(&agent.ToolCall{ID: "m1", Name: "bash"})
+					f.modalVisible = true
+				}
+				v := f.View()
+				rows := visualRowsOf(v, sz.width)
+				if rows > sz.height {
+					lm := f.computeLayout()
+					t.Errorf("overflow: %d rows > %d height (w=%d)\nlayout: Header=%d Runtime=%d TopSep=%d Modal=%d Menu=%d Unseen=%d Composer=%d BottomSep=%d Footer=%d Viewport=%d\nview:\n%s",
+						rows, sz.height, sz.width,
+						lm.HeaderRows, lm.RuntimeStatusRows, lm.TopSepRows,
+						lm.ModalRows, lm.MenuRows, lm.UnseenRows,
+						lm.ComposerRows, lm.BottomSepRows, lm.FooterRows,
+						lm.ViewportRows, v)
+				}
+			})
+		}
+	}
+}
+
+// TestFrameHeightNarrowerThanMinWidth is a documented deferred defect.
+// computeLayout raises TerminalWidth to minViewportWidth (20), so View()
+// renders at 20 cells even when the real terminal is narrower (e.g. 16).
+// This causes separators and footer text to overflow the actual display.
+// Tracking key: NARROW_OVR_12 — see docs/TECH_DEBT.md.
+func TestFrameHeightNarrowerThanMinWidth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipped under -short")
+	}
+	t.Skip("deferred defect: NARROW_OVR_12 — computeLayout raises width to minViewportWidth=20, causing overflow at narrower real terminals; requires policy decision on clamping vs. dynamic width. See docs/TECH_DEBT.md")
 }
 
 // TestFrameHeightExact asserts the rendered frame fills the terminal to

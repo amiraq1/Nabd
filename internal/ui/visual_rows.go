@@ -8,32 +8,37 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// visualRowsOf counts the visual terminal rows occupied by s when printed
-// to a terminal of cell-width w. It accounts for double-width characters
-// (CJK, emoji), ANSI escape sequences (width 0), and auto-wrapping.
+// visualRowsSplit splits s into its visual terminal rows as they would
+// appear at cell-width w. It mirrors the actual rendering pipeline:
+// logical newlines split the string, and each segment is hard-wrapped
+// with ansi.Hardwrap exactly like constrainWidth/constrainLines.
 //
-// Rules:
-//   - An empty string occupies 0 rows (nothing printed).
-//   - A line whose visual width fits within w occupies 1 row.
-//   - A line that exceeds w wraps and occupies ceil(lineWidth/w) rows.
-//   - w <= 0: falls back to DefaultWidth to avoid divide-by-zero.
-func visualRowsOf(s string, w int) int {
+// This is the single source of truth for row counting so that layout
+// reservations and actual rendering can never disagree.
+func visualRowsSplit(s string, w int) []string {
 	if s == "" {
-		return 0
+		return nil
 	}
 	if w <= 0 {
 		w = DefaultWidth
 	}
-	rows := 0
+	var out []string
 	for _, line := range strings.Split(s, "\n") {
-		lw := ansi.StringWidth(line)
-		if lw <= w {
-			rows++
-		} else {
-			rows += (lw + w - 1) / w
+		wrapped := ansi.Hardwrap(line, w, false)
+		if wrapped == "" {
+			out = append(out, "")
+			continue
 		}
+		out = append(out, strings.Split(wrapped, "\n")...)
 	}
-	return rows
+	return out
+}
+
+// visualRowsOf counts the visual terminal rows occupied by s when printed
+// to a terminal of cell-width w. It delegates to visualRowsSplit so there
+// is exactly one definition of row breaking in the package.
+func visualRowsOf(s string, w int) int {
+	return len(visualRowsSplit(s, w))
 }
 
 // constrainWidth hard-wraps s to at most w terminal cells per line.
