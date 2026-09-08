@@ -65,6 +65,12 @@ jobs:
     - name: UI and Presentation intensive race test
       run: go test ./internal/ui/... ./internal/presentation/... -race -count=20
 
+    - name: UI row-accounting contract test
+      run: go test ./internal/ui/ -run 'Contract|RowAccounting|FrameHeight|BottomAnchor' -count=1
+
+    - name: UI rendering and streaming benchmarks
+      run: go test ./internal/ui/ -run '^$' -bench '^(BenchmarkRefreshStreaming|BenchmarkFormatInlineLong|BenchmarkFormatMarkdown|BenchmarkViewFullScreen)$' -benchmem -count=1
+
     - name: Exec.Cmd.Env static audit
       run: bash scripts/check-exec-env.sh
 
