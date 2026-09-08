@@ -10,6 +10,5 @@ import "testing"
 func TestConsumeLinesReadSignatureRequiresHash(t *testing.T) {
 	// Compile-time proof: only the two-arg form type-checks. The old
 	// zero-arg and single-arg forms no longer compile.
-	//lint:ignore SA4031 compile-time proof of method signature; not a runtime nil check
 	var _ func(*Registry, string, string) int = (*Registry).ConsumeLinesRead
 }
