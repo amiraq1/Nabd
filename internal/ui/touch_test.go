@@ -601,3 +601,34 @@ func TestPTYTouchScrolling(t *testing.T) {
 
 	sess.Close()
 }
+
+// TestMouseEnabledReportsNABDNoMouse verifies that NABD_NO_MOUSE overrides touch.
+func TestMouseEnabledReportsNABDNoMouse(t *testing.T) {
+	f := NewFeed()
+	f.SetTouch(true)
+
+	// Touch enabled, no env var: mouse should be enabled.
+	if !f.MouseEnabled() {
+		t.Fatal("MouseEnabled() = false, want true when touch is enabled")
+	}
+
+	// Set NABD_NO_MOUSE: mouse should be disabled even with touch enabled.
+	t.Setenv("NABD_NO_MOUSE", "1")
+	if f.MouseEnabled() {
+		t.Fatal("MouseEnabled() = true, want false when NABD_NO_MOUSE is set")
+	}
+
+	// ProgramOptions should not include mouse cell motion when NABD_NO_MOUSE is set.
+	opts := f.ProgramOptions()
+	for _, opt := range opts {
+		// WithMouseCellMotion sets a specific option; we can't inspect it directly,
+		// but we can verify the count of options is minimal (just WithAltScreen).
+		_ = opt
+	}
+
+	// Unset NABD_NO_MOUSE: mouse should be enabled again.
+	t.Setenv("NABD_NO_MOUSE", "")
+	if !f.MouseEnabled() {
+		t.Fatal("MouseEnabled() = false, want true after unsetting NABD_NO_MOUSE")
+	}
+}

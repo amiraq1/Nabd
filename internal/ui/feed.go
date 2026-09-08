@@ -350,6 +350,12 @@ func (m *Feed) SetTouch(enabled bool) { m.touchEnabled = enabled }
 // TouchEnabled reports whether touch scrolling is enabled.
 func (m *Feed) TouchEnabled() bool { return m.touchEnabled }
 
+// MouseEnabled reports whether mouse input is active in the viewport.
+// Touch enables mouse cell motion, but NABD_NO_MOUSE overrides it.
+func (m *Feed) MouseEnabled() bool {
+	return m.touchEnabled && os.Getenv("NABD_NO_MOUSE") == ""
+}
+
 // SetInput overrides the input reader used by ProgramOptions. Defaults to os.Stdin.
 func (m *Feed) SetInput(r io.Reader) { m.input = r }
 
@@ -358,11 +364,12 @@ func (m *Feed) SetInput(r io.Reader) { m.input = r }
 // redraws do not leak into the terminal's primary scrollback buffer.
 // When touch scrolling is enabled via SetTouch, it enables mouse cell motion and wraps input
 // with an SGRNormalizer to decode localized Arabic-Indic digit mouse reports.
+// The NABD_NO_MOUSE environment variable disables mouse input entirely (overrides touch).
 func (m *Feed) ProgramOptions() []tea.ProgramOption {
 	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
 	}
-	if m.touchEnabled {
+	if m.touchEnabled && os.Getenv("NABD_NO_MOUSE") == "" {
 		opts = append(opts, tea.WithMouseCellMotion())
 		in := m.input
 		if in == nil {
