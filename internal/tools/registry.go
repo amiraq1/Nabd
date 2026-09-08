@@ -20,9 +20,11 @@ type Tool interface {
 	Run(ctx context.Context, args json.RawMessage) (out string, ok bool, err error)
 }
 
-// Registry is the agent.Tools implementation. Read-only at v0.4: nothing
-// here can change a byte on disk, which is why no permission gate exists
-// yet. That gate arrives with write.go, not before.
+// Registry is the agent.Tools implementation: it owns the permission Class
+// lookup (perm.Classifier), stages read-credit for the next mutation
+// (NBD-034), and dispatches every tool including write_file, edit_file,
+// and bash. The gate itself lives in perm.Policy; the registry is where a
+// tool's Class is declared and found.
 // metadata is the per-invocation read state with Consume ownership: exactly
 // one consumer may take it, and it resets on take so no later unrelated call
 // can inherit a stale value. Protected by mu so concurrent tool calls cannot
@@ -183,7 +185,7 @@ func (r *Registry) add(ts ...Tool) {
 
 func (r *Registry) Specs() []provider.ToolSpec {
 	out := make([]provider.ToolSpec, 0, len(r.list))
-	for _, t := range r.list {
+	for _, t := range t.list {
 		out = append(out, t.Spec())
 	}
 	return out
