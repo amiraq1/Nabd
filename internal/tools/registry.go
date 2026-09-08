@@ -63,14 +63,6 @@ func (r *Registry) SetReadCredit(c agent.ReadCredit) {
 	r.meta.mu.Unlock()
 }
 
-// SetLinesRead records how many lines read_file just showed the model.
-// Kept for backward compatibility when only line count is provided.
-func (r *Registry) SetLinesRead(n int) {
-	r.meta.mu.Lock()
-	r.meta.credit = agent.ReadCredit{LinesRead: n}
-	r.meta.mu.Unlock()
-}
-
 // ReadCredit returns a copy of the currently staged read credit without consuming it.
 func (r *Registry) ReadCredit() agent.ReadCredit {
 	r.meta.mu.Lock()
@@ -79,42 +71,29 @@ func (r *Registry) ReadCredit() agent.ReadCredit {
 }
 
 // ConsumeLinesRead atomically validates and returns the pending line count,
-// resetting the staged credit.
+// then clears the staged credit so it cannot leak into a later write.
 //
-// If abs (and optionally hashBefore) are provided, the credit is validated:
-//   - If credit.Path is non-empty and does not match abs, the credit was for
-//     a different file: 0 is returned.
-//   - If credit.Hash is non-empty and does not match hashBefore, the file was
-//     modified since it was read: the credit is invalidated and 0 is returned.
-//
-// In all cases, ownership is strict: the staged credit is cleared so it cannot
-// leak into any later write.
-func (r *Registry) ConsumeLinesRead(args ...string) int {
+// Both abs and hashBefore are required arguments. Omitting the hash is a
+// compile error, not a silent bypass of NBD-034. An empty hashBefore is
+// valid for a brand-new file (no pre-mutation content).
+func (r *Registry) ConsumeLinesRead(abs, hashBefore string) int {
 	r.meta.mu.Lock()
 	defer r.meta.mu.Unlock()
 	credit := r.meta.credit
 	r.meta.credit = agent.ReadCredit{}
 
-	if len(args) == 0 {
-		return credit.LinesRead
-	}
-	abs := args[0]
-	var hashBefore string
-	if len(args) > 1 {
-		hashBefore = args[1]
-	}
-
-	// 1. Path validation: if credit has a path and it doesn't match the target file.
 	if credit.Path != "" && credit.Path != abs {
 		return 0
 	}
-	// 2. Hash validation: if credit has a content hash and it doesn't match pre-mutation hash.
 	if credit.Hash != "" && credit.Hash != hashBefore {
 		return 0
 	}
-
 	return credit.LinesRead
 }
+
+// Compile-time proof that ConsumeLinesRead takes path and hash. The old
+// variadic ConsumeLinesRead() / ConsumeLinesRead(abs) forms do not compile.
+var _ func(*Registry, string, string) int = (*Registry).ConsumeLinesRead
 
 // SetTruncated records that the last read_file call hit the byte cap, with
 // the exact line to continue from.
@@ -185,7 +164,7 @@ func (r *Registry) add(ts ...Tool) {
 
 func (r *Registry) Specs() []provider.ToolSpec {
 	out := make([]provider.ToolSpec, 0, len(r.list))
-	for _, t := range t.list {
+	for _, t := range r.list {
 		out = append(out, t.Spec())
 	}
 	return out
