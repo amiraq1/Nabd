@@ -19,8 +19,13 @@ type Sink interface {
 	Emit(Event) error
 }
 
-// Tools runs a tool call. Empty at v0.2 -- the loop is written against
-// the interface now so that v0.4 adds tools without touching this file.
+// Tools is the loop's view of the tool registry: it advertises the specs the
+// provider is allowed to call and executes one call at a time. The concrete
+// implementation is tools.Registry, which today serves read_file, list_dir,
+// glob, grep, write_file, edit_file and bash, and owns the permission class
+// of each. The loop deliberately knows none of that: it only sees names,
+// specs and outcomes, and discovers richer behaviour (RunDetailed,
+// SetReadCredit, LastEdit) through optional interface assertions.
 type Tools interface {
 	Specs() []provider.ToolSpec
 	Run(ctx context.Context, c provider.ToolCall) (out string, ok bool, err error)
@@ -468,10 +473,10 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 		}
 	}
 
-	// Record the assistant turn even if it was pure tool calls: the next
-	// request must contain the tool_use blocks it is answering.
-	if text != "" || len(calls) > 0 {
-	}
+	// The assistant turn is already in the journal: every TextDelta was
+	// emitted as it streamed, and the tool_use blocks are reconstructed from
+	// the ToolStart/ToolEnd events by Messages(). Nothing is appended here.
+	//
 	// A length-cut answer must carry the marker inside the stored text, not
 	// only in a Notice: the next turn reads the assistant message and would
 	// otherwise build on a truncated answer as if it were complete. The
@@ -567,8 +572,6 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		if c.Name == "read_file" && out.OK {
 			if sc, ok := l.Tools.(interface{ SetReadCredit(ReadCredit) }); ok {
 				sc.SetReadCredit(out.ReadCredit)
-			} else if sr, ok := l.Tools.(interface{ SetLinesRead(int) }); ok {
-				sr.SetLinesRead(out.LinesRead)
 			}
 		}
 		ms := time.Since(start).Milliseconds()
@@ -717,8 +720,9 @@ func (f Fanout) Emit(e Event) error {
 }
 
 // Seed adopts a previous branch as this run's history. The new journal
-// starts empty on purpose: sessions stay separate files, the tree lives in
-// memory. Merging files is a v0.8 problem, not a v0.7 one.
+// starts empty on purpose: each session stays its own file and the tree is
+// reassembled in memory from the seeded events. Merging several journal
+// files into one is deliberately out of scope.
 func (l *Loop) Seed(evs []Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
