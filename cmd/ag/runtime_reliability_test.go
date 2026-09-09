@@ -10,58 +10,87 @@ import (
 	"nabd/internal/agent"
 )
 
-// TestChanSinkBoundedAndObservable is the regression guard for the fix: a
-// chanSink with a full channel returns within a bounded window (not 2s) and
-// surfaces an error instead of dropping silently. The journal is the durable
-// source of truth, so no data is truly lost — but the caller must be able to
-// observe and count the loss.
-func TestChanSinkBoundedAndObservable(t *testing.T) {
-	ch := make(chan agent.Event)
-	sink := chanSink(ch)
+// TestChanSinkDropsImmediatelyWhenFull is the regression guard for the fix:
+// a chanSink with a full channel must drop the event instantly and return
+// nil — it must never block for the UI and never surface an error that
+// Fanout turns into a fatal loop failure. The elapsed-time assertion is what
+// separates "drop" from "wait then give up": any solution that waits for
+// the UI fails it.
+func TestChanSinkDropsImmediatelyWhenFull(t *testing.T) {
+	ch := make(chan agent.Event, 1)
+	sink := &chanSink{ch: ch}
 
-	// Drain in the background so the first event can land, then stop draining
-	// to simulate a stuck UI.
-	stop := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case <-ch:
-			case <-stop:
-				return
-			}
-		}
-	}()
-
-	// First event: lands in the channel (drainer picks it up).
+	// First event lands in the buffer.
 	if err := sink.Emit(agent.Event{Type: agent.RunStart}); err != nil {
-		t.Fatal(err)
+		t.Fatalf("Emit on a channel with room failed: %v", err)
 	}
-	time.Sleep(50 * time.Millisecond)
-	close(stop)
+	if got := sink.Dropped(); got != 0 {
+		t.Fatalf("Dropped() = %d, want 0 after a delivered event", got)
+	}
 
-	// Now emit into the full channel with no drainer. The fix must bound the
-	// wait and return an error.
+	// The channel is now full and nothing drains it: the next emit must
+	// drop instantly, return nil, and count the loss.
 	start := time.Now()
 	err := sink.Emit(agent.Event{Type: agent.TextDelta, Text: "dropped", Seq: 7})
 	elapsed := time.Since(start)
 
-	if err == nil {
-		t.Fatal("chanSink must return error on full channel, not drop silently")
+	if err != nil {
+		t.Fatalf("chanSink must not return an error on a full channel: %v", err)
 	}
-	if elapsed > 2*time.Second {
-		t.Fatalf("chanSink blocked too long (%v): backpressure window not bounded", elapsed)
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("chanSink blocked %v: a full UI channel must drop instantly, not wait", elapsed)
 	}
-	if !strings.Contains(err.Error(), "text_delta") || !strings.Contains(err.Error(), "seq=7") {
-		t.Fatalf("error should name the event type and seq: %v", err)
+	if got := sink.Dropped(); got != 1 {
+		t.Fatalf("Dropped() = %d, want 1", got)
 	}
-	t.Logf("chanSink surfaced error after %v: %v", elapsed, err)
+
+	// Subsequent drops accumulate.
+	if err := sink.Emit(agent.Event{Type: agent.TextDelta, Text: "again", Seq: 8}); err != nil {
+		t.Fatalf("second drop returned error: %v", err)
+	}
+	if got := sink.Dropped(); got != 2 {
+		t.Fatalf("Dropped() = %d, want 2", got)
+	}
+	t.Logf("chanSink dropped after %v", elapsed)
+}
+
+// TestChanSinkNotesDroppedCount proves the drop counter is surfaced as a
+// journal Notice before RunEnd, so the loss stays observable without killing
+// the session.
+func TestChanSinkNotesDroppedCount(t *testing.T) {
+	sink := &chanSink{ch: make(chan agent.Event)}
+	rec := &recordSink{}
+	loop := &agent.Loop{Sink: rec}
+
+	// Nothing drains the channel: two events are dropped.
+	sink.Emit(agent.Event{Type: agent.TextDelta, Text: "one", Seq: 1})
+	sink.Emit(agent.Event{Type: agent.TextDelta, Text: "two", Seq: 2})
+	if got := sink.Dropped(); got != 2 {
+		t.Fatalf("Dropped() = %d, want 2", got)
+	}
+
+	sink.noteDrops(loop)
+
+	if len(rec.evs) != 1 || rec.evs[0].Type != agent.Notice {
+		t.Fatalf("expected exactly one Notice, got %v", rec.evs)
+	}
+	if !strings.Contains(rec.evs[0].Text, "2") {
+		t.Fatalf("Notice must name the dropped count, got %q", rec.evs[0].Text)
+	}
+
+	// With nothing dropped, noteDrops stays silent.
+	rec2 := &recordSink{}
+	(&chanSink{ch: make(chan agent.Event)}).noteDrops(&agent.Loop{Sink: rec2})
+	if len(rec2.evs) != 0 {
+		t.Fatalf("noteDrops must not emit when nothing was dropped, got %v", rec2.evs)
+	}
 }
 
 // TestChanSinkDeliversWhenDrained proves the happy path: when the UI drains
 // promptly, events are delivered in order with no error.
 func TestChanSinkDeliversWhenDrained(t *testing.T) {
 	ch := make(chan agent.Event, 16)
-	sink := chanSink(ch)
+	sink := &chanSink{ch: ch}
 
 	var mu sync.Mutex
 	var got []agent.Event
@@ -71,6 +100,9 @@ func TestChanSinkDeliversWhenDrained(t *testing.T) {
 		if err := sink.Emit(e); err != nil {
 			t.Fatalf("Emit failed on drained channel: %v", err)
 		}
+	}
+	if got := sink.Dropped(); got != 0 {
+		t.Fatalf("Dropped() = %d, want 0 on a drained channel", got)
 	}
 	close(ch)
 	for e := range ch {
@@ -119,6 +151,15 @@ func TestJournalCloseErrorObservable(t *testing.T) {
 type failSink struct{ err error }
 
 func (f *failSink) Emit(e agent.Event) error { return f.err }
+
+// recordSink captures every event it receives, for asserting what the loop
+// actually emitted.
+type recordSink struct{ evs []agent.Event }
+
+func (r *recordSink) Emit(e agent.Event) error {
+	r.evs = append(r.evs, e)
+	return nil
+}
 
 // failCloser mimics a journal whose Close fails.
 type failCloser struct {

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"nabd/internal/agent"
@@ -159,10 +160,11 @@ func doChat(dir string, cont bool) error {
 	ap := ui.NewApprover()
 
 	ch := make(chan agent.Event, 128)
+	uiSink := &chanSink{ch: ch}
 	loop := &agent.Loop{
 		Provider: prov,
 		Tools:    reg,
-		Sink:     agent.Fanout{journal, chanSink(ch)},
+		Sink:     agent.Fanout{journal, uiSink},
 		System:   system,
 		Gate:     gate{pol},
 		Budget:   agent.NewBudget(),
@@ -233,10 +235,12 @@ func doChat(dir string, cont bool) error {
 		return err
 	}
 
-	// Shutdown order: mark the session ended in the journal first (durability),
-	// then close the journal. Either step can fail independently; surface both
-	// without masking the original. The "session:" line is only printed when
-	// the durable close succeeds.
+	// Shutdown order: surface any UI drops as a journal Notice, then mark the
+	// session ended in the journal (durability), then close the journal.
+	// Either step can fail independently; surface both without masking the
+	// original. The "session:" line is only printed when the durable close
+	// succeeds.
+	uiSink.noteDrops(loop)
 	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
 	closeErr := journal.Close()
 	if closeErr == nil {
@@ -443,21 +447,37 @@ func chatOnCompact(loop *agent.Loop) string {
 	return statusCompacting
 }
 
-// deliveryTimeout is how long chanSink waits for the UI to drain before
-// reporting backpressure as an error. It must be short: a blocked UI should
-// not stall the agent loop, but the loss must be observable so the caller
-// can count or log dropped events. The journal is the durable source of
-// truth; the UI channel is a best-effort live view.
-const deliveryTimeout = 500 * time.Millisecond
+// chanSink delivers the live event stream to the interactive UI. The UI
+// channel is a best-effort view — the journal is the durable source of
+// truth — so a full channel must never stall the agent loop or kill the
+// session. Emit drops the event instantly, counts the loss, and always
+// returns nil, which keeps a UI hiccup from propagating through Fanout as
+// a fatal loop error. The drop count is surfaced as a journal Notice just
+// before RunEnd (see noteDrops).
+type chanSink struct {
+	ch      chan agent.Event
+	dropped atomic.Int64
+}
 
-type chanSink chan agent.Event
-
-func (c chanSink) Emit(e agent.Event) error {
+func (s *chanSink) Emit(e agent.Event) error {
 	select {
-	case c <- e:
-		return nil
-	case <-time.After(deliveryTimeout):
-		return fmt.Errorf("ui delivery blocked: dropped %s seq=%d", e.Type, e.Seq)
+	case s.ch <- e:
+	default:
+		s.dropped.Add(1)
+	}
+	return nil
+}
+
+// Dropped reports how many events never reached the UI.
+func (s *chanSink) Dropped() int64 { return s.dropped.Load() }
+
+// noteDrops records the dropped-event count as a Notice, once, just before
+// the session's RunEnd event. It must be called from the session-end path,
+// never from inside Emit: loop.emit holds l.mu while sinks run, so calling
+// back into the loop from a sink would deadlock (see NOTES.md P0-1.5).
+func (s *chanSink) noteDrops(loop *agent.Loop) {
+	if n := s.Dropped(); n > 0 {
+		loop.Note(fmt.Sprintf("ui dropped %d event(s) · journal has the full record", n))
 	}
 }
 
