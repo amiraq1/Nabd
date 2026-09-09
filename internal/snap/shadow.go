@@ -1,6 +1,7 @@
 package snap
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -46,11 +47,14 @@ type Shadow struct {
 	// first publish; never re-probed per blob.
 	capOnce sync.Once
 	capErr  error
+
+	// shieldOnce/shieldErr cache the one-time privacy setup for .ag and
+	// .ag/shadow (directory modes + .ag/.gitignore).  Applied lazily before
+	// the first blob is written so that New() stays side-effect-free.
+	shieldOnce sync.Once
+	shieldErr  error
 }
 
-// New sets up the shadow store for a root. We use .ag/shadow as a
-// durable content-addressed store. We DO NOT rely on git gc or git
-// for keeping objects reachable.
 func New(root string) (*Shadow, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -58,6 +62,120 @@ func New(root string) (*Shadow, error) {
 	}
 	s := &Shadow{root: abs, store: filepath.Join(abs, ".ag", "shadow")}
 	return s, nil
+}
+
+// ensureShielded runs shieldStore at most once per Shadow instance (lazy,
+// idempotent).  It must be called before any blob is written.
+func (s *Shadow) ensureShielded() error {
+	s.shieldOnce.Do(func() {
+		s.shieldErr = shieldStore(filepath.Dir(s.store), s.store)
+	})
+	return s.shieldErr
+}
+
+// shieldStore applies the privacy shield to the nabd-owned .ag tree:
+//
+//  1. Creates (or tightens) agDir (.ag) and shadowDir (.ag/shadow) to 0700.
+//  2. Writes /shadow/ to agDir/.gitignore, atomically and idempotently, so
+//     that accidental git add -A does not stage shadow blobs.
+//
+// Guarantees:
+//   - agDir and shadowDir are always 0700 when this returns nil, regardless
+//     of umask or the mode they had before.
+//   - The .gitignore rule is appended (with a leading newline separator if the
+//     file already has content) only when it is not already present; existing
+//     user content is preserved byte-for-byte.
+//   - The write is atomic: a sibling tmp file is written and renamed into
+//     place so that a concurrent reader never sees a partial file.
+//   - ErrAtomicPublishUnsupported is a separate error class; a failure here
+//     is a plain OS error unrelated to blob publication capability.
+//
+// Limits (documented, not hidden):
+//   - git add -f can still force-add a shadow blob; this shield prevents
+//     accidental staging only.
+//   - A same-uid attacker can read 0700 directories after exec. This is
+//     class (d) in THREAT_MODEL.md and is out of scope.
+func shieldStore(agDir, shadowDir string) error {
+	// 1. Create / tighten .ag and .ag/shadow to 0700.
+	for _, dir := range []string{agDir, shadowDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("snap: shield mkdir %s: %w", dir, err)
+		}
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("snap: shield chmod %s: %w", dir, err)
+		}
+	}
+
+	// 2. Ensure .ag/.gitignore contains "/shadow/" without disturbing user
+	//    content.
+	igPath := filepath.Join(agDir, ".gitignore")
+	const rule = "/shadow/"
+
+	// Read the existing file if present.
+	existing, err := os.ReadFile(igPath)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("snap: shield read %s: %w", igPath, err)
+	}
+
+	// Fast idempotent path: rule is already present.
+	if containsIgnoreRule(string(existing), rule) {
+		return nil
+	}
+
+	// Build the new content: preserve what is there, append the rule.
+	var content string
+	if len(existing) == 0 {
+		content = "# nabd: prevent accidental git-staging of shadow blobs\n" + rule + "\n"
+	} else {
+		// If existing content does not end with a newline, add one so the new
+		// rule starts on its own line.
+		sep := ""
+		if existing[len(existing)-1] != '\n' {
+			sep = "\n"
+		}
+		content = string(existing) + sep + rule + "\n"
+	}
+
+	// Atomic write: tmp sibling → rename.
+	tmp, err := os.CreateTemp(agDir, ".ag-gitignore-*.tmp")
+	if err != nil {
+		return fmt.Errorf("snap: shield tmp %s: %w", agDir, err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op if rename succeeded
+
+	bw := bufio.NewWriter(tmp)
+	if _, err := bw.WriteString(content); err != nil {
+		tmp.Close()
+		return fmt.Errorf("snap: shield write %s: %w", tmpName, err)
+	}
+	if err := bw.Flush(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("snap: shield flush %s: %w", tmpName, err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("snap: shield sync %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("snap: shield close %s: %w", tmpName, err)
+	}
+	if err := os.Rename(tmpName, igPath); err != nil {
+		return fmt.Errorf("snap: shield rename %s → %s: %w", tmpName, igPath, err)
+	}
+	return nil
+}
+
+// containsIgnoreRule reports whether text already contains rule as a
+// non-commented, standalone line.  It avoids re-adding a rule the user or a
+// previous run already wrote.
+func containsIgnoreRule(text, rule string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) == rule {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Shadow) UsesGit() bool    { return false }
@@ -302,6 +420,12 @@ func blobMatches(existingData []byte, sum [sha256.Size]byte) bool {
 }
 
 func (s *Shadow) put(data []byte) (string, error) {
+	// Apply the privacy shield before writing the first blob.  This creates
+	// .ag and .ag/shadow at 0700 and writes /shadow/ to .ag/.gitignore.
+	if err := s.ensureShielded(); err != nil {
+		return "", err
+	}
+
 	sum := sha256.Sum256(data)
 	id := "s256:" + hex.EncodeToString(sum[:])
 	p := filepath.Join(s.store, id[5:7], id[7:])
@@ -318,7 +442,8 @@ func (s *Shadow) put(data []byte) (string, error) {
 		return "", fmt.Errorf("read existing blob: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+	// Blob subdirectories inherit the store's 0700 mode.
+	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return "", err
 	}
 
