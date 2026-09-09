@@ -177,7 +177,8 @@ func (r *realTimer) Reset(d time.Duration) bool { return r.t.Reset(d) }
 // pairs) in order, falling back on failure, and committing to the first route
 // that delivers a semantic chunk (Text, ToolCall, or Stop).
 //
-// All fields are unexported and set once at construction (I.1-I.5, I.11).
+// All fields are unexported and fixed at construction, except newStreamID,
+// which is the sole testing-only override (WithStreamIDFunc) (I.1-I.5, I.11).
 // Router is safe for concurrent use after construction (I.8).
 type Router struct {
 	routes           []Route
@@ -188,7 +189,9 @@ type Router struct {
 	newStreamID      func() (string, error)
 }
 
-// NewRouter constructs an immutable Router (Section I).
+// NewRouter constructs a Router (Section I). Routing state is fixed at
+// construction; the StreamID generator is the only post-construction override,
+// applied via WithStreamIDFunc for testing.
 // It defensively copies the provided routes slice (I.1).
 // It rejects an empty routes slice (I.2).
 // timeout is the per-route pre-stream timeout; if <= 0 it defaults to 30s.
