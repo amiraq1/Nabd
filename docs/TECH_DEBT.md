@@ -300,3 +300,28 @@ history — it existed only in the working tree and is gone permanently.
 The file referenced makeRestoreHandler(loop, reg) which was never
 implemented. If restore functionality is needed, it must be written
 from scratch; there is no prior art in the repo to recover.
+
+## MENU_ROW_ACCOUNTING_NOT_A_BUG - the divergence never existed
+
+The branch narrative (d30551f "fix menu min-rows", 3292a5c "drop the slash
+menu below its physical floor") describes an accounting bug: the menu
+reserved 2 rows but rendered 3. Measurement contradicts this. slashMenuShape
+predates the branch (present in d30551f~1) and is the single source of truth:
+lineCount returns shape().rows, view() renders from the same shape, and at
+rows=2 itemRows is 0 so view() emits header+footer only. Reserved 2, drawn 2.
+
+What d30551f actually did was raise the floor from 2 to 3, which pushed chrome
+above the terminal height at h=4 (composer 1 + footer 1 + menu 3 = 5 > 4) and
+so caused the clamp that 3292a5c then handled by dropping the menu.
+
+The resulting behaviour is kept, but on UX grounds rather than as a bug fix:
+a 2-row menu is header plus footer with zero commands listed, i.e. chrome with
+no content. Dropping it below three rows is the better degradation. This is a
+design decision, not a defect repair, and TestClampNeverFires guards the
+arithmetic either way.
+
+Method note: the original finding was derived by reading lineCount and view
+without reading shape() between them. Remaining items from the same UI audit
+(prefix width in feed_render.go, hidden unseen counter, separator glyph
+consistency) were derived the same way and are unverified. Each needs a
+measurement independent of the helper under test before any code change.
