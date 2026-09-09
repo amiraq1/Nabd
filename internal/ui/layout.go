@@ -166,10 +166,13 @@ func (m *Feed) computeLayout() layoutMetrics {
 		if lm.MenuRows > 0 && chrome() > lm.TerminalHeight {
 			other := chrome() - lm.MenuRows
 			avail := lm.TerminalHeight - other
-			if avail < 2 {
-				avail = 2
+			if avail < menuMinRows {
+				// The menu is transient chrome: below its physical floor it is
+				// dropped, never compressed into rows view() cannot honour.
+				lm.MenuRows = 0
+			} else {
+				lm.MenuRows = m.menu.lineCount(avail)
 			}
-			lm.MenuRows = m.menu.lineCount(avail)
 		}
 	}
 	if chrome() > lm.TerminalHeight && lm.RuntimeStatusRows > 0 {

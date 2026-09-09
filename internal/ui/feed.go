@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
@@ -110,6 +109,25 @@ type Feed struct {
 	// Touch and input settings.
 	touchEnabled bool
 	input        io.Reader
+
+	// Per-item line cache: key is FeedItem.ID.
+	lineCache   map[string]cacheEntry
+	cacheWidth  int // width at which cache was populated; invalid on change
+	renderCount int // test hook: counts actual renderItem calls
+
+	// Render signature: deterministic fingerprint of the final rendered
+	// output (m.lines), used by refresh to report whether the visible
+	// output actually changed without cloning/comparing the slice.
+	renderSig      uint64
+	renderRows     int
+	renderSigValid bool
+}
+
+// cacheEntry holds rendered lines for one feed item at a specific expansion state.
+type cacheEntry struct {
+	fp       uint64
+	expanded bool
+	lines    []string
 }
 
 // FeedCallbacks holds the hooks the feed uses to talk back to the loop.
@@ -225,12 +243,6 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // arrives as a Bubble Tea message on the event loop, never from a
 // goroutine, so mutating model state here is safe.
 func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
-	// Snapshot the rendered lines before projecting events to detect any display changes.
-	// Note: This snapshot and comparison incur a linear O(N) cost in the number of rendered lines,
-	// bounded by the maximum number of items in the viewport, ensuring exact detection of
-	// in-place mutations (such as earlier tool state updates) across the entire feed.
-	beforeLines := slices.Clone(m.lines)
-
 	for _, e := range events {
 		if err := m.proj.Apply(e); err != nil {
 			m.addDiagnostic(fmt.Sprintf("unable to project event %s seq=%d: %v", e.Type, e.Seq, err))
@@ -240,9 +252,11 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 			m.lastSeq = e.Seq
 		}
 	}
-	m.refresh()
 
-	displayChanged := !slices.Equal(beforeLines, m.lines)
+	// refresh() runs the full render pipeline and reports whether the final
+	// rendered output changed (fingerprint of m.lines), replacing the old
+	// slices.Clone/slices.Equal snapshot comparison.
+	displayChanged := m.refresh()
 	if displayChanged {
 		if m.modalVisible || m.decisionPending {
 			// The feed keeps projecting behind the modal, but visible
@@ -350,6 +364,12 @@ func (m *Feed) SetTouch(enabled bool) { m.touchEnabled = enabled }
 // TouchEnabled reports whether touch scrolling is enabled.
 func (m *Feed) TouchEnabled() bool { return m.touchEnabled }
 
+// MouseEnabled reports whether mouse input is active in the viewport.
+// Touch enables mouse cell motion, but NABD_NO_MOUSE overrides it.
+func (m *Feed) MouseEnabled() bool {
+	return m.touchEnabled && os.Getenv("NABD_NO_MOUSE") == ""
+}
+
 // SetInput overrides the input reader used by ProgramOptions. Defaults to os.Stdin.
 func (m *Feed) SetInput(r io.Reader) { m.input = r }
 
@@ -358,11 +378,12 @@ func (m *Feed) SetInput(r io.Reader) { m.input = r }
 // redraws do not leak into the terminal's primary scrollback buffer.
 // When touch scrolling is enabled via SetTouch, it enables mouse cell motion and wraps input
 // with an SGRNormalizer to decode localized Arabic-Indic digit mouse reports.
+// The NABD_NO_MOUSE environment variable disables mouse input entirely (overrides touch).
 func (m *Feed) ProgramOptions() []tea.ProgramOption {
 	opts := []tea.ProgramOption{
 		tea.WithAltScreen(),
 	}
-	if m.touchEnabled {
+	if m.touchEnabled && os.Getenv("NABD_NO_MOUSE") == "" {
 		opts = append(opts, tea.WithMouseCellMotion())
 		in := m.input
 		if in == nil {

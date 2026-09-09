@@ -95,6 +95,80 @@ func (it FeedItem) key() string {
 	return fmt.Sprintf("%s:%s", it.Type, it.ID)
 }
 
+// Fingerprint returns a deterministic hash of all fields that affect rendering.
+// It is pure (no UI state) and uses length-prefixed encoding to avoid ambiguity
+// (e.g., ["ab","c"] ≠ ["a","bc"]). Fields that don't affect display (like Seq)
+// are excluded by design — changing them must not change the fingerprint.
+func (it FeedItem) Fingerprint() uint64 {
+	var h uint64 = 1469598103934665603 // FNV-1a offset basis
+
+	// Type determines how the item is rendered.
+	hashString(&h, string(it.Type))
+
+	// Text is rendered for user/assistant/notice/error/run_boundary items.
+	hashString(&h, it.Text)
+
+	// RunBoundary marks session start/end with a visible separator.
+	hashString(&h, it.RunBoundary)
+
+	// Tool card: all fields are visible in the rendered output.
+	if it.Tool != nil {
+		hashString(&h, it.Tool.Name)
+		hashString(&h, it.Tool.Args)
+		hashString(&h, string(it.Tool.Status))
+		hashString(&h, it.Tool.Output)
+		hashInt64(&h, it.Tool.Duration)
+		hashInt(&h, it.Tool.ExitCode)
+		hashString(&h, it.Tool.Signal)
+		hashString(&h, it.Tool.Err)
+		hashBool(&h, it.Tool.Truncated)
+	}
+
+	// Perm card: all fields affect the rendered permission display.
+	if it.Perm != nil {
+		hashString(&h, it.Perm.Name)
+		hashString(&h, it.Perm.Args)
+		hashString(&h, string(it.Perm.Status))
+		hashString(&h, string(it.Perm.Decision))
+		hashString(&h, string(it.Perm.Effective))
+	}
+
+	return h
+}
+
+// hashString incorporates a length-prefixed string into the hash.
+// Length prefixing prevents ["ab","c"] from colliding with ["a","bc"].
+func hashString(h *uint64, s string) {
+	*h ^= uint64(len(s))
+	*h *= 1099511628211 // FNV-1a prime
+	for _, b := range []byte(s) {
+		*h ^= uint64(b)
+		*h *= 1099511628211
+	}
+}
+
+// hashInt64 incorporates an int64 into the hash.
+func hashInt64(h *uint64, v int64) {
+	*h ^= uint64(v)
+	*h *= 1099511628211
+}
+
+// hashInt incorporates an int into the hash.
+func hashInt(h *uint64, v int) {
+	*h ^= uint64(v)
+	*h *= 1099511628211
+}
+
+// hashBool incorporates a bool into the hash.
+func hashBool(h *uint64, v bool) {
+	if v {
+		*h ^= 1
+	} else {
+		*h ^= 0
+	}
+	*h *= 1099511628211
+}
+
 // sortBySeq orders items using their Seq field, preserving the original
 // event order. Items without Seq (0) or with identical Seq keep their relative positions.
 func sortBySeq(items []FeedItem) {

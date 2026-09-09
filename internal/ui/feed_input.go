@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"nabd/internal/agent"
+	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -75,6 +76,9 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	m.toolsExpanded = !m.toolsExpanded
 	newLines, newOffsets := renderItemsWithOffsets(items, m.width, m.toolsExpanded)
 	m.lines = newLines
+	// toggleTools writes m.lines directly (not via refresh), so the render
+	// signature must be resynced to avoid a stale baseline for applyBatch.
+	m.syncRenderSig()
 
 	if anchorIdx < len(newOffsets) {
 		targetTop := newOffsets[anchorIdx] + offsetWithin
@@ -375,7 +379,7 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 			m.status = "—"
 			return m, nil
 		}
-		m.status = m.callbacks.OnCtx()
+		m.setCommandResult(m.callbacks.OnCtx())
 		return m, nil
 	case "/compact":
 		m.composer.clear()
@@ -383,7 +387,7 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 			m.status = "—"
 			return m, nil
 		}
-		m.status = m.callbacks.OnCompact()
+		m.setCommandResult(m.callbacks.OnCompact())
 		return m, nil
 	case "/edits":
 		m.composer.clear()
@@ -391,7 +395,7 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 			m.status = "—"
 			return m, nil
 		}
-		m.status = m.callbacks.OnEdits()
+		m.setCommandResult(m.callbacks.OnEdits())
 		return m, nil
 	case "/help":
 		m.composer.clear()
@@ -401,6 +405,23 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 	// Unknown command: keep the text, tell the user.
 	m.status = "unknown command: " + parsed.RawCmd
 	return m, nil
+}
+
+// setCommandResult routes a slash command result. Single-line results go to
+// the transient status line (the runtime status row). Multi-line results
+// (e.g. /edits listing several pending edits) cannot live on the one-line
+// status row — they are added to the feed as a permanent notice block, so
+// they render through the ItemUIBlock pipeline, scroll with the feed, and
+// count towards scrollTop.
+func (m *Feed) setCommandResult(text string) {
+	if text == "" {
+		return
+	}
+	if strings.Contains(text, "\n") {
+		m.addNotice(presentation.ItemNotice, text)
+		return
+	}
+	m.status = text
 }
 
 // startRun launches the accepted message on the runner. The caller (trySend)

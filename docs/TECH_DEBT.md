@@ -219,6 +219,175 @@ Measured via `go test ./internal/ui -run '^$' -bench '^BenchmarkComposerBackspac
      - If both match (or if credit was unstaged), returns `credit.LinesRead`.
      - In all cases, staged credit is atomically reset to empty so it cannot leak to subsequent mutations.
 4. **Parity and Cleanup Invariants:**
-   - `Registry.ClearReadState()` completely resets the staged credit to empty (`agent.ReadCredit{}`).
-   - Error and cancellation paths in `readFile.Run` and `readFile.RunDetailed` invoke `ClearReadState()`, preventing partial metadata leakage.
-   - Regression coverage in `internal/tools/nbd034_read_credit_test.go` and `internal/agent/edit_record_loop_test.go` guards against cross-file attribution, external disk modification, brand-new file creation, and loop propagation.
+    - `Registry.ClearReadState()` completely resets the staged credit to empty (`agent.ReadCredit{}`).
+    - Error and cancellation paths in `readFile.Run` and `readFile.RunDetailed` invoke `ClearReadState()`, preventing partial metadata leakage.
+    - Regression coverage in `internal/tools/nbd034_read_credit_test.go` and `internal/agent/edit_record_loop_test.go` guards against cross-file attribution, external disk modification, brand-new file creation, and loop propagation.
+
+## NBD-xxx: BPE tokenizer, calibration error, and adaptive read budget
+
+- **Component:** `internal/token`, `internal/agent`, `internal/tools`, `cmd/ag`
+- **Issue:** Token counting used a chars/4 (ASCII) + chars/1.6 (non-ASCII) heuristic with a stated 10-20% error, and `NABD_MAX_READ` was a fixed 3072 bytes — calibrated for one provider's 8000 tokens/minute ceiling. Reading one average source file cost many round trips, each spending turns and tokens to save tokens. The user had no visibility into whether the estimate was trustworthy this session.
+
+### Architecture & Resolution
+
+1. **Pure-Go BPE tokenizer (`internal/token`):**
+    - `Tokenizer` interface with `Count(text string) int`. `HeuristicTokenizer{}` is the zero-value fallback (wraps the chars/4 rule via a registrable function — `agent.EstimateText` registers itself at init to break the import cycle).
+    - `BPETokenizer` implements the standard tiktoken merge-loop: pre-tokenize, start each unit as byte ranks (0-255), repeatedly collapse the lowest-ranked mergeable pair. Merge table stored as `[]Merge{A,B,NewRank}` (3 integers/merge), NOT a 100k-entry string map.
+    - `Registry` maps `"provider/model"` → `Tokenizer`; unknown key → `HeuristicTokenizer{}` (degrade, never fail).
+    - `Budget.SetTokenizer(t)` installs a real tokenizer; when set, `Budget.Estimate` uses it instead of the heuristic. `agent.RegisterTokenizer(provider, model, t)` registers tables for known models.
+    - **Binary-size budget:** the test encoder (`internal/token/ranks_test.go`, ~5 merges) adds ~2 KB. Production cl100k_base (~100k merges) would add ~300 KB compressed / ~10 MB uncompressed as a Go map. **Not vendored in this PR** — a phone-first project cannot ship a 40 MB binary for 15% accuracy. The architecture supports it (swap the embedded ranks table); the data is deferred.
+
+2. **Calibration error exposure (`/ctx`):**
+    - `Budget.Calibrate` now tracks `lastError` (|actual − estimated| / actual) and `worstError` (session max) for every valid observation.
+    - `Budget.LastError()`, `WorstError()`, `Calibrated()` expose them. `/ctx` appends `· cal err +N%` when calibrated, `· cal uncalibrated` otherwise.
+
+3. **Adaptive read budget:**
+    - `Loop.readBudget(ms)` derives the per-call ceiling: baseline is the live-calibrated default (3072 bytes); `fraction = clamp(remaining/usable, 0.1, 1.0)`; `scale = 0.5 + fraction`; `budget = baseline × scale`, clamped to `[512, 1<<20]`. Empty context reads at 1.5× baseline (4608 bytes → fewer round trips); near-full reads at 0.6× (1843 bytes). A 40KB file reads in ~9 calls empty vs ~14 with the old fixed default.
+    - `Loop.updateReadLimit(ms)` recomputes per turn; emits a `Notice` once when the ceiling changes (a limit that moves silently is a limit the user files a bug about).
+    - `NABD_MAX_READ` set explicitly disables adaptation (constant function installed); unset → adaptive.
+    - `readFile.limit func() int` field + `Registry.SetLimit(fn)` wire the loop's per-turn cap into the tool. Truncation logic (`TruncTail`) is unchanged — only the cap value varies.
+
+### New config keys
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `NABD_MAX_READ` | (unset) | **Override**: disables adaptation, sets a fixed cap (existing semantics) |
+
+(The TPM ceiling, overhead, and bytes-per-token are the measured constants already hardcoded in `read.go`; they are not yet exposed as config keys — the derivation converges on the fixed default without them.)
+
+### Known gaps [DEFERRED]
+
+- **Production encoder tables:** cl100k_base (~100k merges) is not vendored. The architecture supports it; the data is deferred to keep the binary phone-friendly. When a real table is available, register it via `agent.RegisterTokenizer("anthropic", "claude-sonnet-5", token.NewBPETokenizer(merges))`.
+- **Provider rate-limit header parsing:** the TPM ceiling is the hardcoded 8000 (measured Groq value). Parsing provider-specific headers (Anthropic `anthropic-ratelimit-tokens-*`, OpenAI `x-ratelimit-limit-tokens`) to set it live is a follow-up that feeds the same derivation.
+
+- **NARROW_OVR_12 — Overflow at widths below minViewportWidth:** `computeLayout`
+  raises `TerminalWidth` to `minViewportWidth` (20) when the real terminal is
+  narrower. The rendered frame (separators, footer text) is then wider than the
+  actual terminal, causing overflow/clipping. Deferred because fixing it
+  requires a design decision: clamp `m.width` to the real terminal size and let
+  all chrome degrade at 16 cells, or keep the floor. Covered by
+  `TestFrameHeightNarrowerThanMinWidth` (skipped) in
+  `internal/ui/layout_contract_test.go`.
+
+## PERF_CLAIM_1e6916f - refresh dirty detection is not a measured win
+
+Commit 1e6916f is tagged `perf(ui):` ("derive refresh changes from rendered
+output"). The tag is not supported by measurement. Manual runs of
+BenchmarkRefreshStreaming (5 runs each, no benchstat) gave:
+
+  ns/op    2366399 -> 1691751
+  B/op      418235 ->  417873   (-0.1%)
+  allocs/op   2070 ->    2062   (-0.4%)
+
+The B/op and allocs/op deltas are within run-to-run noise, and the ns/op
+delta was measured without benchstat on an unclean tree, so it is not
+attributable to the change. The benchmark also calls renderItemsCached
+directly instead of going through applyBatch/refresh, so it does not
+exercise the path the commit touches.
+
+Treat 1e6916f as `refactor(ui):` - it removes a slices.Clone/slices.Equal
+pair in favour of an FNV-1a fingerprint of the rendered lines, which is a
+correctness/clarity change. The performance question is still open and
+needs a benchmark driven through applyBatch plus benchstat before any
+perf claim is made.
+
+## LOST_RESTORE_TEST - cmd/ag/restore_test.go deleted untracked
+
+cmd/ag/restore_test.go was deleted in commit 88af924 as "orphaned" but
+it was never tracked by git. The file is not recoverable from git
+history — it existed only in the working tree and is gone permanently.
+
+The file referenced makeRestoreHandler(loop, reg) which was never
+implemented. If restore functionality is needed, it must be written
+from scratch; there is no prior art in the repo to recover.
+
+## MENU_ROW_ACCOUNTING_NOT_A_BUG - the divergence never existed
+
+The branch narrative (d30551f "fix menu min-rows", 3292a5c "drop the slash
+menu below its physical floor") describes an accounting bug: the menu
+reserved 2 rows but rendered 3. Measurement contradicts this. slashMenuShape
+predates the branch (present in d30551f~1) and is the single source of truth:
+lineCount returns shape().rows, view() renders from the same shape, and at
+rows=2 itemRows is 0 so view() emits header+footer only. Reserved 2, drawn 2.
+
+What d30551f actually did was raise the floor from 2 to 3, which pushed chrome
+above the terminal height at h=4 (composer 1 + footer 1 + menu 3 = 5 > 4) and
+so caused the clamp that 3292a5c then handled by dropping the menu.
+
+The resulting behaviour is kept, but on UX grounds rather than as a bug fix:
+a 2-row menu is header plus footer with zero commands listed, i.e. chrome with
+no content. Dropping it below three rows is the better degradation. This is a
+design decision, not a defect repair, and TestClampNeverFires guards the
+arithmetic either way.
+
+Method note: the original finding was derived by reading lineCount and view
+without reading shape() between them. Remaining items from the same UI audit
+(prefix width in feed_render.go, hidden unseen counter, separator glyph
+consistency) were derived the same way and are unverified. Each needs a
+measurement independent of the helper under test before any code change.
+
+## MODAL_FLOOR_OVERFLOW - permission modal overflows below five rows
+
+TestClampNeverFires skips modal_and_menu at h in {2,3,4} (nine subcases). This
+is a real limit, not a vacuous skip: modal 3 + composer 1 + footer 1 = 5, so a
+four-row terminal overflows by one row and the defensive clamp fires. The
+modal is not droppable the way the slash menu is, because it carries a pending
+permission decision - dropping it would mean either a blind decision or a
+silently withheld prompt. requiredFloor documents the boundary; terminals
+shorter than five rows with a modal open are out of contract.
+
+## MENU_IGNORES_NABD_ASCII_ONLY - ASCII fallback is not applied consistently
+
+separatorLine honours NABD_ASCII_ONLY and falls back to '-', but
+slash_menu.go:138 and :141 write U+2500 unconditionally. On a terminal that
+sets the variable the feed separators degrade to ASCII while the command menu
+stays Unicode. Unverified and untested; fixing it touches production code and
+needs its own red case, so it is out of scope for the current test batch.
+
+## TWO_INTERACTIVE_UIS - the layout work targets the experimental path
+
+cmd/ag/main.go carries two interactive TUIs and a third replay model:
+doChat (line 111) runs ui.Chat, doChatWithFeed (line 237) runs ui.Feed, and
+--replay runs ui.NewReplay. The -feed flag defaults to false, so the default
+interactive path is Chat, not Feed.
+
+Everything measured and fixed in this batch - computeLayout, the slash menu
+floor, visualRowsOf, the frame contract, separator width - lives in the Feed
+path. Users on the default path do not see it. This is the right order for
+promoting Feed to default, but it must not be described as a production fix.
+
+Chat (internal/ui/chat.go, 284 lines) has no computeLayout, no frame contract
+and no layout tests at all, while Feed (feed.go, 427 lines) now has both. The
+callbacks are wired on both paths (Approve/OnUndo/OnRewind/OnCtx/OnEdits at
+main.go:185-214 for Chat and :312-332 for Feed), so there is no functional gap;
+OnRewind returns two strings on Feed versus one on Chat.
+
+Open decision: promote Feed to default and retire Chat, or keep both and
+duplicate every layout contract. Until it is decided, no layout finding should
+be acted on without stating which path it applies to. The Replay model has not
+been read at all.
+
+## TWO_INTERACTIVE_UIS - correction to the entry above
+Two absolute claims in the previous entry were written without measurement and
+are retracted. "No functional gap" overstated slash_parity_test.go, which
+builds both paths and compares the registered command set; full behavioural
+parity is not established, and OnRewind returns two strings on Feed versus one
+on Chat, so the contracts are not literally identical. "No layout tests at all"
+for Chat should read: no frame-height or computeLayout contract was found for
+Chat, which is not the same as no tests.
+
+The Feed promotion gate is mostly automated already, not yet to be written.
+real_tty_altscreen_test.go, pty_test.go and touch_test.go carry test *names*
+covering alt-screen entry and exit, Ctrl+C exit, primary-screen restore,
+20x12 without overflow, the permission modal, touch drag and NABD_NO_MOUSE.
+Only the names were read, not the bodies. What looks genuinely unautomated is
+narrow: text selection and copy inside the alternate screen, and Android
+keyboard variance on Alt+Enter / Ctrl+J.
+
+Two unverified suspicions, recorded as hypotheses: feed_test.go:251 compares
+f.scrollTop against f.bottomStart(lm.ViewportRows), i.e. against the production
+expression itself, and with three messages at height 10 both sides may be zero
+so nothing is measured - the per-card line count was never measured, so this is
+not asserted. And internal/ui/feed_layout.go holds bottomStart yet never
+appeared in this batch's inventory of layout files, so the production-side
+inventory is as incomplete as the test-side one was.
