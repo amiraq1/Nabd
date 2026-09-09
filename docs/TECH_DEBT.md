@@ -290,3 +290,13 @@ pair in favour of an FNV-1a fingerprint of the rendered lines, which is a
 correctness/clarity change. The performance question is still open and
 needs a benchmark driven through applyBatch plus benchstat before any
 perf claim is made.
+
+## LOST_RESTORE_TEST - cmd/ag/restore_test.go deleted untracked
+
+cmd/ag/restore_test.go was deleted in commit 88af924 as "orphaned" but
+it was never tracked by git. The file is not recoverable from git
+history — it existed only in the working tree and is gone permanently.
+
+The file referenced makeRestoreHandler(loop, reg) which was never
+implemented. If restore functionality is needed, it must be written
+from scratch; there is no prior art in the repo to recover.
