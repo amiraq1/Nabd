@@ -1,0 +1,10 @@
+goos: android
+goarch: arm64
+pkg: nabd/internal/ui
+BenchmarkRefreshStreaming-8   	     500	   2712303 ns/op	  419007 B/op	    2092 allocs/op
+BenchmarkRefreshStreaming-8   	     327	   4038772 ns/op	  420622 B/op	    2129 allocs/op
+BenchmarkRefreshStreaming-8   	     277	   3844983 ns/op	  421264 B/op	    2148 allocs/op
+BenchmarkRefreshStreaming-8   	     328	   4305242 ns/op	  420496 B/op	    2128 allocs/op
+BenchmarkRefreshStreaming-8   	     429	   3400687 ns/op	  419435 B/op	    2103 allocs/op
+PASS
+ok  	nabd/internal/ui	8.374s
