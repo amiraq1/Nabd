@@ -366,3 +366,28 @@ Open decision: promote Feed to default and retire Chat, or keep both and
 duplicate every layout contract. Until it is decided, no layout finding should
 be acted on without stating which path it applies to. The Replay model has not
 been read at all.
+
+## TWO_INTERACTIVE_UIS - correction to the entry above
+Two absolute claims in the previous entry were written without measurement and
+are retracted. "No functional gap" overstated slash_parity_test.go, which
+builds both paths and compares the registered command set; full behavioural
+parity is not established, and OnRewind returns two strings on Feed versus one
+on Chat, so the contracts are not literally identical. "No layout tests at all"
+for Chat should read: no frame-height or computeLayout contract was found for
+Chat, which is not the same as no tests.
+
+The Feed promotion gate is mostly automated already, not yet to be written.
+real_tty_altscreen_test.go, pty_test.go and touch_test.go carry test *names*
+covering alt-screen entry and exit, Ctrl+C exit, primary-screen restore,
+20x12 without overflow, the permission modal, touch drag and NABD_NO_MOUSE.
+Only the names were read, not the bodies. What looks genuinely unautomated is
+narrow: text selection and copy inside the alternate screen, and Android
+keyboard variance on Alt+Enter / Ctrl+J.
+
+Two unverified suspicions, recorded as hypotheses: feed_test.go:251 compares
+f.scrollTop against f.bottomStart(lm.ViewportRows), i.e. against the production
+expression itself, and with three messages at height 10 both sides may be zero
+so nothing is measured - the per-card line count was never measured, so this is
+not asserted. And internal/ui/feed_layout.go holds bottomStart yet never
+appeared in this batch's inventory of layout files, so the production-side
+inventory is as incomplete as the test-side one was.
