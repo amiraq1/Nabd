@@ -111,3 +111,37 @@ func TestSessionPath_DefaultDirIsPrivate(t *testing.T) {
 		t.Errorf("default sessions dir mode = 0o%o, want 0o700", got)
 	}
 }
+
+// TestLatestSession_DefaultDirIsPrivate verifies that --continue (latestSession)
+// hardens the default sessions directory to 0o700, matching sessionPath.
+// A legacy world-readable dir must not stay readable just because the user
+// resumed a session instead of starting a fresh one.
+func TestLatestSession_DefaultDirIsPrivate(t *testing.T) {
+	fakeHome := t.TempDir()
+	t.Setenv("HOME", fakeHome)
+
+	dir := filepath.Join(fakeHome, ".ag", "sessions")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if dirPermBits(t, dir) != 0o755 {
+		t.Skip("filesystem does not honour 0o755 mode; skipping legacy dir hardening test")
+	}
+
+	// A resume-worthy session for this project root.
+	sessionFile := filepath.Join(dir, "20260901-120000.000.jsonl")
+	if err := os.WriteFile(sessionFile, []byte("{\"type\":\"run_start\",\"project_root\":\"/proj\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := latestSession("", "/proj")
+	if err != nil {
+		t.Fatalf("latestSession: %v", err)
+	}
+	if got != sessionFile {
+		t.Errorf("got %q, want %q", got, sessionFile)
+	}
+	if p := dirPermBits(t, dir); p != 0o700 {
+		t.Errorf("default sessions dir after --continue = 0o%o, want 0o700", p)
+	}
+}

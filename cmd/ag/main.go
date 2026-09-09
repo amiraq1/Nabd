@@ -645,6 +645,13 @@ func latestSession(dir, projectRoot string) (string, error) {
 			return "", err
 		}
 		sessDir = filepath.Join(home, ".ag", "sessions")
+		// Same ownership rule as sessionPath: nabd owns the default
+		// directory, so tighten it to 0o700 before reading it. A legacy
+		// world-readable dir must not stay readable just because the user
+		// resumed a session instead of starting a fresh one.
+		if err := ensureDefaultSessionDir(sessDir); err != nil {
+			return "", err
+		}
 	}
 	ents, err := os.ReadDir(sessDir)
 	if err != nil {
