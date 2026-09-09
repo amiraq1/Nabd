@@ -214,7 +214,13 @@ func doChat(dir string, cont bool) error {
 	chat.OnCtx = func() string {
 		ms := agent.Squeeze(agent.Messages(agent.Live(loop.Hist())), agent.KeepFullRounds)
 		p := loop.Budget.Pressure(ms)
-		return fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
+		ctx := fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
+		if loop.Budget.Calibrated() {
+			ctx += fmt.Sprintf(" · cal err +%d%%", int(loop.Budget.LastError()*100))
+		} else {
+			ctx += " · cal uncalibrated"
+		}
+		return ctx
 	}
 	chat.OnCompact = func() string {
 		go func() {
@@ -327,7 +333,13 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		OnCtx: func() string {
 			ms := agent.Squeeze(agent.Messages(agent.Live(loop.Hist())), agent.KeepFullRounds)
 			p := loop.Budget.Pressure(ms)
-			return fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
+			ctx := fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
+			if loop.Budget.Calibrated() {
+				ctx += fmt.Sprintf(" · cal err +%d%%", int(loop.Budget.LastError()*100))
+			} else {
+				ctx += " · cal uncalibrated"
+			}
+			return ctx
 		},
 		OnEdits: func() string {
 			p := editRecords(agent.Live(loop.Hist()))

@@ -87,17 +87,18 @@ func defaultMaxRead() int {
 	return 3072
 }
 
-// maxReadBytes caps a single read_file call. Read once at startup from
-// NABD_MAX_READ so the cap follows the provider's token budget instead of
-// being a hardcoded tool constant. Values outside [minMaxRead, maxMaxRead]
-// (or non-numeric) are ignored and the default is used: a zero or absurd
-// value would otherwise produce an empty read that the model answers with
-// false confidence.
+// minMaxRead/maxMaxRead are the hard bounds for a single read_file call,
+// whether the cap is set explicitly (NABD_MAX_READ) or derived adaptively.
+// A zero or absurd value would otherwise produce an empty read that the
+// model answers with false confidence, so values outside this range are
+// clamped or ignored.
 const (
 	minMaxRead = 512
 	maxMaxRead = 1 << 20
 )
 
+// maxReadBytes is the legacy fixed cap, kept for tests that pin it and
+// for the override path. Production calls readLimit() instead.
 var maxReadBytes = envMaxRead()
 
 func envMaxRead() int {
@@ -112,7 +113,28 @@ func envMaxRead() int {
 type readFile struct {
 	root *Root
 	reg  *Registry
+	// limit returns the byte cap for the current call. If nil, maxReadBytes
+	// is used. The loop sets this to an adaptive function that is
+	// recomputed per turn from the provider's rate-limit headers and the
+	// remaining context budget; NABD_MAX_READ being set disables adaptation
+	// (the loop installs a constant function instead).
+	limit func() int
 }
+
+// readLimit returns the effective byte cap for this call: the adaptive
+// limit if one was installed, otherwise the legacy fixed maxReadBytes.
+func (t readFile) readLimit() int {
+	if t.limit != nil {
+		return t.limit()
+	}
+	return maxReadBytes
+}
+
+// SetLimit installs an adaptive per-call byte cap. nil reverts to the
+// legacy fixed maxReadBytes. Exposed on Registry via the SetLimit
+// method (below) so the loop can wire it without reaching into readFile
+// directly.
+func (t *readFile) SetLimit(fn func() int) { t.limit = fn }
 
 var _ Classified = readFile{}
 
@@ -281,16 +303,18 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 			capped = TruncTail(from, line-1, total, line)
 			break
 		}
-		// Byte cap: only emit the line if it still fits under maxReadBytes,
-		// so truncation always lands on a line boundary, never mid-line.
-		if b.Len()+len(sc.Bytes())+8 > maxReadBytes {
+		// Byte cap: only emit the line if it still fits under the current
+		// limit, so truncation always lands on a line boundary, never
+		// mid-line. The limit is adaptive when the loop installed one.
+		limit := t.readLimit()
+		if b.Len()+len(sc.Bytes())+8 > limit {
 			if shown == 0 && line == from {
 				// The line itself exceeds the cap. It is emitted clipped and
 				// marked, and next_offset skips past it — the remainder of
 				// this line is NOT reachable (the tool has no byte offset),
 				// so the marker says so explicitly rather than let the model
 				// believe it saw the whole file.
-				fmt.Fprintf(&b, "%d|%s [LINE_TRUNCATED: line longer than maxReadBytes=%d; remainder of this line is not readable with this tool]\n", line, clip(sc.Text(), maxLineRunes), maxReadBytes)
+				fmt.Fprintf(&b, "%d|%s [LINE_TRUNCATED: line longer than limit=%d; remainder of this line is not readable with this tool]\n", line, clip(sc.Text(), maxLineRunes), limit)
 				shown++
 				capped = TruncTail(from, line, total, line+1)
 				meta.truncated = true

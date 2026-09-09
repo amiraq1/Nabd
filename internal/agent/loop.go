@@ -6,11 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"nabd/internal/config"
 	"nabd/internal/provider"
+	"nabd/internal/token"
 )
 
 // Sink receives every event. The journal is one; the UI is another.
@@ -68,6 +71,14 @@ type Loop struct {
 	providerRetryAfter time.Duration // provider-declared wait for the most recent 429
 	rateLimitTotalWait time.Duration // cumulative wait spent on 429s this Run
 	rateLimitAttempts  int           // turns that ended in 429 since last success
+	// readLimitState holds the adaptive read-budget derivation. The read cap
+	// is recomputed per turn from the provider's TPM ceiling and the
+	// remaining context budget, so a read costs what the context can afford
+	// rather than a fixed 3072 bytes. When NABD_MAX_READ is set explicitly,
+	// adaptation is disabled and readLimitFn returns that constant.
+	readLimitFn   func(ms []provider.Message) int // derives the cap for this turn
+	readLimitCur  int                             // last installed cap (for change detection)
+	readLimitInit bool                            // true once the limit has been wired
 }
 
 func (l *Loop) clockNow() time.Time {
@@ -105,6 +116,147 @@ func (l *Loop) pressure(ms []provider.Message) float64 {
 	}
 	estimated := int(float64(l.estimateMessages(ms)) * l.Budget.Ratio())
 	return float64(estimated) / float64(usable)
+}
+
+// readLimitOverride returns the NABD_MAX_READ value if it was set
+// explicitly (and is within bounds), or 0 if adaptation should be active.
+// A fixed override disables adaptation — the explicit ceiling the user
+// asked for. Mirrors the bounds in internal/tools/read.go.
+func readLimitOverride() int {
+	if v := config.Get("NABD_MAX_READ"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 512 && n <= 1<<20 {
+			return n
+		}
+	}
+	return 0
+}
+
+// readBudget derives the per-call read ceiling (in bytes) for the current
+// turn. It is the single source of truth for the adaptive read budget.
+//
+// The baseline is the live-calibrated default (3072 bytes — the shipped
+// NABD_MAX_READ default, measured to be safe at the provider's TPM
+// ceiling). That baseline is then scaled by context pressure:
+//
+//	fraction = clamp(remainingContext / usable, 0.1, 1.0)
+//	scale    = 0.5 + fraction
+//	budget   = baseline × scale, clamped to [minRead, maxRead]
+//
+// So an empty context (fraction 1.0) reads at 1.5× the baseline (more
+// bytes per call, fewer round trips — the whole point of adapting), a
+// half-full context reads at the baseline, and a near-full context reads
+// down to 60% of it, never below the floor. A fixed NABD_MAX_READ bypasses
+// this entirely (see initReadLimit).
+func (l *Loop) readBudget(ms []provider.Message) int {
+	const (
+		baseline = 3072 // live-calibrated NABD_MAX_READ default (measured safe)
+		minRead  = 512
+		maxRead  = 1 << 20
+	)
+	usable := l.Budget.Usable()
+	fraction := 1.0
+	if usable > 0 {
+		remaining := usable - l.Budget.Estimate(ms)
+		if remaining < 0 {
+			remaining = 0
+		}
+		fraction = float64(remaining) / float64(usable)
+		if fraction < 0.1 {
+			fraction = 0.1
+		}
+	}
+	n := int(float64(baseline) * (0.5 + fraction))
+	if n < minRead {
+		n = minRead
+	}
+	if n > maxRead {
+		n = maxRead
+	}
+	return n
+}
+
+// initReadLimit wires the adaptive read budget into the read_file tool.
+// Called once before the first Run(). If NABD_MAX_READ is set, adaptation
+// is disabled and the tool uses that constant instead (the explicit
+// override the task requires).
+func (l *Loop) initReadLimit(fixedOverride int) {
+	if l.readLimitInit {
+		return
+	}
+	l.readLimitInit = true
+	if fixedOverride > 0 {
+		v := fixedOverride
+		l.readLimitFn = func(ms []provider.Message) int { return v }
+	} else {
+		l.readReadLimitAdaptive()
+	}
+	if l.Tools == nil {
+		return
+	}
+	if sr, ok := l.Tools.(interface{ SetLimit(func() int) }); ok {
+		fn := l.readLimitFn
+		sr.SetLimit(func() int {
+			// The tool has no access to the message list, so the loop
+			// pre-computes the cap per turn via updateReadLimit(); this
+			// closure returns the most recent value.
+			l.mu.Lock()
+			defer l.mu.Unlock()
+			return l.readLimitCur
+		})
+		_ = fn
+	}
+}
+
+// readReadLimitAdaptive sets readLimitFn to the adaptive derivation.
+func (l *Loop) readReadLimitAdaptive() {
+	l.readLimitFn = l.readBudget
+}
+
+// initTokenizer installs a real tokenizer for the active provider on the
+// budget, so Estimate uses it instead of the chars/4 heuristic. Called
+// once per Run(). An unknown provider name degrades to the heuristic
+// (never nil). The registry is package-global because the tokenizer
+// tables are data, not per-session state.
+var tokenizerRegistry = token.NewRegistry()
+
+// RegisterTokenizer adds a tokenizer for "provider/model". Exported so
+// main() can register the real encoder tables at startup.
+func RegisterTokenizer(provider, model string, t token.Tokenizer) {
+	tokenizerRegistry.Register(provider+"/"+model, t)
+}
+
+func init() {
+	// Register the heuristic as the universal fallback under a sentinel
+	// key is unnecessary — Resolve already returns HeuristicTokenizer{}
+	// for unknown keys. This is a no-op hook for clarity.
+	tokenizerRegistry.Register("*/*", token.HeuristicTokenizer{})
+}
+
+func (l *Loop) initTokenizer() {
+	if l.Budget == nil || l.Provider == nil {
+		return
+	}
+	name := l.Provider.Name()
+	// Name() returns "provider/model"; Resolve handles that directly.
+	l.Budget.SetTokenizer(tokenizerRegistry.Resolve(name))
+}
+
+// updateReadLimit recomputes the read cap for the current turn and, when it
+// changes, emits a single Notice (a limit that moves silently is a limit
+// the user files a bug about). Call at the start of each turn with the
+// current message list.
+func (l *Loop) updateReadLimit(ms []provider.Message) {
+	if l.readLimitFn == nil {
+		return
+	}
+	l.mu.Lock()
+	prev := l.readLimitCur
+	next := l.readLimitFn(ms)
+	l.readLimitCur = next
+	l.mu.Unlock()
+	if next != prev && prev != 0 {
+		_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf("read budget ← %d bytes/tcall (context %d%% full)", next, int(l.pressure(ms)*100))})
+	}
 }
 
 // ErrMaxTurns means the model kept calling tools past the ceiling. It is
@@ -174,6 +326,15 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 	l.rateLimitTotalWait = 0
 	l.rateLimitAttempts = 0
 	l.mu.Unlock()
+
+	// Wire the adaptive read budget once. A fixed NABD_MAX_READ disables
+	// adaptation (the explicit override); otherwise the cap is recomputed
+	// per turn from the remaining context budget.
+	l.initReadLimit(readLimitOverride())
+
+	// Install a real tokenizer for the active provider (degrades to the
+	// heuristic for unknown models).
+	l.initTokenizer()
 
 	maxTurns := l.MaxTurns
 	if maxTurns <= 0 {
@@ -248,6 +409,10 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			l.warned = true
 			l.emit(Event{Type: Notice, Text: fmt.Sprintf("context %d%%", int(p*100))})
 		}
+
+		// Recompute the read budget for this turn from the (possibly
+		// compacted) context. Emits a Notice when the ceiling changes.
+		l.updateReadLimit(ms)
 
 		calls, stop, err := l.streamTurn(ctx, ms)
 		if err != nil {

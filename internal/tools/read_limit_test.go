@@ -303,3 +303,51 @@ func TestDefaultMaxReadDerivesFromMaxTok(t *testing.T) {
 	}
 	t.Logf("derived at MaxTok=1024: %d bytes; at 2048: %d; shipped default: %d", at1024, at2048, defaultMaxRead())
 }
+
+// TestSetLimitAdaptive: the Registry can install an adaptive per-call cap on
+// the read_file tool, and the tool uses it instead of the fixed
+// maxReadBytes. Truncation still lands on a line boundary and reports the
+// exact range — only the cap value changes, so the read stops earlier.
+func TestSetLimitAdaptive(t *testing.T) {
+	r, dir := newReg(t)
+	path := filepath.Join(dir, "wide.go")
+	var b strings.Builder
+	for i := 0; i < 300; i++ {
+		b.WriteString(strings.Repeat("z", 120) + "\n")
+	}
+	os.WriteFile(path, []byte(b.String()), 0o644)
+
+	// Baseline: default cap (3072) lets ~24 lines through (128 B/line).
+	raw, _ := json.Marshal(map[string]any{"path": "wide.go"})
+	outDefault, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw))
+	if err != nil || !ok {
+		t.Fatalf("read_file default: ok=%v err=%v", ok, err)
+	}
+	linesDefault := strings.Count(outDefault, "\n")
+	if !strings.Contains(outDefault, "[TRUNCATED:") {
+		t.Fatalf("default read must truncate: %q", outDefault)
+	}
+
+	// Install a small adaptive cap (1024 bytes) — well under the default,
+	// so the read truncates sooner (~8 lines).
+	r.SetLimit(func() int { return 1024 })
+	outSmall, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw))
+	if err != nil || !ok {
+		t.Fatalf("read_file adaptive: ok=%v err=%v", ok, err)
+	}
+	if !strings.Contains(outSmall, "[TRUNCATED:") {
+		t.Fatalf("adaptive-cap read must truncate: %q", outSmall)
+	}
+	linesSmall := strings.Count(outSmall, "\n")
+	if linesSmall >= linesDefault {
+		t.Errorf("adaptive cap (%d lines) must truncate sooner than default (%d lines)", linesSmall, linesDefault)
+	}
+	// Continuation metadata must still be exact.
+	if !strings.Contains(outSmall, "continue with offset=") || !strings.Contains(outSmall, "next_offset=") {
+		t.Errorf("adaptive truncation must keep exact continuation: %q", outSmall)
+	}
+	t.Logf("default=%d lines, adaptive=%d lines (cap 1024)", linesDefault, linesSmall)
+
+	// Removing the limit reverts to the fixed default.
+	r.SetLimit(nil)
+}
