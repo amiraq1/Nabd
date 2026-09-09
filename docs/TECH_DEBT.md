@@ -325,3 +325,21 @@ without reading shape() between them. Remaining items from the same UI audit
 (prefix width in feed_render.go, hidden unseen counter, separator glyph
 consistency) were derived the same way and are unverified. Each needs a
 measurement independent of the helper under test before any code change.
+
+## MODAL_FLOOR_OVERFLOW - permission modal overflows below five rows
+
+TestClampNeverFires skips modal_and_menu at h in {2,3,4} (nine subcases). This
+is a real limit, not a vacuous skip: modal 3 + composer 1 + footer 1 = 5, so a
+four-row terminal overflows by one row and the defensive clamp fires. The
+modal is not droppable the way the slash menu is, because it carries a pending
+permission decision - dropping it would mean either a blind decision or a
+silently withheld prompt. requiredFloor documents the boundary; terminals
+shorter than five rows with a modal open are out of contract.
+
+## MENU_IGNORES_NABD_ASCII_ONLY - ASCII fallback is not applied consistently
+
+separatorLine honours NABD_ASCII_ONLY and falls back to '-', but
+slash_menu.go:138 and :141 write U+2500 unconditionally. On a terminal that
+sets the variable the feed separators degrade to ASCII while the command menu
+stays Unicode. Unverified and untested; fixing it touches production code and
+needs its own red case, so it is out of scope for the current test batch.

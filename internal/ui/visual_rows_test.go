@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestVisualRowsOfEmpty(t *testing.T) {
@@ -69,5 +71,25 @@ func TestVisualRowsOfNonPositiveWidth(t *testing.T) {
 	gotNeg := visualRowsOf(strings.Repeat("x", 100), -5)
 	if gotNeg != 2 {
 		t.Errorf("width=-5: got %d rows, want 2", gotNeg)
+	}
+}
+
+// TestSeparatorGlyphWidth measures the separator glyphs instead of assuming
+// their width. separatorLine and the slash menu both build a run of one rune
+// and rely on it occupying exactly one cell; AllowedUISymbols only permits a
+// rune, it says nothing about its terminal width.
+func TestSeparatorGlyphWidth(t *testing.T) {
+	for _, glyph := range []string{"\u2500", "-"} {
+		if got := ansi.StringWidth(glyph); got != 1 {
+			t.Fatalf("separator glyph %q: width %d, want 1", glyph, got)
+		}
+	}
+	for _, w := range []int{1, 20, 50, 80} {
+		if got := ansi.StringWidth(separatorLine(w)); got != w {
+			t.Fatalf("separatorLine(%d): width %d", w, got)
+		}
+		if got := ansi.StringWidth(asciiSeparatorLine(w)); got != w {
+			t.Fatalf("asciiSeparatorLine(%d): width %d", w, got)
+		}
 	}
 }
