@@ -103,22 +103,17 @@ func (m *Feed) clampScroll() {
 }
 
 // refresh rebuilds the visible lines from the projector plus UI notices.
- feature/nbd-104-rot
 // It returns true when the final rendered output (m.lines) actually changed,
 // and false when it is byte-for-byte identical to the previous refresh.
 // The detection uses a deterministic fingerprint of the rendered lines, so
 // callers no longer need to clone and compare the slice themselves.
 func (m *Feed) refresh() bool {
-
-func (m *Feed) refresh() {
- master
 	items := mergeNotices(m.proj.Items(), m.notices)
 	// DOCUMENTED DECISION: Vertical trimming at maxVisibleFeedItems shifts the
 	// anchor under from-top index convention when buffer exceeds the cap.
 	if len(items) > maxVisibleFeedItems {
 		items = items[len(items)-maxVisibleFeedItems:]
 	}
- feature/nbd-104-rot
 
 	// Invalidate entire cache on width change.
 	if m.width != m.cacheWidth {
@@ -204,10 +199,6 @@ func (m *Feed) syncRenderSig() {
 	m.renderSig = renderedLinesFingerprint(m.lines)
 	m.renderRows = len(m.lines)
 	m.renderSigValid = true
-
-	m.lines = renderItems(items, m.width, m.toolsExpanded)
-	m.clampScroll()
- master
 }
 
 // scrollToEnd moves the viewport to show the latest items and re-arms follow.

@@ -5,10 +5,7 @@ import (
 	"strings"
 
 	"nabd/internal/agent"
- feature/nbd-104-rot
 	"nabd/internal/presentation"
-
- master
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -79,12 +76,9 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	m.toolsExpanded = !m.toolsExpanded
 	newLines, newOffsets := renderItemsWithOffsets(items, m.width, m.toolsExpanded)
 	m.lines = newLines
- feature/nbd-104-rot
 	// toggleTools writes m.lines directly (not via refresh), so the render
 	// signature must be resynced to avoid a stale baseline for applyBatch.
 	m.syncRenderSig()
-
- master
 
 	if anchorIdx < len(newOffsets) {
 		targetTop := newOffsets[anchorIdx] + offsetWithin
@@ -385,11 +379,9 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 			m.status = "—"
 			return m, nil
 		}
- feature/nbd-104-rot
 		m.setCommandResult(m.callbacks.OnCtx())
 
 		m.status = m.callbacks.OnCtx()
- master
 		return m, nil
 	case "/compact":
 		m.composer.clear()
@@ -397,11 +389,9 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 			m.status = "—"
 			return m, nil
 		}
- feature/nbd-104-rot
 		m.setCommandResult(m.callbacks.OnCompact())
 
 		m.status = m.callbacks.OnCompact()
- master
 		return m, nil
 	case "/edits":
 		m.composer.clear()
@@ -409,11 +399,9 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 			m.status = "—"
 			return m, nil
 		}
- feature/nbd-104-rot
 		m.setCommandResult(m.callbacks.OnEdits())
 
 		m.status = m.callbacks.OnEdits()
- master
 		return m, nil
 	case "/help":
 		m.composer.clear()
@@ -425,7 +413,6 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
- feature/nbd-104-rot
 // setCommandResult routes a slash command result. Single-line results go to
 // the transient status line (the runtime status row). Multi-line results
 // (e.g. /edits listing several pending edits) cannot live on the one-line
@@ -443,8 +430,6 @@ func (m *Feed) setCommandResult(text string) {
 	m.status = text
 }
 
-
- master
 // startRun launches the accepted message on the runner. The caller (trySend)
 // has already verified the runner exists and the text is within limits, so
 // a run always starts here.
