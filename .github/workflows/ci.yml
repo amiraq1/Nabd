@@ -68,7 +68,7 @@ jobs:
     - name: UI row-accounting contract test
       run: go test ./internal/ui/ -run 'Contract|RowAccounting|FrameHeight|BottomAnchor' -count=1
 
-        - name: UI rendering and streaming benchmarks
+    - name: UI rendering and streaming benchmarks
       run: go test ./internal/ui/ -run '^$' -bench '^(BenchmarkRefreshStreaming|BenchmarkFormatInlineLong|BenchmarkFormatMarkdown|BenchmarkViewFullScreen)$' -benchmem -count=1
 
     - name: UI layout benchmark baseline (non-gating)
