@@ -71,7 +71,7 @@ broken. **REDUCED** names the residual. **OUT OF SCOPE** names why.
 | `bash` cannot escape the project via `Resolve` | OUT OF SCOPE | `bash.go` never calls `Resolve`. cwd is `root.Dir()`. `cd ..` is a shell builtin |
 | `/undo` covers bash side effects | OUT OF SCOPE | snap never sees the blast radius; stated in `bash.go` package comment |
 | Network, resource exhaustion, or killing unrelated processes from an approved bash | OUT OF SCOPE | no namespace, no cgroup, no Landlock in this version |
-| Prompt injection via ReadOnly tool output | OUT OF SCOPE (today) | no envelope; auto-allow ReadOnly. Tracked for NBD-204 |
+| Prompt injection via ReadOnly tool output | REDUCED | tool output is labeled and fenced at the provider boundary (NBD-204). Residual: the model may follow content despite the label; user approval remains the barrier for sensitive actions |
 | Same-uid local attacker (TOCTOU on `~/.ag/config` between `Lstat` and `Open`) | OUT OF SCOPE | see Path and key handling below |
 | Windows NT ACL ownership of the config file | OUT OF SCOPE | `owner_other.go` is a documented no-op |
 | bash filesystem reach after the operator types `y` | REDUCED | prompt + Executing class + no session grant. Residual: the operator's eye |

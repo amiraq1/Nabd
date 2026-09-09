@@ -175,7 +175,7 @@ func Messages(evs []Event) []provider.Message {
 			delete(open, ev.Call.ID)
 			toolResults = append(toolResults, toolResultItem{
 				result: provider.ToolResult{
-					ID: ev.Call.ID, Output: ev.Call.Output, IsErr: !ev.Call.OK,
+					ID: ev.Call.ID, Output: fenceToolOutput(name, ev.Call.Output), IsErr: !ev.Call.OK,
 				},
 				name: name,
 			})

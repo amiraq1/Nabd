@@ -41,7 +41,7 @@ func TestOrphanToolEndReconstructed(t *testing.T) {
 			output = r.Output
 		}
 	}
-	if output != "refused to run bash: unknown tool" {
+	if output != agent.FenceToolOutput("bash", "refused to run bash: unknown tool") {
 		t.Fatalf("error text must be preserved verbatim, got %q", output)
 	}
 }
