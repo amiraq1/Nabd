@@ -1,8 +1,8 @@
 package agent
 
 import (
-	"bytes"
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -106,20 +106,20 @@ func TestNoticeInjectedDuringToolCallDoesNotCancelOrPrecedeToolResult(t *testing
 		{Seq: 5, Parent: 4, Type: TurnEnd},
 	}
 	ms := Messages(evs)
-	wantFenced := fenceToolOutput("read_file", "file_data")
 	for _, m := range ms {
 		for _, tr := range m.ToolResults {
-			if tr.ID == "t1" && tr.Output != wantFenced {
-				t.Fatalf("tool call t1 has bad result (cancelled or corrupted): %q", tr.Output)
+			if tr.ID == "t1" {
+				assertFenced(t, tr.Output, "read_file", "file_data")
 			}
 		}
 	}
 	if len(ms) != 4 {
 		t.Fatalf("expected 4 messages (user, assistant, user-results, user-notice), got %d: %v", len(ms), ms)
 	}
-	if len(ms[2].ToolResults) != 1 || ms[2].ToolResults[0].Output != wantFenced {
+	if len(ms[2].ToolResults) != 1 {
 		t.Fatalf("expected ms[2] to be tool result, got: %v", ms[2])
 	}
+	assertFenced(t, ms[2].ToolResults[0].Output, "read_file", "file_data")
 	if ms[3].Text != "«notice» calibrated" {
 		t.Fatalf("expected ms[3] to be notice, got: %v", ms[3])
 	}
@@ -143,9 +143,10 @@ func TestNoticePreservedAfterMultipleResults(t *testing.T) {
 	if len(ms) != 5 {
 		t.Fatalf("expected 5 messages, got %d", len(ms))
 	}
-	if len(ms[2].ToolResults) != 1 || ms[2].ToolResults[0].Output != fenceToolOutput("cmd1", "res1") {
+	if len(ms[2].ToolResults) != 1 {
 		t.Fatalf("tool result missing or corrupted: %v", ms[2])
 	}
+	assertFenced(t, ms[2].ToolResults[0].Output, "cmd1", "res1")
 	if ms[3].Text != "«notice» notice_one" || ms[4].Text != "«notice» notice_two" {
 		t.Fatalf("notices not preserved in order: ms[3]=%q ms[4]=%q", ms[3].Text, ms[4].Text)
 	}
@@ -319,8 +320,19 @@ func TestMessagesReplayIsDeterministic(t *testing.T) {
 			first = b
 			continue
 		}
-		if !bytes.Equal(first, b) {
+		// The per-call fence nonce is intentionally random; everything else
+		// must be byte-identical across replays.
+		if stripFenceNonces(string(first)) != stripFenceNonces(string(b)) {
 			t.Fatalf("replay %d: nondeterministic output\n first=%s\n  this=%s", i, first, b)
 		}
 	}
+}
+
+// nonceRe matches the per-call fence nonce inside JSON-escaped message
+// output (\u003c is '<'). Normalizing it lets determinism tests compare
+// structure without tripping over the intentional randomization.
+var nonceRe = regexp.MustCompile(`\\u003c\\u003c\\u003c(?:TOOL_OUTPUT|END_TOOL_OUTPUT)\[[^\]]+\] [0-9a-f]{16}`)
+
+func stripFenceNonces(s string) string {
+	return nonceRe.ReplaceAllString(s, "NONCE")
 }
