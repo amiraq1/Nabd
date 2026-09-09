@@ -343,3 +343,26 @@ slash_menu.go:138 and :141 write U+2500 unconditionally. On a terminal that
 sets the variable the feed separators degrade to ASCII while the command menu
 stays Unicode. Unverified and untested; fixing it touches production code and
 needs its own red case, so it is out of scope for the current test batch.
+
+## TWO_INTERACTIVE_UIS - the layout work targets the experimental path
+
+cmd/ag/main.go carries two interactive TUIs and a third replay model:
+doChat (line 111) runs ui.Chat, doChatWithFeed (line 237) runs ui.Feed, and
+--replay runs ui.NewReplay. The -feed flag defaults to false, so the default
+interactive path is Chat, not Feed.
+
+Everything measured and fixed in this batch - computeLayout, the slash menu
+floor, visualRowsOf, the frame contract, separator width - lives in the Feed
+path. Users on the default path do not see it. This is the right order for
+promoting Feed to default, but it must not be described as a production fix.
+
+Chat (internal/ui/chat.go, 284 lines) has no computeLayout, no frame contract
+and no layout tests at all, while Feed (feed.go, 427 lines) now has both. The
+callbacks are wired on both paths (Approve/OnUndo/OnRewind/OnCtx/OnEdits at
+main.go:185-214 for Chat and :312-332 for Feed), so there is no functional gap;
+OnRewind returns two strings on Feed versus one on Chat.
+
+Open decision: promote Feed to default and retire Chat, or keep both and
+duplicate every layout contract. Until it is decided, no layout finding should
+be acted on without stating which path it applies to. The Replay model has not
+been read at all.
