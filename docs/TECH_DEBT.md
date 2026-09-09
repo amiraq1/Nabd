@@ -268,3 +268,25 @@ Measured via `go test ./internal/ui -run '^$' -bench '^BenchmarkComposerBackspac
   all chrome degrade at 16 cells, or keep the floor. Covered by
   `TestFrameHeightNarrowerThanMinWidth` (skipped) in
   `internal/ui/layout_contract_test.go`.
+
+## PERF_CLAIM_1e6916f - refresh dirty detection is not a measured win
+
+Commit 1e6916f is tagged `perf(ui):` ("derive refresh changes from rendered
+output"). The tag is not supported by measurement. Manual runs of
+BenchmarkRefreshStreaming (5 runs each, no benchstat) gave:
+
+  ns/op    2366399 -> 1691751
+  B/op      418235 ->  417873   (-0.1%)
+  allocs/op   2070 ->    2062   (-0.4%)
+
+The B/op and allocs/op deltas are within run-to-run noise, and the ns/op
+delta was measured without benchstat on an unclean tree, so it is not
+attributable to the change. The benchmark also calls renderItemsCached
+directly instead of going through applyBatch/refresh, so it does not
+exercise the path the commit touches.
+
+Treat 1e6916f as `refactor(ui):` - it removes a slices.Clone/slices.Equal
+pair in favour of an FNV-1a fingerprint of the rendered lines, which is a
+correctness/clarity change. The performance question is still open and
+needs a benchmark driven through applyBatch plus benchstat before any
+perf claim is made.
