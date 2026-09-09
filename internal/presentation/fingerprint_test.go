@@ -27,7 +27,6 @@ func TestFingerprintDeterministic(t *testing.T) {
 	}
 }
 
-
 // TestFingerprintFieldSensitivity verifies that changing each visible field
 // changes the fingerprint.
 func TestFingerprintFieldSensitivity(t *testing.T) {

@@ -91,8 +91,8 @@ func TestMultiLineSlashOutputRoutesToFeedBlock(t *testing.T) {
 func TestSingleLineSlashOutputStaysInStatus(t *testing.T) {
 	f := NewFeed()
 	f.SetCallbacks(&FeedCallbacks{
-		OnCtx:    func() string { return "context 42%" },
-		OnEdits:  func() string { return "1· edit_file internal/a.go" },
+		OnCtx:     func() string { return "context 42%" },
+		OnEdits:   func() string { return "1· edit_file internal/a.go" },
 		OnCompact: func() string { return "compacting in background" },
 	})
 

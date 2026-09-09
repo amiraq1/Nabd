@@ -109,7 +109,7 @@ func TestTextareaKeymapContract(t *testing.T) {
 				ta := textarea.New()
 				ta.SetWidth(40)
 				ta.SetValue(tc.step.init)
-			ta.Focus()
+				ta.Focus()
 				ta.CursorEnd()
 				for _, s := range strings.Fields(tc.step.setup) {
 					ta, _ = ta.Update(keyMsgFor(s))
