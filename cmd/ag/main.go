@@ -136,12 +136,12 @@ func doChat(dir string, cont bool) error {
 	if err != nil {
 		return err
 	}
-	defer journal.Close()
 
 	var prevEvs []agent.Event
 	if cont {
 		evs, err := store.Read(journalPath)
 		if err != nil {
+			journal.Close()
 			return err
 		}
 		prevEvs = agent.Live(evs)
@@ -151,6 +151,7 @@ func doChat(dir string, cont bool) error {
 
 	sh, err := snap.New(root.Dir())
 	if err != nil {
+		journal.Close()
 		return err
 	}
 	reg := tools.NewRegistry(root, sh)
@@ -174,6 +175,7 @@ func doChat(dir string, cont bool) error {
 	cwd, _ := os.Getwd()
 	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
 		build.BannerPrefix(), prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
+		journal.Close()
 		return err
 	}
 
@@ -227,11 +229,20 @@ func doChat(dir string, cont bool) error {
 
 	_, err = tea.NewProgram(chat).Run()
 	if err != nil {
+		journal.Close()
 		return err
 	}
-	_ = loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
-	fmt.Println("session:", journalPath)
-	return nil
+
+	// Shutdown order: mark the session ended in the journal first (durability),
+	// then close the journal. Either step can fail independently; surface both
+	// without masking the original. The "session:" line is only printed when
+	// the durable close succeeds.
+	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
+	closeErr := journal.Close()
+	if closeErr == nil {
+		fmt.Println("session:", journalPath)
+	}
+	return errors.Join(endErr, closeErr)
 }
 
 func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
@@ -264,12 +275,12 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 	if err != nil {
 		return err
 	}
-	defer journal.Close()
 
 	var prevEvs []agent.Event
 	if cont {
 		evs, err := store.Read(journalPath)
 		if err != nil {
+			journal.Close()
 			return err
 		}
 		prevEvs = agent.Live(evs)
@@ -279,6 +290,7 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 
 	sh, err := snap.New(root.Dir())
 	if err != nil {
+		journal.Close()
 		return err
 	}
 	reg := tools.NewRegistry(root, sh)
@@ -304,7 +316,6 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		feed.SendBatch(batch)
 	})
 	batcher.Start()
-	defer batcher.Stop()
 
 	loop.Sink = agent.Fanout{journal, feedSink{batcher: batcher}}
 
@@ -361,6 +372,8 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 
 	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
 		build.BannerPrefix(), prov.Name(), filepath.Base(journalPath)), root.Dir()); err != nil {
+		batcher.Stop()
+		journal.Close()
 		return err
 	}
 
@@ -368,12 +381,20 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		loop.Note(s)
 	}
 
+	// Stop the batcher before shutdown so no new events race the End marker.
+	batcher.Stop()
+
 	if err := <-progDone; err != nil {
+		journal.Close()
 		return err
 	}
-	_ = loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
-	fmt.Println("session:", journalPath)
-	return nil
+
+	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
+	closeErr := journal.Close()
+	if closeErr == nil {
+		fmt.Println("session:", journalPath)
+	}
+	return errors.Join(endErr, closeErr)
 }
 
 type feedSink struct {
@@ -422,14 +443,22 @@ func chatOnCompact(loop *agent.Loop) string {
 	return statusCompacting
 }
 
+// deliveryTimeout is how long chanSink waits for the UI to drain before
+// reporting backpressure as an error. It must be short: a blocked UI should
+// not stall the agent loop, but the loss must be observable so the caller
+// can count or log dropped events. The journal is the durable source of
+// truth; the UI channel is a best-effort live view.
+const deliveryTimeout = 500 * time.Millisecond
+
 type chanSink chan agent.Event
 
 func (c chanSink) Emit(e agent.Event) error {
 	select {
 	case c <- e:
-	case <-time.After(2 * time.Second):
+		return nil
+	case <-time.After(deliveryTimeout):
+		return fmt.Errorf("ui delivery blocked: dropped %s seq=%d", e.Type, e.Seq)
 	}
-	return nil
 }
 
 func sessionPath(dir string) (string, error) {
