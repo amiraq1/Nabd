@@ -105,10 +105,13 @@ func TestLoopEndErrorObservable(t *testing.T) {
 // observed. The production code currently defers journal.Close() without
 // inspecting the error.
 func TestJournalCloseErrorObservable(t *testing.T) {
-	j := &failCloser{}
+	j := &failCloser{err: errors.New("close boom")}
 	err := j.Close()
 	if err == nil {
 		t.Fatal("expected Close to return error, got nil")
+	}
+	if !strings.Contains(err.Error(), "close boom") {
+		t.Fatalf("Close must surface the injected error, got %q", err)
 	}
 }
 
@@ -129,5 +132,5 @@ func (f *failCloser) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.closed = true
-	return errors.New("close boom")
+	return f.err
 }
