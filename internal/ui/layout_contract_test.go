@@ -378,3 +378,75 @@ func TestMenuVisibleAtPhysicalFloor(t *testing.T) {
 		t.Fatalf("menu header missing from View() when MenuRows=%d:\n%s", lm.MenuRows, f.View())
 	}
 }
+
+// menuFrameRows counts the menu rows that survive View() and the defensive
+// clamp -- i.e. what the user actually sees. Unlike menuReserveAndDrawn it
+// never passes the reservation back into shape(), so a divergence between
+// what computeLayout reserves and what reaches the screen is observable here.
+func menuFrameRows(f *Feed) (reserved, onScreen int) {
+	lm := f.computeLayout()
+	rows := visualRowsSplit(ansi.Strip(f.View()), lm.TerminalWidth)
+	start := -1
+	for i, r := range rows {
+		if strings.Contains(r, "Commands") {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return lm.MenuRows, 0
+	}
+	for i := start + 1; i < len(rows); i++ {
+		if isMenuFooterLine(rows[i]) {
+			return lm.MenuRows, i - start + 1
+		}
+	}
+	return lm.MenuRows, len(rows) - start
+}
+
+// isMenuFooterLine matches the menu's closing separator by shape rather than
+// by glyph: a non-empty run of one repeated non-ASCII rune.
+func isMenuFooterLine(row string) bool {
+	trimmed := strings.TrimRight(row, " ")
+	if trimmed == "" {
+		return false
+	}
+	rs := []rune(trimmed)
+	if rs[0] < 0x80 {
+		return false
+	}
+	for _, r := range rs {
+		if r != rs[0] {
+			return false
+		}
+	}
+	return true
+}
+
+// TestMenuReachesScreen asserts the reservation survives rendering and the
+// clamp: whatever computeLayout reserves for the menu must appear on screen.
+func TestMenuReachesScreen(t *testing.T) {
+	cases := []struct {
+		name  string
+		items []SlashCommand
+	}{
+		{"menu_1", menuItems(1)},
+		{"menu_3", menuItems(3)},
+		{"menu_12", menuItems(12)},
+	}
+	for _, tc := range cases {
+		for _, w := range []int{20, 50, 80} {
+			for h := 2; h <= 12; h++ {
+				tag := fmt.Sprintf("%s/w=%d/h=%d", tc.name, w, h)
+				t.Run(tag, func(t *testing.T) {
+					f := newFeedAt(t, w, h)
+					f.menu.open(tc.items)
+					reserved, onScreen := menuFrameRows(f)
+					if reserved != onScreen {
+						t.Fatalf("menu reserved %d rows, %d reached the screen", reserved, onScreen)
+					}
+				})
+			}
+		}
+	}
+}
