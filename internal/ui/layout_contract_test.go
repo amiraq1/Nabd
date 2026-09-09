@@ -25,9 +25,10 @@ func menuItems(n int) []SlashCommand {
 	return out
 }
 
-// menuReserveAndDrawn captures the contract under test: the rows computeLayout
-// reserves for the slash menu (lm.MenuRows) must equal the rows menu.view
-// actually draws for that reservation.
+// menuReserveAndDrawn is an internal consistency check on slashMenuShape:
+// lineCount is shape().rows and view renders from the same shape, so this can
+// only catch a divergence inside the menu itself, never one introduced by the
+// defensive clamp in View(). See menuFrameRows for the screen-level contract.
 func menuReserveAndDrawn(f *Feed) (reserved, drawn int) {
 	lm := f.computeLayout()
 	if lm.MenuRows == 0 {

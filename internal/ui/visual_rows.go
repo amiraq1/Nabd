@@ -96,7 +96,7 @@ func separatorLine(w int) string {
 	if os.Getenv("NABD_ASCII_ONLY") != "" {
 		return asciiSeparatorLine(w)
 	}
-	// ─ is 1 cell wide (verified by AllowedUISymbols)
+	// ─ is 1 cell wide (verified by TestSeparatorGlyphWidth)
 	return strings.Repeat("─", w)
 }
 
