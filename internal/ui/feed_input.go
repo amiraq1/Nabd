@@ -380,8 +380,6 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.setCommandResult(m.callbacks.OnCtx())
-
-		m.status = m.callbacks.OnCtx()
 		return m, nil
 	case "/compact":
 		m.composer.clear()
@@ -390,8 +388,6 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.setCommandResult(m.callbacks.OnCompact())
-
-		m.status = m.callbacks.OnCompact()
 		return m, nil
 	case "/edits":
 		m.composer.clear()
@@ -400,8 +396,6 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.setCommandResult(m.callbacks.OnEdits())
-
-		m.status = m.callbacks.OnEdits()
 		return m, nil
 	case "/help":
 		m.composer.clear()
