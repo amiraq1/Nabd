@@ -439,9 +439,28 @@ func sessionPath(dir string) (string, error) {
 			return "", err
 		}
 		dir = filepath.Join(home, ".ag", "sessions")
+		// nabd owns this directory: tighten it to 0o700 so that no other
+		// uid can list or open session journals.  We do this only for the
+		// default path — a caller-supplied --dir is their responsibility.
+		if err := ensureDefaultSessionDir(dir); err != nil {
+			return "", err
+		}
 	}
 	name := time.Now().UTC().Format("20060102-150405.000") + ".jsonl"
 	return filepath.Join(dir, name), nil
+}
+
+// ensureDefaultSessionDir creates dir with mode 0o700 if it does not exist, or
+// tightens an existing directory to 0o700 if it is wider.  It only touches
+// directories under ~/.ag that nabd creates and owns; it never modifies a
+// caller-supplied --dir path.
+func ensureDefaultSessionDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// MkdirAll does not tighten an existing directory, so chmod explicitly.
+	// This migrates a legacy 0o755 directory to 0o700 on first run.
+	return os.Chmod(dir, 0o700)
 }
 
 func conflictLine(cs []config.Conflict) string {

@@ -24,13 +24,30 @@ type JSONL struct {
 }
 
 // NewJSONL opens path for appending, creating parents if needed.
+//
+// Security contract (NBD-306):
+//   - New files are created with mode 0o600 (owner read/write only).
+//   - Existing files that are wider than 0o600 are hardened via Fchmod before
+//     any data is written. If Fchmod fails the file is closed and an error is
+//     returned; we never continue with an exposed journal.
+//   - The perm argument to MkdirAll controls only the parent directory created
+//     here. Callers that own the session directory (i.e. the nabd default
+//     ~/.ag/sessions path) are responsible for ensuring the directory itself is
+//     0o700; see ensureDefaultSessionDir in cmd/ag.
 func NewJSONL(path string) (*JSONL, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	// Harden an existing file that was created wider than 0o600.
+	// Fchmod operates on the open file descriptor, so there is no TOCTOU
+	// window between the mode check and the chmod itself.
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("store: harden journal permissions: %w", err)
 	}
 	return &JSONL{path: path, f: f, w: bufio.NewWriter(f)}, nil
 }
