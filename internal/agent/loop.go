@@ -19,6 +19,14 @@ type Sink interface {
 	Emit(Event) error
 }
 
+// Repairing is implemented by a tool layer that can correct malformed calls.
+// The loop asks before it classifies, so the gate, the permission prompt and
+// every journal event name the call that will actually run rather than the one
+// the model wrote. A layer that does not implement it is left alone.
+type Repairing interface {
+	RepairCall(provider.ToolCall) provider.ToolCall
+}
+
 // Tools is the loop's view of the tool registry: it advertises the specs the
 // provider is allowed to call and executes one call at a time. The concrete
 // implementation is tools.Registry, which today serves read_file, glob, grep,
@@ -538,6 +546,14 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 	for _, c := range calls {
 		if ctx.Err() != nil {
 			return true, nil
+		}
+
+		// Repair before anything else observes the call: the ToolStart event,
+		// the existence check, the gate and the permission prompt must all name
+		// the call that will run. The tool layer announces each fix through its
+		// own sink, so a repair is in the journal before execution.
+		if rp, ok := l.Tools.(Repairing); ok {
+			c = rp.RepairCall(c)
 		}
 
 		ac := ToolCall{ID: c.ID, Name: c.Name, Args: c.Input}

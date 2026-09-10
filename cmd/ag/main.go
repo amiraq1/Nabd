@@ -55,7 +55,7 @@ const (
 // prompt itself lives in internal/payload because its size is a budgeted cost
 // term (see NBD-403).
 func newSessionLoop(prov provider.Provider, reg *tools.Registry, g agent.Gate, human agent.Asker) *agent.Loop {
-	return &agent.Loop{
+	loop := &agent.Loop{
 		Provider: prov,
 		Tools:    reg,
 		System:   payload.DefaultSystemPrompt,
@@ -63,6 +63,14 @@ func newSessionLoop(prov provider.Provider, reg *tools.Registry, g agent.Gate, h
 		Budget:   agent.NewBudget(),
 		Human:    human,
 	}
+	// A repaired tool call is announced in the journal before it runs: a repair
+	// the user never sees is one that did not happen. Wiring it here rather
+	// than at each entry point is what keeps Chat, Feed and headless identical
+	// (see TestSessionLoopPromptHasNoDivergentPaths).
+	if reg != nil {
+		reg.OnRepair = func(f tools.Fix) { loop.Note(f.Notice()) }
+	}
+	return loop
 }
 
 func main() {
