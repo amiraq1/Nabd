@@ -121,7 +121,12 @@ func TestLatestSession_DefaultDirIsPrivate(t *testing.T) {
 	t.Setenv("HOME", fakeHome)
 
 	dir := filepath.Join(fakeHome, ".ag", "sessions")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Chmod explicitly: MkdirAll's mode is masked by umask, so a legacy 0o755
+	// directory cannot be simulated by the create mode alone.
+	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if dirPermBits(t, dir) != 0o755 {
@@ -143,5 +148,77 @@ func TestLatestSession_DefaultDirIsPrivate(t *testing.T) {
 	}
 	if p := dirPermBits(t, dir); p != 0o700 {
 		t.Errorf("default sessions dir after --continue = 0o%o, want 0o700", p)
+	}
+}
+
+// TestSessionPathResolvesDefaultDirThroughSingleSource proves sessionPath
+// builds the default directory in exactly one place: the seam that
+// defaultSessionDir owns. If sessionPath resolved the home directory itself,
+// replacing the seam would not move the path.
+func TestSessionPathResolvesDefaultDirThroughSingleSource(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", filepath.Join(home, "decoy"))
+	orig := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = orig })
+
+	want := filepath.Join(home, ".ag", "sessions")
+	got, err := sessionPath("")
+	if err != nil {
+		t.Fatalf("sessionPath: %v", err)
+	}
+	if filepath.Dir(got) != want {
+		t.Fatalf("sessionPath resolved %q, want the single default-dir source %q", filepath.Dir(got), want)
+	}
+	if fi, err := os.Stat(want); err != nil || !fi.IsDir() {
+		t.Fatalf("default session dir not created by the single source: %v", err)
+	}
+}
+
+// TestLatestSessionResolvesDefaultDirThroughSingleSource proves --continue
+// reads that same single source: with the seam pointing at a home that holds
+// the session and $HOME pointing at a decoy, latestSession finds the session
+// only if it goes through defaultSessionDir.
+func TestLatestSessionResolvesDefaultDirThroughSingleSource(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", filepath.Join(home, "decoy"))
+	orig := userHomeDir
+	userHomeDir = func() (string, error) { return home, nil }
+	t.Cleanup(func() { userHomeDir = orig })
+
+	wantDir := filepath.Join(home, ".ag", "sessions")
+	if err := os.MkdirAll(wantDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sessionFile := filepath.Join(wantDir, "20260910-120000.000.jsonl")
+	if err := os.WriteFile(sessionFile, []byte("{\"type\":\"run_start\",\"project_root\":\"/proj\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := latestSession("", "/proj")
+	if err != nil {
+		t.Fatalf("latestSession must read the single default-dir source: %v", err)
+	}
+	if got != sessionFile {
+		t.Fatalf("latestSession returned %q, want %q", got, sessionFile)
+	}
+}
+
+// TestLatestSession_CustomDirUnchanged proves --dir semantics are untouched:
+// latestSession neither chmods nor relocates a caller-supplied directory.
+func TestLatestSession_CustomDirUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Skipf("cannot chmod temp dir: %v", err)
+	}
+	if dirPermBits(t, dir) != 0o755 {
+		t.Skip("filesystem does not honour 0o755 mode; skipping custom dir test")
+	}
+
+	if _, err := latestSession(dir, "/proj"); err == nil {
+		t.Fatal("expected a no-sessions error for an empty custom dir")
+	}
+	if got := dirPermBits(t, dir); got != 0o755 {
+		t.Errorf("custom dir mode changed to 0o%o, want 0o755 (unchanged)", got)
 	}
 }

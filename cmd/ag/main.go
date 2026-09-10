@@ -498,17 +498,32 @@ func (s *chanSink) noteDrops(loop *agent.Loop) {
 	}
 }
 
+// userHomeDir is the single seam for resolving the operator's home
+// directory. Tests replace it to prove that the default session directory is
+// built in exactly one place.
+var userHomeDir = os.UserHomeDir
+
+// defaultSessionDir is the one source of the default session directory
+// (~/.ag/sessions): it resolves the home directory and guarantees the
+// directory exists with mode 0o700. A caller-supplied --dir never reaches
+// here.
+func defaultSessionDir() (string, error) {
+	home, err := userHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".ag", "sessions")
+	if err := ensureDefaultSessionDir(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 func sessionPath(dir string) (string, error) {
 	if dir == "" {
-		home, err := os.UserHomeDir()
+		var err error
+		dir, err = defaultSessionDir()
 		if err != nil {
-			return "", err
-		}
-		dir = filepath.Join(home, ".ag", "sessions")
-		// nabd owns this directory: tighten it to 0o700 so that no other
-		// uid can list or open session journals.  We do this only for the
-		// default path — a caller-supplied --dir is their responsibility.
-		if err := ensureDefaultSessionDir(dir); err != nil {
 			return "", err
 		}
 	}
@@ -657,16 +672,9 @@ func (g gate) Effective(tool string, d agent.Decision) agent.Decision {
 func latestSession(dir, projectRoot string) (string, error) {
 	sessDir := dir
 	if sessDir == "" {
-		home, err := os.UserHomeDir()
+		var err error
+		sessDir, err = defaultSessionDir()
 		if err != nil {
-			return "", err
-		}
-		sessDir = filepath.Join(home, ".ag", "sessions")
-		// Same ownership rule as sessionPath: nabd owns the default
-		// directory, so tighten it to 0o700 before reading it. A legacy
-		// world-readable dir must not stay readable just because the user
-		// resumed a session instead of starting a fresh one.
-		if err := ensureDefaultSessionDir(sessDir); err != nil {
 			return "", err
 		}
 	}
