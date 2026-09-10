@@ -59,9 +59,13 @@ func NewJSONL(path string) (*JSONL, error) {
 // leaves an existing directory untouched — not even to narrow it, because a
 // caller-supplied --dir belongs to the caller.
 //
-// MkdirAll's mode argument is masked by the umask, so the directory this
-// function creates is chmod'd to 0o700 explicitly. Directories above it that
-// MkdirAll also creates get 0o700 &^ umask, which is never wider than 0o700.
+// The mode contract for the created case is:
+//   - dir (the last element) ends up exactly 0o700, because MkdirAll's mode
+//     argument is masked by the umask and the explicit Chmod is not;
+//   - every ancestor MkdirAll has to create on the way is private too (no
+//     group or other bits), since MkdirAll applies the same 0o700 mode to all
+//     of them. An ancestor can therefore be narrower than 0o700 under an
+//     unusual umask, but never wider.
 func ensurePrivateParent(dir string) error {
 	switch _, err := os.Stat(dir); {
 	case err == nil:

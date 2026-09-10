@@ -120,11 +120,14 @@ func TestNewJSONL_AppendAndReadAfterHarden(t *testing.T) {
 // itself creates for a journal is created with mode 0o700, and that the
 // result does not depend on the process umask.
 //
-// A permissive umask (0022, the usual CI default) must not turn the created
-// directory into 0o755: the journal file is 0o600, so the file contents stay
-// protected either way, but a world-listable directory exposes how many
-// sessions exist and what they are named. Run this under `umask 022` to see
-// the deviation; the developer shell's umask 0077 hides it.
+// A permissive umask must not turn the created directory into 0o755: the
+// journal file is 0o600, so the file contents stay protected either way, but a
+// world-listable directory exposes how many sessions exist and what they are
+// named. This test is meaningful on CI (GitHub's ubuntu runners use umask
+// 0022) and on any machine with a permissive umask; on a developer shell with
+// umask 0077 the deviation is masked (0o755 &^ 0o077 == 0o700), so the test
+// passes there for the wrong reason. Do not "fix" it by relaxing the
+// assertion to whatever the local umask yields — that would license the bug.
 func TestNewJSONL_MissingParentDirIsPrivate(t *testing.T) {
 	base := t.TempDir()
 	dir := filepath.Join(base, "created-by-nabd")
@@ -144,6 +147,42 @@ func TestNewJSONL_MissingParentDirIsPrivate(t *testing.T) {
 	}
 	if got := permBits(t, path); got != 0o600 {
 		t.Errorf("journal mode = 0o%o, want 0o600", got)
+	}
+}
+
+// TestNewJSONL_CreatedAncestorsArePrivate verifies the multi-level half of the
+// contract: when --dir names a path whose ancestors do not exist either, every
+// directory nabd creates along the way is private. The leaf is pinned to
+// exactly 0o700 by the explicit Chmod; ancestors get MkdirAll's 0o700 before
+// the umask, so they can be narrower but never wider (no group/other bits).
+func TestNewJSONL_CreatedAncestorsArePrivate(t *testing.T) {
+	base := t.TempDir()
+	leaf := filepath.Join(base, "made-by-nabd", "nested", "sessions")
+	if _, err := os.Stat(filepath.Join(base, "made-by-nabd")); !os.IsNotExist(err) {
+		t.Fatalf("precondition: ancestor must not exist (Stat err = %v)", err)
+	}
+
+	path := filepath.Join(leaf, "session.jsonl")
+	j, err := NewJSONL(path)
+	if err != nil {
+		t.Fatalf("NewJSONL: %v", err)
+	}
+	defer j.Close()
+
+	if got := permBits(t, path); got != 0o600 {
+		t.Errorf("journal mode = 0o%o, want 0o600", got)
+	}
+	if got := permBits(t, leaf); got != 0o700 {
+		t.Errorf("leaf directory mode = 0o%o, want exactly 0o700", got)
+	}
+	for _, ancestor := range []string{
+		filepath.Join(base, "made-by-nabd"),
+		filepath.Join(base, "made-by-nabd", "nested"),
+	} {
+		got := permBits(t, ancestor)
+		if got&0o077 != 0 {
+			t.Errorf("ancestor %s mode = 0o%o, want no group/other bits", ancestor, got)
+		}
 	}
 }
 
