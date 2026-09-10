@@ -141,6 +141,14 @@ func Messages(evs []Event) []provider.Message {
 			if len(toolResults) > 0 {
 				flush()
 			}
+			// The name is model-supplied, so it goes through the fence's
+			// allowlist before it reaches either the tool call or the marker.
+			// One value for both is deliberate: the providers are faithful
+			// encoders and sanitize nothing (internal/provider
+			// TestProvidersDoNotSanitizeToolNames), so if the call kept the raw
+			// name and the fence used the marker, the model would read a call
+			// to one tool answered by a result from another, and the raw name
+			// would still reach the wire.
 			name := fenceToolName(ev.Call.Name)
 			appendUniqueCall(provider.ToolCall{
 				ID: ev.Call.ID, Name: name, Input: ev.Call.Args,
