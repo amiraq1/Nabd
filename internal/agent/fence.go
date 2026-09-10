@@ -19,7 +19,7 @@ import (
 // determined payload can still influence the model while fenced, so user
 // approval remains the real containment for sensitive actions. See NBD-204.
 func FenceToolOutput(toolName string, raw string) string {
-	return fenceToolOutputWithNonce(toolName, raw, newFenceNonce())
+	return fenceToolOutputWithNonce(toolName, raw, FenceNonceFunc())
 }
 
 // fenceToolOutput is the internal alias used by Messages() to preserve the
@@ -37,6 +37,13 @@ func fenceToolOutputWithNonce(toolName, raw, nonce string) string {
 	close := fmt.Sprintf("\n<<<END_TOOL_OUTPUT[%s] %s>>>", toolName, nonce)
 	return open + raw + close
 }
+
+// FenceNonceFunc produces the per-call nonce embedded in both fence markers.
+// Production keeps the crypto/rand default (newFenceNonce); tests replace it
+// to inject a deterministic nonce, so a serialized request can be compared
+// byte-for-byte at the source instead of normalizing a random value after it
+// was generated.
+var FenceNonceFunc = newFenceNonce
 
 // newFenceNonce returns a fresh unpredictable hex nonce, so marker-shaped
 // payload content cannot predict the real close delimiter.
