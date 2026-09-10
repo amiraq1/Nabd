@@ -8,10 +8,12 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"nabd/internal/agent"
@@ -35,6 +37,10 @@ const (
 	// maxEventBatchSize forces a flush when this many events accumulate
 	// within one interval.
 	maxEventBatchSize = 128
+	// uiEventBuffer is the buffer of the live UI event channel. A burst of
+	// tool output must fit without dropping, and when it does not the sink
+	// drops the event instead of stalling the agent loop (see chanSink).
+	uiEventBuffer = 1024
 )
 
 const system = `You are nabd, a coding agent working inside a phone terminal 50 columns wide.
@@ -136,12 +142,12 @@ func doChat(dir string, cont bool) error {
 	if err != nil {
 		return err
 	}
-	defer journal.Close()
 
 	var prevEvs []agent.Event
 	if cont {
 		evs, err := store.Read(journalPath)
 		if err != nil {
+			journal.Close()
 			return err
 		}
 		prevEvs = agent.Live(evs)
@@ -151,17 +157,18 @@ func doChat(dir string, cont bool) error {
 
 	sh, err := snap.New(root.Dir())
 	if err != nil {
+		journal.Close()
 		return err
 	}
 	reg := tools.NewRegistry(root, sh)
 	pol := perm.New(reg)
 	ap := ui.NewApprover()
 
-	ch := make(chan agent.Event, 128)
+	uiSink := newUISink()
 	loop := &agent.Loop{
 		Provider: prov,
 		Tools:    reg,
-		Sink:     agent.Fanout{journal, chanSink(ch)},
+		Sink:     agent.Fanout{journal, uiSink},
 		System:   system,
 		Gate:     gate{pol},
 		Budget:   agent.NewBudget(),
@@ -174,6 +181,7 @@ func doChat(dir string, cont bool) error {
 	cwd, _ := os.Getwd()
 	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
 		build.BannerPrefix(), prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
+		journal.Close()
 		return err
 	}
 
@@ -181,7 +189,7 @@ func doChat(dir string, cont bool) error {
 		loop.Note(s)
 	}
 
-	chat := ui.NewChat(loop, ch)
+	chat := ui.NewChat(loop, uiSink.ch)
 	chat.Approve = ap
 
 	chat.OnRewind = func(n int) string {
@@ -227,11 +235,20 @@ func doChat(dir string, cont bool) error {
 
 	_, err = tea.NewProgram(chat).Run()
 	if err != nil {
+		journal.Close()
 		return err
 	}
-	_ = loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
-	fmt.Println("session:", journalPath)
-	return nil
+
+	// Shutdown order: surface any UI drops as a journal Notice, then mark the
+	// session ended in the journal (durability), then close the journal.
+	// Either step can fail independently; surface both without masking the
+	// original. The "session:" line is printed by reportSession regardless of
+	// whether the durable close succeeded.
+	uiSink.noteDrops(loop)
+	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
+	closeErr := journal.Close()
+	reportSession(os.Stdout, os.Stderr, journalPath, closeErr)
+	return errors.Join(endErr, closeErr)
 }
 
 func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
@@ -264,12 +281,12 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 	if err != nil {
 		return err
 	}
-	defer journal.Close()
 
 	var prevEvs []agent.Event
 	if cont {
 		evs, err := store.Read(journalPath)
 		if err != nil {
+			journal.Close()
 			return err
 		}
 		prevEvs = agent.Live(evs)
@@ -279,6 +296,7 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 
 	sh, err := snap.New(root.Dir())
 	if err != nil {
+		journal.Close()
 		return err
 	}
 	reg := tools.NewRegistry(root, sh)
@@ -304,7 +322,6 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		feed.SendBatch(batch)
 	})
 	batcher.Start()
-	defer batcher.Stop()
 
 	loop.Sink = agent.Fanout{journal, feedSink{batcher: batcher}}
 
@@ -361,6 +378,8 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 
 	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
 		build.BannerPrefix(), prov.Name(), filepath.Base(journalPath)), root.Dir()); err != nil {
+		batcher.Stop()
+		journal.Close()
 		return err
 	}
 
@@ -368,12 +387,32 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		loop.Note(s)
 	}
 
+	// The batcher must outlive the interactive program: it carries every live
+	// event, and Batcher.Add is a silent no-op once stopped. finishFeedSession
+	// waits for the program to exit before stopping it, so nothing is dropped
+	// while the session runs and nothing races the End marker. (Stopping right
+	// after loop.Start here regressed exactly that: the feed showed nothing
+	// past the banner.)
+	return finishFeedSession(progDone, batcher, loop, journal, journalPath)
+}
+
+// finishFeedSession is the feed path's shutdown sequence, isolated so its
+// ordering is testable: wait for the interactive program to exit, stop the
+// batcher so its final flush lands, then mark the session ended and close the
+// journal. Stopping the batcher before the program exits silently drops the
+// whole session's events (Batcher.Add no-ops once stopped); stopping it after
+// loop.End lets events race the End marker.
+func finishFeedSession(progDone <-chan error, batcher *ui.Batcher, loop *agent.Loop, journal io.Closer, journalPath string) error {
 	if err := <-progDone; err != nil {
+		batcher.Stop()
+		journal.Close()
 		return err
 	}
-	_ = loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
-	fmt.Println("session:", journalPath)
-	return nil
+	batcher.Stop()
+	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
+	closeErr := journal.Close()
+	reportSession(os.Stdout, os.Stderr, journalPath, closeErr)
+	return errors.Join(endErr, closeErr)
 }
 
 type feedSink struct {
@@ -422,26 +461,101 @@ func chatOnCompact(loop *agent.Loop) string {
 	return statusCompacting
 }
 
-type chanSink chan agent.Event
+// chanSink delivers the live event stream to the interactive UI. The UI
+// channel is a best-effort view — the journal is the durable source of
+// truth — so a full channel must never stall the agent loop or kill the
+// session. Emit drops the event instantly, counts the loss, and always
+// returns nil, which keeps a UI hiccup from propagating through Fanout as
+// a fatal loop error. The drop count is surfaced as a journal Notice just
+// before RunEnd (see noteDrops).
+type chanSink struct {
+	ch      chan agent.Event
+	dropped atomic.Int64
+}
 
-func (c chanSink) Emit(e agent.Event) error {
+// newUISink builds the interactive UI sink. Its buffer is the contract value
+// (uiEventBuffer); when it overflows, Emit drops instead of blocking.
+func newUISink() *chanSink {
+	return &chanSink{ch: make(chan agent.Event, uiEventBuffer)}
+}
+
+// reportSession prints the authoritative session path and routes a close
+// failure to the error stream beside it. The path is printed unconditionally,
+// so a failed close never hides where the full transcript was written, and
+// the close error never replaces the path.
+func reportSession(out, errOut io.Writer, path string, closeErr error) {
+	fmt.Fprintln(out, "session:", path)
+	if closeErr != nil {
+		fmt.Fprintln(errOut, "nabd: session close:", closeErr)
+	}
+}
+
+func (s *chanSink) Emit(e agent.Event) error {
 	select {
-	case c <- e:
-	case <-time.After(2 * time.Second):
+	case s.ch <- e:
+	default:
+		s.dropped.Add(1)
 	}
 	return nil
 }
 
+// Dropped reports how many events never reached the UI.
+func (s *chanSink) Dropped() int64 { return s.dropped.Load() }
+
+// noteDrops records the dropped-event count as a Notice, once, just before
+// the session's RunEnd event. It must be called from the session-end path,
+// never from inside Emit: loop.emit holds l.mu while sinks run, so calling
+// back into the loop from a sink would deadlock (see NOTES.md P0-1.5).
+func (s *chanSink) noteDrops(loop *agent.Loop) {
+	if n := s.Dropped(); n > 0 {
+		loop.Note(fmt.Sprintf("ui/display dropped %d event(s) · full session transcript is in the journal", n))
+	}
+}
+
+// userHomeDir is the single seam for resolving the operator's home
+// directory. Tests replace it to prove that the default session directory is
+// built in exactly one place.
+var userHomeDir = os.UserHomeDir
+
+// defaultSessionDir is the one source of the default session directory
+// (~/.ag/sessions): it resolves the home directory and guarantees the
+// directory exists with mode 0o700. A caller-supplied --dir never reaches
+// here.
+func defaultSessionDir() (string, error) {
+	home, err := userHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".ag", "sessions")
+	if err := ensureDefaultSessionDir(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 func sessionPath(dir string) (string, error) {
 	if dir == "" {
-		home, err := os.UserHomeDir()
+		var err error
+		dir, err = defaultSessionDir()
 		if err != nil {
 			return "", err
 		}
-		dir = filepath.Join(home, ".ag", "sessions")
 	}
 	name := time.Now().UTC().Format("20060102-150405.000") + ".jsonl"
 	return filepath.Join(dir, name), nil
+}
+
+// ensureDefaultSessionDir creates dir with mode 0o700 if it does not exist, or
+// tightens an existing directory to 0o700 if it is wider.  It only touches
+// directories under ~/.ag that nabd creates and owns; it never modifies a
+// caller-supplied --dir path.
+func ensureDefaultSessionDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// MkdirAll does not tighten an existing directory, so chmod explicitly.
+	// This migrates a legacy 0o755 directory to 0o700 on first run.
+	return os.Chmod(dir, 0o700)
 }
 
 func conflictLine(cs []config.Conflict) string {
@@ -572,11 +686,11 @@ func (g gate) Effective(tool string, d agent.Decision) agent.Decision {
 func latestSession(dir, projectRoot string) (string, error) {
 	sessDir := dir
 	if sessDir == "" {
-		home, err := os.UserHomeDir()
+		var err error
+		sessDir, err = defaultSessionDir()
 		if err != nil {
 			return "", err
 		}
-		sessDir = filepath.Join(home, ".ag", "sessions")
 	}
 	ents, err := os.ReadDir(sessDir)
 	if err != nil {

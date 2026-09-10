@@ -74,6 +74,14 @@ func TestEventRateLimitRawFieldRoundTrip(t *testing.T) {
 // it, through Messages() and json.Marshal — the encode path used for the
 // request. Rate-limit events are operator-visible only and must not leak.
 func TestEventRateLimitDoesNotShiftSerializedPromptContent(t *testing.T) {
+	// Inject the fence nonce at the source so the two serializations are
+	// comparable byte-for-byte. Normalizing a generated nonce after the fact
+	// would mask any real difference behind the substitution; injecting a
+	// fixed nonce keeps the equality assertion exact and deterministic.
+	restoreNonce := agent.FenceNonceFunc
+	agent.FenceNonceFunc = func() string { return "0123456789abcdef" }
+	t.Cleanup(func() { agent.FenceNonceFunc = restoreNonce })
+
 	base := []agent.Event{
 		{Seq: 1, Type: agent.UserMsg, Text: "start"},
 		{Seq: 2, Parent: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "read_file", Args: json.RawMessage(`{"path":"main.go"}`)}},

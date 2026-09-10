@@ -1,8 +1,11 @@
 # Threat model
 
-Sourced from the code as of the NBD-102 commit, not from intention.
+Sourced from the code as of commit d63da42 (the last code change in the
+NBD-306/204 batch; the commits after it are documentation only and change no
+code), not from intention.
 Primary files: `internal/tools/path.go`, `internal/tools/bash.go`,
-`internal/perm/policy.go`, `internal/config/config.go`, `internal/snap/shadow.go`.
+`internal/perm/policy.go`, `internal/config/config.go`, `internal/snap/shadow.go`,
+`internal/agent/fence.go`, `cmd/ag/main.go`.
 
 This is the only place nabd states security claims. README points here.
 
@@ -12,8 +15,8 @@ This is the only place nabd states security claims. README points here.
 |---|---|
 | Provider API keys | `~/.ag/config` (preferred) or process environment (fallback). The binary never writes the file. |
 | Working tree | The directory `Root` was constructed from (`NewRoot("")` uses cwd). |
-| Session journal | `~/.ag/sessions/*.jsonl` by default (`--dir` overrides). Append-only events, including file contents and command output in cleartext. |
-| Shadow store | `<root>/.ag/shadow`, content-addressed `s256:` blobs. Independent of git. |
+| Session journal | `~/.ag/sessions/*.jsonl` by default (`--dir` overrides). Append-only events, including file contents and command output in cleartext. Default file mode 0o600, default dir mode 0o700 (NBD-306). The default directory is built by exactly one function (`defaultSessionDir`) and is hardened to 0o700 on a fresh session and on `--continue` alike. For a caller-supplied `--dir` the mode contract is explicit: a directory that already exists keeps whatever mode the caller set, and a directory nabd has to create — along with any missing ancestors — is created private (no group/other bits) with the final element pinned to 0o700 regardless of umask. The file is 0o600 in both cases. |
+| Shadow store | `<root>/.ag/shadow`, content-addressed `s256:` blobs. Independent of git. `.ag` and `.ag/shadow` are tightened to 0o700 and nabd writes `/shadow/` to `.ag/.gitignore`. |
 
 ## Adversaries
 
@@ -26,10 +29,15 @@ the `bash` prompt.
 
 **(b) Hostile content in the repo or in tool output (prompt injection).**
 ReadOnly tools (`read_file`, `glob`, `grep`) are auto-allowed. Their
-bytes are spliced into the next provider request as undifferentiated
-text. There is no envelope and no injection detector today. Residual
-risk: a README can ask the model to call `bash`; the remaining defence
-is the human reading that one prompt.
+bytes reach the next provider request inside a labeled, nonce-fenced
+envelope: a fresh random nonce in both markers, every marker token in the
+payload defanged, and the tool name echoed only when it is in the tool
+registry's allowlist — anything else is reported as the explicit marker
+`unknown`, never trimmed into a plausible-looking name (NBD-204). That is
+a semantic signal, not a security boundary: there is no injection
+detector, and a determined or confused model may still follow the
+content. Residual risk: a README can ask the model to call `bash`; the
+remaining defence is the human reading that one prompt.
 
 **(c) A hostile dependency invoked through bash.** After the operator
 types `y`, `sh -c` runs with cwd = project root and no `Resolve`.
@@ -39,9 +47,9 @@ contain the filesystem.
 
 **(d) A local attacker with the same uid.** Out of scope. nabd is a
 phone-first, single-user process. It cannot defend files the operator
-can already `open(2)`. Config-file TOCTOU, world-readable journals, and
-ptrace are this class. Mitigate with OS user separation, not with this
-binary.
+can already `open(2)`. Config-file TOCTOU, 0o600/0o700 discipline that
+only excludes other uids, and ptrace are this class. Mitigate with OS
+user separation, not with this binary.
 
 ## Guarantees
 
@@ -71,14 +79,15 @@ broken. **REDUCED** names the residual. **OUT OF SCOPE** names why.
 | `bash` cannot escape the project via `Resolve` | OUT OF SCOPE | `bash.go` never calls `Resolve`. cwd is `root.Dir()`. `cd ..` is a shell builtin |
 | `/undo` covers bash side effects | OUT OF SCOPE | snap never sees the blast radius; stated in `bash.go` package comment |
 | Network, resource exhaustion, or killing unrelated processes from an approved bash | OUT OF SCOPE | no namespace, no cgroup, no Landlock in this version |
-| Prompt injection via ReadOnly tool output | OUT OF SCOPE (today) | no envelope; auto-allow ReadOnly. Tracked for NBD-204 |
+| Prompt injection via ReadOnly tool output | REDUCED | tool output is labeled and fenced at the provider boundary (NBD-204): a per-call random nonce in both markers, every marker token in the payload defanged, and the tool name echoed only from the registry allowlist (`unknown` otherwise), the same value used for the tool call and both markers. **The fence is a semantic signal, not a security boundary**: a determined or confused model may still follow content despite the marker, so user approval remains the barrier for sensitive actions |
 | Same-uid local attacker (TOCTOU on `~/.ag/config` between `Lstat` and `Open`) | OUT OF SCOPE | see Path and key handling below |
 | Windows NT ACL ownership of the config file | OUT OF SCOPE | `owner_other.go` is a documented no-op |
 | bash filesystem reach after the operator types `y` | REDUCED | prompt + Executing class + no session grant. Residual: the operator's eye |
 | Config TOCTOU | REDUCED | `Lstat` then `Open`. Symlink at Lstat time is refused. Swap after Lstat is a same-uid race |
 | Key in the environment | REDUCED | file wins when both are set (`Conflicts()`). Env remains a fallback. Child bash does not inherit it |
 | Multi-process `/undo` | REDUCED | pending-edit log is process memory (IDEAS.md). Journal-backed undo after restart still works for committed edits |
-| Journal cleartext (file contents, command output, keys if a tool printed them) | REDUCED | redaction is oriented to provider requests, not the write path. NBD-306 |
+| Journal cleartext (file contents, command output, keys if a tool printed them) | REDUCED | NBD-306 lands the storage hardening only: file 0o600 and default dir 0o700, so disclosure is confined to the same uid. Redaction on the journal write path is NOT implemented; display-layer redaction in `internal/ui` does not touch the journal. |
+| Shadow store accidentally staged by git | REDUCED | nabd writes `/shadow/` to `<root>/.ag/.gitignore` (atomic, idempotent), so `git add -A` skips it. `git add -f` bypasses `.gitignore`, so this is a guard against accidental tracking, not a security boundary; the 0o700 directory mode is the storage boundary and same-uid readers are class (d). |
 
 ## Path layer
 
@@ -138,5 +147,6 @@ guarantees in the binary.
 5. Treat every `bash` prompt as a root-equivalent for your uid. `n` is the
    containment mechanism.
 6. Do not enable YOLO (`perm.Policy.SetYOLO`) on a tree you care about.
-7. After a session, assume `session.jsonl` contains file excerpts in
-   cleartext until NBD-306.
+7. `session.jsonl` is 0o600 inside a 0o700 default dir, but redaction is
+   not implemented: assume it holds file excerpts and command output in
+   cleartext, readable by anything running as the same uid.

@@ -72,9 +72,14 @@ Exit codes:
 | 4 | permission denied and the model produced no answer |
 | 130 | interrupted |
 
-Release binaries (static, `CGO_ENABLED=0`, trimpath, ldflags-stamped) are
-published on tag `v*`. See `docs/RELEASING.md`. `v1.2.0` already exists;
-the Goreleaser pipeline is for **v1.3.0** onward.
+Static release binaries (`CGO_ENABLED=0`, trimpath, ldflags-stamped) plus a
+`checksums.txt` are built and published by the Goreleaser pipeline
+(`.github/workflows/release.yml`) when a `v*` tag is pushed.
+
+**No GitHub Release has been published yet:** `v1.2.0` is a git tag only and
+carries no release assets — the release workflow was added to the repository
+after `v1.2.0` was tagged. The pipeline is ready for the next `v*` tag
+(target: v1.3.0). See `docs/RELEASING.md`.
 
 Put keys in `~/.ag/config` with mode `600`, not in the environment:
 

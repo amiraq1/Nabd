@@ -242,10 +242,10 @@ func runHeadlessErr(cfg headlessConfig) error {
 	if err != nil {
 		return err
 	}
-	defer journal.Close()
 
 	sh, err := snap.New(root.Dir())
 	if err != nil {
+		journal.Close()
 		return err
 	}
 	reg := tools.NewRegistry(root, sh)
@@ -270,6 +270,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 	cwd, _ := os.Getwd()
 	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
 		build.BannerPrefix(), prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
+		journal.Close()
 		return err
 	}
 	if s := conflictLine(config.Conflicts()); s != "" {
@@ -281,14 +282,18 @@ func runHeadlessErr(cfg headlessConfig) error {
 
 	err = loop.Run(ctx, prompt)
 	interrupted := ctx.Err() != nil
-	_ = loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
-	fmt.Fprintln(cfg.stderr, "session:", journalPath)
+
+	// End the session in the journal first, then close. Surface both errors
+	// without masking the original run error.
+	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
+	closeErr := journal.Close()
+	reportSession(cfg.stderr, cfg.stderr, journalPath, closeErr)
 
 	if interrupted {
-		return errInterrupted
+		return errors.Join(errors.New("interrupted"), endErr, closeErr)
 	}
 	if err != nil {
-		return err
+		return errors.Join(err, endErr, closeErr)
 	}
 	text := finalAssistantText(loop.Hist())
 	if deniedAndStuck(loop.Hist(), text) {
@@ -296,7 +301,9 @@ func runHeadlessErr(cfg headlessConfig) error {
 	}
 	if !cfg.json {
 		_, werr := io.WriteString(cfg.stdout, text)
-		return werr
+		if werr != nil {
+			return errors.Join(werr, endErr, closeErr)
+		}
 	}
-	return nil
+	return errors.Join(endErr, closeErr)
 }
