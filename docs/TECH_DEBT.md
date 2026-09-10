@@ -391,3 +391,5 @@ so nothing is measured - the per-card line count was never measured, so this is
 not asserted. And internal/ui/feed_layout.go holds bottomStart yet never
 appeared in this batch's inventory of layout files, so the production-side
 inventory is as incomplete as the test-side one was.
+
+## FEED_BATCHER_STOPPED_EARLY (8de9879, issue #39) - doChatWithFeed calls batcher.Stop() before `<-progDone`, so the whole interactive session runs against a stopped batcher and Batcher.Add silently drops every live event; the pre-8de9879 code used `defer batcher.Stop()`, which ran after `<-progDone`.
