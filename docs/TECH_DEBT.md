@@ -391,3 +391,46 @@ so nothing is measured - the per-card line count was never measured, so this is
 not asserted. And internal/ui/feed_layout.go holds bottomStart yet never
 appeared in this batch's inventory of layout files, so the production-side
 inventory is as incomplete as the test-side one was.
+
+## READ_CAP_TURN_COST (NBD-400) - the shipped read defaults cannot read a mid-sized file in one run
+
+NBD-400 reviewed the read_file cap and the MaxTurns default by measurement.
+The result is a measured limitation, and the decision was to keep both
+defaults rather than trade a bounded failure for an unbounded one.
+
+Measured on an 800-line / 37014-byte Go-like fixture, driving the real
+Registry through the real Loop with a scripted sequential reader (one
+truncation segment per turn — the mechanical lower bound for a reader that
+does not guess offsets; it is not a claim about model behaviour):
+
+| cap   | calls | turns | fits MaxTurns=12 | longest call | tok_est | delivered |
+|-------|-------|-------|------------------|--------------|---------|-----------|
+| 3072  | 14    | 15    | no               | 3156         | 10838   | 41582     |
+| 8192  | 5     | 6     | yes              | 8290         | 10299   | 40564     |
+| 16384 | 3     | 4     | yes              | 16495        | 10178   | 40334     |
+| 24576 | 2     | 3     | yes              | 24651        | 10118   | 40219     |
+
+Reproduce: `go test ./internal/tools -run 'TestReadCapEval|TestReadCapTurnCost' -count=1 -v`
+
+Two of these invert the intuition:
+
+- A smaller cap is not the cheap one in TOTAL tokens. It is the cheap one
+  PER REQUEST: each truncation re-sends its tail, so 3072 delivers 1363 more
+  bytes and ~720 more estimated tokens than 24576 for the same file.
+- The real cost of a larger cap is the longest call — the per-request input a
+  provider's TPM ceiling actually sees. The derivation in read.go is
+  calibrated against an 8000 TPM free key, where the per-request input budget
+  is already below 3072; a larger cap trades turns against 413s.
+
+Decision: defaults unchanged. Raising MaxTurns would drop the turn ceiling
+without putting any token or cost bound in its place (the loop's other bounds
+— the rate-limit budget and the context window with compaction — bound
+waiting and context, not spend). Raising the read cap would trade a bounded,
+visible failure — the model is handed next_offset and the loop returns
+ErrMaxTurns — for an unbounded, provider-specific one. Both escape hatches
+stay documented and tested: NABD_MAX_READ and --max-turns.
+
+The read cap also must not become provider-keyed: Router.Name() is a
+composite display string, so any policy parsed from it would mis-key for the
+multi-provider case. TestReadCapIgnoresProviderSelection pins that the cap
+depends only on the read and token settings.

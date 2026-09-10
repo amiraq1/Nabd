@@ -177,6 +177,14 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 	l.rateLimitAttempts = 0
 	l.mu.Unlock()
 
+	// The default turn ceiling. It is deliberately modest, because this loop
+	// bounds waiting (the rate-limit budget) and context (the window plus
+	// compaction) but nothing bounds total spend: the ceiling is the only
+	// thing between a looping model and an unbounded bill. NBD-400 measured
+	// that 12 turns at the default read cap cannot finish a mid-sized file by
+	// sequential reads (docs/TECH_DEBT.md, READ_CAP_TURN_COST) — a known,
+	// visible limit, which is preferable to raising the ceiling with no spend
+	// bound in its place. --max-turns overrides.
 	maxTurns := l.MaxTurns
 	if maxTurns <= 0 {
 		maxTurns = 12
