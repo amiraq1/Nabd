@@ -68,9 +68,23 @@ const (
 
 var maxReadBytes = envMaxRead()
 
-// maxReadExplicit records whether NABD_MAX_READ was set, so that
-// SetReadCap knows an operator's explicit choice outranks the provider.
-var maxReadExplicit = config.Get("NABD_MAX_READ") != ""
+// maxReadExplicit records whether NABD_MAX_READ supplied a USABLE value, so
+// that SetReadCap knows an operator's explicit choice outranks the provider.
+//
+// It is computed from the parsed value, not from the string being non-empty:
+// an override outside [minMaxRead, maxMaxRead] is ignored by envMaxRead (the
+// fallback is used), and treating it as explicit anyway would leave the user
+// with the conservative 3072 while silently suppressing the provider's own
+// declaration. "Set to something unusable" is not the same as "set".
+var maxReadExplicit = isUsableReadCap(config.Get("NABD_MAX_READ"))
+
+func isUsableReadCap(v string) bool {
+	if v == "" {
+		return false
+	}
+	n, err := strconv.Atoi(v)
+	return err == nil && n >= minMaxRead && n <= maxMaxRead
+}
 
 func envMaxRead() int {
 	if v := config.Get("NABD_MAX_READ"); v != "" {

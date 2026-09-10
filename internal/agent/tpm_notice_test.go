@@ -115,8 +115,13 @@ func (c capTools) ReadCapBytes() int { return c.cap }
 // and checks the Notice names the read cap in force as well as the provider's
 // limit. A bare "per-minute limit" tells a reader a ceiling was hit but not
 // which knob produced the request that hit it.
+//
+// The provider body below is the CAPTURED one, from
+// ~/.ag/sessions/20260901-133251.jsonl line 8 (the same session NOTES.md cites
+// for Requested 8968). Only the organization id and the upgrade link are
+// dropped — they are account noise, not part of the shape being tested.
 func TestTPMNoticeNamesTheReadCap_NBD404(t *testing.T) {
-	groqBody := "Request too large for model `m` on tokens per minute (TPM): Limit 8000, Requested 8968, please reduce your message size and try again."
+	groqBody := "Request too large for model `qwen/qwen3.8-27b` on tokens per minute (TPM): Limit 8000, Requested 8968, please reduce your message size and try again."
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

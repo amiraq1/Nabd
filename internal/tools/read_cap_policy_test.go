@@ -64,6 +64,48 @@ func TestSetReadCapRejectsUnusableValues(t *testing.T) {
 	}
 }
 
+// TestUnusableOverrideDoesNotSuppressTheProvider answers a question the
+// precedence raises: an override outside the accepted range is IGNORED, which
+// must mean "not set" and not "set to something we refused".
+//
+// Before this was fixed, NABD_MAX_READ=999999 left the user on the
+// conservative fallback while still counting as an explicit choice — so the
+// provider's own declaration was suppressed too, and an Anthropic session
+// silently ran at Groq's cap. The range guards the user's value; it must not
+// also disable the provider policy.
+func TestUnusableOverrideDoesNotSuppressTheProvider(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NABD_CONFIG", filepath.Join(dir, "config"))
+
+	for _, bad := range []string{"0", "-5", "999999999", "not-a-number"} {
+		if isUsableReadCap(bad) {
+			t.Errorf("isUsableReadCap(%q) = true; the value is outside [%d, %d]", bad, minMaxRead, maxMaxRead)
+		}
+
+		// The behaviour that matters: with an unusable override, a declared
+		// provider cap must still be applied.
+		t.Setenv("NABD_MAX_READ", bad)
+		config.ResetForTest()
+		withReadCap(t)
+		maxReadBytes, maxReadExplicit = envMaxRead(), isUsableReadCap(config.Get("NABD_MAX_READ"))
+		SetReadCap(16384)
+		if got := maxReadBytes; got != 16384 {
+			t.Fatalf("NABD_MAX_READ=%q: cap is %d, want the declared provider value 16384 — "+
+				"an unusable override must be treated as unset", bad, got)
+		}
+	}
+
+	// A usable override still wins, which is the whole point of the precedence.
+	t.Setenv("NABD_MAX_READ", "4096")
+	config.ResetForTest()
+	withReadCap(t)
+	maxReadBytes, maxReadExplicit = envMaxRead(), isUsableReadCap(config.Get("NABD_MAX_READ"))
+	SetReadCap(16384)
+	if got := maxReadBytes; got != 4096 {
+		t.Fatalf("a usable override was overridden by the provider: cap %d, want 4096", got)
+	}
+}
+
 // TestEnvMaxReadStillWinsAtStartup checks the resolution order end to end: with
 // NABD_MAX_READ set, the startup value is the override and not the fallback.
 func TestEnvMaxReadStillWinsAtStartup(t *testing.T) {
