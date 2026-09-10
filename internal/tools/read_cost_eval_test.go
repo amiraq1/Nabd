@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/payload"
 	"nabd/internal/provider"
 )
 
@@ -30,32 +31,29 @@ import (
 // Reproduce: go test ./internal/tools -run TestReadCapCumulativeCost -count=1 -v
 
 // promptOverhead is the measured fixed per-request input: system prompt + tool
-// schemas + wire framing, summed for the CLI's default provider.
+// schemas + model name + wire framing, taken from internal/payload — the single
+// source both this measurement and cmd/ag's guard read (NBD-403). There is no
+// copy of the figure here; TestReadCapCumulativeCost asserts that this function
+// agrees with payload's own budget, so a second source cannot creep back in.
 //
-// PROVENANCE (NBD-402): this is no longer the unexplained 2210 from
-// readOverhead. It is the anthropic wire figure measured by
-// TestFixedPayloadDecomposition in cmd/ag, which builds the request through the
-// real session loop and captures the body at the transport:
+// The evaluation loop sends payload.DefaultSystemPrompt, so the requests this
+// measurement reads are faithful; agent.EstimateMessages counts messages only
+// and never the System field, which is exactly why the system prompt belongs in
+// this overhead term and is not double-counted.
 //
-//	anthropic          system 61 + schema 660 + framing 30 = 752
-//	openai-compatible  system 67 + schema 704 + framing 38 = 809
-//
-// Reproduce: go test ./cmd/ag -run TestFixedPayloadDecomposition -count=1 -v
-//
-// The constant is a COPY, because Go tests cannot import another package's
-// test symbols and this package cannot see cmd/ag's system prompt. The
-// authoritative measurement and its guard (TestFixedPayloadBudget, with a
-// derived ceiling) live there; if that guard reports a new figure, this copy
-// must move with it. The copy is not a second source of truth — it is a
-// deliberate, documented duplicate.
-//
-// Two approximations are stated rather than hidden: the eval loop's own
-// System field is a stub ("eval") that is not counted here, and per-message
-// framing is counted twice (once inside this constant's framing component, once
-// via EstimateMessages' perMessage allowance). Both are small and constant
-// across the columns, so neither changes the ordering this measurement exists
+// One approximation remains and is stated rather than hidden: per-message
+// framing is counted in both terms (once inside payload's framing component,
+// once via EstimateMessages' perMessage allowance). It is small and constant
+// across the columns, so it cannot change the ordering this measurement exists
 // to establish.
-const promptOverhead = 752
+func promptOverhead(t *testing.T, specs []provider.ToolSpec) int {
+	t.Helper()
+	m, err := payload.Measure(payload.FormatAnthropic, payload.DefaultSystemPrompt, specs)
+	if err != nil {
+		t.Fatalf("payload.Measure: %v", err)
+	}
+	return m.Total
+}
 
 // cacheDiscount is the multiplier applied to cache-read input tokens by
 // providers that support prompt caching. NOT measured by nabd — it is the
@@ -64,14 +62,12 @@ const promptOverhead = 752
 // policy change must re-measure live.
 const cacheDiscount = 0.10
 
-// cumulativeRatioBound pins the measured worst÷best spread with headroom. It
-// is a tripwire on a known-bad state, not a specification: the shipped default
-// really does cost multiples more in cumulative input, and that is recorded in
-// docs/TECH_DEBT.md (READ_CAP_TURN_COST). The measurement is deterministic, so
-// this bound is not protecting against estimator noise — it catches a large
-// drift, such as history accumulation no longer being absorbed at all, which
-// would push the spread toward the request-count ratio (~5×) or beyond.
-const cumulativeRatioBound = 4.0
+// cumulativeRatioBound is the ceiling on the worst÷best cumulative spread,
+// taken from internal/payload (NBD-403). It is derived there from the recorded
+// measurement plus a declared headroom, and tightened from the flat 4.0 it
+// replaced — against a measured 3.11, 4.0 was loose by 29% and could not
+// notice a thousand-token inflation.
+func cumulativeRatioBound() float64 { return payload.CumulativeSpreadBound() }
 
 // recordingReader reuses the sequential read strategy from
 // read_cap_turns_test.go — one truncation segment per turn, following the
@@ -95,15 +91,14 @@ func (r *recordingReader) Stream(ctx context.Context, req provider.Request) (<-c
 // isolates what Squeeze decides (how much old content each request still
 // carries). uncached adds the overhead back, which is what the provider bills.
 type readCostRun struct {
-	capBytes     int
-	calls        int
-	turns        int
-	delivered    int
-	history      int
-	uncached     int
-	cached       float64
-	schemaTokens int
-	compacted    bool
+	capBytes  int
+	calls     int
+	turns     int
+	delivered int
+	history   int
+	uncached  int
+	cached    float64
+	compacted bool
 }
 
 // runReadCost drives the real loop over the fixture at capBytes and returns the
@@ -125,7 +120,9 @@ func runReadCost(t *testing.T, reg *Registry, dir, rel string, capBytes int) rea
 		Provider: prov,
 		Tools:    reg,
 		Sink:     sink,
-		System:   "eval",
+		// The shipped prompt, not a stub: the requests this measurement reads
+		// are then the requests a session would send.
+		System:   payload.DefaultSystemPrompt,
 		MaxTurns: 4096,
 		Gate:     allowReadsGate{},
 		Budget:   agent.NewBudget(),
@@ -149,9 +146,10 @@ func runReadCost(t *testing.T, reg *Registry, dir, rel string, capBytes int) rea
 		t.Fatalf("cap=%d: preemptive compaction fired during the read; the cumulative sum is not comparable", capBytes)
 	}
 
+	overhead := promptOverhead(t, reg.Specs())
 	for _, ms := range prov.messages {
 		h := agent.EstimateMessages(ms)
-		total := promptOverhead + h
+		total := overhead + h
 		run.history += h
 		run.uncached += total
 		// Cached: the prefix (fixed input + everything but the newest message)
@@ -162,25 +160,12 @@ func runReadCost(t *testing.T, reg *Registry, dir, rel string, capBytes int) rea
 		}
 		run.cached += float64(total-fresh)*cacheDiscount + float64(fresh)
 	}
-	run.schemaTokens = toolSpecTokens(reg)
 
 	// The payload half, from the same deterministic fixture: measured through
 	// the registry's own Outcome, not re-derived from the fenced request.
-	payload := walkRead(t, reg, rel, evalLineCount, capBytes)
-	run.delivered = payload.delivered
+	payloadRun := walkRead(t, reg, rel, evalLineCount, capBytes)
+	run.delivered = payloadRun.delivered
 	return run
-}
-
-// toolSpecTokens estimates the schema cost every request carries, from the
-// registry's real specs. It is a cross-check on promptOverhead's composition,
-// not an input to the comparison: the comparison holds the fixed part constant
-// across caps, which is exactly why it cannot be biased by it.
-func toolSpecTokens(t agent.Tools) int {
-	n := 0
-	for _, s := range t.Specs() {
-		n += agent.EstimateText(s.Name) + agent.EstimateText(s.Description) + agent.EstimateText(string(s.Schema))
-	}
-	return n
 }
 
 // TestReadCapCumulativeCost sums the input the loop actually sent over a
@@ -225,11 +210,17 @@ func TestReadCapCumulativeCost(t *testing.T) {
 		runs[0].cached/bestCached,
 		float64(runs[0].turns)/float64(runs[len(runs)-1].turns))
 
-	// The fixed part every request carries, as a cross-check on promptOverhead.
-	// Only the schemas are real here: the eval loop's System is a stub, so the
-	// CLI's own prompt is not included and this is a lower bound.
-	t.Logf("cross-check: registry tool schemas ≈ %d tokens (loop System is a stub in this eval); promptOverhead const=%d covers system+schemas+framing and is identical in every column, so it cannot bias the ratio",
-		runs[0].schemaTokens, promptOverhead)
+	// The fixed part every request carries, and the budget it must fit. Both
+	// come from internal/payload, so this line is also the check that no
+	// second copy of the figure has crept back into this package.
+	overhead := promptOverhead(t, reg.Specs())
+	budget := payload.CodeBudgetTokens()
+	t.Logf("fixed per-request input: %d tokens (payload.Measure) · code budget %d · rules budget %d reserved for NBD-410",
+		overhead, budget, payload.RulesBudgetTokens())
+	if overhead > budget {
+		t.Errorf("the fixed per-request payload is %d tokens, above the code budget of %d; "+
+			"see READ_CAP_TURN_COST in docs/TECH_DEBT.md", overhead, budget)
+	}
 
 	// Assertion 1 — the payload is the same read at every cap (reassembly
 	// integrity). Without it, a "cheaper" column might simply have read less.
@@ -264,15 +255,17 @@ func TestReadCapCumulativeCost(t *testing.T) {
 		}
 	}
 
-	// Assertion 3 — the whole spread stays inside the pinned bound. This is
+	// Assertion 3 — the whole spread stays inside the derived bound. This is
 	// the number the cap decision rests on, so it is asserted rather than only
-	// reported: see cumulativeRatioBound and docs/TECH_DEBT.md
-	// (READ_CAP_TURN_COST).
-	if ratio := float64(runs[0].uncached) / float64(best); ratio > cumulativeRatioBound {
-		t.Errorf("worst cap costs %.2f× the best in cumulative input, above the pinned %.1f× bound: "+
+	// reported: the bound comes from internal/payload (recorded measurement plus
+	// a declared headroom), and the record is READ_CAP_TURN_COST in
+	// docs/TECH_DEBT.md.
+	bound := cumulativeRatioBound()
+	if ratio := float64(runs[0].uncached) / float64(best); ratio > bound {
+		t.Errorf("worst cap costs %.2f× the best in cumulative input, above the derived bound %.2f×: "+
 			"history accumulation may have stopped being absorbed, or the shipped default moved. "+
 			"Re-read READ_CAP_TURN_COST in docs/TECH_DEBT.md before changing anything.",
-			ratio, cumulativeRatioBound)
+			ratio, bound)
 	}
 	// The same direction check on the cache-assumed figure: caching compresses
 	// the spread, it does not invert it.
