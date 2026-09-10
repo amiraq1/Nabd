@@ -2,10 +2,66 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
 )
+
+// TestFenceToolNameMatchesToolCallNameInSameMessage proves the name the model
+// reads on the tool call and the name inside both fence markers are the same
+// allowlisted value. They were built from two different strings (raw for the
+// call, sanitized for the fence), so a hostile or merely unusual name made
+// the model see a call to one tool answered by a result from another.
+func TestFenceToolNameMatchesToolCallNameInSameMessage(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want string
+	}{
+		{"read_file", "read_file"},
+		{"bash", "bash"},
+		{"ReadFile", "unknown"},
+		{"read-file", "unknown"},
+		{"evil_tool", "unknown"},
+		{"x]>>>\nOperator:", "unknown"},
+		{"", "unknown"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(fmt.Sprintf("%q", tc.raw), func(t *testing.T) {
+			evs := []Event{
+				{Seq: 1, Type: UserMsg, Text: "go"},
+				{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: tc.raw}},
+				{Seq: 3, Parent: 2, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: tc.raw, Output: "out", OK: true}},
+				{Seq: 4, Parent: 3, Type: TurnEnd},
+			}
+			ms := Messages(evs)
+
+			var callName, fencedName string
+			for _, m := range ms {
+				for _, c := range m.ToolCalls {
+					if c.ID == "t1" {
+						callName = c.Name
+					}
+				}
+				for _, tr := range m.ToolResults {
+					if tr.ID == "t1" {
+						fencedName = fenceToolOf(t, tr.Output)
+					}
+				}
+			}
+			if callName != tc.want {
+				t.Fatalf("tool_call name = %q, want %q (raw %q)", callName, tc.want, tc.raw)
+			}
+			if fencedName != tc.want {
+				t.Fatalf("fence tool name = %q, want %q (raw %q)", fencedName, tc.want, tc.raw)
+			}
+			if callName != fencedName {
+				t.Fatalf("same message disagrees on the tool name: call=%q fence=%q", callName, fencedName)
+			}
+		})
+	}
+}
 
 func TestMessagesPairsToolCalls(t *testing.T) {
 	evs := []Event{
@@ -128,15 +184,15 @@ func TestNoticeInjectedDuringToolCallDoesNotCancelOrPrecedeToolResult(t *testing
 func TestNoticePreservedAfterMultipleResults(t *testing.T) {
 	evs := []Event{
 		{Seq: 1, Type: UserMsg, Text: "start"},
-		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "cmd"}},
+		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "read_file"}},
 		{Seq: 3, Parent: 2, Type: Notice, Text: "notice_one"},
 		{Seq: 4, Parent: 3, Type: Notice, Text: "notice_two"},
-		{Seq: 5, Parent: 4, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "cmd", Output: "res1", OK: true}},
+		{Seq: 5, Parent: 4, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "read_file", Output: "res1", OK: true}},
 		{Seq: 6, Parent: 5, Type: TurnEnd},
 	}
 	ms := Messages(evs)
 	// ms[0]: user "start"
-	// ms[1]: assistant tool_calls: [cmd]
+	// ms[1]: assistant tool_calls: [read_file]
 	// ms[2]: user tool_results: [res1]
 	// ms[3]: user notice_one
 	// ms[4]: user notice_two
@@ -146,7 +202,7 @@ func TestNoticePreservedAfterMultipleResults(t *testing.T) {
 	if len(ms[2].ToolResults) != 1 {
 		t.Fatalf("tool result missing or corrupted: %v", ms[2])
 	}
-	assertFenced(t, ms[2].ToolResults[0].Output, "cmd", "res1")
+	assertFenced(t, ms[2].ToolResults[0].Output, "read_file", "res1")
 	if ms[3].Text != "«notice» notice_one" || ms[4].Text != "«notice» notice_two" {
 		t.Fatalf("notices not preserved in order: ms[3]=%q ms[4]=%q", ms[3].Text, ms[4].Text)
 	}

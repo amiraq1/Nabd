@@ -141,13 +141,14 @@ func Messages(evs []Event) []provider.Message {
 			if len(toolResults) > 0 {
 				flush()
 			}
+			name := fenceToolName(ev.Call.Name)
 			appendUniqueCall(provider.ToolCall{
-				ID: ev.Call.ID, Name: ev.Call.Name, Input: ev.Call.Args,
+				ID: ev.Call.ID, Name: name, Input: ev.Call.Args,
 			})
 			if _, ok := open[ev.Call.ID]; !ok {
 				openOrder = append(openOrder, ev.Call.ID)
 			}
-			open[ev.Call.ID] = ev.Call.Name
+			open[ev.Call.ID] = name
 
 		case ToolEnd:
 			if ev.Call == nil {
@@ -159,12 +160,12 @@ func Messages(evs []Event) []provider.Message {
 			// one is recorded, else the generic marker. The output is never
 			// dropped: hiding the error text would conceal from the model
 			// that the tool is unknown, and it would keep re-invoking it.
-			name := ev.Call.Name
-			if name == "" {
+			// The open map already holds allowlisted names, so the fallback
+			// cannot reintroduce a raw one.
+			name := fenceToolName(ev.Call.Name)
+			if ev.Call.Name == "" {
 				if n, ok := open[ev.Call.ID]; ok {
 					name = n
-				} else {
-					name = "unknown"
 				}
 			}
 			if _, ok := open[ev.Call.ID]; !ok && ev.Call.ID != "" {

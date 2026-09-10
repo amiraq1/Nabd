@@ -3,6 +3,7 @@ package tools
 import (
 	"testing"
 
+	"nabd/internal/agent"
 	"nabd/internal/snap"
 )
 
@@ -42,6 +43,42 @@ func TestRegistrySpecsParity(t *testing.T) {
 	for _, tt := range r.list {
 		if s := tt.Spec(); !byName[s.Name] {
 			t.Errorf("tool list declares %q not present in byName", s.Name)
+		}
+	}
+}
+
+// TestFenceToolNameAllowlistMatchesRegistry pins the fence's tool-name
+// allowlist to the registry. The fence lives in internal/agent, which cannot
+// import this package (tools imports agent), so the allowlist is declared
+// there and verified here, in both directions: every registered tool must be
+// fenceable by its real name, and the fence must not accept a name the
+// registry does not register. Without this, adding a tool would silently
+// fence it as "unknown" at the provider boundary, and a stale allowlist entry
+// would advertise a tool the model cannot call.
+func TestFenceToolNameAllowlistMatchesRegistry(t *testing.T) {
+	r := NewRegistry(nil, nil)
+
+	registered := make(map[string]bool, len(r.byName))
+	for name := range r.byName {
+		registered[name] = true
+	}
+	if len(registered) == 0 {
+		t.Fatal("registry registered no tools; the comparison would be vacuous")
+	}
+
+	fenced := make(map[string]bool)
+	for _, name := range agent.FenceToolNames() {
+		fenced[name] = true
+	}
+
+	for name := range registered {
+		if !fenced[name] {
+			t.Errorf("tool %q is registered but missing from the fence allowlist; the model would read it as \"unknown\"", name)
+		}
+	}
+	for name := range fenced {
+		if !registered[name] {
+			t.Errorf("fence allowlist accepts %q, which the registry does not register", name)
 		}
 	}
 }
