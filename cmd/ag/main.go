@@ -19,6 +19,7 @@ import (
 	"nabd/internal/agent"
 	"nabd/internal/build"
 	"nabd/internal/config"
+	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
@@ -43,9 +44,6 @@ const (
 	uiEventBuffer = 1024
 )
 
-const system = `You are nabd, a coding agent working inside a phone terminal 50 columns wide.
-Reply in Arabic. Be extremely brief: never repeat the question, never apologise, and never list anything without cause. Two lines suffice when two suffice.`
-
 // newSessionLoop builds the Loop the three entry points share: the same
 // model-facing system prompt, the same permission gate, the same context
 // budget. Callers set only what differs — the provider, the sinks, and any
@@ -53,12 +51,14 @@ Reply in Arabic. Be extremely brief: never repeat the question, never apologise,
 //
 // This exists because the prompt is a security-relevant contract, not a
 // string: three literals that happen to agree today are three places to
-// diverge tomorrow. TestSessionLoopPromptHasNoDivergentPaths pins it.
+// diverge tomorrow. TestSessionLoopPromptHasNoDivergentPaths pins it, and the
+// prompt itself lives in internal/payload because its size is a budgeted cost
+// term (see NBD-403).
 func newSessionLoop(prov provider.Provider, reg *tools.Registry, g agent.Gate, human agent.Asker) *agent.Loop {
 	return &agent.Loop{
 		Provider: prov,
 		Tools:    reg,
-		System:   system,
+		System:   payload.DefaultSystemPrompt,
 		Gate:     g,
 		Budget:   agent.NewBudget(),
 		Human:    human,

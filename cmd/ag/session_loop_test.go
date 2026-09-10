@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"nabd/internal/payload"
 	"nabd/internal/perm"
 )
 
@@ -28,8 +29,8 @@ import (
 func TestSessionLoopPromptHasNoDivergentPaths(t *testing.T) {
 	// (2) The constructor produces the shared prompt.
 	loop := newSessionLoop(nil, nil, nil, nil)
-	if loop.System != system {
-		t.Fatalf("newSessionLoop System = %q, want the shared system constant", loop.System)
+	if loop.System != payload.DefaultSystemPrompt {
+		t.Fatalf("newSessionLoop System = %q, want payload.DefaultSystemPrompt", loop.System)
 	}
 	for _, want := range []string{"Reply in Arabic", "50 columns", "never apologise"} {
 		if !strings.Contains(loop.System, want) {
