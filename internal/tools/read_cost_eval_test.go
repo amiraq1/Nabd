@@ -29,16 +29,33 @@ import (
 //
 // Reproduce: go test ./internal/tools -run TestReadCapCumulativeCost -count=1 -v
 
-// promptOverhead is the measured per-request fixed input: system prompt + tool
-// schemas + message framing. Provenance: the same two 413 sessions cited in
-// read.go's budget derivation (203320, 203954). It is a constant on purpose —
-// it does not vary with the cap, so it cannot bias the comparison between
-// caps, but omitting it would understate runs with many short turns.
+// promptOverhead is the measured fixed per-request input: system prompt + tool
+// schemas + wire framing, summed for the CLI's default provider.
 //
-// It is deliberately NOT read from the request the loop sends: that would mix
-// a second measurement into this one. TestReadCapCumulativeCost logs the real
-// request's fixed part once, as a cross-check on this constant.
-const promptOverhead = 2210
+// PROVENANCE (NBD-402): this is no longer the unexplained 2210 from
+// readOverhead. It is the anthropic wire figure measured by
+// TestFixedPayloadDecomposition in cmd/ag, which builds the request through the
+// real session loop and captures the body at the transport:
+//
+//	anthropic          system 61 + schema 660 + framing 30 = 752
+//	openai-compatible  system 67 + schema 704 + framing 38 = 809
+//
+// Reproduce: go test ./cmd/ag -run TestFixedPayloadDecomposition -count=1 -v
+//
+// The constant is a COPY, because Go tests cannot import another package's
+// test symbols and this package cannot see cmd/ag's system prompt. The
+// authoritative measurement and its guard (TestFixedPayloadBudget, with a
+// derived ceiling) live there; if that guard reports a new figure, this copy
+// must move with it. The copy is not a second source of truth — it is a
+// deliberate, documented duplicate.
+//
+// Two approximations are stated rather than hidden: the eval loop's own
+// System field is a stub ("eval") that is not counted here, and per-message
+// framing is counted twice (once inside this constant's framing component, once
+// via EstimateMessages' perMessage allowance). Both are small and constant
+// across the columns, so neither changes the ordering this measurement exists
+// to establish.
+const promptOverhead = 752
 
 // cacheDiscount is the multiplier applied to cache-read input tokens by
 // providers that support prompt caching. NOT measured by nabd — it is the
