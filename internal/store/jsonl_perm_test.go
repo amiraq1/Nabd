@@ -116,6 +116,65 @@ func TestNewJSONL_AppendAndReadAfterHarden(t *testing.T) {
 	}
 }
 
+// TestNewJSONL_MissingParentDirIsPrivate verifies that a directory nabd
+// itself creates for a journal is created with mode 0o700, and that the
+// result does not depend on the process umask.
+//
+// A permissive umask (0022, the usual CI default) must not turn the created
+// directory into 0o755: the journal file is 0o600, so the file contents stay
+// protected either way, but a world-listable directory exposes how many
+// sessions exist and what they are named. Run this under `umask 022` to see
+// the deviation; the developer shell's umask 0077 hides it.
+func TestNewJSONL_MissingParentDirIsPrivate(t *testing.T) {
+	base := t.TempDir()
+	dir := filepath.Join(base, "created-by-nabd")
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("precondition: %q must not exist (Stat err = %v)", dir, err)
+	}
+
+	path := filepath.Join(dir, "session.jsonl")
+	j, err := NewJSONL(path)
+	if err != nil {
+		t.Fatalf("NewJSONL: %v", err)
+	}
+	defer j.Close()
+
+	if got := permBits(t, dir); got != 0o700 {
+		t.Errorf("directory created by NewJSONL = 0o%o, want 0o700", got)
+	}
+	if got := permBits(t, path); got != 0o600 {
+		t.Errorf("journal mode = 0o%o, want 0o600", got)
+	}
+}
+
+// TestNewJSONL_ExistingParentDirIsNotTouched verifies the other half of the
+// --dir contract: a directory that already exists keeps whatever mode the
+// caller gave it, even a wide one. nabd never widens and never tightens a
+// directory it did not create.
+func TestNewJSONL_ExistingParentDirIsNotTouched(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	if permBits(t, dir) != 0o755 {
+		t.Skip("filesystem does not honour 0o755 mode; skipping existing-dir test")
+	}
+
+	path := filepath.Join(dir, "session.jsonl")
+	j, err := NewJSONL(path)
+	if err != nil {
+		t.Fatalf("NewJSONL: %v", err)
+	}
+	defer j.Close()
+
+	if got := permBits(t, path); got != 0o600 {
+		t.Errorf("journal mode = 0o%o, want 0o600", got)
+	}
+	if got := permBits(t, dir); got != 0o755 {
+		t.Errorf("existing --dir mode changed to 0o%o, want 0o755 (untouched)", got)
+	}
+}
+
 // TestNewJSONL_CustomDirPermUnchanged verifies that when the caller passes a
 // custom directory path, NewJSONL does NOT widen or narrow the directory
 // permissions.  The file itself must still be private.

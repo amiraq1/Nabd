@@ -30,12 +30,15 @@ type JSONL struct {
 //   - Existing files that are wider than 0o600 are hardened via Fchmod before
 //     any data is written. If Fchmod fails the file is closed and an error is
 //     returned; we never continue with an exposed journal.
-//   - The perm argument to MkdirAll controls only the parent directory created
-//     here. Callers that own the session directory (i.e. the nabd default
-//     ~/.ag/sessions path) are responsible for ensuring the directory itself is
-//     0o700; see ensureDefaultSessionDir in cmd/ag.
+//   - A parent directory nabd has to create is created with mode 0o700, so a
+//     permissive umask cannot leave the journal directory world-listable. A
+//     parent that already exists is left exactly as the caller set it: nabd
+//     never widens and never tightens a directory it did not create. Callers
+//     that own the session directory (the nabd default ~/.ag/sessions path)
+//     additionally pin it to 0o700 themselves; see ensureDefaultSessionDir
+//     and defaultSessionDir in cmd/ag.
 func NewJSONL(path string) (*JSONL, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := ensurePrivateParent(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -50,6 +53,26 @@ func NewJSONL(path string) (*JSONL, error) {
 		return nil, fmt.Errorf("store: harden journal permissions: %w", err)
 	}
 	return &JSONL{path: path, f: f, w: bufio.NewWriter(f)}, nil
+}
+
+// ensurePrivateParent creates dir with mode 0o700 if it does not exist, and
+// leaves an existing directory untouched — not even to narrow it, because a
+// caller-supplied --dir belongs to the caller.
+//
+// MkdirAll's mode argument is masked by the umask, so the directory this
+// function creates is chmod'd to 0o700 explicitly. Directories above it that
+// MkdirAll also creates get 0o700 &^ umask, which is never wider than 0o700.
+func ensurePrivateParent(dir string) error {
+	switch _, err := os.Stat(dir); {
+	case err == nil:
+		return nil
+	case !os.IsNotExist(err):
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	return os.Chmod(dir, 0o700)
 }
 
 func (j *JSONL) Path() string { return j.path }
