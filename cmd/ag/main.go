@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -36,6 +37,10 @@ const (
 	// maxEventBatchSize forces a flush when this many events accumulate
 	// within one interval.
 	maxEventBatchSize = 128
+	// uiEventBuffer is the buffer of the live UI event channel. A burst of
+	// tool output must fit without dropping, and when it does not the sink
+	// drops the event instead of stalling the agent loop (see chanSink).
+	uiEventBuffer = 1024
 )
 
 const system = `You are nabd, a coding agent working inside a phone terminal 50 columns wide.
@@ -159,8 +164,7 @@ func doChat(dir string, cont bool) error {
 	pol := perm.New(reg)
 	ap := ui.NewApprover()
 
-	ch := make(chan agent.Event, 128)
-	uiSink := &chanSink{ch: ch}
+	uiSink := newUISink()
 	loop := &agent.Loop{
 		Provider: prov,
 		Tools:    reg,
@@ -185,7 +189,7 @@ func doChat(dir string, cont bool) error {
 		loop.Note(s)
 	}
 
-	chat := ui.NewChat(loop, ch)
+	chat := ui.NewChat(loop, uiSink.ch)
 	chat.Approve = ap
 
 	chat.OnRewind = func(n int) string {
@@ -238,14 +242,12 @@ func doChat(dir string, cont bool) error {
 	// Shutdown order: surface any UI drops as a journal Notice, then mark the
 	// session ended in the journal (durability), then close the journal.
 	// Either step can fail independently; surface both without masking the
-	// original. The "session:" line is only printed when the durable close
-	// succeeds.
+	// original. The "session:" line is printed by reportSession regardless of
+	// whether the durable close succeeded.
 	uiSink.noteDrops(loop)
 	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
 	closeErr := journal.Close()
-	if closeErr == nil {
-		fmt.Println("session:", journalPath)
-	}
+	reportSession(os.Stdout, os.Stderr, journalPath, closeErr)
 	return errors.Join(endErr, closeErr)
 }
 
@@ -395,9 +397,7 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 
 	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
 	closeErr := journal.Close()
-	if closeErr == nil {
-		fmt.Println("session:", journalPath)
-	}
+	reportSession(os.Stdout, os.Stderr, journalPath, closeErr)
 	return errors.Join(endErr, closeErr)
 }
 
@@ -459,6 +459,23 @@ type chanSink struct {
 	dropped atomic.Int64
 }
 
+// newUISink builds the interactive UI sink. Its buffer is the contract value
+// (uiEventBuffer); when it overflows, Emit drops instead of blocking.
+func newUISink() *chanSink {
+	return &chanSink{ch: make(chan agent.Event, uiEventBuffer)}
+}
+
+// reportSession prints the authoritative session path and routes a close
+// failure to the error stream beside it. The path is printed unconditionally,
+// so a failed close never hides where the full transcript was written, and
+// the close error never replaces the path.
+func reportSession(out, errOut io.Writer, path string, closeErr error) {
+	fmt.Fprintln(out, "session:", path)
+	if closeErr != nil {
+		fmt.Fprintln(errOut, "nabd: session close:", closeErr)
+	}
+}
+
 func (s *chanSink) Emit(e agent.Event) error {
 	select {
 	case s.ch <- e:
@@ -477,7 +494,7 @@ func (s *chanSink) Dropped() int64 { return s.dropped.Load() }
 // back into the loop from a sink would deadlock (see NOTES.md P0-1.5).
 func (s *chanSink) noteDrops(loop *agent.Loop) {
 	if n := s.Dropped(); n > 0 {
-		loop.Note(fmt.Sprintf("ui dropped %d event(s) · journal has the full record", n))
+		loop.Note(fmt.Sprintf("ui/display dropped %d event(s) · full session transcript is in the journal", n))
 	}
 }
 

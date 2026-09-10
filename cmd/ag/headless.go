@@ -287,9 +287,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 	// without masking the original run error.
 	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
 	closeErr := journal.Close()
-	if closeErr == nil {
-		fmt.Fprintln(cfg.stderr, "session:", journalPath)
-	}
+	reportSession(cfg.stderr, cfg.stderr, journalPath, closeErr)
 
 	if interrupted {
 		return errors.Join(errors.New("interrupted"), endErr, closeErr)

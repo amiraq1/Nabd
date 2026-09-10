@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -76,6 +78,12 @@ func TestChanSinkNotesDroppedCount(t *testing.T) {
 	}
 	if !strings.Contains(rec.evs[0].Text, "2") {
 		t.Fatalf("Notice must name the dropped count, got %q", rec.evs[0].Text)
+	}
+	for _, frag := range []string{"ui/display", "full session transcript"} {
+		if !strings.Contains(rec.evs[0].Text, frag) {
+			t.Fatalf("Notice %q must distinguish UI/display drops from the authoritative transcript (missing %q)",
+				rec.evs[0].Text, frag)
+		}
 	}
 
 	// With nothing dropped, noteDrops stays silent.
@@ -174,4 +182,117 @@ func (f *failCloser) Close() error {
 	defer f.mu.Unlock()
 	f.closed = true
 	return f.err
+}
+
+// TestChanSinkCapacityMatchesContract pins the buffer size of the live UI
+// event channel to the contract value and proves the sink accepts exactly
+// that many events before it starts dropping.
+func TestChanSinkCapacityMatchesContract(t *testing.T) {
+	sink := newUISink()
+	const want = 1024
+	if got := cap(sink.ch); got != want {
+		t.Fatalf("UI event channel capacity = %d, want %d", got, want)
+	}
+	for i := 0; i < want; i++ {
+		if err := sink.Emit(agent.Event{Type: agent.TextDelta, Seq: i + 1}); err != nil {
+			t.Fatalf("Emit(%d) returned error while the channel had room: %v", i, err)
+		}
+	}
+	if got := sink.Dropped(); got != 0 {
+		t.Fatalf("Dropped() = %d, want 0 after exactly %d events", got, want)
+	}
+	if err := sink.Emit(agent.Event{Type: agent.TextDelta, Seq: want + 1}); err != nil {
+		t.Fatalf("Emit past capacity returned error: %v", err)
+	}
+	if got := sink.Dropped(); got != 1 {
+		t.Fatalf("Dropped() = %d, want 1 once the buffer overflowed", got)
+	}
+}
+
+// TestChanSinkNeverBlocksUnderBurst pins the non-blocking contract: with a
+// buffer of one, a burst of ten events accepts the first, drops the other
+// nine, returns nil from every call, and finishes in well under a human
+// timescale. The elapsed-time bound is the assertion that separates "drop"
+// from "wait then give up"; an "eventually" check would hide a blocking sink.
+func TestChanSinkNeverBlocksUnderBurst(t *testing.T) {
+	sink := &chanSink{ch: make(chan agent.Event, 1)}
+
+	start := time.Now()
+	for i := 0; i < 10; i++ {
+		if err := sink.Emit(agent.Event{Type: agent.TextDelta, Seq: i + 1}); err != nil {
+			t.Fatalf("Emit(%d) returned error: %v", i, err)
+		}
+	}
+	elapsed := time.Since(start)
+
+	if got := sink.Dropped(); got != 9 {
+		t.Fatalf("Dropped() = %d, want 9 (first buffered, nine dropped)", got)
+	}
+	if elapsed >= 10*time.Millisecond {
+		t.Fatalf("ten emits took %v; a full channel must drop instantly, not wait", elapsed)
+	}
+	select {
+	case e := <-sink.ch:
+		if e.Seq != 1 {
+			t.Fatalf("buffered event Seq = %d, want 1", e.Seq)
+		}
+	default:
+		t.Fatal("no event was accepted into the buffer")
+	}
+}
+
+// captureStdio runs fn with os.Stdout and os.Stderr redirected to pipes and
+// returns what was written to each.
+func captureStdio(t *testing.T, fn func()) (stdout, stderr string) {
+	t.Helper()
+	origOut, origErr := os.Stdout, os.Stderr
+	rOut, wOut, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	rErr, wErr, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout, os.Stderr = wOut, wErr
+	defer func() { os.Stdout, os.Stderr = origOut, origErr }()
+
+	fn()
+
+	if err := wOut.Close(); err != nil {
+		t.Fatalf("close stdout pipe: %v", err)
+	}
+	if err := wErr.Close(); err != nil {
+		t.Fatalf("close stderr pipe: %v", err)
+	}
+	bOut, _ := io.ReadAll(rOut)
+	bErr, _ := io.ReadAll(rErr)
+	return string(bOut), string(bErr)
+}
+
+// TestReportSessionAlwaysPrintsPath pins the session reporting contract: the
+// path is printed on stdout even when the journal close fails, and the close
+// error goes to stderr without replacing the path.
+func TestReportSessionAlwaysPrintsPath(t *testing.T) {
+	const path = "/home/u/.ag/sessions/20260910-120000.000.jsonl"
+
+	out, errOut := captureStdio(t, func() {
+		reportSession(os.Stdout, os.Stderr, path, nil)
+	})
+	if !strings.Contains(out, "session: "+path) {
+		t.Fatalf("session path missing on stdout: %q", out)
+	}
+	if errOut != "" {
+		t.Fatalf("stderr must stay empty on a clean close, got %q", errOut)
+	}
+
+	out, errOut = captureStdio(t, func() {
+		reportSession(os.Stdout, os.Stderr, path, errors.New("close boom"))
+	})
+	if !strings.Contains(out, "session: "+path) {
+		t.Fatalf("close failure suppressed the session path: stdout=%q", out)
+	}
+	if !strings.Contains(errOut, "close boom") {
+		t.Fatalf("close error not routed to stderr: stderr=%q", errOut)
+	}
 }
