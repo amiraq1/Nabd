@@ -113,6 +113,11 @@ func (l *Loop) pressure(ms []provider.Message) float64 {
 // a bug guard, not a normal ending: a loop that never settles is a loop.
 var ErrMaxTurns = errors.New("turn ceiling reached")
 
+// DefaultMaxTurns is the shipped turn ceiling, named so a test or a document
+// can refer to it instead of repeating the number and drifting from it. The
+// reasoning behind the value is at its use in run().
+const DefaultMaxTurns = 40
+
 // ErrRateLimitBudget means too many 429s arrived in a single Run(). The
 // session is intact; the caller should wait before retrying.
 var ErrRateLimitBudget = errors.New("rate limit budget exhausted")
@@ -177,17 +182,25 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 	l.rateLimitAttempts = 0
 	l.mu.Unlock()
 
-	// The default turn ceiling. It is deliberately modest, because this loop
-	// bounds waiting (the rate-limit budget) and context (the window plus
-	// compaction) but nothing bounds total spend: the ceiling is the only
-	// thing between a looping model and an unbounded bill. NBD-400 measured
-	// that 12 turns at the default read cap cannot finish a mid-sized file by
-	// sequential reads (docs/TECH_DEBT.md, READ_CAP_TURN_COST) — a known,
-	// visible limit, which is preferable to raising the ceiling with no spend
-	// bound in its place. --max-turns overrides.
+	// The default turn ceiling.
+	//
+	// It is 40, and that is a deliberate reversal of the reasoning that set it
+	// to 12 (NBD-400). At 12 a session reading a mid-sized file spends every
+	// turn it has and then returns ErrMaxTurns: the full cost is paid and the
+	// task fails anyway. NBD-400 measured exactly that — at the default read
+	// cap a sequential reader needs 15 turns for an 800-line file, so the
+	// shipped pair could not finish it.
+	//
+	// The counter-argument was, and remains, that this loop bounds waiting (the
+	// rate-limit budget) and context (the window plus compaction) but nothing
+	// bounds spend, so the ceiling was the only spend proxy. Raising it gives
+	// that up knowingly: a looping model may now spend 40 turns. That trade is
+	// recorded in docs/TECH_DEBT.md (READ_CAP_TURN_COST) as a decision, not an
+	// oversight, so the next reader does not mistake it for one. --max-turns
+	// overrides, and a spend bound would be the way to reclaim it.
 	maxTurns := l.MaxTurns
 	if maxTurns <= 0 {
-		maxTurns = 12
+		maxTurns = DefaultMaxTurns
 	}
 
 	// Absolute rate-limit termination bounds, independent of the hits
@@ -285,9 +298,12 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			// A 413 on Groq is a per-minute TPM violation, not a final
 			// failure: waiting a minute resolves it. The human must know,
 			// and the requested count N goes into the journal so every
-			// future failure feeds the budget equations.
+			// future failure feeds the budget equations. The read cap in
+			// force is named too: the cap decided how large this request
+			// was, so anyone who wants to act on the notice needs to know
+			// which ceiling it came from (NBD-404).
 			if notice, ok := tpmLimitNotice(err); ok {
-				_ = l.emit(Event{Type: Notice, Text: notice.Text, Limit: notice.Limit, Requested: notice.Requested})
+				_ = l.emit(Event{Type: Notice, Text: l.tpmNoticeText(notice), Limit: notice.Limit, Requested: notice.Requested})
 			}
 			_ = l.emit(Event{Type: RunError, Err: err.Error()})
 			return err
@@ -646,6 +662,19 @@ type tpmNotice struct {
 	Text      string
 	Limit     int
 	Requested int
+}
+
+// tpmNoticeText composes the 413 Notice line for a TPM hit. It names the read
+// cap in force as well as the provider's limit, because the cap decided how
+// large the rejected request was: a reader who wants to act needs to know which
+// ceiling produced it. The tool layer is asked through an optional interface,
+// so a layer that does not report a cap simply gets the provider's line.
+func (l *Loop) tpmNoticeText(notice tpmNotice) string {
+	text := notice.Text
+	if rc, ok := l.Tools.(interface{ ReadCapBytes() int }); ok {
+		text = fmt.Sprintf("%s · read cap %d bytes", text, rc.ReadCapBytes())
+	}
+	return text
 }
 
 func tpmLimitNotice(err error) (tpmNotice, bool) {
