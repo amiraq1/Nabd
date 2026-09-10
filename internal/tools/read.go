@@ -25,9 +25,8 @@ const (
 	// Read budget derivation (STEP 1/8), written out:
 	//   tpmLimit   = 8000 tokens/min  (Groq key, measured live from 7×413)
 	//   maxTok     = NABD_MAX_TOKENS  (output reservation; default 1024)
-	//   overhead   = 2210 tokens  (MEASURED from two 413 sessions: system
-	//                prompt + tool schemas + message framing; the old 450
-	//                estimate was wrong by 5×)
+	//   overhead   = 2210 tokens  (provenance UNEXPLAINED — see the NBD-402
+	//                status note below)
 	//   bytesPerTok = 2.41  (MEASURED: 4121 read bytes over 1709 tokens
 	//                between sessions 203320 and 203954)
 	//   roundsPerMin = 2  (tool round + answer round per turn; the TPM cap
@@ -38,10 +37,31 @@ const (
 	//   defaultMaxRead = safe_input × bytesPerTok × safety
 	// The shipped default stays 3072 (live-calibrated) until the derived
 	// value passes the disk measurement.
+	//
+	// STATUS OF overhead = 2210 (NBD-402): it was believed to be "system
+	// prompt + tool schemas + message framing" measured from two 413
+	// sessions, but NOTES.md records that the request bytes were never
+	// captured, the journal stores neither the system prompt nor the tool
+	// schemas, and those sessions ran MaxTok=4096 (before df48305). The
+	// derivation therefore cannot be reproduced from any artifact in the
+	// repo, and the figure is unexplained.
+	//
+	// The fixed payload WAS measured, on the wire, in cmd/ag:
+	// TestFixedPayloadDecomposition reports 752 tokens for the anthropic
+	// format and 809 for openai-compatible (system + schemas + framing), with
+	// a derived guard ceiling in TestFixedPayloadBudget. 2210 is ~2.9x that.
+	//
+	// Verdict, so the two numbers are not left side by side without one: 2210
+	// governs nothing shipped — it feeds only defaultMaxReadDerived, which no
+	// production path calls (defaultMaxRead returns the constant 3072) — and
+	// it is retained rather than silently rewritten because rewriting it
+	// would change that derivation's output without a measurement to justify
+	// the new value. The measured 752/809 govern the cumulative measurement
+	// in read_cost_eval_test.go. See READ_CAP_TURN_COST in docs/TECH_DEBT.md.
 	tpmLimit      = 8000
 	maxTokEnv     = "NABD_MAX_TOKENS"
 	defaultMaxTok = 1024
-	readOverhead  = 2210 // tokens; MEASURED from 413 sessions, not estimated
+	readOverhead  = 2210 // tokens; provenance UNEXPLAINED — see the NBD-402 status note above
 	bytesPerTok   = 2.41 // MEASURED from session pair, Arabic-heavy content
 	readRounds    = 2    // requests per turn (tool + answer)
 	readSafety    = 0.5

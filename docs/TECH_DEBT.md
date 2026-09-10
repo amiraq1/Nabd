@@ -431,12 +431,21 @@ ones — not a rebuilt approximation. Same fixture, same caps:
 
 | cap   | calls | delivered | cumulative_in | hist_in | cached_in | ratio  | cache_ratio |
 |-------|-------|-----------|---------------|---------|-----------|--------|-------------|
-| 3072  | 15    | 41582     | 80286         | 47136   | 17995     | 3.47×  | 1.57×       |
-| 8192  | 6     | 40564     | 43368         | 30108   | 13689     | 1.87×  | 1.19×       |
-| 16384 | 4     | 40334     | 31829         | 22989   | 12397     | 1.38×  | 1.08×       |
-| 24576 | 3     | 40219     | 23140         | 16510   | 11460     | 1.00×  | 1.00×       |
+| 3072  | 15    | 41582     | 58416         | 47136   | 15808     | 3.11×  | 1.43×       |
+| 8192  | 6     | 40564     | 34620         | 30108   | 12814     | 1.84×  | 1.16×       |
+| 16384 | 4     | 40334     | 25997         | 22989   | 11814     | 1.39×  | 1.07×       |
+| 24576 | 3     | 40219     | 18766         | 16510   | 11022     | 1.00×  | 1.00×       |
 
 Reproduce: `go test ./internal/tools -run TestReadCapCumulativeCost -count=1 -v`
+
+**Correction (NBD-402).** As first published in NBD-401 the `cumulative_in`
+column read 80286 / 43368 / 31829 / 23140 and the spread was 3.47×, because
+the fixed per-request payload was taken from `readOverhead = 2210` — a figure
+with no reproducible provenance. NBD-402 measured the payload on the wire and
+the constant became 752; every row above is recomputed and the spread moved to
+3.11× (−10.3%). The direction of every conclusion is unchanged, and the
+monotonicity assertion was re-checked against the new column. `hist_in` never
+depended on the constant and is unchanged.
 
 `cumulative_in` = Σ per-turn (promptOverhead + EstimateMessages(request));
 `hist_in` omits the constant overhead to isolate what Squeeze decides;
@@ -446,23 +455,68 @@ newest message. The estimator (chars/4 ASCII) is a heuristic, and Budget.Ratio
 because it cannot change the ordering; these are relative figures, not
 absolute token counts.
 
+### Fixed per-request payload (NBD-402)
+
+`promptOverhead` had no reproducible source. It does now: the request is built
+by the real session loop and captured at the transport, so the bytes are the
+bytes the provider encoder would send. Decomposition in the project's estimator
+units:
+
+| format            | system | schema | framing | total | residue |
+|-------------------|--------|--------|---------|-------|---------|
+| anthropic         | 61     | 660    | 30      | 752   | +1      |
+| openai-compatible | 67     | 704    | 38      | 809   | +0      |
+
+Reproduce: `go test ./cmd/ag -run TestFixedPayloadDecomposition -count=1 -v`
+
+The framing differs between the two formats, which the single constant could
+not represent. `readOverhead = 2210` is ~2.9× the measured value and is now
+marked in code as UNEXPLAINED: NOTES.md records that the 413 request bodies
+were never captured, the journal stores neither the system prompt nor the tool
+schemas, and those sessions ran MaxToks=4096 (before df48305), so the figure
+cannot be reproduced from any artifact in the repo. It is retained without
+rewriting (it feeds only `defaultMaxReadDerived`, which no production path
+calls) and the measured 752/809 now govern the cumulative measurement.
+`TestFixedPayloadBudget` guards the payload ceiling, derived as
+`round_up_100(max(measured) × 1.25) = 1100` with the headroom stated as its own
+constant.
+
 What the numbers say:
 
-- The worst÷best spread is 3.47× uncached. A naive accumulation (no Squeeze)
+- The worst÷best spread is 3.11× uncached. A naive accumulation (no Squeeze)
   would be at least the request-count ratio, 5.00×. Squeeze does absorb part
   of it — the history-only spread is 2.85× — but it cannot touch the fixed
   per-request overhead, which is multiplied by the request count. The dominant
   term is therefore the number of round trips, not the size of the history.
-- Prompt caching compresses the spread to 1.57×. It more than halves the
+- Prompt caching compresses the spread to 1.43×. It more than halves the
   penalty but does not remove it, and it only applies where the provider
   supports it; the OpenAI-compatible path's behaviour is exactly what NBD-430
   must establish before any policy is set on it.
 - So the fixed cap is a real per-session cost on an uncached provider, not
-  merely a turns problem. That is stated here rather than fixed here: NBD-401
-  is a measurement pass with no behaviour change, and the replacement (a cap
-  derived from remaining budget — `Budget.Usable() − pressure`, which the loop
-  already computes but does not consult for reads) needs its own evidence and
-  its own PR.
+  merely a turns problem.
+
+### Constraint this places on NBD-410 (the rules layer)
+
+With the measured figures, the spread is a function of the fixed payload:
+
+    ratio(overhead) = (requests · overhead + hist) / (requests' · overhead + hist')
+                    = (15 · overhead + 47136) / (3 · overhead + 16510)
+
+It is monotone increasing in `overhead` with asymptote 5.00 (= 15/3, the
+request-count ratio), and it crosses 4.0 at `overhead ≈ 6300` tokens — about
+5550 tokens above today's measured 752. Concretely, a rules file re-sent on
+every request costs: +2048 tokens (an 8 KiB ASCII file) moves the spread from
+3.11× to 3.58×.
+
+Two consequences for NBD-410:
+
+- A project-instructions layer needs an explicit token budget, and that budget
+  is a cost decision, not a formatting preference. The previously suggested
+  "8 KiB per file" cap was invented, not derived; the derivation is the formula
+  above.
+- Rules are re-sent every turn, so this is the same mistake as the read cap in
+  the other direction: a per-file limit would sit in the term that is
+  multiplied by the request count.
 
 Decision: defaults unchanged. Raising MaxTurns would drop the turn ceiling
 without putting any token or cost bound in its place (the loop's other bounds
