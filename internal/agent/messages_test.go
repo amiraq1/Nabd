@@ -128,15 +128,15 @@ func TestNoticeInjectedDuringToolCallDoesNotCancelOrPrecedeToolResult(t *testing
 func TestNoticePreservedAfterMultipleResults(t *testing.T) {
 	evs := []Event{
 		{Seq: 1, Type: UserMsg, Text: "start"},
-		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "cmd1"}},
+		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "cmd"}},
 		{Seq: 3, Parent: 2, Type: Notice, Text: "notice_one"},
 		{Seq: 4, Parent: 3, Type: Notice, Text: "notice_two"},
-		{Seq: 5, Parent: 4, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "cmd1", Output: "res1", OK: true}},
+		{Seq: 5, Parent: 4, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "cmd", Output: "res1", OK: true}},
 		{Seq: 6, Parent: 5, Type: TurnEnd},
 	}
 	ms := Messages(evs)
 	// ms[0]: user "start"
-	// ms[1]: assistant tool_calls: [cmd1]
+	// ms[1]: assistant tool_calls: [cmd]
 	// ms[2]: user tool_results: [res1]
 	// ms[3]: user notice_one
 	// ms[4]: user notice_two
@@ -146,7 +146,7 @@ func TestNoticePreservedAfterMultipleResults(t *testing.T) {
 	if len(ms[2].ToolResults) != 1 {
 		t.Fatalf("tool result missing or corrupted: %v", ms[2])
 	}
-	assertFenced(t, ms[2].ToolResults[0].Output, "cmd1", "res1")
+	assertFenced(t, ms[2].ToolResults[0].Output, "cmd", "res1")
 	if ms[3].Text != "«notice» notice_one" || ms[4].Text != "«notice» notice_two" {
 		t.Fatalf("notices not preserved in order: ms[3]=%q ms[4]=%q", ms[3].Text, ms[4].Text)
 	}
