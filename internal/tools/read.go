@@ -22,91 +22,21 @@ const (
 	maxOutBytes  = 48 * 1024 // what one tool result may cost in context
 	maxLines     = 1200
 	maxLineRunes = 300 // a minified bundle must not eat the whole budget
-	// Read budget derivation (STEP 1/8), written out:
-	//   tpmLimit   = 8000 tokens/min  (Groq key, measured live from 7×413)
-	//   maxTok     = NABD_MAX_TOKENS  (output reservation; default 1024)
-	//   overhead   = 2210 tokens  (provenance UNEXPLAINED — see the NBD-402
-	//                status note below)
-	//   bytesPerTok = 2.41  (MEASURED: 4121 read bytes over 1709 tokens
-	//                between sessions 203320 and 203954)
-	//   roundsPerMin = 2  (tool round + answer round per turn; the TPM cap
-	//                is per-minute across all requests, so the per-request
-	//                budget divides by the expected request count)
-	//   safety     = 0.5
-	//   safe_input_per_request = (tpmLimit/maxTok − overhead) / roundsPerMin
-	//   defaultMaxRead = safe_input × bytesPerTok × safety
-	// The shipped default stays 3072 (live-calibrated) until the derived
-	// value passes the disk measurement.
-	//
-	// STATUS OF overhead = 2210 (NBD-402): it was believed to be "system
-	// prompt + tool schemas + message framing" measured from two 413
-	// sessions, but NOTES.md records that the request bytes were never
-	// captured, the journal stores neither the system prompt nor the tool
-	// schemas, and those sessions ran MaxTok=4096 (before df48305). The
-	// derivation therefore cannot be reproduced from any artifact in the
-	// repo, and the figure is unexplained.
-	//
-	// The fixed payload WAS measured, on the wire, in cmd/ag:
-	// TestFixedPayloadDecomposition reports 752 tokens for the anthropic
-	// format and 809 for openai-compatible (system + schemas + framing), with
-	// a derived guard ceiling in TestFixedPayloadBudget. 2210 is ~2.9x that.
-	//
-	// Verdict, so the two numbers are not left side by side without one: 2210
-	// governs nothing shipped — it feeds only defaultMaxReadDerived, which no
-	// production path calls (defaultMaxRead returns the constant 3072) — and
-	// it is retained rather than silently rewritten because rewriting it
-	// would change that derivation's output without a measurement to justify
-	// the new value. The measured 752/809 govern the cumulative measurement
-	// in read_cost_eval_test.go. See READ_CAP_TURN_COST in docs/TECH_DEBT.md.
-	tpmLimit      = 8000
-	maxTokEnv     = "NABD_MAX_TOKENS"
-	defaultMaxTok = 1024
-	readOverhead  = 2210 // tokens; provenance UNEXPLAINED — see the NBD-402 status note above
-	bytesPerTok   = 2.41 // MEASURED from session pair, Arabic-heavy content
-	readRounds    = 2    // requests per turn (tool + answer)
-	readSafety    = 0.5
 )
 
-// readMaxTokens mirrors the agent's NABD_MAX_TOKENS resolution so the read
-// cap follows the same output reservation. It reads through config.Get so a
-// value set in ~/.ag/config takes precedence, with the environment as the
-// documented fallback — the same contract every other limit uses.
-func readMaxTokens() int {
-	if v := config.Get(maxTokEnv); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 128 && n <= 8192 {
-			return n
-		}
-	}
-	return defaultMaxTok
-}
-
-// defaultMaxReadDerived derives the read cap from the measured input
-// budget. IMPORTANT: the derived value is NOT the default — the shipped
-// default is 3072 (live-calibrated) until the derived value passes the
-// disk measurement. The derivation is a candidate reachable via
-// NABD_MAX_READ.
-func defaultMaxReadDerived() int {
-	// Per-request input budget: the per-minute TPM cap divided by the
-	// expected request count in a turn, minus the measured overhead and the
-	// output reservation.
-	perReq := tpmLimit/readRounds - readMaxTokens() - readOverhead
-	if perReq < 0 {
-		perReq = 0
-	}
-	n := int(float64(perReq) * bytesPerTok * readSafety)
-	if n < minMaxRead {
-		return minMaxRead
-	}
-	return n
-}
-
-// defaultMaxRead is what NABD_MAX_READ falls back to when unset. Kept at
-// the live-calibrated 3072: the derived value (measured constants) still
-// needs the disk regression gate before it ships as a default, and the
-// NBD-400 measurement showed that raising the cap trades round trips against
-// per-request input, which is the provider-specific bound that produced this
-// number (see docs/TECH_DEBT.md, READ_CAP_TURN_COST; reproduce with
-// TestReadCapEval / TestReadCapPinsMeasuredTurnCost_NBD401).
+// defaultMaxRead is what NABD_MAX_READ falls back to when unset. Kept at the
+// live-calibrated 3072: the NBD-400 measurement showed that raising the cap
+// trades round trips against per-request input, which is the provider-specific
+// bound that produced this number (see docs/TECH_DEBT.md, READ_CAP_TURN_COST;
+// reproduce with TestReadCapEval / TestReadCapPinsMeasuredTurnCost_NBD401).
+//
+// An earlier version also carried a derivation of this cap from a tokens-per-
+// minute ceiling, a measured overhead and a bytes-per-token ratio. It was
+// removed in NBD-403: no production path ever called it (defaultMaxRead
+// returned this constant, and the derivation was reachable only from a test),
+// and its overhead constant had no reproducible provenance. The derivation is
+// recorded in docs/TECH_DEBT.md as history rather than kept here as code that
+// looks load-bearing and is not.
 func defaultMaxRead() int {
 	return 3072
 }
