@@ -21,11 +21,13 @@ type Sink interface {
 
 // Tools is the loop's view of the tool registry: it advertises the specs the
 // provider is allowed to call and executes one call at a time. The concrete
-// implementation is tools.Registry, which today serves read_file, list_dir,
-// glob, grep, write_file, edit_file and bash, and owns the permission class
-// of each. The loop deliberately knows none of that: it only sees names,
-// specs and outcomes, and discovers richer behaviour (RunDetailed,
-// SetReadCredit, LastEdit) through optional interface assertions.
+// implementation is tools.Registry, which today serves read_file, glob, grep,
+// write_file, edit_file and bash, and owns the permission class of each. (A
+// directory listing is served by glob, not by a separate tool; this comment
+// named a "list_dir" that has never been registered.) The loop deliberately
+// knows none of that: it only sees names, specs and outcomes, and discovers
+// richer behaviour (RunDetailed, SetReadCredit, LastEdit) through optional
+// interface assertions.
 type Tools interface {
 	Specs() []provider.ToolSpec
 	Run(ctx context.Context, c provider.ToolCall) (out string, ok bool, err error)
