@@ -410,7 +410,7 @@ does not guess offsets; it is not a claim about model behaviour):
 | 16384 | 3     | 4     | yes              | 16495        | 10178   | 40334     |
 | 24576 | 2     | 3     | yes              | 24651        | 10118   | 40219     |
 
-Reproduce: `go test ./internal/tools -run 'TestReadCapEval|TestReadCapTurnCost' -count=1 -v`
+Reproduce: `go test ./internal/tools -run 'TestReadCapEval|TestReadCapPinsMeasuredTurnCost_NBD401' -count=1 -v`
 
 Two of these invert the intuition:
 
@@ -432,5 +432,5 @@ stay documented and tested: NABD_MAX_READ and --max-turns.
 
 The read cap also must not become provider-keyed: Router.Name() is a
 composite display string, so any policy parsed from it would mis-key for the
-multi-provider case. TestReadCapIgnoresProviderSelection pins that the cap
+multi-provider case. TestReadCapPinsProviderIndependence_NBD401 pins that the cap
 depends only on the read and token settings.

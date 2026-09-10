@@ -25,7 +25,7 @@ import (
 // a model that guessed offsets could fetch more per turn, and a model that
 // stopped early would need fewer turns and know less.
 //
-// Reproduce: go test ./internal/tools -run TestReadCapTurnCost -count=1 -v
+// Reproduce: go test ./internal/tools -run TestReadCapPinsMeasuredTurnCost_NBD401 -count=1 -v
 
 var nextOffsetRE = regexp.MustCompile(`next_offset=(\d+)`)
 
@@ -163,12 +163,17 @@ func (s *recordingSink) Emit(e agent.Event) error {
 	return nil
 }
 
-// TestReadCapTurnCost measures how many turns a strictly sequential reader needs
-// to read the fixture at each cap, and whether that fits the shipped MaxTurns
-// default of 12. The gap it exposes is the reason this stage does not raise the
-// cap on the eval's say-so: a larger cap would mask an unbounded-turn risk
-// rather than remove it.
-func TestReadCapTurnCost(t *testing.T) {
+// TestReadCapPinsMeasuredTurnCost_NBD401 measures how many turns a strictly
+// sequential reader needs to read the fixture at each cap, and pins the
+// combination the project ships.
+//
+// It is named as a pin on a MEASURED state, not a specification. The shipped
+// pair (cap 3072, MaxTurns 12) does not finish this fixture, and that is
+// recorded in docs/TECH_DEBT.md (READ_CAP_TURN_COST) with the reason the
+// defaults were kept anyway. If this test fails because the pair now fits,
+// that means a default moved: update the record and say what moved, instead of
+// adjusting the test.
+func TestReadCapPinsMeasuredTurnCost_NBD401(t *testing.T) {
 	r, dir := newReg(t)
 	rel, fileBytes := evalFixture(t, dir, evalLineCount)
 
@@ -183,7 +188,8 @@ func TestReadCapTurnCost(t *testing.T) {
 		// interfere; then decide whether that cost fits the shipped default.
 		natural := runSequentialRead(t, r, dir, rel, cap, 4096)
 		if !natural.completed {
-			t.Fatalf("cap=%d: natural run did not complete", cap)
+			t.Fatalf("cap=%d: natural run did not complete with a 4096-turn ceiling; "+
+				"the read strategy is looping. See READ_CAP_TURN_COST in docs/TECH_DEBT.md.", cap)
 		}
 		fits := natural.turns <= shippedMaxTurns
 		t.Logf("%8d %7d %9v %v", cap, natural.turns, fits, natural.offsets)
@@ -194,7 +200,7 @@ func TestReadCapTurnCost(t *testing.T) {
 		// Offsets must march forward: the reader only ever continues.
 		for i := 1; i < len(natural.offsets); i++ {
 			if natural.offsets[i] <= natural.offsets[i-1] {
-				t.Errorf("cap=%d: offsets not increasing: %v", cap, natural.offsets)
+				t.Errorf("cap=%d: offsets not increasing: %v — see READ_CAP_TURN_COST in docs/TECH_DEBT.md", cap, natural.offsets)
 				break
 			}
 		}
@@ -210,20 +216,21 @@ func TestReadCapTurnCost(t *testing.T) {
 	shipped := runSequentialRead(t, r, dir, rel, defaultMaxRead(), shippedMaxTurns)
 	if shipped.completed {
 		t.Fatalf("the shipped cap %d now reads the %d-line fixture within MaxTurns=%d (%d turns); "+
-			"this contradicts TECH_DEBT READ_CAP_TURN_COST — update that record and say what moved",
+			"this contradicts READ_CAP_TURN_COST in docs/TECH_DEBT.md — update that record and say what moved",
 			defaultMaxRead(), evalLineCount, shippedMaxTurns, shipped.turns)
 	}
 	if !shipped.hitCeiling {
-		t.Fatalf("shipped run neither completed nor hit the turn ceiling: %+v", shipped)
+		t.Fatalf("shipped run neither completed nor hit the turn ceiling: %+v — see READ_CAP_TURN_COST in docs/TECH_DEBT.md", shipped)
 	}
-	t.Logf("shipped combination: cap=%d hits MaxTurns=%d after %d turns (the recorded limitation)",
+	t.Logf("shipped combination: cap=%d hits MaxTurns=%d after %d turns (the recorded limitation in READ_CAP_TURN_COST)",
 		defaultMaxRead(), shippedMaxTurns, shipped.turns)
 
 	// The contrast that makes the finding actionable: a larger cap fits, so
 	// the documented escape hatch (NABD_MAX_READ) is a real remedy.
 	bigger := runSequentialRead(t, r, dir, rel, 8192, shippedMaxTurns)
 	if !bigger.completed {
-		t.Fatalf("cap 8192 did not fit MaxTurns=%d (%d turns); the escape hatch does not work", shippedMaxTurns, bigger.turns)
+		t.Fatalf("cap 8192 did not fit MaxTurns=%d (%d turns); the escape hatch does not work — "+
+			"see READ_CAP_TURN_COST in docs/TECH_DEBT.md", shippedMaxTurns, bigger.turns)
 	}
 	t.Logf("escape hatch: cap=8192 completes in %d turns within MaxTurns=%d", bigger.turns, shippedMaxTurns)
 }

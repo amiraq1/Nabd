@@ -271,15 +271,21 @@ func TestReadMaxTokensRoutesThroughConfig(t *testing.T) {
 	}
 }
 
-// TestReadCapIgnoresProviderSelection pins the Router-safety property this
-// stage requires. The read cap must not be derived from the provider's name:
-// Router.Name() is a composite display string (built as
+// TestReadCapPinsProviderIndependence_NBD401 pins the Router-safety property
+// this stage requires. The read cap must not be derived from the provider's
+// name: Router.Name() is a composite display string (built as
 // "router/<provider>:<model>→<provider>:<model>", truncated at 200 bytes), so
 // any policy that parsed a provider out of it would mis-key itself for exactly
 // the multi-provider case. The cap is a pure function of NABD_MAX_READ — and,
 // for the derivation, of the output reservation — so changing which provider
 // is selected cannot move it.
-func TestReadCapIgnoresProviderSelection(t *testing.T) {
+//
+// This is a deliberate pin on a state that is not good in itself: the read cap
+// is a fixed number precisely because the cumulative cost it stands for has
+// not been replaced by a budget-aware policy yet (docs/TECH_DEBT.md,
+// READ_CAP_TURN_COST). Keying it to the provider would look like a fix and
+// would be worse, which is why the failure message says so.
+func TestReadCapPinsProviderIndependence_NBD401(t *testing.T) {
 	dir := t.TempDir()
 	cfg := filepath.Join(dir, "config")
 	t.Setenv("NABD_CONFIG", cfg)
@@ -298,7 +304,9 @@ func TestReadCapIgnoresProviderSelection(t *testing.T) {
 		}
 		config.ResetForTest()
 		if got := envMaxRead(); got != 4096 {
-			t.Fatalf("selection %d (%q): envMaxRead()=%d, want 4096 — provider selection leaked into the read cap", i, sel, got)
+			t.Fatalf("selection %d (%q): envMaxRead()=%d, want 4096 — provider selection leaked into the read cap. "+
+				"The cap is deliberately provider-blind; see READ_CAP_TURN_COST in docs/TECH_DEBT.md for why the fixed value exists and what would replace it.",
+				i, sel, got)
 		}
 	}
 
@@ -315,7 +323,9 @@ func TestReadCapIgnoresProviderSelection(t *testing.T) {
 	}
 	config.ResetForTest()
 	if after := defaultMaxReadDerived(); after != before {
-		t.Fatalf("derived read cap moved with provider selection: %d → %d", before, after)
+		t.Fatalf("derived read cap moved with provider selection: %d → %d. "+
+			"The derivation is a function of the token budget, not of who is selected; see READ_CAP_TURN_COST in docs/TECH_DEBT.md.",
+			before, after)
 	}
 }
 
