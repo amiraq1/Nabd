@@ -99,15 +99,6 @@ func lastResultErrored(ms []provider.Message) bool {
 	return false
 }
 
-// repairRun is one fixture's measurement.
-type repairRun struct {
-	rule       string
-	requestsOn int
-	requestsOf int
-	cumulOn    int
-	cumulOf    int
-}
-
 func cumulativeInput(msgs [][]provider.Message) int {
 	overhead := payload.CodeBudgetTokens()
 	total := 0
