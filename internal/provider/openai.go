@@ -28,6 +28,10 @@ type OpenAICompat struct {
 	BaseURL     string
 	Client      *http.Client
 	retryPolicy RetryPolicy // unexported; set by constructor
+	// readCapBytes is the read ceiling this endpoint can accept, fixed by the
+	// constructor. Zero means "not declared"; ReadCapBytes then reports the
+	// package default. See readcap.go.
+	readCapBytes int
 }
 
 // TPMError is Groq's per-minute token ceiling response. It is deliberately
@@ -89,8 +93,9 @@ func NewNVIDIA() (*OpenAICompat, error) {
 	base := config.GetOr("NABD_BASE_URL", nvidiaBase)
 	return &OpenAICompat{
 		Key: k, Model: m, BaseURL: base,
-		Client:      &http.Client{},
-		retryPolicy: RetryStandalone,
+		Client:       &http.Client{},
+		retryPolicy:  RetryStandalone,
+		readCapBytes: DefaultReadCapBytes,
 	}, nil
 }
 
@@ -100,11 +105,12 @@ func NewOpenRouter() (*OpenAICompat, error) {
 		return nil, errors.New("OPENROUTER_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
 	}
 	return &OpenAICompat{
-		Key:         k,
-		Model:       config.GetOr("NABD_MODEL", "anthropic/claude-3.5-haiku"),
-		BaseURL:     config.GetOr("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
-		Client:      &http.Client{},
-		retryPolicy: RetryStandalone,
+		Key:          k,
+		Model:        config.GetOr("NABD_MODEL", "anthropic/claude-3.5-haiku"),
+		BaseURL:      config.GetOr("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
+		Client:       &http.Client{},
+		retryPolicy:  RetryStandalone,
+		readCapBytes: DefaultReadCapBytes,
 	}, nil
 }
 
@@ -114,11 +120,12 @@ func NewGroq() (*OpenAICompat, error) {
 		return nil, errors.New("GROQ_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
 	}
 	return &OpenAICompat{
-		Key:         k,
-		Model:       config.GetOr("NABD_MODEL", "qwen-2.5-32b"),
-		BaseURL:     "https://api.groq.com/openai/v1",
-		Client:      &http.Client{},
-		retryPolicy: RetryStandalone,
+		Key:          k,
+		Model:        config.GetOr("NABD_MODEL", "qwen-2.5-32b"),
+		BaseURL:      "https://api.groq.com/openai/v1",
+		Client:       &http.Client{},
+		retryPolicy:  RetryStandalone,
+		readCapBytes: GroqReadCapBytes,
 	}, nil
 }
 
@@ -149,11 +156,12 @@ func NewOpenAICompatForRoute(providerName, model, key, baseURL string) (*OpenAIC
 		}
 	}
 	return &OpenAICompat{
-		Key:         key,
-		Model:       model,
-		BaseURL:     baseURL,
-		Client:      &http.Client{},
-		retryPolicy: RetrySingleAttempt,
+		Key:          key,
+		Model:        model,
+		BaseURL:      baseURL,
+		Client:       &http.Client{},
+		retryPolicy:  RetrySingleAttempt,
+		readCapBytes: readCapForRouteName(providerName),
 	}, nil
 }
 

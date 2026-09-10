@@ -83,6 +83,15 @@ func (s *singleAttemptAdapter) Name() string {
 	return s.p.Name()
 }
 
+// ReadCapBytes delegates to the wrapped provider, so a route reports its
+// provider's ceiling whether or not the adapter had to be introduced.
+func (s *singleAttemptAdapter) ReadCapBytes() int {
+	if rc, ok := s.p.(ReadCapper); ok {
+		return rc.ReadCapBytes()
+	}
+	return DefaultReadCapBytes
+}
+
 // BuildRoute constructs a Route with its SingleAttempt client for a single RouteEntry.
 func BuildRoute(entry RouteEntry) (Route, error) {
 	prov, err := BuildRouteProvider(entry)

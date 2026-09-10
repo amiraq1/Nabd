@@ -41,21 +41,36 @@ func defaultMaxRead() int {
 	return 3072
 }
 
-// maxReadBytes caps a single read_file call. It is resolved once at startup
-// from NABD_MAX_READ (config file first, environment as the documented
-// fallback), so an operator whose provider meters tokens differently can set
-// it; it is deliberately NOT derived from the selected provider, because
-// Router.Name() is a composite of several providers and any policy parsed out
-// of it would mis-key. Values outside [minMaxRead, maxMaxRead] (or
-// non-numeric) are ignored and the default is used: a zero or absurd value
-// would otherwise produce an empty read that the model answers with false
-// confidence. TestReadCapPinsProviderIndependence_NBD401 pins the independence.
+// maxReadBytes caps a single read_file call.
+//
+// It has three sources, resolved once at startup in this order:
+//
+//  1. NABD_MAX_READ, if set (config file first, environment as the documented
+//     fallback). This is the explicit override and it wins over everything,
+//     which is why a custom base URL pointed at a metered clone has an escape.
+//  2. The provider's own declared ceiling, passed to SetReadCap by cmd/ag from
+//     provider.ReadCapper. A Router reports the strictest of its routes.
+//  3. defaultMaxRead, when neither applies (tests, and a provider that declares
+//     nothing).
+//
+// Values outside [minMaxRead, maxMaxRead] (or non-numeric) are ignored and the
+// next source is used: a zero or absurd value would otherwise produce an empty
+// read that the model answers with false confidence.
+//
+// Note the shape: the cap follows what the provider DECLARES, never what it is
+// called. TestReadCapPinsProviderIndependence_NBD401 pins that a provider
+// *selection string* cannot move it, and TestProviderReadCaps pins the declared
+// values themselves.
 const (
 	minMaxRead = 512
 	maxMaxRead = 1 << 20
 )
 
 var maxReadBytes = envMaxRead()
+
+// maxReadExplicit records whether NABD_MAX_READ was set, so that
+// SetReadCap knows an operator's explicit choice outranks the provider.
+var maxReadExplicit = config.Get("NABD_MAX_READ") != ""
 
 func envMaxRead() int {
 	if v := config.Get("NABD_MAX_READ"); v != "" {
@@ -65,6 +80,27 @@ func envMaxRead() int {
 	}
 	return defaultMaxRead()
 }
+
+// SetReadCap applies the ceiling the selected provider declares. It is called
+// once at startup, before any session runs.
+//
+// It never overrides an explicit NABD_MAX_READ, and it rejects a value outside
+// the same bounds the override is held to, so a provider cannot accidentally
+// widen the cap to something absurd. A non-positive value means "the provider
+// declares nothing" and is ignored rather than treated as zero.
+func SetReadCap(n int) {
+	if maxReadExplicit {
+		return
+	}
+	if n < minMaxRead || n > maxMaxRead {
+		return
+	}
+	maxReadBytes = n
+}
+
+// ReadCapBytes reports the cap in force. The loop asks for it through an
+// optional interface so a 413 Notice can name the ceiling that was hit.
+func (r *Registry) ReadCapBytes() int { return maxReadBytes }
 
 type readFile struct {
 	root *Root
