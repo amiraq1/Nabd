@@ -55,6 +55,15 @@ const (
 // prompt itself lives in internal/payload because its size is a budgeted cost
 // term (see NBD-403).
 func newSessionLoop(prov provider.Provider, reg *tools.Registry, g agent.Gate, human agent.Asker) *agent.Loop {
+	// The read ceiling follows the provider's own declaration (NBD-404). This
+	// constructor is the single point all three entry points pass through, so
+	// the cap cannot differ between Chat, Feed and headless. An explicit
+	// NABD_MAX_READ still wins — SetReadCap decides that, not this call.
+	if prov != nil {
+		if rc, ok := prov.(provider.ReadCapper); ok {
+			tools.SetReadCap(rc.ReadCapBytes())
+		}
+	}
 	return &agent.Loop{
 		Provider: prov,
 		Tools:    reg,
