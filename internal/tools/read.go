@@ -82,17 +82,24 @@ func defaultMaxReadDerived() int {
 
 // defaultMaxRead is what NABD_MAX_READ falls back to when unset. Kept at
 // the live-calibrated 3072: the derived value (measured constants) still
-// needs the disk regression gate before it ships as a default.
+// needs the disk regression gate before it ships as a default, and the
+// NBD-400 measurement showed that raising the cap trades round trips against
+// per-request input, which is the provider-specific bound that produced this
+// number (see docs/TECH_DEBT.md, READ_CAP_TURN_COST; reproduce with
+// TestReadCapEval / TestReadCapTurnCost).
 func defaultMaxRead() int {
 	return 3072
 }
 
-// maxReadBytes caps a single read_file call. Read once at startup from
-// NABD_MAX_READ so the cap follows the provider's token budget instead of
-// being a hardcoded tool constant. Values outside [minMaxRead, maxMaxRead]
-// (or non-numeric) are ignored and the default is used: a zero or absurd
-// value would otherwise produce an empty read that the model answers with
-// false confidence.
+// maxReadBytes caps a single read_file call. It is resolved once at startup
+// from NABD_MAX_READ (config file first, environment as the documented
+// fallback), so an operator whose provider meters tokens differently can set
+// it; it is deliberately NOT derived from the selected provider, because
+// Router.Name() is a composite of several providers and any policy parsed out
+// of it would mis-key. Values outside [minMaxRead, maxMaxRead] (or
+// non-numeric) are ignored and the default is used: a zero or absurd value
+// would otherwise produce an empty read that the model answers with false
+// confidence. TestReadCapIgnoresProviderSelection pins the independence.
 const (
 	minMaxRead = 512
 	maxMaxRead = 1 << 20
