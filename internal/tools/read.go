@@ -86,7 +86,7 @@ func defaultMaxReadDerived() int {
 // NBD-400 measurement showed that raising the cap trades round trips against
 // per-request input, which is the provider-specific bound that produced this
 // number (see docs/TECH_DEBT.md, READ_CAP_TURN_COST; reproduce with
-// TestReadCapEval / TestReadCapTurnCost).
+// TestReadCapEval / TestReadCapPinsMeasuredTurnCost_NBD401).
 func defaultMaxRead() int {
 	return 3072
 }
@@ -99,7 +99,7 @@ func defaultMaxRead() int {
 // of it would mis-key. Values outside [minMaxRead, maxMaxRead] (or
 // non-numeric) are ignored and the default is used: a zero or absurd value
 // would otherwise produce an empty read that the model answers with false
-// confidence. TestReadCapIgnoresProviderSelection pins the independence.
+// confidence. TestReadCapPinsProviderIndependence_NBD401 pins the independence.
 const (
 	minMaxRead = 512
 	maxMaxRead = 1 << 20
