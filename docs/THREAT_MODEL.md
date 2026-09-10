@@ -1,8 +1,8 @@
 # Threat model
 
-Sourced from the code as of commit b82900f (the last code change in the
-NBD-306/204 corrective batch; this document is the only later commit and
-changes no code), not from intention.
+Sourced from the code as of commit d63da42 (the last code change in the
+NBD-306/204 batch; the commits after it are documentation only and change no
+code), not from intention.
 Primary files: `internal/tools/path.go`, `internal/tools/bash.go`,
 `internal/perm/policy.go`, `internal/config/config.go`, `internal/snap/shadow.go`,
 `internal/agent/fence.go`, `cmd/ag/main.go`.
@@ -15,7 +15,7 @@ This is the only place nabd states security claims. README points here.
 |---|---|
 | Provider API keys | `~/.ag/config` (preferred) or process environment (fallback). The binary never writes the file. |
 | Working tree | The directory `Root` was constructed from (`NewRoot("")` uses cwd). |
-| Session journal | `~/.ag/sessions/*.jsonl` by default (`--dir` overrides). Append-only events, including file contents and command output in cleartext. Default file mode 0o600, default dir mode 0o700 (NBD-306); a caller-supplied `--dir` keeps its own mode. The default directory is built by exactly one function (`defaultSessionDir`) and is hardened to 0o700 on a fresh session and on `--continue` alike. |
+| Session journal | `~/.ag/sessions/*.jsonl` by default (`--dir` overrides). Append-only events, including file contents and command output in cleartext. Default file mode 0o600, default dir mode 0o700 (NBD-306). The default directory is built by exactly one function (`defaultSessionDir`) and is hardened to 0o700 on a fresh session and on `--continue` alike. For a caller-supplied `--dir` the mode contract is explicit: a directory that already exists keeps whatever mode the caller set, and a directory nabd has to create is created 0o700 regardless of umask. The file is 0o600 in both cases. |
 | Shadow store | `<root>/.ag/shadow`, content-addressed `s256:` blobs. Independent of git. `.ag` and `.ag/shadow` are tightened to 0o700 and nabd writes `/shadow/` to `.ag/.gitignore`. |
 
 ## Adversaries
@@ -31,11 +31,13 @@ the `bash` prompt.
 ReadOnly tools (`read_file`, `glob`, `grep`) are auto-allowed. Their
 bytes reach the next provider request inside a labeled, nonce-fenced
 envelope: a fresh random nonce in both markers, every marker token in the
-payload defanged, and the model-supplied tool name reduced to `[a-z_]`
-(NBD-204). That is a semantic signal, not a boundary: there is no
-injection detector, and a determined or confused model may still follow
-the content. Residual risk: a README can ask the model to call `bash`;
-the remaining defence is the human reading that one prompt.
+payload defanged, and the tool name echoed only when it is in the tool
+registry's allowlist — anything else is reported as the explicit marker
+`unknown`, never trimmed into a plausible-looking name (NBD-204). That is
+a semantic signal, not a security boundary: there is no injection
+detector, and a determined or confused model may still follow the
+content. Residual risk: a README can ask the model to call `bash`; the
+remaining defence is the human reading that one prompt.
 
 **(c) A hostile dependency invoked through bash.** After the operator
 types `y`, `sh -c` runs with cwd = project root and no `Resolve`.
@@ -77,7 +79,7 @@ broken. **REDUCED** names the residual. **OUT OF SCOPE** names why.
 | `bash` cannot escape the project via `Resolve` | OUT OF SCOPE | `bash.go` never calls `Resolve`. cwd is `root.Dir()`. `cd ..` is a shell builtin |
 | `/undo` covers bash side effects | OUT OF SCOPE | snap never sees the blast radius; stated in `bash.go` package comment |
 | Network, resource exhaustion, or killing unrelated processes from an approved bash | OUT OF SCOPE | no namespace, no cgroup, no Landlock in this version |
-| Prompt injection via ReadOnly tool output | REDUCED | tool output is labeled and fenced at the provider boundary (NBD-204): a per-call random nonce in both markers, every marker token in the payload defanged, and the model-supplied tool name reduced to `[a-z_]`. The fence is a semantic signal, not a security boundary: a determined or confused model may still follow content despite the marker. Residual: user approval remains the barrier for sensitive actions |
+| Prompt injection via ReadOnly tool output | REDUCED | tool output is labeled and fenced at the provider boundary (NBD-204): a per-call random nonce in both markers, every marker token in the payload defanged, and the tool name echoed only from the registry allowlist (`unknown` otherwise), the same value used for the tool call and both markers. **The fence is a semantic signal, not a security boundary**: a determined or confused model may still follow content despite the marker, so user approval remains the barrier for sensitive actions |
 | Same-uid local attacker (TOCTOU on `~/.ag/config` between `Lstat` and `Open`) | OUT OF SCOPE | see Path and key handling below |
 | Windows NT ACL ownership of the config file | OUT OF SCOPE | `owner_other.go` is a documented no-op |
 | bash filesystem reach after the operator types `y` | REDUCED | prompt + Executing class + no session grant. Residual: the operator's eye |
