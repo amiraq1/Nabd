@@ -256,16 +256,9 @@ func runHeadlessErr(cfg headlessConfig) error {
 		sinks = append(sinks, jsonlStdout{w: cfg.stdout})
 	}
 
-	loop := &agent.Loop{
-		Provider: prov,
-		Tools:    reg,
-		Sink:     sinks,
-		System:   system,
-		Gate:     headlessGate{inner: gate{perm.New(reg)}, mode: cfg.mode},
-		Budget:   agent.NewBudget(),
-		Human:    silentAsker{},
-		MaxTurns: cfg.maxTurns,
-	}
+	loop := newSessionLoop(prov, reg, headlessGate{inner: gate{perm.New(reg)}, mode: cfg.mode}, silentAsker{})
+	loop.Sink = sinks
+	loop.MaxTurns = cfg.maxTurns
 
 	cwd, _ := os.Getwd()
 	if err := loop.Start(fmt.Sprintf("%s · %s · %s",

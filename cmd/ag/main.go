@@ -46,6 +46,25 @@ const (
 const system = `You are nabd, a coding agent working inside a phone terminal 50 columns wide.
 Reply in Arabic. Be extremely brief: never repeat the question, never apologise, and never list anything without cause. Two lines suffice when two suffice.`
 
+// newSessionLoop builds the Loop the three entry points share: the same
+// model-facing system prompt, the same permission gate, the same context
+// budget. Callers set only what differs — the provider, the sinks, and any
+// turn ceiling.
+//
+// This exists because the prompt is a security-relevant contract, not a
+// string: three literals that happen to agree today are three places to
+// diverge tomorrow. TestSessionLoopPromptHasNoDivergentPaths pins it.
+func newSessionLoop(prov provider.Provider, reg *tools.Registry, g agent.Gate, human agent.Asker) *agent.Loop {
+	return &agent.Loop{
+		Provider: prov,
+		Tools:    reg,
+		System:   system,
+		Gate:     g,
+		Budget:   agent.NewBudget(),
+		Human:    human,
+	}
+}
+
 func main() {
 	// NOTE: no legacy ~/.ag/env loading here. Environment-isolation policy
 	// (Phase 3) removed it: the only config source is ~/.ag/config, parsed by
@@ -165,15 +184,8 @@ func doChat(dir string, cont bool) error {
 	ap := ui.NewApprover()
 
 	uiSink := newUISink()
-	loop := &agent.Loop{
-		Provider: prov,
-		Tools:    reg,
-		Sink:     agent.Fanout{journal, uiSink},
-		System:   system,
-		Gate:     gate{pol},
-		Budget:   agent.NewBudget(),
-		Human:    ap,
-	}
+	loop := newSessionLoop(prov, reg, gate{pol}, ap)
+	loop.Sink = agent.Fanout{journal, uiSink}
 	if cont {
 		loop.Seed(prevEvs)
 	}
@@ -306,14 +318,7 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 	feed := ui.NewFeed()
 	feed.SetTouch(feedTouch)
 
-	loop := &agent.Loop{
-		Provider: prov,
-		Tools:    reg,
-		System:   system,
-		Gate:     gate{pol},
-		Budget:   agent.NewBudget(),
-		Human:    ap,
-	}
+	loop := newSessionLoop(prov, reg, gate{pol}, ap)
 	if cont {
 		loop.Seed(prevEvs)
 	}
