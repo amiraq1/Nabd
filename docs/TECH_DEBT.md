@@ -431,10 +431,10 @@ ones — not a rebuilt approximation. Same fixture, same caps:
 
 | cap   | calls | delivered | cumulative_in | hist_in | cached_in | ratio  | cache_ratio |
 |-------|-------|-----------|---------------|---------|-----------|--------|-------------|
-| 3072  | 15    | 41582     | 58416         | 47136   | 15808     | 3.11×  | 1.43×       |
-| 8192  | 6     | 40564     | 34620         | 30108   | 12814     | 1.84×  | 1.16×       |
-| 16384 | 4     | 40334     | 25997         | 22989   | 11814     | 1.39×  | 1.07×       |
-| 24576 | 3     | 40219     | 18766         | 16510   | 11022     | 1.00×  | 1.00×       |
+| 3072  | 15    | 41582     | 58431         | 47136   | 15810     | 3.11×  | 1.43×       |
+| 8192  | 6     | 40564     | 34626         | 30108   | 12814     | 1.84×  | 1.16×       |
+| 16384 | 4     | 40334     | 26001         | 22989   | 11814     | 1.39×  | 1.07×       |
+| 24576 | 3     | 40219     | 18769         | 16510   | 11023     | 1.00×  | 1.00×       |
 
 Reproduce: `go test ./internal/tools -run TestReadCapCumulativeCost -count=1 -v`
 
@@ -447,6 +447,13 @@ the constant became 752; every row above is recomputed and the spread moved to
 monotonicity assertion was re-checked against the new column. `hist_in` never
 depended on the constant and is unchanged.
 
+**NBD-403** then took the constant out of this package entirely: the overhead is
+now read from `internal/payload` at measurement time, and the eval loop sends
+the shipped prompt rather than a stub. The rows moved by single digits
+(58431 vs 58416) because the placeholder model differs by one token from the
+captured one; the ratio is unchanged at 3.11×, and the assertion now also
+checks the overhead against the same package's budget.
+
 `cumulative_in` = Σ per-turn (promptOverhead + EstimateMessages(request));
 `hist_in` omits the constant overhead to isolate what Squeeze decides;
 `cached_in` applies the published cache-read discount to everything but the
@@ -455,31 +462,51 @@ newest message. The estimator (chars/4 ASCII) is a heuristic, and Budget.Ratio
 because it cannot change the ordering; these are relative figures, not
 absolute token counts.
 
-### Fixed per-request payload (NBD-402)
+### Fixed per-request payload (NBD-402, restructured in NBD-403)
 
-`promptOverhead` had no reproducible source. It does now: the request is built
-by the real session loop and captured at the transport, so the bytes are the
-bytes the provider encoder would send. Decomposition in the project's estimator
-units:
+`promptOverhead` had no reproducible source. It does now. The measurement lives
+in `internal/payload`, which is the single source both the cmd/ag guard and the
+cumulative measurement read; `TestFixedPayloadHasASingleSourceInNonTestCode`
+fails the build if a second definition appears in non-test source. The request
+is built by the real session loop and captured at the transport, and
+`TestFixedPayloadMeasurementsMatchTheWire` proves `payload.Encode` reproduces
+that body byte for byte. Decomposition in the project's estimator units:
 
-| format            | system | schema | framing | total | residue |
-|-------------------|--------|--------|---------|-------|---------|
-| anthropic         | 61     | 660    | 30      | 752   | +1      |
-| openai-compatible | 67     | 704    | 38      | 809   | +0      |
+| format            | system | schema | model | framing | residue | encoded | code_owned |
+|-------------------|--------|--------|-------|---------|---------|---------|------------|
+| anthropic         | 61     | 660    | 3     | 28      | +1      | 752     | 750        |
+| openai-compatible | 66     | 704    | 4     | 36      | 0       | 809     | 806        |
 
-Reproduce: `go test ./cmd/ag -run TestFixedPayloadDecomposition -count=1 -v`
+Reproduce: `go test ./cmd/ag -run TestFixedPayloadMeasurementsMatchTheWire -count=1 -v`
 
 The framing differs between the two formats, which the single constant could
-not represent. `readOverhead = 2210` is ~2.9× the measured value and is now
-marked in code as UNEXPLAINED: NOTES.md records that the 413 request bodies
-were never captured, the journal stores neither the system prompt nor the tool
-schemas, and those sessions ran MaxToks=4096 (before df48305), so the figure
-cannot be reproduced from any artifact in the repo. It is retained without
-rewriting (it feeds only `defaultMaxReadDerived`, which no production path
-calls) and the measured 752/809 now govern the cumulative measurement.
-`TestFixedPayloadBudget` guards the payload ceiling, derived as
-`round_up_100(max(measured) × 1.25) = 1100` with the headroom stated as its own
-constant.
+not represent. `model` is reported separately and excluded from the code-owned
+total: the model name comes from configuration, not from code, and the budget
+must not silently follow whatever a user sets.
+
+`readOverhead = 2210` is ~2.9× the measured value and is now gone. NOTES.md
+records that the 413 request bodies were never captured, the journal stores
+neither the system prompt nor the tool schemas, and those sessions ran
+MaxToks=4096 (before df48305), so the figure could not be reproduced from any
+artifact in the repo. NBD-403 deleted the derivation that consumed it
+(`defaultMaxReadDerived`, reachable only from a test) and recorded it here as
+history. The derivation it implemented, verbatim from commit 1485e2d:
+
+    safeInput      = tpmLimit − maxTok − overhead      // = 8000 − 1024 − 450 = 6526
+    defaultMaxRead = safeInput × bytesPerTok × safety  // = 6526 × 3.2 × 0.5 = 10441
+    at MaxTok=4096:  (8000 − 4096 − 450) × 3.2 × 0.5   // = 5526
+
+Two corrections to the record, because the comment carried a second error.
+First, the subtraction form above is the reference: it is what the code
+implemented and what reproduces that commit's own stated outputs (10441 and
+5526). The comment block had drifted to `(tpmLimit/maxTok − overhead) /
+roundsPerMin`, which divides tokens/minute by tokens and then subtracts tokens
+— dimensionally meaningless, and it evaluates to −1326. Second, the shipped
+3072 was never the output of any form: 1485e2d's own comment says 5526 was
+"clamped by live 413s down to 3072", and reproducing exactly 3072 would require
+`safeInput ≈ 1920`, i.e. `maxTok + overhead ≈ 6080`, which no documented
+constants satisfy. So the cap was a live observation, not a derivation — which
+is why deleting the derivation changes no shipped value.
 
 What the numbers say:
 
@@ -495,28 +522,57 @@ What the numbers say:
 - So the fixed cap is a real per-session cost on an uncached provider, not
   merely a turns problem.
 
+### Budgets (NBD-403)
+
+One ceiling was not a guard. NBD-402's single `1100` left ~290 tokens for a
+system prompt the prompt spec puts at 800–1500, so it would have been raised
+every stage; and a ceiling sized for the prompt leaves nothing for rules. There
+are now two, each derived in code from named inputs and each owned by a
+different party:
+
+| budget | owner | derived from | value |
+|---|---|---|---|
+| `CodeBudgetTokens()` | the code: system prompt + schemas + framing | `round_up_100(systemPromptAllowance 1500 + recordedSchema 704 + recordedFraming 36 + recordedResidue 1)` | 2300 |
+| `RulesBudgetTokens()` | the user: a project's AGENTS.md (NBD-410) | `round_down_100(measured 809 + allowance 2115 − codeBudget 2300)` | 600 |
+
+The two partition one allowance. `FixedPayloadAllowanceTokens()` is how much may
+be added to every request before the spread reaches the bound, and
+`TestBudgetsAreDerivedAndConsistent` asserts that consuming both keeps the
+spread inside it (2900 tokens → 3.595 ≤ 3.599). Rounding the code budget up and
+the rules budget down is what makes the sum safe.
+
+The rules budget has no consumer yet, deliberately: NBD-410 spends it instead of
+inventing a ceiling.
+
 ### Constraint this places on NBD-410 (the rules layer)
 
-With the measured figures, the spread is a function of the fixed payload:
+With the measured figures, the spread as a function of what a rules layer adds
+to every request, Δ:
 
-    ratio(overhead) = (requests · overhead + hist) / (requests' · overhead + hist')
-                    = (15 · overhead + 47136) / (3 · overhead + 16510)
+    ratio(Δ) = (15 · (752 + Δ) + 47136) / (3 · (752 + Δ) + 16510)
+             = (58416 + 15Δ) / (18766 + 3Δ)
 
-It is monotone increasing in `overhead` with asymptote 5.00 (= 15/3, the
-request-count ratio), and it crosses 4.0 at `overhead ≈ 6300` tokens — about
-5550 tokens above today's measured 752. Concretely, a rules file re-sent on
-every request costs: +2048 tokens (an 8 KiB ASCII file) moves the spread from
-3.11× to 3.58×.
+It is monotone increasing in Δ with asymptote 5.00 (= 15/3, the request-count
+ratio). Solving for the bound the code now uses, 3.5994:
+
+    58416 + 15Δ = 3.5994 · (18766 + 3Δ)
+    Δ = (18766 · 3.5994 − 58416) / (15 − 3 · 3.5994) ≈ 2115 tokens
+
+That is the whole allowance, and `RulesBudgetTokens()` spends the part left
+after the code's own budget: 600 tokens today. Concretely, +2048 tokens (an
+8 KiB file) would cost the spread 3.58× — most of the headroom — which is why
+the budget is 600 and not "8 KiB per file": that figure was invented, and this
+derivation is what replaces it.
 
 Two consequences for NBD-410:
 
-- A project-instructions layer needs an explicit token budget, and that budget
-  is a cost decision, not a formatting preference. The previously suggested
-  "8 KiB per file" cap was invented, not derived; the derivation is the formula
-  above.
-- Rules are re-sent every turn, so this is the same mistake as the read cap in
-  the other direction: a per-file limit would sit in the term that is
-  multiplied by the request count.
+- A project-instructions layer spends `RulesBudgetTokens()`; it must not define
+  a second ceiling. If 600 tokens is too small for the intended feature, the
+  change to make is the shared allowance — measured, in `internal/payload` —
+  not a new constant next to the rules loader.
+- Rules are re-sent every turn, so a per-file byte limit sits in the term that
+  is multiplied by the request count. The unit that matters is tokens per
+  request, which is what both budgets are stated in.
 
 Decision: defaults unchanged. Raising MaxTurns would drop the turn ceiling
 without putting any token or cost bound in its place (the loop's other bounds
