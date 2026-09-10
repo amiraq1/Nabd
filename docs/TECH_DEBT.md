@@ -422,6 +422,48 @@ Two of these invert the intuition:
   calibrated against an 8000 TPM free key, where the per-request input budget
   is already below 3072; a larger cap trades turns against 413s.
 
+NBD-401 then measured what NBD-400 left open: the CUMULATIVE bill. NBD-400's
+`delivered` column is bytes sent once; the provider bills every turn, because
+each request re-sends the fixed prompt and the (squeezed) history. The
+measurement drives the real Loop and sums the requests it actually sent, so
+Squeeze, DedupeReadTails, keepFullRounds and the fence are the production
+ones — not a rebuilt approximation. Same fixture, same caps:
+
+| cap   | calls | delivered | cumulative_in | hist_in | cached_in | ratio  | cache_ratio |
+|-------|-------|-----------|---------------|---------|-----------|--------|-------------|
+| 3072  | 15    | 41582     | 80286         | 47136   | 17995     | 3.47×  | 1.57×       |
+| 8192  | 6     | 40564     | 43368         | 30108   | 13689     | 1.87×  | 1.19×       |
+| 16384 | 4     | 40334     | 31829         | 22989   | 12397     | 1.38×  | 1.08×       |
+| 24576 | 3     | 40219     | 23140         | 16510   | 11460     | 1.00×  | 1.00×       |
+
+Reproduce: `go test ./internal/tools -run TestReadCapCumulativeCost -count=1 -v`
+
+`cumulative_in` = Σ per-turn (promptOverhead + EstimateMessages(request));
+`hist_in` omits the constant overhead to isolate what Squeeze decides;
+`cached_in` applies the published cache-read discount to everything but the
+newest message. The estimator (chars/4 ASCII) is a heuristic, and Budget.Ratio
+— a single multiplicative calibration shared by every column — is left out
+because it cannot change the ordering; these are relative figures, not
+absolute token counts.
+
+What the numbers say:
+
+- The worst÷best spread is 3.47× uncached. A naive accumulation (no Squeeze)
+  would be at least the request-count ratio, 5.00×. Squeeze does absorb part
+  of it — the history-only spread is 2.85× — but it cannot touch the fixed
+  per-request overhead, which is multiplied by the request count. The dominant
+  term is therefore the number of round trips, not the size of the history.
+- Prompt caching compresses the spread to 1.57×. It more than halves the
+  penalty but does not remove it, and it only applies where the provider
+  supports it; the OpenAI-compatible path's behaviour is exactly what NBD-430
+  must establish before any policy is set on it.
+- So the fixed cap is a real per-session cost on an uncached provider, not
+  merely a turns problem. That is stated here rather than fixed here: NBD-401
+  is a measurement pass with no behaviour change, and the replacement (a cap
+  derived from remaining budget — `Budget.Usable() − pressure`, which the loop
+  already computes but does not consult for reads) needs its own evidence and
+  its own PR.
+
 Decision: defaults unchanged. Raising MaxTurns would drop the turn ceiling
 without putting any token or cost bound in its place (the loop's other bounds
 — the rate-limit budget and the context window with compaction — bound
@@ -432,5 +474,5 @@ stay documented and tested: NABD_MAX_READ and --max-turns.
 
 The read cap also must not become provider-keyed: Router.Name() is a
 composite display string, so any policy parsed from it would mis-key for the
-multi-provider case. TestReadCapPinsProviderIndependence_NBD401 pins that the cap
-depends only on the read and token settings.
+multi-provider case. TestReadCapPinsProviderIndependence_NBD401 pins that the
+cap depends only on the read and token settings.
