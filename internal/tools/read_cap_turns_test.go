@@ -167,21 +167,30 @@ func (s *recordingSink) Emit(e agent.Event) error {
 // sequential reader needs to read the fixture at each cap, and pins the
 // combination the project ships.
 //
-// It is named as a pin on a MEASURED state, not a specification. The shipped
-// pair (cap 3072, MaxTurns 12) does not finish this fixture, and that is
-// recorded in docs/TECH_DEBT.md (READ_CAP_TURN_COST) with the reason the
-// defaults were kept anyway. If this test fails because the pair now fits,
-// that means a default moved: update the record and say what moved, instead of
+// It is named as a pin on a MEASURED state, not a specification. NBD-400
+// recorded that the shipped pair (cap 3072, MaxTurns 12) could not finish this
+// fixture; NBD-404 raised the ceiling to agent.DefaultMaxTurns, so the shipped
+// pair now fits. Both facts are asserted below, because the second is only
+// meaningful beside the first: the low ceiling is what the change fixed, and
+// keeping it visible stops the record from reading as though the ceiling had
+// always been adequate.
+//
+// If this test fails because the pair changed again, a default moved: update
+// READ_CAP_TURN_COST in docs/TECH_DEBT.md and say what moved, rather than
 // adjusting the test.
 func TestReadCapPinsMeasuredTurnCost_NBD401(t *testing.T) {
 	r, dir := newReg(t)
 	rel, fileBytes := evalFixture(t, dir, evalLineCount)
 
-	// The shipped default, read from the loop rather than restated here.
-	const shippedMaxTurns = 12
+	// The shipped ceiling, read from the package that owns it rather than
+	// repeated here, so the two cannot drift apart.
+	shippedMaxTurns := agent.DefaultMaxTurns
+	// The ceiling NBD-400 shipped, kept as the historical contrast.
+	const nbd400MaxTurns = 12
 
-	t.Logf("fixture: %d lines, %d bytes; shipped MaxTurns default: %d", evalLineCount, fileBytes, shippedMaxTurns)
-	t.Logf("%8s %7s %9s %s", "cap", "turns", "fits_12", "offsets")
+	t.Logf("fixture: %d lines, %d bytes; shipped MaxTurns: %d (NBD-400 shipped %d)",
+		evalLineCount, fileBytes, shippedMaxTurns, nbd400MaxTurns)
+	t.Logf("%8s %7s %9s %s", "cap", "turns", "fits", "offsets")
 
 	for _, cap := range evalCaps {
 		// Measure the natural cost first, with a ceiling high enough not to
@@ -206,31 +215,36 @@ func TestReadCapPinsMeasuredTurnCost_NBD401(t *testing.T) {
 		}
 	}
 
-	// The shipped combination does NOT fit the shipped ceiling for this
-	// fixture, and that is the stage's finding rather than an assumption:
-	// reading a mid-sized file by sequential calls needs more turns than the
-	// default allows. It is recorded in docs/TECH_DEBT.md (READ_CAP_TURN_COST)
-	// and asserted here as a tripwire — if it ever starts fitting, a default
-	// moved, and the record must be updated with the reason instead of the
-	// change landing silently.
+	// The shipped combination must finish the fixture. NBD-400 measured that it
+	// did not at MaxTurns=12; if it stops fitting again, a default moved and the
+	// record must say so.
 	shipped := runSequentialRead(t, r, dir, rel, defaultMaxRead(), shippedMaxTurns)
-	if shipped.completed {
-		t.Fatalf("the shipped cap %d now reads the %d-line fixture within MaxTurns=%d (%d turns); "+
+	if !shipped.completed {
+		t.Fatalf("the shipped cap %d does not finish the %d-line fixture within the shipped MaxTurns=%d (%d turns); "+
 			"this contradicts READ_CAP_TURN_COST in docs/TECH_DEBT.md — update that record and say what moved",
 			defaultMaxRead(), evalLineCount, shippedMaxTurns, shipped.turns)
 	}
-	if !shipped.hitCeiling {
-		t.Fatalf("shipped run neither completed nor hit the turn ceiling: %+v — see READ_CAP_TURN_COST in docs/TECH_DEBT.md", shipped)
-	}
-	t.Logf("shipped combination: cap=%d hits MaxTurns=%d after %d turns (the recorded limitation in READ_CAP_TURN_COST)",
-		defaultMaxRead(), shippedMaxTurns, shipped.turns)
+	t.Logf("shipped combination: cap=%d, MaxTurns=%d, %d turns — fits", defaultMaxRead(), shippedMaxTurns, shipped.turns)
 
-	// The contrast that makes the finding actionable: a larger cap fits, so
-	// the documented escape hatch (NABD_MAX_READ) is a real remedy.
-	bigger := runSequentialRead(t, r, dir, rel, 8192, shippedMaxTurns)
+	// The historical fact that motivated the change: at NBD-400's ceiling the
+	// same shipped cap cannot finish the same file.
+	atNBD400 := runSequentialRead(t, r, dir, rel, defaultMaxRead(), nbd400MaxTurns)
+	if atNBD400.completed {
+		t.Fatalf("cap %d now finishes within MaxTurns=%d (%d turns); NBD-400 recorded that it did not. "+
+			"If the read cap changed, update READ_CAP_TURN_COST in docs/TECH_DEBT.md",
+			defaultMaxRead(), nbd400MaxTurns, atNBD400.turns)
+	}
+	if !atNBD400.hitCeiling {
+		t.Fatalf("the NBD-400-ceiling run neither completed nor hit the ceiling: %+v", atNBD400)
+	}
+	t.Logf("contrast: the same cap at MaxTurns=%d hits the ceiling after %d turns (the NBD-400 finding)",
+		nbd400MaxTurns, atNBD400.turns)
+
+	// The escape hatch still works where the shipped ceiling is not enough.
+	bigger := runSequentialRead(t, r, dir, rel, 8192, nbd400MaxTurns)
 	if !bigger.completed {
 		t.Fatalf("cap 8192 did not fit MaxTurns=%d (%d turns); the escape hatch does not work — "+
-			"see READ_CAP_TURN_COST in docs/TECH_DEBT.md", shippedMaxTurns, bigger.turns)
+			"see READ_CAP_TURN_COST in docs/TECH_DEBT.md", nbd400MaxTurns, bigger.turns)
 	}
-	t.Logf("escape hatch: cap=8192 completes in %d turns within MaxTurns=%d", bigger.turns, shippedMaxTurns)
+	t.Logf("escape hatch: cap=8192 completes in %d turns within MaxTurns=%d", bigger.turns, nbd400MaxTurns)
 }

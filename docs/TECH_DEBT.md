@@ -544,6 +544,56 @@ the rules budget down is what makes the sum safe.
 The rules budget has no consumer yet, deliberately: NBD-410 spends it instead of
 inventing a ceiling.
 
+### Read cap and turn ceiling: the policy (NBD-404)
+
+The measurements above produced a decision.
+
+**The cap now follows the provider.** `provider.ReadCapper` is an optional
+interface; a provider that declares a ceiling is asked for it, and:
+
+| source | when it applies | value |
+|---|---|---|
+| `NABD_MAX_READ` | whenever it is set | the operator's value; it outranks everything |
+| the provider's declaration | otherwise | Groq 3072; Anthropic/OpenRouter/NVIDIA 16384 |
+| `defaultMaxRead()` | no provider declares anything | 3072 |
+
+A **Router takes the minimum over its routes**, because every request goes to
+one route and the choice is made by fallback at runtime: a cap sized for the
+most permissive route would be sent to the strictest one and trip its ceiling.
+The cap is read from each route's provider object, never parsed out of a name —
+`Router.Name()` is a composite display string and cannot express "strictest of
+several". `TestProviderReadCaps`, `TestRouterReadCapIsTheStrictestRoute` and
+`TestReadCapIsNotDerivedFromName` pin all of that, and
+`TestReadCapPinsProviderIndependence_NBD401` still holds for the selection
+string.
+
+**16384 is a declared default, not a derived one.** No TPM measurement exists in
+this repository for Anthropic, OpenRouter or NVIDIA, so the larger value is a
+judgment: the constraint it stands in for — a per-minute input ceiling — is
+absent, leaving the context window as the only bound. That is the permissive
+direction, which is exactly why `NABD_MAX_READ` outranks it and why a custom
+base URL pointed at a metered clone should set it.
+
+**The turn ceiling is now 40** (`agent.DefaultMaxTurns`), and that is a
+deliberate reversal of NBD-400's reasoning. At 12, a session reading a
+mid-sized file spent every turn it had and returned ErrMaxTurns: the full cost
+was paid and the task failed anyway. NBD-400 measured exactly that — 15 turns
+needed for an 800-line file at the default cap — so the shipped pair could not
+finish it.
+
+The counter-argument has not gone away: this loop bounds **waiting** (the
+rate-limit budget) and **context** (the window plus compaction), but nothing
+bounds **spend**, so the ceiling was the only spend proxy. Raising it gives that
+up knowingly: a looping model may now spend 40 turns. That is recorded as a
+decision rather than left to read as an oversight. Reclaiming it means adding a
+spend bound, not lowering the ceiling again.
+
+`TestReadCapPinsMeasuredTurnCost_NBD401` now asserts both directions: the
+shipped pair finishes the fixture, and the same cap at the old ceiling of 12
+still does not. A 413 Notice names the read cap in force alongside the
+provider's limit (`TestTPMNoticeNamesTheReadCap_NBD404`), so a reader who wants
+to act knows which ceiling produced the rejected request.
+
 ### Constraint this places on NBD-410 (the rules layer)
 
 With the measured figures, the spread as a function of what a rules layer adds
