@@ -271,6 +271,54 @@ func TestReadMaxTokensRoutesThroughConfig(t *testing.T) {
 	}
 }
 
+// TestReadCapIgnoresProviderSelection pins the Router-safety property this
+// stage requires. The read cap must not be derived from the provider's name:
+// Router.Name() is a composite display string (built as
+// "router/<provider>:<model>→<provider>:<model>", truncated at 200 bytes), so
+// any policy that parsed a provider out of it would mis-key itself for exactly
+// the multi-provider case. The cap is a pure function of NABD_MAX_READ — and,
+// for the derivation, of the output reservation — so changing which provider
+// is selected cannot move it.
+func TestReadCapIgnoresProviderSelection(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config")
+	t.Setenv("NABD_CONFIG", cfg)
+
+	// A composite router route is the case a name-parsing policy would break;
+	// the single-provider selections are the contrast.
+	selections := []string{
+		"",
+		"NABD_PROVIDER=groq\n",
+		"NABD_PROVIDER=anthropic\n",
+		"NABD_PROVIDER=router\nNABD_ROUTES=groq:llama→openrouter:qwen\n",
+	}
+	for i, sel := range selections {
+		if err := os.WriteFile(cfg, []byte("NABD_MAX_READ=4096\n"+sel), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		config.ResetForTest()
+		if got := envMaxRead(); got != 4096 {
+			t.Fatalf("selection %d (%q): envMaxRead()=%d, want 4096 — provider selection leaked into the read cap", i, sel, got)
+		}
+	}
+
+	// The derivation must be provider-blind too: it is a function of the token
+	// budget, which is set by the output reservation.
+	if err := os.WriteFile(cfg, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config.ResetForTest()
+	before := defaultMaxReadDerived()
+
+	if err := os.WriteFile(cfg, []byte("NABD_PROVIDER=router\nNABD_ROUTES=groq:llama→openrouter:qwen\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config.ResetForTest()
+	if after := defaultMaxReadDerived(); after != before {
+		t.Fatalf("derived read cap moved with provider selection: %d → %d", before, after)
+	}
+}
+
 // TestDefaultMaxReadDerivesFromMaxTok: the derived read cap must move when
 // NABD_MAX_TOKENS moves — a single derivation, not two hardcoded numbers.
 // The shipped default stays at the live-calibrated 3072 until the derived
