@@ -90,15 +90,18 @@ func (r *recordingReader) Stream(ctx context.Context, req provider.Request) (<-c
 // history is the cumulative sum WITHOUT the fixed per-request overhead: it
 // isolates what Squeeze decides (how much old content each request still
 // carries). uncached adds the overhead back, which is what the provider bills.
+// maxRequestIn is the largest single request, which is what a provider's
+// per-minute ceiling actually rejects.
 type readCostRun struct {
-	capBytes  int
-	calls     int
-	turns     int
-	delivered int
-	history   int
-	uncached  int
-	cached    float64
-	compacted bool
+	capBytes     int
+	calls        int
+	turns        int
+	delivered    int
+	history      int
+	uncached     int
+	cached       float64
+	maxRequestIn int
+	compacted    bool
 }
 
 // runReadCost drives the real loop over the fixture at capBytes and returns the
@@ -152,6 +155,9 @@ func runReadCost(t *testing.T, reg *Registry, dir, rel string, capBytes int) rea
 		total := overhead + h
 		run.history += h
 		run.uncached += total
+		if total > run.maxRequestIn {
+			run.maxRequestIn = total
+		}
 		// Cached: the prefix (fixed input + everything but the newest message)
 		// is a cache read; only the newest message is billed in full.
 		fresh := 0
@@ -175,8 +181,12 @@ func TestReadCapCumulativeCost(t *testing.T) {
 	reg, dir := newReg(t)
 	rel, fileBytes := evalFixture(t, dir, evalLineCount)
 
-	t.Logf("fixture: %d lines, %d bytes; caps: %v", evalLineCount, fileBytes, evalCaps)
-	t.Logf("%8s %7s %9s %12s %10s %12s %12s %9s", "cap", "calls", "delivered", "cumulative_in", "hist_in", "cached_in", "ratio", "cache_ratio")
+	// max_tokens is the output reservation the budget is measured against; the
+	// provider counts it in the same per-minute bucket as the input.
+	maxTok := provider.DefaultMaxTokens()
+
+	t.Logf("fixture: %d lines, %d bytes; caps: %v; max_tokens: %d", evalLineCount, fileBytes, evalCaps, maxTok)
+	t.Logf("%8s %7s %9s %12s %10s %12s %12s %9s %12s", "cap", "calls", "delivered", "cumulative_in", "hist_in", "cached_in", "ratio", "cache_ratio", "max_request")
 
 	runs := make([]readCostRun, 0, len(evalCaps))
 	for _, c := range evalCaps {
@@ -196,9 +206,31 @@ func TestReadCapCumulativeCost(t *testing.T) {
 		}
 	}
 	for _, r := range runs {
-		t.Logf("%8d %7d %9d %12d %10d %12.0f %8.2f× %8.2f×",
+		t.Logf("%8d %7d %9d %12d %10d %12.0f %8.2f× %8.2f× %12d",
 			r.capBytes, r.calls, r.delivered, r.uncached, r.history, r.cached,
-			float64(r.uncached)/float64(best), r.cached/bestCached)
+			float64(r.uncached)/float64(best), r.cached/bestCached, r.maxRequestIn)
+	}
+
+	// The provider ceiling test. A per-minute limit rejects a single REQUEST,
+	// not a session: with the captured Groq refusal as the reference
+	// (Limit 8000, Requested 8968, from ~/.ag/sessions/20260901-133251.jsonl),
+	// what matters is whether one request's input stays under
+	// (limit − max_tokens).
+	//
+	// This is a comparison of two ESTIMATES — our chars/4 figure and the
+	// provider's own counter are different measures — so it is reported as a
+	// margin and not asserted as a pass. It is enough to show whether the
+	// shipped cap is comfortably under the ceiling or pressing against it.
+	const groqLimitTokens = 8000
+	tpmInputBudget := groqLimitTokens - maxTok
+	for _, r := range runs {
+		margin := tpmInputBudget - r.maxRequestIn
+		verdict := "under"
+		if margin < 0 {
+			verdict = "OVER"
+		}
+		t.Logf("ceiling check (estimated): cap=%d largest request %d vs available %d → %s by %d",
+			r.capBytes, r.maxRequestIn, tpmInputBudget, verdict, margin)
 	}
 
 	// The three spreads, stated separately because they answer different

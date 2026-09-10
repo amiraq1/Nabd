@@ -190,7 +190,11 @@ func TestReadCapPinsMeasuredTurnCost_NBD401(t *testing.T) {
 
 	t.Logf("fixture: %d lines, %d bytes; shipped MaxTurns: %d (NBD-400 shipped %d)",
 		evalLineCount, fileBytes, shippedMaxTurns, nbd400MaxTurns)
-	t.Logf("%8s %7s %9s %s", "cap", "turns", "fits", "offsets")
+	// fits_turns is about the TURN budget only. Whether the same schedule fits
+	// the provider's tokens-per-minute ceiling is a different question, and
+	// TestReadCapCumulativeCost reports the per-request figure that one turns
+	// on. The column is named for what it measures.
+	t.Logf("%8s %7s %11s %s", "cap", "turns", "fits_turns", "offsets")
 
 	for _, cap := range evalCaps {
 		// Measure the natural cost first, with a ceiling high enough not to

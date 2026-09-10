@@ -590,9 +590,50 @@ spend bound, not lowering the ceiling again.
 
 `TestReadCapPinsMeasuredTurnCost_NBD401` now asserts both directions: the
 shipped pair finishes the fixture, and the same cap at the old ceiling of 12
-still does not. A 413 Notice names the read cap in force alongside the
-provider's limit (`TestTPMNoticeNamesTheReadCap_NBD404`), so a reader who wants
-to act knows which ceiling produced the rejected request.
+still does not. Its `fits_turns` column is named for what it measures — the
+TURN budget — because whether the same schedule fits the provider's
+tokens-per-minute ceiling is a different question, measured below.
+
+### Does the shipped cap fit Groq's per-minute ceiling? (NBD-404)
+
+The captured refusal, not an illustration: `~/.ag/sessions/20260901-133251.jsonl`
+line 8 holds the real 413 —
+
+    http 413: Request too large for model `qwen/qwen3.8-27b` … on tokens per minute
+    (TPM): Limit 8000, Requested 8968, please reduce your message size and try again.
+
+— and NOTES.md cites the same session for `Requested 8968`. That request was
+made with `max_tokens=4096` (before `df48305`), so its prompt was ~4872 tokens;
+NOTES.md records the governing rule, `prompt + max_tokens ≤ 8000`, applied
+per request. With today's `max_tokens=1024` the input budget is therefore 6976.
+
+`TestReadCapCumulativeCost` now reports the largest single request per cap and
+compares it with that budget. Largest request and margin, estimated with the
+project's own counter:
+
+| cap | largest request | available | verdict |
+|---|---|---|---|
+| 3072 | 4902 | 6976 | under by 2074 |
+| 8192 | 9386 | 6976 | OVER by 2410 |
+| 16384 | 11105 | 6976 | OVER by 4129 |
+| 24576 | 10991 | 6976 | OVER by 4015 |
+
+Two estimates are being compared — the project's chars/4 counter and the
+provider's own — so this is reported as a margin, not asserted as a pass. The
+margins are large in both directions, so the direction is not in doubt even if
+the counter is off by tens of percent.
+
+The consequence is that **3072 is not conservatism on Groq; it is the largest
+cap that fits.** Raising a Groq session to 8192 or beyond would trip 413s
+rather than read more, which is what the cap was protecting against all along —
+now measured rather than assumed. And it is exactly why the policy is keyed to
+the provider: on Anthropic, OpenRouter and NVIDIA the same 8192 request has no
+equivalent per-minute ceiling to hit, so the larger caps are usable there.
+
+A live confirmation is still outstanding: this comparison is arithmetic over
+estimates, not a captured 413 from the current cap. The per-request TPM
+behaviour on a live Groq key at 3072 remains unverified, and the honest
+statement is "under by an estimated 2074 tokens", not "safe".
 
 ### Constraint this places on NBD-410 (the rules layer)
 
