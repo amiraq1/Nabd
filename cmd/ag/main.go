@@ -387,14 +387,28 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		loop.Note(s)
 	}
 
-	// Stop the batcher before shutdown so no new events race the End marker.
-	batcher.Stop()
+	// The batcher must outlive the interactive program: it carries every live
+	// event, and Batcher.Add is a silent no-op once stopped. finishFeedSession
+	// waits for the program to exit before stopping it, so nothing is dropped
+	// while the session runs and nothing races the End marker. (Stopping right
+	// after loop.Start here regressed exactly that: the feed showed nothing
+	// past the banner.)
+	return finishFeedSession(progDone, batcher, loop, journal, journalPath)
+}
 
+// finishFeedSession is the feed path's shutdown sequence, isolated so its
+// ordering is testable: wait for the interactive program to exit, stop the
+// batcher so its final flush lands, then mark the session ended and close the
+// journal. Stopping the batcher before the program exits silently drops the
+// whole session's events (Batcher.Add no-ops once stopped); stopping it after
+// loop.End lets events race the End marker.
+func finishFeedSession(progDone <-chan error, batcher *ui.Batcher, loop *agent.Loop, journal io.Closer, journalPath string) error {
 	if err := <-progDone; err != nil {
+		batcher.Stop()
 		journal.Close()
 		return err
 	}
-
+	batcher.Stop()
 	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
 	closeErr := journal.Close()
 	reportSession(os.Stdout, os.Stderr, journalPath, closeErr)
