@@ -209,6 +209,9 @@ func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y":
 		return m.answerModal(agent.AllowOnce)
 	case "a", "A":
+		if m.permModal.call != nil && m.permModal.call.SessionGrantKnown && !m.permModal.call.SessionGrantAllowed {
+			return m, nil
+		}
 		return m.answerModal(agent.AllowSession)
 	case "n", "N":
 		return m.answerModal(agent.Deny)

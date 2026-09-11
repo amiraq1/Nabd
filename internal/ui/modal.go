@@ -80,11 +80,28 @@ func (m *PermissionModal) toolName() string {
 }
 
 func (m *PermissionModal) choices() []PermissionChoice {
-	return []PermissionChoice{
+	choices := []PermissionChoice{
 		{Decision: agent.AllowOnce, Label: "Allow Once", KeyHint: "y"},
-		{Decision: agent.AllowSession, Label: "Allow Session", KeyHint: "a"},
 		{Decision: agent.Deny, Label: "Deny", KeyHint: "n / esc"},
 	}
+	if m.call == nil || !m.call.SessionGrantKnown || m.call.SessionGrantAllowed {
+		choices = append(choices[:1], append([]PermissionChoice{{Decision: agent.AllowSession, Label: "Allow Session", KeyHint: "a"}}, choices[1:]...)...)
+	}
+	return choices
+}
+
+func (m *PermissionModal) keyHintText() string {
+	if m.call != nil && m.call.SessionGrantKnown && !m.call.SessionGrantAllowed {
+		return "y once · n deny · Esc cancel"
+	}
+	return "y once · a session · n deny · Esc cancel"
+}
+
+func (m *PermissionModal) scopeText() string {
+	if m.call != nil && m.call.SessionGrantKnown && m.call.SessionGrantAllowed {
+		return "scope: this tool for this session"
+	}
+	return "scope: this request only"
 }
 
 func (m *PermissionModal) currentDecision() agent.Decision {
@@ -189,7 +206,7 @@ func (m *PermissionModal) shape(maxRows ...int) permModalShape {
 	}
 
 	hasArgs := m.hasArgs()
-	choiceRows := 3
+	choiceRows := len(m.choices())
 	if m.decisionPending {
 		// A pending decision collapses the three choices into one status row.
 		choiceRows = 1
@@ -304,9 +321,12 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	// hintBorder is the bottom border that also carries the key hints, used by
 	// the two shortest levels where no separate hint row exists.
 	hintBorder := func() string {
-		hint := "+-- Enter confirm · y/a/n "
+		hint := "+-- Enter confirm · " + m.keyHintText() + " "
 		if ansi.StringWidth(hint) > cardW-2 {
-			hint = "+-- Enter · y/a/n "
+			hint = "+-- Enter · " + m.keyHintText() + " "
+		}
+		if ansi.StringWidth(hint) > cardW-2 {
+			hint = ansi.Truncate(hint, max(1, cardW-2), "…")
 		}
 		hintDashes := max(0, cardW-ansi.StringWidth(hint)-1)
 		return dim.Render(hint + strings.Repeat("-", hintDashes) + "+")
@@ -373,7 +393,7 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 		// 5 or 6 rows: title, tool, [args], one choice, hint row, border.
 		lines := []string{
 			standardTitle(),
-			formatRow(fmt.Sprintf("Tool: %s (not executed yet)", tool)),
+			formatRow(fmt.Sprintf("Tool: %s (not executed yet) · %s", tool, m.scopeText())),
 		}
 		if sh.includeArgs {
 			lines = append(lines, argsRow())
@@ -387,7 +407,7 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 		}
 		lines = append(lines,
 			formatRow(fmt.Sprintf("  %s %s (%s)", mark, sel.Label, sel.KeyHint)),
-			formatRow("Enter confirm · Up/Down select · y/a/n direct"),
+			formatRow("Enter confirm · Up/Down select · "+m.keyHintText()),
 			plainBorder(),
 		)
 		return strings.Join(lines, "\n")
@@ -396,7 +416,7 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	// permLevelFull: title, tool, [args], [blank], choices, [blank], hint, border.
 	lines := []string{
 		standardTitle(),
-		formatRow(fmt.Sprintf("Tool: %s (not executed yet)", tool)),
+		formatRow(fmt.Sprintf("Tool: %s (not executed yet) · %s", tool, m.scopeText())),
 	}
 	if sh.includeArgs {
 		lines = append(lines, argsRow())
@@ -422,9 +442,9 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	case m.decisionPending:
 		lines = append(lines, formatRow("waiting for decision to apply…"))
 	case m.selected >= 0:
-		lines = append(lines, formatRow("Enter confirm · Up/Down select · y/a/n direct"))
+		lines = append(lines, formatRow("Enter confirm · Up/Down select · "+m.keyHintText()))
 	default:
-		lines = append(lines, formatRow("y/a/n direct · Up/Down select · Enter confirm"))
+		lines = append(lines, formatRow(m.keyHintText()+" · Up/Down select · Enter confirm"))
 	}
 	lines = append(lines, plainBorder())
 	return strings.Join(lines, "\n")
