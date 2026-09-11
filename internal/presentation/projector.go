@@ -175,10 +175,17 @@ func (p *Projector) applyToolResult(card *ToolCard, call *agent.ToolCall) {
 	}
 	if call.Name != "" {
 		card.Name = call.Name
+ feat/secure-permission-experience
 	}
 	if card.Args == "" {
 		card.Args = callArgs(call)
 	}
+
+	}
+	if card.Args == "" {
+		card.Args = callArgs(call)
+	}
+ master
 	card.Status = ToolDone
 	if !call.OK {
 		if p.deniedCalls[call.ID] {
@@ -303,7 +310,11 @@ func (p *Projector) appendNotice(e agent.Event) error {
 	return p.append(FeedItem{Type: ItemNotice, ID: "notice_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: e.Text})
 }
 func (p *Projector) appendError(e agent.Event) error {
+ feat/secure-permission-experience
 	return p.append(FeedItem{Type: ItemError, ID: "err_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: e.Err, Error: ErrorCardFromEvent(e)})
+
+	return p.append(FeedItem{Type: ItemError, ID: "err_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: e.Err})
+ master
 }
 func (p *Projector) appendInterrupted(e agent.Event) error {
 	for i := range p.items {
@@ -315,7 +326,11 @@ func (p *Projector) appendInterrupted(e agent.Event) error {
 	if text == "" {
 		text = "stopped"
 	}
+ feat/secure-permission-experience
 	return p.append(FeedItem{Type: ItemError, ID: "intr_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: text, Error: NewErrorCard(agent.ErrCanceled, text, "")})
+
+	return p.append(FeedItem{Type: ItemError, ID: "intr_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: text})
+ master
 }
 func (p *Projector) append(it FeedItem) error {
 	p.byID[it.key()] = len(p.items)

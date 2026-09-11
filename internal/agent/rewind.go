@@ -68,7 +68,11 @@ func (l *Loop) emitLocked(parent int, e Event) error {
 	}
 	if l.Sink != nil {
 		if err := l.Sink.Emit(e); err != nil {
+ feat/secure-permission-experience
 			return NewPersistError(err, sinkJournalPath(l.Sink))
+
+			return err
+ master
 		}
 	}
 	l.seq = nextSeq
