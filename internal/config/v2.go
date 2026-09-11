@@ -15,8 +15,10 @@ import (
 )
 
 var providerKeyNames = map[string]string{
-	"anthropic": "ANTHROPIC_API_KEY", "groq": "GROQ_API_KEY",
-	"openrouter": "OPENROUTER_API_KEY", "nvidia": "NVIDIA_API_KEY",
+	"anthropic":  "ANTHROPIC_API_KEY",
+	"groq":       "GROQ_API_KEY",
+	"openrouter": "OPENROUTER_API_KEY",
+	"nvidia":     "NVIDIA_API_KEY",
 }
 
 type V2Config struct {
@@ -176,7 +178,7 @@ func readSecureFile(path string, limit int64) ([]byte, error) {
 
 func flattenV2(cfg V2Config) (map[string]string, error) {
 	if cfg.Version != 2 {
-		return nil, fmt.Errorf("Config v2: version must be 2")
+		return nil, errors.New("Config v2: version must be 2")
 	}
 	if _, ok := providerKeyNames[cfg.Provider]; !ok && cfg.Provider != "router" {
 		return nil, fmt.Errorf("Config v2: unsupported provider %q", cfg.Provider)
@@ -280,14 +282,12 @@ func flattenLimits(l V2Limits, out map[string]string) error {
 	}
 	if l.MaxRead != 0 {
 		if l.MaxRead < 1 || l.MaxRead > MaxFileBytes {
-			return nilError("limits.max_read must be in [1,262144]")
+			return errors.New("Config v2: limits.max_read must be in [1,262144]")
 		}
 		out["NABD_MAX_READ"] = strconv.Itoa(l.MaxRead)
 	}
 	return nil
 }
-
-func nilError(message string) error { return errors.New("Config v2: " + message) }
 
 func resolveCredential(providerName, keyName string, cred V2Credential) (string, error) {
 	switch cred.Source {
