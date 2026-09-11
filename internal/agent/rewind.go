@@ -12,6 +12,11 @@ import (
 // Rewind drops the last n user turns. It returns the text of the turn the
 // human is now free to retype, so a rewind is a correction, not a loss.
 func (l *Loop) Rewind(n int) (string, error) {
+	if !l.historyMu.TryLock() {
+		return "", ErrHistoryMutationInProgress
+	}
+	defer l.historyMu.Unlock()
+
 	if n < 1 {
 		n = 1
 	}
