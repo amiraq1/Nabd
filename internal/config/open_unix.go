@@ -9,7 +9,9 @@ import (
 )
 
 func openConfigFile(path string) (*os.File, os.FileInfo, error) {
-	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	// O_NONBLOCK prevents a hostile FIFO or device path from blocking before
+	// ParseFile can verify the descriptor refers to a regular file.
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
