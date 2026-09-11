@@ -50,3 +50,5 @@ func TestFeedCardNavigationAndSemanticJumps(t *testing.T) {
 		t.Fatal("p did not select permission")
 	}
 }
+
+// The public contracts above intentionally cover both phone and desktop widths.
