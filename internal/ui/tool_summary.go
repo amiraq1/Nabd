@@ -9,20 +9,15 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// renderToolSummary keeps the lifecycle and tool identity at every width, then
-// adds a safe subject and structured metadata while space remains.
 func renderToolSummary(t *presentation.ToolCard, width int) string {
 	if width <= 0 { width = DefaultWidth }
 	prefix := "  " + toolStatusSymbol(t.Status) + " " + toolDisplayName(t.Name)
 	subject := toolSubject(t)
 	meta := toolSummaryMetadata(t)
-
 	parts := []string{prefix}
 	if subject != "" { parts = append(parts, subject) }
 	if len(meta) > 0 { parts = append(parts, strings.Join(meta, " · ")) }
 	if line := strings.Join(parts, "  "); ansi.StringWidth(line) <= width { return line }
-
-	// Failure state outranks secondary subject/duration at narrow widths.
 	if important := toolImportantMetadata(t); important != "" {
 		line := prefix + " · " + important
 		if ansi.StringWidth(line) <= width { return line }
@@ -41,8 +36,7 @@ func toolSubject(t *presentation.ToolCard) string {
 
 func toolSummaryText(value string) string {
 	clean := SanitizeForDisplay(value, DisplayPolicy{AllowNewline: false, AllowTab: false, Redact: true})
-	clean = strings.Join(strings.Fields(clean), " ")
-	return clean
+	return strings.Join(strings.Fields(clean), " ")
 }
 
 func toolSummaryMetadata(t *presentation.ToolCard) []string {
@@ -76,20 +70,25 @@ func toolImportantMetadata(t *presentation.ToolCard) string {
 func toolStatusSymbol(status presentation.ToolStatus) string {
 	switch status {
 	case presentation.ToolPending:
-		return dim.Render("…")
+		return dim.Render("o")
 	case presentation.ToolRunning:
-		return warn.Render("⚙")
+		return warn.Render("~")
 	case presentation.ToolDone:
 		return good.Render("✓")
 	case presentation.ToolFailed:
 		return bad.Render("✗")
 	case presentation.ToolDenied:
-		return bad.Render("!")
+		return bad.Render("✗")
 	case presentation.ToolCancelled:
-		return dim.Render("⊘")
+		return dim.Render("✗")
 	default:
 		return dim.Render("·")
 	}
+}
+
+func toolOutputAvailable(t *presentation.ToolCard) bool {
+	if t == nil || t.Output == "" { return false }
+	return t.OutputState == "" || t.OutputState == presentation.OutputSaved || t.OutputState == presentation.OutputTruncated
 }
 
 func renderToolMetadata(t *presentation.ToolCard, width int) []string {
