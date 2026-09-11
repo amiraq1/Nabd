@@ -1,4 +1,4 @@
-name: Diagnose tool cards
+name: Fix tool card truncation contract
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  diagnose:
+  fix:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
@@ -19,24 +19,33 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Capture checks
-        shell: bash
+      - name: Update legacy truncation test
         run: |
-          set +e
-          {
-            echo '== gofmt =='
-            gofmt -l internal/presentation internal/ui
-            echo '== vet =='
-            go vet ./...
-            echo "vet_exit=$?"
-            echo '== tests =='
-            go test ./...
-            echo "test_exit=$?"
-          } > tool-card-ci-diagnostic.txt 2>&1
-      - name: Commit diagnostics
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('internal/presentation/projector_test.go')
+          text = path.read_text()
+          old = '''\tif !tool.Tool.Truncated {
+          \t\tt.Errorf("expected tool.Truncated to be true for real store marker %q", output)
+          \t}
+          '''
+          new = '''\tif tool.Tool.Truncated {
+          \t\tt.Errorf("execution truncation must not be inferred from the store marker %q", output)
+          \t}
+          \tif tool.Tool.OutputState != presentation.OutputTruncated {
+          \t\tt.Errorf("OutputState = %q, want OutputTruncated", tool.Tool.OutputState)
+          \t}
+          '''
+          if old not in text:
+              raise SystemExit('legacy truncation assertion not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          gofmt -w internal/presentation/projector_test.go
+          go test ./internal/presentation ./internal/ui
+      - name: Commit fix
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add tool-card-ci-diagnostic.txt
-          git commit -m 'chore: capture tool card diagnostics'
+          git add internal/presentation/projector_test.go
+          git commit -m 'test: distinguish persisted and execution truncation'
           git push origin HEAD:feat/ui-tool-cards
