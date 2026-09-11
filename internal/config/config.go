@@ -1,29 +1,13 @@
-// Package config reads nabd's settings from a file that lives outside any
-// project root, so a provider key never has to travel through the shell
-// environment where `env`, `cat ~/.bashrc`, or a curious child process can
-// see it.
-//
-// The file is ~/.ag/config (override with NABD_CONFIG). Format is the
-// smallest thing that works:
-//
-//	# comment
-//	ANTHROPIC_API_KEY=sk-ant-...
-//	export NVIDIA_API_KEY="nvapi-..."   # `export` and quotes are tolerated
-//	NABD_MODEL=claude-sonnet-4-5
-//
-// Rules that matter:
-//   - This package never writes. Not the file, not a temp copy, nothing.
-//   - A file readable by group or others is refused, the way ssh refuses a
-//     loose private key. A key you can't protect is a key you don't have.
-//   - The file wins over the environment. If both are set, the file is the
-//     source of truth; the environment is a fallback for people who have
-//     not migrated yet.
+// Package config reads Nabd's user-scoped v1 configuration.
+// Provider selection, credentials, models and base URLs are accepted only
+// from NABD_CONFIG or ~/.ag/config. Project files are never consulted.
 package config
 
 import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -31,8 +15,21 @@ import (
 	"sync"
 )
 
-// EnvVar names the override for the config path.
-const EnvVar = "NABD_CONFIG"
+const (
+	EnvVar        = "NABD_CONFIG"
+	MaxFileBytes  = 256 << 10
+	MaxLineBytes  = 64 << 10
+	MaxKeys       = 256
+	MaxKeyBytes   = 128
+	MaxValueBytes = 64 << 10
+)
+
+var knownV1Keys = map[string]struct{}{
+	"ANTHROPIC_API_KEY": {}, "GROQ_API_KEY": {}, "OPENROUTER_API_KEY": {}, "NVIDIA_API_KEY": {},
+	"NABD_PROVIDER": {}, "NABD_MODEL": {}, "NABD_BASE_URL": {}, "NABD_ROUTES": {},
+	"NABD_ROUTER_MODE": {}, "NABD_ROUTER_PRESTREAM_TIMEOUT": {}, "NABD_PROVIDER_TURN_TIMEOUT": {},
+	"NABD_CTX": {}, "NABD_MAX_TOKENS": {}, "NABD_MAX_TOKENS_PER_RUN": {}, "NABD_MAX_READ": {},
+}
 
 var (
 	once    sync.Once
@@ -40,11 +37,12 @@ var (
 	loadErr error
 )
 
-// Path returns where the config file is expected. It does not check that
-// the file exists.
 func Path() (string, error) {
 	if p := strings.TrimSpace(os.Getenv(EnvVar)); p != "" {
-		return p, nil
+		if !filepath.IsAbs(p) {
+			return "", fmt.Errorf("%s must be an absolute user-scoped path", EnvVar)
+		}
+		return filepath.Clean(p), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -53,27 +51,23 @@ func Path() (string, error) {
 	return filepath.Join(home, ".ag", "config"), nil
 }
 
-// Load parses the config file once. A missing file is not an error: the
-// environment still works. A present but unreadable or too-open file is.
 func Load() error {
-	once.Do(func() {
-		values, loadErr = load()
-	})
+	once.Do(func() { values, loadErr = load() })
 	return loadErr
 }
 
-// Get returns the value for key: file first, then environment, trimmed.
-// An unloaded or broken config silently degrades to the environment; the
-// caller that cares about the error should call Load first.
+// Get fails closed: a present-but-invalid config never falls back to an
+// environment credential. Call Load for the diagnostic.
 func Get(key string) string {
-	_ = Load()
+	if Load() != nil {
+		return ""
+	}
 	if v, ok := values[key]; ok && v != "" {
 		return v
 	}
 	return strings.TrimSpace(os.Getenv(key))
 }
 
-// GetOr is Get with a fallback for the empty case.
 func GetOr(key, fallback string) string {
 	if v := Get(key); v != "" {
 		return v
@@ -81,44 +75,38 @@ func GetOr(key, fallback string) string {
 	return fallback
 }
 
-// Has reports whether key is set in either the file or the environment.
 func Has(key string) bool { return Get(key) != "" }
 
-// Conflict is a key that the user set in both the process environment and the
-// config file, with different values after trimming. The file wins, so the
-// environment value is silently ignored — Conflict exposes the key name so the
-// UI can tell the user. It never carries a value: a printed key name is a fact
-// about the user's intent, but a printed value is a secret on the screen.
 type Conflict struct{ Key string }
 
-// Conflicts returns the keys present in both the loaded file and the process
-// environment with different non-empty trimmed values — the keys the file
-// silently overrode. The environment is observed at conflict-query time.
-// The result is sorted alphabetically for deterministic output. It calls
-// Load(), which is guarded by sync.Once, so the file is parsed at most once
-// and never reloaded on subsequent calls. It never writes and never exposes
-// a value.
 func Conflicts() []Conflict {
-	_ = Load()
+	if Load() != nil {
+		return nil
+	}
 	var out []Conflict
 	for k, fv := range values {
 		fv = strings.TrimSpace(fv)
-		if fv == "" {
-			continue
-		}
 		ev := strings.TrimSpace(os.Getenv(k))
-		if ev == "" || ev == fv {
-			continue
+		if fv != "" && ev != "" && ev != fv {
+			out = append(out, Conflict{Key: k})
 		}
-		out = append(out, Conflict{Key: k})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
 }
 
-// ResetForTest clears the load-once and cached values so a test can point
-// NABD_CONFIG at a fresh file and observe the new load. Production code never
-// calls this; the package-global Once is correct for a process lifetime.
+// Warnings reports unknown v1 keys by name only. Values are never included.
+func Warnings(v map[string]string) []string {
+	out := make([]string, 0)
+	for k := range v {
+		if _, ok := knownV1Keys[k]; !ok {
+			out = append(out, fmt.Sprintf("unknown v1 key %s", k))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func ResetForTest() {
 	once = sync.Once{}
 	values = nil
@@ -133,57 +121,38 @@ func load() (map[string]string, error) {
 	return ParseFile(p)
 }
 
-// ParseFile reads and parses the file at p with the permission check.
-// It is exported for tests and for anyone who wants a different location.
-//
-// Security: the path is checked with os.Lstat so an attacker cannot swap a
-// symlink in front of the open (TOCTOU via a symlink to a loose file). A
-// symlink is refused outright; only a regular file is accepted; group/other
-// permission bits are refused; and on Unix the file must be owned by the
-// current user (documented as a Windows limitation: NT ACL semantics make a
-// numeric-uid ownership check meaningless there, so it is skipped).
+// ParseFile securely opens and validates a regular user-owned 0600 file.
+// On Unix the final component uses O_NOFOLLOW and descriptor metadata.
 func ParseFile(p string) (map[string]string, error) {
-	fi, err := os.Lstat(p)
+	f, fi, err := openConfigFile(p)
 	if errors.Is(err, os.ErrNotExist) {
 		return map[string]string{}, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if fi.Mode()&os.ModeSymlink != 0 {
-		return nil, fmt.Errorf("%s: رابط مرن غير مسموح — الملف العادي مطلوب (chmod 600 على الملف الحقيقي)", p)
-	}
+	defer f.Close()
 	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s: غير منتظم — الملف العادي مطلوب", p)
+		return nil, fmt.Errorf("%s: regular file required", p)
 	}
 	if mode := fi.Mode().Perm(); mode&0o077 != 0 {
-		return nil, fmt.Errorf("%s: الصلاحيات %04o مفتوحة للغير — شغّل: chmod 600 %s", p, mode, p)
+		return nil, fmt.Errorf("%s: permissions %04o are open to others; run chmod 600 %s", p, mode, p)
 	}
 	if err := checkOwner(p, fi); err != nil {
 		return nil, err
 	}
-	f, err := os.Open(p)
-	if err != nil {
-		return nil, err
+	if fi.Size() > MaxFileBytes {
+		return nil, fmt.Errorf("%s: config exceeds %d bytes", p, MaxFileBytes)
 	}
-	defer f.Close()
-	return Parse(f)
+	return Parse(io.LimitReader(f, MaxFileBytes+1))
 }
 
-// checkOwner enforces Unix ownership of the config file: it must belong to the
-// current user, the way ssh refuses a loose private key owned by someone else.
-// On non-Unix platforms it is a no-op (see owner_unix.go / owner_other.go).
-func checkOwner(p string, fi os.FileInfo) error {
-	return checkOwnerPlatform(p, fi)
-}
+func checkOwner(p string, fi os.FileInfo) error { return checkOwnerPlatform(p, fi) }
 
-// Parse reads KEY=VALUE lines. Blank lines and `#` comments are skipped;
-// an optional `export ` prefix and matching single or double quotes around
-// the value are stripped. A trailing ` # comment` is removed only when the
-// value is unquoted, because `#` is legal inside a key.
 func Parse(r interface{ Read([]byte) (int, error) }) (map[string]string, error) {
 	out := map[string]string{}
 	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 4096), MaxLineBytes+1)
 	for n := 1; sc.Scan(); n++ {
 		line := strings.TrimSpace(sc.Text())
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -192,11 +161,14 @@ func Parse(r interface{ Read([]byte) (int, error) }) (map[string]string, error) 
 		line = strings.TrimPrefix(line, "export ")
 		k, v, ok := strings.Cut(line, "=")
 		if !ok {
-			return nil, fmt.Errorf("سطر %d: ليس بصيغة KEY=VALUE", n)
+			return nil, fmt.Errorf("line %d: expected KEY=VALUE", n)
 		}
 		k = strings.TrimSpace(k)
-		if k == "" || strings.ContainsAny(k, " \t") {
-			return nil, fmt.Errorf("سطر %d: اسم مفتاح غير صالح", n)
+		if k == "" || len(k) > MaxKeyBytes || strings.ContainsAny(k, " \t\r\n") {
+			return nil, fmt.Errorf("line %d: invalid key", n)
+		}
+		if _, duplicate := out[k]; duplicate {
+			return nil, fmt.Errorf("line %d: duplicate key %s", n, k)
 		}
 		v = strings.TrimSpace(v)
 		switch {
@@ -207,9 +179,18 @@ func Parse(r interface{ Read([]byte) (int, error) }) (map[string]string, error) 
 				v = strings.TrimSpace(v[:i])
 			}
 		}
+		if len(v) > MaxValueBytes {
+			return nil, fmt.Errorf("line %d: value for %s exceeds %d bytes", n, k, MaxValueBytes)
+		}
 		out[k] = v
+		if len(out) > MaxKeys {
+			return nil, fmt.Errorf("config exceeds %d keys", MaxKeys)
+		}
 	}
 	if err := sc.Err(); err != nil {
+		if strings.Contains(err.Error(), "token too long") {
+			return nil, fmt.Errorf("config line exceeds %d bytes", MaxLineBytes)
+		}
 		return nil, err
 	}
 	return out, nil
