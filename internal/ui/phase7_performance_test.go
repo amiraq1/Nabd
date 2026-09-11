@@ -10,7 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-func TestRepeatedIdenticalResizeSkipsRefresh(t *testing.T) {
+func TestRepeatedIdenticalResizeSkipsItemRender(t *testing.T) {
 	f := NewFeed()
 	f.BuildFromEvents([]agent.Event{{Seq: 1, Type: agent.UserMsg, Text: "hello"}})
 	f.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -25,7 +25,7 @@ func TestRepeatedIdenticalResizeSkipsRefresh(t *testing.T) {
 
 func TestRenderedViewportBackingIsBounded(t *testing.T) {
 	f := NewFeed()
-	f.BuildFromEvents([]agent.Event{{Seq: 1, Type: agent.AssistantText, Text: strings.Repeat("line\n", maxRenderedFeedLines+2000)}})
+	f.BuildFromEvents([]agent.Event{{Seq: 1, Type: agent.TextDelta, Text: strings.Repeat("line\n", maxRenderedFeedLines+2000)}})
 	if len(f.lines) > maxRenderedFeedLines {
 		t.Fatalf("retained %d lines, limit %d", len(f.lines), maxRenderedFeedLines)
 	}
@@ -45,7 +45,7 @@ func TestLineCacheNeverExceedsVisibleItemCap(t *testing.T) {
 
 func BenchmarkResizeAndStreamingRefresh(b *testing.B) {
 	f := NewFeed()
-	f.BuildFromEvents([]agent.Event{{Seq: 1, Type: agent.AssistantText, Text: strings.Repeat("stream ", 200)}})
+	f.BuildFromEvents([]agent.Event{{Seq: 1, Type: agent.TextDelta, Text: strings.Repeat("stream ", 200)}})
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		f.Update(tea.WindowSizeMsg{Width: 79 + i%2, Height: 24})
