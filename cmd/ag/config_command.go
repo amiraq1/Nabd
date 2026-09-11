@@ -15,7 +15,7 @@ func runConfigCommand(args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, "usage: nabd config path|validate|show --redacted")
 		return 2
 	}
-	path, err := config.Path()
+	path, version, err := config.SelectedPath()
 	if err != nil {
 		fmt.Fprintln(errOut, "nabd config:", err)
 		return 1
@@ -26,20 +26,22 @@ func runConfigCommand(args []string, out, errOut io.Writer) int {
 			fmt.Fprintln(errOut, "usage: nabd config path")
 			return 2
 		}
-		fmt.Fprintln(out, path)
+		fmt.Fprintf(out, "%s (v%d)\n", path, version)
 		return 0
 	case "validate":
 		if len(args) != 1 {
 			fmt.Fprintln(errOut, "usage: nabd config validate")
 			return 2
 		}
-		vals, err := config.ParseFile(path)
+		vals, selectedVersion, err := config.ParseSelectedFile()
 		if err != nil {
 			fmt.Fprintln(errOut, "invalid config:", err)
 			return 1
 		}
-		printConfigWarnings(errOut, vals)
-		fmt.Fprintln(out, "config valid")
+		if selectedVersion == 1 {
+			printConfigWarnings(errOut, vals)
+		}
+		fmt.Fprintf(out, "config valid (v%d)\n", selectedVersion)
 		return 0
 	case "show":
 		fs := flag.NewFlagSet("config show", flag.ContinueOnError)
@@ -49,12 +51,14 @@ func runConfigCommand(args []string, out, errOut io.Writer) int {
 			fmt.Fprintln(errOut, "usage: nabd config show --redacted")
 			return 2
 		}
-		vals, err := config.ParseFile(path)
+		vals, selectedVersion, err := config.ParseSelectedFile()
 		if err != nil {
 			fmt.Fprintln(errOut, "invalid config:", err)
 			return 1
 		}
-		printConfigWarnings(errOut, vals)
+		if selectedVersion == 1 {
+			printConfigWarnings(errOut, vals)
+		}
 		keys := make([]string, 0, len(vals))
 		for k := range vals {
 			keys = append(keys, k)
