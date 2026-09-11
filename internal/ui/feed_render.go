@@ -73,7 +73,7 @@ func renderTool(it presentation.FeedItem, width int, expanded ...bool) []string 
 	out:=[]string{renderToolSummary(t,width)}
 	if isExpanded {
 		out=append(out,renderToolMetadata(t,width)...)
-		if t.Output!=""&&(t.OutputState==presentation.OutputSaved||t.OutputState==presentation.OutputTruncated) {
+		if toolOutputAvailable(t) {
 			if t.Name=="read_file" {out=append(out,renderReadFileOutput(t.Output,width)...)} else {out=append(out,truncateOutput(t.Output,width)...)}
 		} else if t.Status==presentation.ToolRunning {out=append(out,dim.Render(truncateToWidth("  · running",width,"…")))}
 	} else if (t.Status==presentation.ToolFailed||t.Status==presentation.ToolDenied)&&t.Err!="" {
