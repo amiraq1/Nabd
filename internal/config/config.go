@@ -1,5 +1,4 @@
 // Package config reads Nabd's user-scoped v1 configuration.
-//
 // Provider selection, credentials, models and base URLs are accepted only
 // from NABD_CONFIG or ~/.ag/config. Project files are never consulted.
 package config
@@ -17,11 +16,11 @@ import (
 )
 
 const (
-	EnvVar       = "NABD_CONFIG"
-	MaxFileBytes = 256 << 10
-	MaxLineBytes = 64 << 10
-	MaxKeys      = 256
-	MaxKeyBytes  = 128
+	EnvVar        = "NABD_CONFIG"
+	MaxFileBytes  = 256 << 10
+	MaxLineBytes  = 64 << 10
+	MaxKeys       = 256
+	MaxKeyBytes   = 128
 	MaxValueBytes = 64 << 10
 )
 
@@ -123,9 +122,7 @@ func load() (map[string]string, error) {
 }
 
 // ParseFile securely opens and validates a regular user-owned 0600 file.
-// On Unix the final path component is opened with O_NOFOLLOW and metadata is
-// checked from the opened descriptor. Parent-directory symlink resolution is
-// intentionally outside this v1 contract and documented in THREAT_MODEL.md.
+// On Unix the final component uses O_NOFOLLOW and descriptor metadata.
 func ParseFile(p string) (map[string]string, error) {
 	f, fi, err := openConfigFile(p)
 	if errors.Is(err, os.ErrNotExist) {
@@ -191,7 +188,7 @@ func Parse(r interface{ Read([]byte) (int, error) }) (map[string]string, error) 
 		}
 	}
 	if err := sc.Err(); err != nil {
-		if errors.Is(err, bufio.ErrTooLong) || strings.Contains(err.Error(), "token too long") {
+		if strings.Contains(err.Error(), "token too long") {
 			return nil, fmt.Errorf("config line exceeds %d bytes", MaxLineBytes)
 		}
 		return nil, err
