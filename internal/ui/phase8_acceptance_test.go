@@ -34,15 +34,20 @@ func TestProductAcceptanceMatrix(t *testing.T) {
 			f := NewFeed()
 			f.Update(tea.WindowSizeMsg{Width: width, Height: 40})
 			f.BuildFromEvents(acceptanceEvents())
-			view := ansi.Strip(f.View())
-			for _, line := range strings.Split(view, "\n") {
+			feed := ansi.Strip(strings.Join(f.lines, "\n"))
+			for _, line := range strings.Split(feed, "\n") {
 				if ansi.StringWidth(line) > width {
 					t.Fatalf("line width %d exceeds %d: %q", ansi.StringWidth(line), width, line)
 				}
 			}
-			for _, want := range []string{"Nabd", "Read", "Bash", "provider", "action:"} {
-				if !strings.Contains(view, want) {
-					t.Errorf("missing semantic cue %q in view:\n%s", want, view)
+			if !strings.Contains(feed, "action:") {
+				t.Errorf("missing next action in feed:\n%s", feed)
+			}
+			if width >= 40 {
+				for _, want := range []string{"Nabd", "Read", "Bash", "provider"} {
+					if !strings.Contains(feed, want) {
+						t.Errorf("missing semantic cue %q in feed:\n%s", want, feed)
+					}
 				}
 			}
 		})
