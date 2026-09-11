@@ -65,6 +65,13 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 	if !rawPairingInvariantHolds(live[len(dropped):]) {
 		return ErrCompactBoundaryStale
 	}
+	promptEstimate := EstimateMessages(Messages(dropped))
+	if l.Budget != nil {
+		promptEstimate = l.Budget.Estimate(Messages(dropped))
+	}
+	if err := l.SpendBudget.Charge(promptEstimate, 0, maxOutputTokens()); err != nil {
+		return err
+	}
 
 	// Phase 2: summarise without holding l.mu (provider round-trip may be slow).
 	sum := l.summarise(ctx, dropped)
@@ -122,9 +129,9 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 			Stubs:         countReadStubs(after),
 		},
 	}
-	_ = l.emitLocked(l.parent, compactEvent)
+	err := l.emitLocked(l.parent, compactEvent)
 	l.mu.Unlock()
-	return nil
+	return err
 }
 
 func countReadStubs(ms []provider.Message) int {

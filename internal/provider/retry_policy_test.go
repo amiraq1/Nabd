@@ -419,6 +419,19 @@ func TestRouterRedactsExactConfiguredKeys(t *testing.T) {
 	}
 }
 
+func TestSanitizeBodyIsIdempotent(t *testing.T) {
+	key := "provider-secret-without-a-known-prefix-123456"
+	input := fmt.Sprintf(`{"error":{"message":"key=%s"}}`, key)
+	once := SanitizeBody(input, []string{key})
+	twice := SanitizeBody(once, []string{key})
+	if once != twice {
+		t.Fatalf("SanitizeBody is not idempotent: once=%q twice=%q", once, twice)
+	}
+	if bytes.Contains([]byte(once), []byte(key)) {
+		t.Fatalf("exact key leaked: %q", once)
+	}
+}
+
 func TestRouterRedactsBearerAuthorization(t *testing.T) {
 	input := "Authorization: Bearer sk-ant-abc123456789"
 	got := Redact(input)

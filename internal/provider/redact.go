@@ -25,6 +25,25 @@ import (
 	"strings"
 )
 
+// SecretKeyProvider exposes only exact secret values needed for redaction.
+type SecretKeyProvider interface {
+	SecretKeys() []string
+}
+
+func (a *Anthropic) SecretKeys() []string {
+	if a == nil || a.Key == "" {
+		return nil
+	}
+	return []string{a.Key}
+}
+
+func (o *OpenAICompat) SecretKeys() []string {
+	if o == nil || o.Key == "" {
+		return nil
+	}
+	return []string{o.Key}
+}
+
 const (
 	redactedToken     = "[REDACTED]"
 	maxBodyBytes      = 4 * 1024  // 4 KiB per sanitized provider body

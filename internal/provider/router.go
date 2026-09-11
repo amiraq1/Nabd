@@ -195,6 +195,9 @@ type Router struct {
 	clock            Clock
 	name             string
 	newStreamID      func() (string, error)
+	breakerMu        sync.Mutex
+	blockedUntil     map[string]time.Time
+	breakerCooldown  time.Duration
 }
 
 // NewRouter constructs a Router (Section I). Routing state is fixed at
@@ -245,7 +248,29 @@ func NewRouter(routes []Route, timeout time.Duration, clock Clock) (*Router, err
 		clock:            clock,
 		name:             name,
 		newStreamID:      randomStreamID,
+		blockedUntil:     make(map[string]time.Time),
+		breakerCooldown:  5 * time.Minute,
 	}, nil
+}
+
+func routeKey(re Route) string { return re.Provider + "\x00" + re.Model }
+
+func (r *Router) routeAllowed(re Route) bool {
+	r.breakerMu.Lock()
+	defer r.breakerMu.Unlock()
+	return !r.clock.Now().Before(r.blockedUntil[routeKey(re)])
+}
+
+func (r *Router) tripRoute(re Route) {
+	r.breakerMu.Lock()
+	defer r.breakerMu.Unlock()
+	if r.blockedUntil == nil {
+		r.blockedUntil = make(map[string]time.Time)
+	}
+	if r.breakerCooldown <= 0 {
+		r.breakerCooldown = 5 * time.Minute
+	}
+	r.blockedUntil[routeKey(re)] = r.clock.Now().Add(r.breakerCooldown)
 }
 
 // Name returns a human-readable, non-secret description of the router.
@@ -295,6 +320,17 @@ func (r *Router) route(ctx context.Context, req Request, streamID string, out ch
 			sendError(out, ctx.Err())
 			return
 		}
+		if !r.routeAllowed(re) {
+			sendTrace(out, ChunkRouteTrace{
+				StreamID: streamID,
+				Provider: re.Provider,
+				Model:    re.Model,
+				Attempt:  idx + 1,
+				Status:   "blocked",
+				Reason:   "route circuit breaker open",
+			})
+			continue
+		}
 
 		sendTrace(out, ChunkRouteTrace{
 			StreamID: streamID,
@@ -314,7 +350,7 @@ func (r *Router) route(ctx context.Context, req Request, streamID string, out ch
 				Provider:  re.Provider,
 				Model:     re.Model,
 				Retryable: true,
-				Body:      SanitizeBody(err.Error(), nil),
+				Body:      SanitizeBody(err.Error(), exactKeys(re.Client)),
 			}
 			attempts = append(attempts, pe)
 			allRL = false
@@ -350,6 +386,9 @@ func (r *Router) route(ctx context.Context, req Request, streamID string, out ch
 
 		case outcomeFallbackEligible:
 			pe := outcome.provErr
+			if pe.Status == http.StatusUnauthorized || pe.Status == http.StatusForbidden {
+				r.tripRoute(re)
+			}
 			attempts = append(attempts, pe)
 			if pe.Status != http.StatusTooManyRequests {
 				allRL = false
@@ -421,6 +460,13 @@ type routeOutcome struct {
 	kind        outcomeKind
 	provErr     ProviderError
 	nonRetryErr error
+}
+
+func exactKeys(client SingleAttempt) []string {
+	if p, ok := client.(SecretKeyProvider); ok {
+		return p.SecretKeys()
+	}
+	return nil
 }
 
 // ─── consumeRoute ─────────────────────────────────────────────────────────────
@@ -617,7 +663,7 @@ func (r *Router) classifyError(re Route, chunk Chunk) routeOutcome {
 			// Generic 400 Bad Request — Section K: no fallback.
 			return routeOutcome{
 				kind:        outcomeNonRetryableError,
-				nonRetryErr: fmt.Errorf(nonRetryableHTTPErrFmt, re.Provider, re.Model, SanitizeBody(he.Body, nil)),
+				nonRetryErr: fmt.Errorf(nonRetryableHTTPErrFmt, re.Provider, re.Model, SanitizeBody(he.Body, exactKeys(re.Client))),
 			}
 		}
 		return r.makeFailure(re, he.Status, he.Body, isFallbackStatus(he.Status), he.Body)
@@ -628,7 +674,7 @@ func (r *Router) classifyError(re Route, chunk Chunk) routeOutcome {
 		// Generic 400 in text format
 		return routeOutcome{
 			kind:        outcomeNonRetryableError,
-			nonRetryErr: fmt.Errorf(nonRetryableTextErrFmt, re.Provider, re.Model, SanitizeBody(errStr, nil)),
+			nonRetryErr: fmt.Errorf(nonRetryableTextErrFmt, re.Provider, re.Model, SanitizeBody(errStr, exactKeys(re.Client))),
 		}
 	}
 
@@ -639,7 +685,7 @@ func (r *Router) classifyError(re Route, chunk Chunk) routeOutcome {
 			Model:     re.Model,
 			Status:    0,
 			Retryable: chunk.Retryable,
-			Body:      SanitizeBody(errStr, nil),
+			Body:      SanitizeBody(errStr, exactKeys(re.Client)),
 		},
 	}
 }
@@ -648,7 +694,7 @@ func (r *Router) classifyRateLimit(re Route, chunk Chunk) routeOutcome {
 	var body string
 	var rawRA string
 	if chunk.RateLimit != nil {
-		body = SanitizeBody(chunk.RateLimit.RawMessage, nil)
+		body = SanitizeBody(chunk.RateLimit.RawMessage, exactKeys(re.Client))
 		rawRA = chunk.RateLimit.RawRetryAfter
 		if rawRA == "" && chunk.RateLimit.WaitSec > 0 {
 			rawRA = fmt.Sprintf("%.2f", chunk.RateLimit.WaitSec)
@@ -673,9 +719,9 @@ func (r *Router) classifyRateLimit(re Route, chunk Chunk) routeOutcome {
 func (r *Router) makeFailure(re Route, status int, rawBody string, retryable bool, rawReason string) routeOutcome {
 	var body string
 	if rawBody != "" {
-		body = SanitizeBody(rawBody, nil)
+		body = SanitizeBody(rawBody, exactKeys(re.Client))
 	} else {
-		body = SanitizeBody(rawReason, nil)
+		body = SanitizeBody(rawReason, exactKeys(re.Client))
 	}
 	return routeOutcome{
 		kind: outcomeFallbackEligible,
