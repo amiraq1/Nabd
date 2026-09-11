@@ -429,22 +429,16 @@ func (r *Router) consumeRoute(
 	out chan<- Chunk,
 ) routeOutcome {
 	var precommitMeta []Chunk
-	var mu sync.Mutex
-	committed := false
 
 	checkAndCommit := func() bool {
-		mu.Lock()
-		defer mu.Unlock()
 		if parentCtx.Err() != nil {
 			return false
 		}
 		if !r.clock.Now().Before(routeDeadline) {
 			return false
 		}
-		committed = true
 		return true
 	}
-	_ = committed
 
 	defer routeCancel()
 
