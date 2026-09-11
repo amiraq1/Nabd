@@ -1,0 +1,139 @@
+name: Apply error recovery implementation
+on:
+  push:
+    branches: [feat/error-recovery]
+    paths: [.github/workflows/apply-error-recovery.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/error-recovery
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Integrate typed errors and recovery UI
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          def patch(path, old, new):
+              p=Path(path); s=p.read_text()
+              if old not in s: raise SystemExit(f'missing patch anchor in {path}: {old[:80]!r}')
+              p.write_text(s.replace(old,new,1))
+
+          patch('internal/agent/event.go', '\tErrorCode   string   `json:"error_code,omitempty"`\n', '\tErrorCode   string   `json:"error_code,omitempty"`\n\tJournalPath string   `json:"journal_path,omitempty"`\n')
+          patch('internal/agent/rewind.go', '\t\tif err := l.Sink.Emit(e); err != nil {\n\t\t\treturn err\n\t\t}\n', '\t\tif err := l.Sink.Emit(e); err != nil {\n\t\t\treturn NewPersistError(err, sinkJournalPath(l.Sink))\n\t\t}\n')
+          patch('internal/store/sink.go', 'func (j *JSONL) Emit(e agent.Event) error { return j.Append(e) }\n', 'func (j *JSONL) Emit(e agent.Event) error { return j.Append(e) }\n\n// JournalPath exposes only the local journal location for safe-stop diagnostics.\nfunc (j *JSONL) JournalPath() string { return j.Path() }\n')
+          patch('internal/agent/error_event.go', 'func NewPersistError(err error, path string) error {', 'func sinkJournalPath(s Sink) string {\n\tif p, ok := s.(interface{ JournalPath() string }); ok {\n\t\treturn p.JournalPath()\n\t}\n\tif fanout, ok := s.(Fanout); ok {\n\t\tfor _, child := range fanout {\n\t\t\tif path := sinkJournalPath(child); path != "" {\n\t\t\t\treturn path\n\t\t\t}\n\t\t}\n\t}\n\treturn ""\n}\n\nfunc NewPersistError(err error, path string) error {')
+
+          p=Path('internal/presentation/item.go'); s=p.read_text()
+          s=s.replace('\tPerm        *PermCard `json:"permission,omitempty"`\n', '\tPerm        *PermCard `json:"permission,omitempty"`\n\tError       *ErrorCard `json:"error,omitempty"`\n',1)
+          s=s.replace('\tif it.Perm != nil {\n', '\tif it.Error != nil {\n\t\thashString(&h, string(it.Error.Code))\n\t\thashString(&h, it.Error.Title)\n\t\thashString(&h, it.Error.Message)\n\t\thashString(&h, it.Error.ActionText)\n\t\thashBool(&h, it.Error.Retryable)\n\t\thashString(&h, string(it.Error.RetryScope))\n\t\thashString(&h, it.Error.JournalPath)\n\t\thashBool(&h, it.Error.ToolExecuted)\n\t}\n\tif it.Perm != nil {',1)
+          p.write_text(s)
+
+          p=Path('internal/presentation/projector.go'); s=p.read_text()
+          s=s.replace('\t\tif it.Perm != nil {\n\t\t\tperm := *it.Perm\n\t\t\tit.Perm = &perm\n\t\t}\n', '\t\tif it.Perm != nil {\n\t\t\tperm := *it.Perm\n\t\t\tit.Perm = &perm\n\t\t}\n\t\tif it.Error != nil {\n\t\t\tcard := *it.Error\n\t\t\tit.Error = &card\n\t\t}\n',1)
+          s=s.replace('\t\tText: e.Err,\n\t}\n\treturn p.append(it)\n}\n\n// appendInterrupted', '\t\tText: e.Err,\n\t\tError: ErrorCardFromEvent(e),\n\t}\n\treturn p.append(it)\n}\n\n// appendInterrupted',1)
+          old='\tit := FeedItem{\n\t\tType: ItemError,\n\t\tID:   "intr_" + strconv.Itoa(e.Seq),\n\t\tSeq:  e.Seq,\n\t\tText: text,\n\t}\n'
+          new='\tit := FeedItem{\n\t\tType: ItemError,\n\t\tID:   "intr_" + strconv.Itoa(e.Seq),\n\t\tSeq:  e.Seq,\n\t\tText: text,\n\t\tError: NewErrorCard(agent.ErrCanceled, text, ""),\n\t}\n'
+          if old not in s: raise SystemExit('missing interrupted anchor')
+          p.write_text(s.replace(old,new,1))
+
+          patch('internal/ui/feed_render.go', 'func renderError(it presentation.FeedItem, width int) []string {\n\ttext := it.Text\n', 'func renderError(it presentation.FeedItem, width int) []string {\n\tif it.Error != nil {\n\t\treturn renderErrorCard(it.Error, width)\n\t}\n\ttext := it.Text\n')
+
+          p=Path('internal/presentation/status.go'); s=p.read_text()
+          start=s.index('type ErrorCode string\n')
+          end=s.index('type PresentedError struct', start)
+          s=s[:start]+s[end:]
+          s=s.replace('\tCode      ErrorCode\n', '\tCode      agent.ErrorCode\n',1)
+          old='\tcase agent.Interrupted:\n\t\tp.status.Phase = PhaseCanceling\n\t\tp.status.LastError = &PresentedError{Code: ErrCodeCanceled, Message: "run canceled", Retryable: true}\n\tcase agent.RunError:\n\t\tcode := ErrorCode(e.ErrorCode)\n\t\tif code == "" {\n\t\t\tcode = ErrCodeUnknown\n\t\t}\n\t\tp.status.LastError = &PresentedError{Code: code, Message: e.Err, Retryable: code != ErrCodePersist}\n\t\tp.status.Phase = PhaseError\n'
+          new='\tcase agent.Interrupted:\n\t\tp.status.Phase = PhaseIdle\n\t\tp.status.CanCancel = false\n\t\tp.status.LastError = &PresentedError{Code: agent.ErrCanceled, Message: "run canceled", Retryable: false}\n\tcase agent.RunError:\n\t\tcard := ErrorCardFromEvent(e)\n\t\tp.status.LastError = &PresentedError{Code: card.Code, Message: card.Message, Retryable: card.Retryable}\n\t\tp.status.CanRetry = card.RetryScope == RetryProviderTurn\n\t\tswitch card.Code {\n\t\tcase agent.ErrBudget, agent.ErrMaxTurnsCode:\n\t\t\tp.status.Phase = PhaseEnded\n\t\tcase agent.ErrCanceled:\n\t\t\tp.status.Phase = PhaseIdle\n\t\tdefault:\n\t\t\tp.status.Phase = PhaseError\n\t\t}\n'
+          if old not in s: raise SystemExit('missing status error block')
+          p.write_text(s.replace(old,new,1))
+
+          p=Path('internal/agent/loop.go'); s=p.read_text()
+          s=s.replace('\tif l.SpendBudget != nil && l.SpendBudget.Exhausted() {\n\t\treturn ErrSpendBudget\n\t}\n', '\tif l.SpendBudget != nil && l.SpendBudget.Exhausted() {\n\t\t_ = l.emit(RunErrorEvent(ErrSpendBudget))\n\t\treturn ErrSpendBudget\n\t}\n',1)
+          s=s.replace('_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})','_ = l.emit(RunErrorEvent(ErrRateLimitBudget))',1)
+          old='\t\t\tif err := l.Compact(ctx, l.compactTarget()); err != nil {\n\t\t\t\tl.emit(Event{Type: Notice, Text: "compact failed: " + err.Error()})\n'
+          new='\t\t\tif err := l.Compact(ctx, l.compactTarget()); err != nil {\n\t\t\t\tif ErrorCodeOf(err) == ErrPersist {\n\t\t\t\t\treturn err\n\t\t\t\t}\n\t\t\t\t_ = l.emit(RunErrorEvent(err))\n'
+          if old not in s: raise SystemExit('missing compact block')
+          p.write_text(s.replace(old,new,1))
+
+          p=Path('internal/ui/feed.go'); s=p.read_text()
+          s=s.replace('\terrorSeenSinceSend bool\n', '\terrorSeenSinceSend bool\n\trecoveryError *presentation.ErrorCard\n',1)
+          s=s.replace('\t\tif msg.err != nil && !m.errorSeenSinceSend {\n\t\t\tm.addNotice(presentation.ItemError, errSummary(msg.err))\n\t\t}\n', '\t\tif msg.err != nil && !m.errorSeenSinceSend {\n\t\t\tm.addRuntimeError(msg.err)\n\t\t}\n',1)
+          s=s.replace('\tcase agent.RunError:\n\t\tm.errorSeenSinceSend = true\n', '\tcase agent.RunError:\n\t\tm.errorSeenSinceSend = true\n\t\tm.recoveryError = presentation.ErrorCardFromEvent(e)\n',1)
+          s=s.replace('\tcase agent.PermReply, agent.Interrupted:\n', '\tcase agent.PermReply, agent.Interrupted:\n\t\tif e.Type == agent.Interrupted {\n\t\t\tm.recoveryError = presentation.NewErrorCard(agent.ErrCanceled, e.Text, "")\n\t\t}\n',1)
+          s=s.replace('\tm.proj = presentation.NewProjector()\n\tm.notices = nil\n', '\tm.proj = presentation.NewProjector()\n\tm.statusProj = presentation.NewStatusProjector()\n\tm.recoveryError = nil\n\tm.notices = nil\n',1)
+          s=s.replace('\t\t_ = m.proj.Apply(e)\n\t\tm.trackState(e)\n', '\t\t_ = m.proj.Apply(e)\n\t\tm.statusProj.Apply(e)\n\t\tm.trackState(e)\n',1)
+          p.write_text(s)
+
+          p=Path('internal/ui/feed_input.go'); s=p.read_text()
+          anchor='\tif m.modalVisible || m.decisionPending {\n\t\treturn m.modalKey(k)\n\t}\n'
+          repl=anchor+'\tif m.recoveryError != nil && !m.running && !m.busy {\n\t\tif model, cmd, handled := m.recoveryKey(k); handled {\n\t\t\treturn model, cmd\n\t\t}\n\t}\n'
+          if anchor not in s: raise SystemExit('missing routeKey anchor')
+          p.write_text(s.replace(anchor,repl,1))
+          PY
+          cat > internal/ui/recovery.go <<'EOF'
+          package ui
+
+          import (
+            "context"
+            "strconv"
+
+            "nabd/internal/presentation"
+            tea "github.com/charmbracelet/bubbletea"
+          )
+
+          type providerRetryRunner interface { RetryProvider(context.Context) error }
+
+          func (m *Feed) addRuntimeError(err error) {
+            card := presentation.ErrorCardFromError(err)
+            m.recoveryError = card
+            m.notices = append(m.notices, presentation.FeedItem{Type: presentation.ItemError, ID: "runtime_error_" + strconv.Itoa(len(m.notices)+1), Seq: m.lastSeq, Text: errSummary(err), Error: card})
+            m.refresh()
+            if m.follow { m.scrollToEnd() }
+          }
+
+          func (m *Feed) recoveryKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
+            switch k.String() {
+            case "d", "D", "esc":
+              m.recoveryError = nil
+              return m, nil, true
+            case "n", "N":
+              if m.recoveryError.RetryScope == presentation.RetryNewMessage {
+                m.recoveryError = nil
+                m.composer.focus()
+                return m, nil, true
+              }
+            case "c", "C":
+              if m.callbacks.OnCtx != nil { m.setCommandResult(m.callbacks.OnCtx()) }
+              return m, nil, true
+            case "r", "R":
+              if m.recoveryError.RetryScope != presentation.RetryProviderTurn { return m, nil, true }
+              retry, ok := m.runner.(providerRetryRunner)
+              if !ok { m.status = "provider retry is unavailable"; return m, nil, true }
+              ctx, cancel := context.WithCancel(context.Background())
+              m.cancel = cancel; m.running = true; m.busy = true; m.errorSeenSinceSend = false
+              m.recoveryError = nil; m.status = "retry pending"
+              return m, func() tea.Msg { err := retry.RetryProvider(ctx); cancel(); return doneMsg{err} }, true
+            }
+            return m, nil, false
+          }
+          EOF
+          gofmt -w internal/agent internal/provider internal/presentation internal/store internal/ui
+          go test ./...
+          go test -race ./internal/agent ./internal/provider ./internal/presentation ./internal/ui
+          go vet ./...
+          git diff --check
+          rm .github/workflows/apply-error-recovery.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'feat(errors): integrate safe error recovery cards'
+          git push
