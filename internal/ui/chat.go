@@ -265,7 +265,7 @@ func (m *Chat) command(line string) string {
 		}
 		return m.OnEdits()
 	case "/help":
-		return "/undo [n] · /edits · /rewind [n] · /ctx · /compact · ctrl+c · ctrl+d"
+		return CommandHelp(m.width)
 	}
 	return "unknown command: " + parsed.RawCmd
 }
