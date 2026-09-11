@@ -1,6 +1,6 @@
 # UI diagnostics dashboard
 
-`/diag` opens a local, read-only diagnostics snapshot for troubleshooting long terminal sessions.
+Enter feed navigation mode with `Esc`, then press `d` to open a local, read-only diagnostics snapshot for troubleshooting long terminal sessions.
 
 The dashboard reports only aggregate UI metrics:
 
@@ -12,4 +12,4 @@ The dashboard reports only aggregate UI metrics:
 
 It never includes prompts, assistant text, tool arguments, tool output, file paths, error messages, credentials, or journal content. The snapshot is not persisted and does not modify the journal.
 
-The output adapts to narrow, compact, and wide terminals and remains usable with `NO_COLOR`.
+The output adapts to narrow, compact, and wide terminals and remains usable with `NO_COLOR`. Bracketed paste cannot trigger the shortcut.

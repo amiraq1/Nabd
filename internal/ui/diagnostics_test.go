@@ -6,6 +6,7 @@ import (
 
 	"nabd/internal/agent"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -46,18 +47,20 @@ func TestDiagnosticsSnapshotIsPure(t *testing.T) {
 	}
 }
 
-func TestDiagSlashCommandRunsLocally(t *testing.T) {
-	cmd, ok := LookupSlashCommand("/diag")
-	if !ok || cmd.HasArg {
-		t.Fatalf("/diag registry entry missing or invalid: %#v", cmd)
-	}
+func TestDiagnosticsNavigationShortcut(t *testing.T) {
 	f := NewFeed()
-	f.composer.setValue("/diag")
-	f.runCommand("/diag")
-	if !f.composer.isEmpty() {
-		t.Fatal("/diag did not clear composer")
-	}
+	f.enterNavigation()
+	f.navigationKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	if len(f.notices) == 0 || !strings.Contains(f.notices[len(f.notices)-1].Text, "Diagnostics") {
-		t.Fatal("/diag did not add diagnostics dashboard")
+		t.Fatal("navigation shortcut did not add diagnostics dashboard")
+	}
+}
+
+func TestDiagnosticsShortcutIgnoresPaste(t *testing.T) {
+	f := NewFeed()
+	f.enterNavigation()
+	_, _, handled := f.navigationKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}, Paste: true})
+	if handled || len(f.notices) != 0 {
+		t.Fatal("pasted d unexpectedly opened diagnostics")
 	}
 }

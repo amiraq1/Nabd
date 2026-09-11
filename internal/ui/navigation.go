@@ -122,6 +122,9 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case "p":
 		m.selectType(presentation.ItemPermission, false)
 		return m, nil, true
+	case "d":
+		m.setCommandResult(m.Diagnostics(m.width))
+		return m, nil, true
 	case "?":
 		if m.status == "" {
 			m.status = navigationHint(m.width)
