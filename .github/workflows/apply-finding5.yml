@@ -1,0 +1,102 @@
+name: Apply Finding 5 compact guard
+
+on:
+  push:
+    branches: [fix/compact-command-interlock]
+    paths: [.github/workflows/apply-finding5.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/compact-command-interlock
+      - shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('internal/agent/loop.go')
+          s = p.read_text()
+          old = '''\tmu     sync.Mutex
+\tseq    int
+\tparent int
+\thist   []Event
+'''
+          new = '''\tmu        sync.Mutex
+\thistoryMu sync.Mutex
+\tseq       int
+\tparent    int
+\thist      []Event
+'''
+          if old not in s:
+              raise SystemExit('Loop mutex anchor missing')
+          s = s.replace(old, new, 1)
+          anchor = '''var ErrCompactBoundaryStale = errors.New("compact boundary became unsafe; concurrent turn invalidated the projection")
+'''
+          addition = anchor + '''
+// ErrHistoryMutationInProgress means Compact or Rewind already owns the
+// history-mutation interlock. Callers should retry after the active operation
+// settles; waiting inside either operation would freeze an interactive command.
+var ErrHistoryMutationInProgress = errors.New("history mutation already in progress; wait for compact or rewind to finish")
+'''
+          if anchor not in s:
+              raise SystemExit('compact sentinel anchor missing')
+          s = s.replace(anchor, addition, 1)
+          p.write_text(s)
+
+          p = Path('internal/agent/compact.go')
+          s = p.read_text()
+          old = '''func (l *Loop) Compact(ctx context.Context, target int) error {
+\t// Phase 1: take a snapshot of the live branch to pick a boundary.
+\t// l.mu is held only briefly so that the provider call does not block it.
+\tl.mu.Lock()
+\tlive := Live(l.hist)
+\tl.mu.Unlock()
+'''
+          new = '''func (l *Loop) Compact(ctx context.Context, target int) error {
+\tif !l.historyMu.TryLock() {
+\t\treturn ErrHistoryMutationInProgress
+\t}
+\tdefer l.historyMu.Unlock()
+
+\t// Phase 1: take a snapshot of the live branch to pick a boundary.
+\t// l.mu is held only briefly so that the provider call does not block it.
+\tl.mu.Lock()
+\tlive := Live(l.hist)
+\tl.mu.Unlock()
+'''
+          if old not in s:
+              raise SystemExit('Compact entry anchor missing')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('internal/agent/rewind.go')
+          s = p.read_text()
+          old = '''func (l *Loop) Rewind(n int) (string, error) {
+\tif n < 1 {
+'''
+          new = '''func (l *Loop) Rewind(n int) (string, error) {
+\tif !l.historyMu.TryLock() {
+\t\treturn "", ErrHistoryMutationInProgress
+\t}
+\tdefer l.historyMu.Unlock()
+
+\tif n < 1 {
+'''
+          if old not in s:
+              raise SystemExit('Rewind entry anchor missing')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          gofmt -w internal/agent
+          rm .github/workflows/apply-finding5.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'fix(agent): serialize compact and rewind history mutations'
+          git push
