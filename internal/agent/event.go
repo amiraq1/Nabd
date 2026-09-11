@@ -168,14 +168,19 @@ type EditRecord struct {
 
 // ToolCall carries both the request and its outcome.
 type ToolCall struct {
-	ID     string          `json:"id"`
-	Name   string          `json:"name"`
-	Args   json.RawMessage `json:"args,omitempty"`
-	Output string          `json:"out,omitempty"`
-	OK     bool            `json:"ok,omitempty"`
-	Exit   int             `json:"exit,omitempty"`
-	Signal string          `json:"signal,omitempty"`
-	MS     int64           `json:"ms,omitempty"`
+	ID   string          `json:"id"`
+	Name string          `json:"name"`
+	Args json.RawMessage `json:"args,omitempty"`
+	// SessionGrantKnown distinguishes live permission requests from legacy
+	// journal entries. When known, the UI must derive the AllowSession option
+	// from SessionGrantAllowed rather than from the tool name.
+	SessionGrantKnown   bool   `json:"session_grant_known,omitempty"`
+	SessionGrantAllowed bool   `json:"session_grant_allowed,omitempty"`
+	Output              string `json:"out,omitempty"`
+	OK                  bool   `json:"ok,omitempty"`
+	Exit                int    `json:"exit,omitempty"`
+	Signal              string `json:"signal,omitempty"`
+	MS                  int64  `json:"ms,omitempty"`
 }
 
 // Decision is fail-closed by construction: the zero value refuses.

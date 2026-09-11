@@ -131,3 +131,16 @@ func TestRawDecisionForWriteFile(t *testing.T) {
 		t.Errorf("Effective(write_file, AllowSession) = %v, want AllowSession", got)
 	}
 }
+
+func TestSessionGrantAllowedOnlyForMutatingTools(t *testing.T) {
+	p := New(testCls())
+	if p.SessionGrantAllowed("read_file") {
+		t.Fatal("read-only tool must not expose a standing grant")
+	}
+	if !p.SessionGrantAllowed("write_file") {
+		t.Fatal("mutating tool should expose a standing grant")
+	}
+	if p.SessionGrantAllowed("bash") {
+		t.Fatal("executing tool must not expose a standing grant")
+	}
+}
