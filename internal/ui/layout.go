@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+	"nabd/internal/presentation"
 )
 
 // layoutMetrics is the single source of truth for all dimensional calculations
@@ -203,6 +204,20 @@ func (m *Feed) runtimeStatusText() string {
 	}
 	if m.busy {
 		return "Working…"
+	}
+	if m.statusProj != nil {
+		s := m.statusProj.Status()
+		switch s.Phase {
+		case presentation.PhasePermission:
+			return "Permission Required"
+		case presentation.PhaseCompacting:
+			return "Compacting context…"
+		case presentation.PhaseError:
+			if s.LastError != nil {
+				return "Error: " + s.LastError.Message
+			}
+			return "Error"
+		}
 	}
 	return ""
 }
