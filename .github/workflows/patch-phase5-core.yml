@@ -1,0 +1,29 @@
+name: Patch phase five core
+on:
+  push:
+    branches: [feat/commands-navigation]
+    paths: [.github/workflows/patch-phase5-core.yml]
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/commands-navigation
+      - shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('internal/ui/feed.go'); s=p.read_text(); s=s.replace('\ttoolsExpanded bool\n','\ttoolsExpanded bool\n\tselectedItem int\n\tnavigationMode bool\n',1); s=s.replace('\t\tfollow:     true,\n','\t\tfollow:     true,\n\t\tselectedItem: -1,\n',1); p.write_text(s)
+          p=Path('internal/ui/feed_input.go'); s=p.read_text(); a='\tif m.menu.visible {\n\t\treturn m.menuKey(k)\n\t}\n'; s=s.replace(a,a+'\tif m.navigationMode { if model, cmd, handled := m.navigationKey(k); handled { return model, cmd } }\n',1); a='func (m *Feed) composerKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {\n\tswitch {\n'; s=s.replace(a,'func (m *Feed) composerKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {\n\tif k.Type == tea.KeyEsc && m.composer.isEmpty() { m.enterNavigation(); return m, nil }\n\tswitch {\n',1); s=s.replace('\t\tm.status = "/undo [n] · /edits · /ctx · /compact · /rewind [n]"','\t\tm.setCommandResult(CommandHelp(m.width))'); s=s.replace('completed := cmd.Name + " "','completed := cmd.Name\n\t\t\tif cmd.HasArg { completed += " " }'); p.write_text(s)
+          p=Path('internal/ui/chat.go'); s=p.read_text().replace('return "/undo [n] · /edits · /rewind [n] · /ctx · /compact · ctrl+c · ctrl+d"','return CommandHelp(m.width)'); p.write_text(s)
+          p=Path('internal/ui/phase5_navigation_test.go'); s=p.read_text().replace('"nabd/internal/agent"','"nabd/internal/agent"\n\n\t"github.com/charmbracelet/x/ansi"').replace('displayWidth(line)','ansi.StringWidth(line)'); p.write_text(s)
+          p=Path('internal/ui/slash_commands.go'); s=p.read_text(); old='\tif len(f) > 1 {\n\t\tif v, err := strconv.Atoi(f[1]); err == nil && v > 0 {\n\t\t\tres.N = v\n\t\t\tres.HasN = true\n\t\t}\n\t}\n'; new='\tif len(f) > 1 {\n\t\tif !cmd.HasArg || len(f) != 2 { res.Valid = false; res.Error = "usage: " + cmd.Usage; return res }\n\t\tv, err := strconv.Atoi(f[1]); if err != nil || v <= 0 { res.Valid = false; res.Error = "usage: " + cmd.Usage; return res }\n\t\tres.N = v; res.HasN = true\n\t}\n'; s=s.replace(old,new,1); p.write_text(s)
+          PY
+          gofmt -w internal/ui
+          rm -f .github/workflows/apply-phase5.yml .github/workflows/force-phase5.yml .github/workflows/patch-phase5-core.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A && git commit -m 'feat(ui): wire command help and card navigation' && git push
