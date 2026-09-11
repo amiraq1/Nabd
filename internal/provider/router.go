@@ -57,6 +57,14 @@ const MaxPrecommitBufferedChunks = 64
 // Matches agent.Loop maxRateLimitWait = 120 * time.Second.
 const maxRetryCeiling = 120 * time.Second
 
+// nonRetryableHTTPErrFmt is the format string for 400 errors arriving as a
+// structured httpError (K-section no-fallback rule).
+const nonRetryableHTTPErrFmt = "provider %s:%s returned non-retryable error 400: %s"
+
+// nonRetryableTextErrFmt is the format string for errors that arrive as plain
+// text (not *httpError) and whose text contains the substring "400".
+const nonRetryableTextErrFmt = "provider %s:%s returned non-retryable 400: %s"
+
 var (
 	// ErrRouteCleanupTimeout is returned when a route's goroutine fails to stop
 	// within RouteCleanupTimeout. The entire request is aborted (G5).
@@ -89,7 +97,7 @@ type ProviderError struct {
 	Status    int
 	Code      string
 	Retryable bool
-	Body      string // sanitized (Redact + TruncateBody applied)
+	Body      string // sanitized (SanitizeBody applied)
 }
 
 // ─── RouterExhaustedError ─────────────────────────────────────────────────────
@@ -603,16 +611,16 @@ func (r *Router) classifyError(re Route, chunk Chunk) routeOutcome {
 	var he *httpError
 	if errors.As(chunk.Err, &he) {
 		if isModelNotFound(he.Status, he.Body) {
-			return r.makeFailure(re, he.Status, he.Body, true, Redact(he.Body))
+			return r.makeFailure(re, he.Status, he.Body, true, he.Body)
 		}
 		if he.Status == http.StatusBadRequest {
 			// Generic 400 Bad Request — Section K: no fallback.
 			return routeOutcome{
 				kind:        outcomeNonRetryableError,
-				nonRetryErr: fmt.Errorf("provider %s:%s returned non-retryable error 400: %s", re.Provider, re.Model, Redact(he.Body)),
+				nonRetryErr: fmt.Errorf(nonRetryableHTTPErrFmt, re.Provider, re.Model, SanitizeBody(he.Body, nil)),
 			}
 		}
-		return r.makeFailure(re, he.Status, he.Body, isFallbackStatus(he.Status), Redact(he.Body))
+		return r.makeFailure(re, he.Status, he.Body, isFallbackStatus(he.Status), he.Body)
 	}
 
 	errStr := chunk.Err.Error()
@@ -620,11 +628,10 @@ func (r *Router) classifyError(re Route, chunk Chunk) routeOutcome {
 		// Generic 400 in text format
 		return routeOutcome{
 			kind:        outcomeNonRetryableError,
-			nonRetryErr: fmt.Errorf("provider %s:%s returned non-retryable 400: %s", re.Provider, re.Model, Redact(errStr)),
+			nonRetryErr: fmt.Errorf(nonRetryableTextErrFmt, re.Provider, re.Model, SanitizeBody(errStr, nil)),
 		}
 	}
 
-	body := Redact(errStr)
 	return routeOutcome{
 		kind: outcomeFallbackEligible,
 		provErr: ProviderError{
@@ -632,7 +639,7 @@ func (r *Router) classifyError(re Route, chunk Chunk) routeOutcome {
 			Model:     re.Model,
 			Status:    0,
 			Retryable: chunk.Retryable,
-			Body:      TruncateBody(body),
+			Body:      SanitizeBody(errStr, nil),
 		},
 	}
 }
@@ -663,10 +670,12 @@ func (r *Router) classifyRateLimit(re Route, chunk Chunk) routeOutcome {
 	}
 }
 
-func (r *Router) makeFailure(re Route, status int, rawBody string, retryable bool, sanitizedReason string) routeOutcome {
-	body := sanitizedReason
+func (r *Router) makeFailure(re Route, status int, rawBody string, retryable bool, rawReason string) routeOutcome {
+	var body string
 	if rawBody != "" {
-		body = TruncateBody(Redact(rawBody))
+		body = SanitizeBody(rawBody, nil)
+	} else {
+		body = SanitizeBody(rawReason, nil)
 	}
 	return routeOutcome{
 		kind: outcomeFallbackEligible,
