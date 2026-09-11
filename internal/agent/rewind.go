@@ -68,7 +68,7 @@ func (l *Loop) emitLocked(parent int, e Event) error {
 	}
 	if l.Sink != nil {
 		if err := l.Sink.Emit(e); err != nil {
-			return err
+			return NewPersistError(err, sinkJournalPath(l.Sink))
 		}
 	}
 	l.seq = nextSeq

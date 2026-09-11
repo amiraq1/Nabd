@@ -17,7 +17,7 @@ const (
 	ErrProviderAuth      ErrorCode = "provider_auth"
 	ErrPersist           ErrorCode = "persist"
 	ErrBudget            ErrorCode = "budget"
-	ErrMaxTurnsCode       ErrorCode = "max_turns"
+	ErrMaxTurnsCode      ErrorCode = "max_turns"
 	ErrCanceled          ErrorCode = "canceled"
 	ErrUnknown           ErrorCode = "unknown"
 )
@@ -36,6 +36,20 @@ func (e *PersistError) Error() string {
 	return fmt.Sprintf("session event was not saved (%s): %v", e.Path, e.Err)
 }
 func (e *PersistError) Unwrap() error { return e.Err }
+
+func sinkJournalPath(s Sink) string {
+	if p, ok := s.(interface{ JournalPath() string }); ok {
+		return p.JournalPath()
+	}
+	if f, ok := s.(Fanout); ok {
+		for _, child := range f {
+			if path := sinkJournalPath(child); path != "" {
+				return path
+			}
+		}
+	}
+	return ""
+}
 
 func NewPersistError(err error, path string) error {
 	if err == nil {

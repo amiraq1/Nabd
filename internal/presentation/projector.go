@@ -102,6 +102,10 @@ func (p *Projector) Items() []FeedItem {
 			perm := *it.Perm
 			it.Perm = &perm
 		}
+		if it.Error != nil {
+			card := *it.Error
+			it.Error = &card
+		}
 		out[i] = it
 	}
 	sortBySeq(out)
