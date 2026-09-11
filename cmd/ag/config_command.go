@@ -56,11 +56,15 @@ func runConfigCommand(args []string, out, errOut io.Writer) int {
 		}
 		printConfigWarnings(errOut, vals)
 		keys := make([]string, 0, len(vals))
-		for k := range vals { keys = append(keys, k) }
+		for k := range vals {
+			keys = append(keys, k)
+		}
 		sort.Strings(keys)
 		for _, k := range keys {
 			v := vals[k]
-			if sensitiveConfigKey(k) && v != "" { v = "<redacted>" }
+			if sensitiveConfigKey(k) && v != "" {
+				v = "<redacted>"
+			}
 			fmt.Fprintf(out, "%s=%s\n", k, v)
 		}
 		return 0
@@ -71,13 +75,17 @@ func runConfigCommand(args []string, out, errOut io.Writer) int {
 }
 
 func printConfigWarnings(w io.Writer, vals map[string]string) {
-	for _, warning := range config.Warnings(vals) { fmt.Fprintln(w, "warning:", warning) }
+	for _, warning := range config.Warnings(vals) {
+		fmt.Fprintln(w, "warning:", warning)
+	}
 }
 
 func sensitiveConfigKey(key string) bool {
 	upper := strings.ToUpper(key)
 	for _, marker := range []string{"KEY", "TOKEN", "SECRET", "PASSWORD", "AUTH", "CREDENTIAL"} {
-		if strings.Contains(upper, marker) { return true }
+		if strings.Contains(upper, marker) {
+			return true
+		}
 	}
 	return false
 }
