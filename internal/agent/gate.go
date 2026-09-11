@@ -25,6 +25,13 @@ type Gate interface {
 	Effective(tool string, d Decision) Decision
 }
 
+// SessionGrantPolicy is optional so existing test gates and integrations keep
+// compiling. The UI uses it only when the policy can explicitly describe
+// whether an AllowSession choice is valid for this tool.
+type SessionGrantPolicy interface {
+	SessionGrantAllowed(tool string) bool
+}
+
 // Asker is the human, reached through the UI. It must return on ctx death.
 type Asker interface {
 	Ask(ctx context.Context, call ToolCall) Decision
@@ -53,6 +60,10 @@ func (l *Loop) decide(ctx context.Context, c ToolCall, emit func(Event) error) (
 	if l.Human == nil {
 		emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: "no prompt interface"})
 		return Deny, "no prompt interface"
+	}
+	if policy, ok := l.Gate.(SessionGrantPolicy); ok {
+		c.SessionGrantKnown = true
+		c.SessionGrantAllowed = policy.SessionGrantAllowed(c.Name)
 	}
 	emit(Event{Type: PermAsk, Call: &c, Text: why})
 	d := l.Human.Ask(ctx, c)
