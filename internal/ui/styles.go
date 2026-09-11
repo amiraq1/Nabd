@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"os"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -61,8 +60,6 @@ func newSemanticTheme(noColor bool) semanticTheme {
 		UserRole: lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true).Background(userBg),
 	}
 }
-
-func noColorRequested() bool { return os.Getenv("NO_COLOR") != "" }
 
 func navigationHint(width int) string {
 	switch widthMode(width) {

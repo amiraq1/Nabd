@@ -183,7 +183,6 @@ func (m *Feed) ToolsExpanded() bool {
 // NewFeed creates a feed model.
 func NewFeed() *Feed {
 	return &Feed{
- feat/secure-permission-experience
 		proj:         presentation.NewProjector(),
 		statusProj:   presentation.NewStatusProjector(),
 		width:        DefaultWidth,
@@ -195,18 +194,6 @@ func NewFeed() *Feed {
 		history:      newUserHistory(),
 		permModal:    newPermissionModal(),
 		menu:         newSlashMenu(),
-
-		proj:       presentation.NewProjector(),
-		statusProj: presentation.NewStatusProjector(),
-		width:      DefaultWidth,
-		height:     24,
-		follow:     true,
-		lines:      []string{},
-		composer:   newComposer(),
-		history:    newUserHistory(),
-		permModal:  newPermissionModal(),
-		menu:       newSlashMenu(),
- master
 	}
 }
 
