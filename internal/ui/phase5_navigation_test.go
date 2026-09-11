@@ -30,13 +30,16 @@ func TestSlashInvalidArgumentShowsUsage(t *testing.T) {
 }
 
 func TestFeedCardNavigationAndSemanticJumps(t *testing.T) {
+	call := &agent.ToolCall{ID: "p", Name: "bash"}
 	f := NewFeed()
 	f.BuildFromEvents([]agent.Event{
 		{Seq: 1, Type: agent.UserMsg, Text: "one"},
 		{Seq: 2, Type: agent.RunError, Err: "failure", ErrorCode: "unknown"},
-		{Seq: 3, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "p", Name: "bash"}},
+		{Seq: 3, Type: agent.PermAsk, Call: call},
+		{Seq: 4, Type: agent.PermReply, Call: call, Decision: agent.Deny, RawDecision: agent.Deny},
 	})
 	f.composer.clear()
+	f.composer.focus()
 	f.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	if !f.navigationMode {
 		t.Fatal("Esc did not enter navigation")
@@ -50,5 +53,3 @@ func TestFeedCardNavigationAndSemanticJumps(t *testing.T) {
 		t.Fatal("p did not select permission")
 	}
 }
-
-// The public contracts above intentionally cover both phone and desktop widths.
