@@ -23,8 +23,9 @@ Do not apologise, do not greet, do not invent what did not happen. Leave out poi
 // l.mu after provider summarisation, and the Compact event is appended within
 // the same critical section, so no mutation can interleave between the final
 // check and the append. If the chosen firstKept is absent from the current live
-// branch — which a concurrent /rewind can cause because /compact runs in a
-// detached goroutine outside the m.running interlock (cmd/ag/main.go) — Compact
+// branch — which the historyMu interlock now prevents a concurrent /rewind from
+// causing, leaving this check as the last barrier against a stale FirstKept,
+// reachable only via injection or a structurally corrupt --continue — Compact
 // returns ErrCompactBoundaryStale and appends nothing.
 //
 // A secondary raw tool-event-pairing check runs as defense in depth. It cannot
@@ -35,6 +36,47 @@ Do not apologise, do not greet, do not invent what did not happen. Leave out poi
 // fabricated tool_use attributed to the assistant — Messages() synthesises a
 // wire-valid tool_use for an unmatched ToolEnd, so the request is never
 // provider-rejected — not an orphaned tool_result. See messages.go's ToolEnd case.
+// locateBoundary returns the index of the event whose Seq equals firstKept in
+// live, or -1 when no such event remains.
+func locateBoundary(live []Event, firstKept int) int {
+	for i, e := range live {
+		if e.Seq == firstKept {
+			return i
+		}
+	}
+	return -1
+}
+
+// validateBoundary re-checks a boundary chosen from an earlier snapshot against
+// the current live branch. It returns the index of firstKept in live and a nil
+// error only when the cut is still usable.
+//
+// Two ways it can fail:
+//
+//  1. firstKept is absent from live. The threshold in a Compact event is
+//     numeric: Live() keeps e.Seq >= FirstKept. Appending a Compact whose
+//     FirstKept names a Seq that no longer exists on the branch does not
+//     degrade gracefully — no branch event satisfies the predicate except the
+//     Compact and whatever follows it, so the in-memory context collapses to a
+//     near-empty projection, recoverable only via --replay.
+//
+//  2. The retained segment violates raw tool pairing. Defense in depth; see
+//     Compact's doc comment for why it is unreachable under current ordering.
+//
+// Callers must hold l.mu (or otherwise own live) while acting on the result.
+func validateBoundary(live []Event, firstKept int) (int, error) {
+	boundary := locateBoundary(live, firstKept)
+	if boundary < 0 {
+		return -1, fmt.Errorf("%w: boundary seq %d absent from live branch (%d events)",
+			ErrCompactBoundaryStale, firstKept, len(live))
+	}
+	if !rawPairingInvariantHolds(live[boundary:]) {
+		return -1, fmt.Errorf("%w: retained segment violates raw tool pairing",
+			ErrCompactBoundaryStale)
+	}
+	return boundary, nil
+}
+
 func (l *Loop) Compact(ctx context.Context, target int) error {
 	if !l.historyMu.TryLock() {
 		return ErrHistoryMutationInProgress
@@ -86,31 +128,12 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 	l.mu.Lock()
 	freshLive := Live(l.hist)
 
-	// Find firstKept in the fresh history.
-	boundary := -1
-	for i, e := range freshLive {
-		if e.Seq == firstKept {
-			boundary = i
-			break
-		}
-	}
-	if boundary < 0 {
-		// firstKept was dropped by a concurrent rewind or other operation.
+	boundary, err := validateBoundary(freshLive, firstKept)
+	if err != nil {
 		l.mu.Unlock()
-		return ErrCompactBoundaryStale
+		return err
 	}
-
-	// Verify the proposed retained raw segment directly: for every ToolEnd
-	// event in freshLive[boundary:], a matching ToolStart event with the same
-	// tool-call ID must precede it in that retained segment. We validate raw
-	// events directly rather than calling Messages(), because Messages()
-	// synthesizes missing ToolCalls for archive compatibility and would
-	// mask the corruption.
 	retained := freshLive[boundary:]
-	if !rawPairingInvariantHolds(retained) {
-		l.mu.Unlock()
-		return ErrCompactBoundaryStale
-	}
 
 	// The boundary is safe. Compute statistics from the fresh state and append
 	// the compact event atomically under the same lock acquisition.
@@ -134,9 +157,9 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 			Stubs:         countReadStubs(after),
 		},
 	}
-	err := l.emitLocked(l.parent, compactEvent)
+	emitErr := l.emitLocked(l.parent, compactEvent)
 	l.mu.Unlock()
-	return err
+	return emitErr
 }
 
 func countReadStubs(ms []provider.Message) int {

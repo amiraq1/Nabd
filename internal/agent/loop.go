@@ -125,15 +125,22 @@ const DefaultMaxTurns = 40
 // session is intact; the caller should wait before retrying.
 var ErrRateLimitBudget = errors.New("rate limit budget exhausted")
 
-// ErrCompactBoundaryStale is returned by Compact when the proposed boundary
-// is no longer safe to apply to the current history at append time. This is
-// not a provider failure or journal error — it is a deliberate rejection:
-// history changed during summarisation and applying firstKept would retain a
-// ToolEnd whose ToolStart was dropped. Messages() then synthesises a
-// fabricated tool_use for the assistant (empty/foreign Input); the request
-// stays wire-valid, so the harm is a fabricated call the model never made,
-// not a provider rejection.
-var ErrCompactBoundaryStale = errors.New("compact boundary became unsafe; concurrent turn invalidated the projection")
+// ErrCompactBoundaryStale is returned by Compact when the boundary chosen from
+// an earlier snapshot is no longer safe to apply to the history that exists at
+// append time. It is a deliberate fail-closed rejection, not a provider or
+// journal failure: Compact appends nothing and the session is unchanged.
+//
+// Two causes map to this error, distinguished only in logs by the caller:
+//
+//  1. The boundary Seq is absent from the live branch. FirstKept is a numeric
+//     threshold (Live keeps e.Seq >= FirstKept), so appending a Compact that
+//     names a Seq no longer on the branch does not degrade gracefully — the
+//     live projection collapses to the Compact marker and whatever follows it,
+//     and the dropped context is recoverable only via --replay.
+//
+//  2. The retained segment violates raw tool-event pairing. Defense in depth;
+//     unreachable under current production ordering. See Compact's doc comment.
+var ErrCompactBoundaryStale = errors.New("compact boundary is no longer safe to apply")
 
 // ErrHistoryMutationInProgress means Compact or Rewind already owns the
 // history-mutation interlock. Callers should retry after the active operation
@@ -324,7 +331,9 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		ms := Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
 		if p := l.pressure(ms); p > 0.75 {
 			if err := l.Compact(ctx, l.compactTarget()); err != nil {
-				l.emit(Event{Type: Notice, Text: "compact failed: " + err.Error()})
+				if !errors.Is(err, ErrHistoryMutationInProgress) {
+					l.emit(Event{Type: Notice, Text: "compact failed: " + err.Error()})
+				}
 			} else {
 				ms = Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
 				l.emit(Event{Type: Notice, Text: fmt.Sprintf("context compacted · %d%% → %d%%",
