@@ -1,0 +1,42 @@
+name: Diagnose tool cards
+
+on:
+  push:
+    branches:
+      - feat/ui-tool-cards
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/ui-tool-cards
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Capture checks
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '== gofmt =='
+            gofmt -l internal/presentation internal/ui
+            echo '== vet =='
+            go vet ./...
+            echo "vet_exit=$?"
+            echo '== tests =='
+            go test ./...
+            echo "test_exit=$?"
+          } > tool-card-ci-diagnostic.txt 2>&1
+      - name: Commit diagnostics
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add tool-card-ci-diagnostic.txt
+          git commit -m 'chore: capture tool card diagnostics'
+          git push origin HEAD:feat/ui-tool-cards
