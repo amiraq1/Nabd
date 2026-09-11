@@ -1,11 +1,11 @@
 name: Config v2 debug
 
 on:
-  push:
-    branches: [feat/config-v2-strict]
+  pull_request:
+    branches: [master]
 
 jobs:
-  gofmt:
+  gofmt-v2-debug:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -14,7 +14,7 @@ jobs:
           go-version: '1.27.1'
       - run: test -z "$(gofmt -l .)"
 
-  build:
+  build-v2-debug:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -23,7 +23,7 @@ jobs:
           go-version: '1.27.1'
       - run: go build ./...
 
-  vet:
+  vet-v2-debug:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -32,7 +32,7 @@ jobs:
           go-version: '1.27.1'
       - run: go vet ./...
 
-  unit:
+  unit-v2-debug:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -41,7 +41,17 @@ jobs:
           go-version: '1.27.1'
       - run: go test ./... -count=1
 
-  staticcheck:
+  nested-v2-debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.27.1'
+      - working-directory: third_party/bubbles
+        run: go test ./... -count=1
+
+  staticcheck-v2-debug:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
