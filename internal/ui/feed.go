@@ -32,12 +32,14 @@ type Feed struct {
 	statusProj *presentation.StatusProjector
 
 	// Viewport state.
-	width         int
-	height        int
-	scrollTop     int // index of the first visible rendered line
-	follow        bool
-	unseen        int
-	toolsExpanded bool
+	width          int
+	height         int
+	scrollTop      int // index of the first visible rendered line
+	follow         bool
+	unseen         int
+	toolsExpanded  bool
+	selectedItem   int
+	navigationMode bool
 
 	// Cached rendered lines for the current viewport.
 	lines []string
@@ -181,16 +183,17 @@ func (m *Feed) ToolsExpanded() bool {
 // NewFeed creates a feed model.
 func NewFeed() *Feed {
 	return &Feed{
-		proj:       presentation.NewProjector(),
-		statusProj: presentation.NewStatusProjector(),
-		width:      DefaultWidth,
-		height:     24,
-		follow:     true,
-		lines:      []string{},
-		composer:   newComposer(),
-		history:    newUserHistory(),
-		permModal:  newPermissionModal(),
-		menu:       newSlashMenu(),
+		proj:         presentation.NewProjector(),
+		statusProj:   presentation.NewStatusProjector(),
+		width:        DefaultWidth,
+		height:       24,
+		follow:       true,
+		selectedItem: -1,
+		lines:        []string{},
+		composer:     newComposer(),
+		history:      newUserHistory(),
+		permModal:    newPermissionModal(),
+		menu:         newSlashMenu(),
 	}
 }
 
