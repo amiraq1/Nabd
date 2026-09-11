@@ -1,0 +1,46 @@
+name: Apply core error recovery
+on:
+  push:
+    branches: [feat/error-recovery]
+    paths: [.github/workflows/force-error-core.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/error-recovery
+      - name: Apply and commit
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          def rep(path, old, new):
+            p=Path(path); s=p.read_text()
+            if old in s: p.write_text(s.replace(old,new,1))
+            else: print('anchor absent',path)
+          rep('internal/agent/event.go','\tErrorCode   string   `json:"error_code,omitempty"`\n','\tErrorCode   string   `json:"error_code,omitempty"`\n\tJournalPath string   `json:"journal_path,omitempty"`\n')
+          rep('internal/agent/rewind.go','\t\tif err := l.Sink.Emit(e); err != nil {\n\t\t\treturn err\n\t\t}\n','\t\tif err := l.Sink.Emit(e); err != nil {\n\t\t\treturn NewPersistError(err, sinkJournalPath(l.Sink))\n\t\t}\n')
+          rep('internal/store/sink.go','func (j *JSONL) Emit(e agent.Event) error { return j.Append(e) }\n','func (j *JSONL) Emit(e agent.Event) error { return j.Append(e) }\n\nfunc (j *JSONL) JournalPath() string { return j.Path() }\n')
+          rep('internal/agent/error_event.go','func NewPersistError(err error, path string) error {','func sinkJournalPath(s Sink) string {\n\tif p, ok := s.(interface{ JournalPath() string }); ok { return p.JournalPath() }\n\tif f, ok := s.(Fanout); ok { for _, child := range f { if path := sinkJournalPath(child); path != "" { return path } } }\n\treturn ""\n}\n\nfunc NewPersistError(err error, path string) error {')
+          p=Path('internal/presentation/item.go'); s=p.read_text()
+          if 'Error       *ErrorCard' not in s: s=s.replace('\tPerm        *PermCard `json:"permission,omitempty"`\n','\tPerm        *PermCard `json:"permission,omitempty"`\n\tError       *ErrorCard `json:"error,omitempty"`\n',1)
+          if 'string(it.Error.Code)' not in s: s=s.replace('\tif it.Perm != nil {','\tif it.Error != nil {\n\t\thashString(&h, string(it.Error.Code)); hashString(&h, it.Error.Title); hashString(&h, it.Error.Message); hashString(&h, it.Error.ActionText); hashBool(&h, it.Error.Retryable); hashString(&h, string(it.Error.RetryScope)); hashString(&h, it.Error.JournalPath); hashBool(&h, it.Error.ToolExecuted)\n\t}\n\tif it.Perm != nil {',1)
+          p.write_text(s)
+          p=Path('internal/presentation/projector.go'); s=p.read_text()
+          if 'card := *it.Error' not in s: s=s.replace('\t\tif it.Perm != nil {\n\t\t\tperm := *it.Perm\n\t\t\tit.Perm = &perm\n\t\t}\n','\t\tif it.Perm != nil { perm := *it.Perm; it.Perm = &perm }\n\t\tif it.Error != nil { card := *it.Error; it.Error = &card }\n',1)
+          if 'Error: ErrorCardFromEvent(e)' not in s: s=s.replace('\t\tText: e.Err,\n\t}\n\treturn p.append(it)\n}\n\n// appendInterrupted','\t\tText: e.Err,\n\t\tError: ErrorCardFromEvent(e),\n\t}\n\treturn p.append(it)\n}\n\n// appendInterrupted',1)
+          old='\tit := FeedItem{\n\t\tType: ItemError,\n\t\tID:   "intr_" + strconv.Itoa(e.Seq),\n\t\tSeq:  e.Seq,\n\t\tText: text,\n\t}\n'
+          if old in s: s=s.replace(old,'\tit := FeedItem{Type: ItemError, ID: "intr_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: text, Error: NewErrorCard(agent.ErrCanceled, text, "")}\n',1)
+          p.write_text(s)
+          rep('internal/ui/feed_render.go','func renderError(it presentation.FeedItem, width int) []string {\n\ttext := it.Text\n','func renderError(it presentation.FeedItem, width int) []string {\n\tif it.Error != nil { return renderErrorCard(it.Error, width) }\n\ttext := it.Text\n')
+          PY
+          gofmt -w internal/agent internal/provider internal/presentation internal/store internal/ui
+          rm -f .github/workflows/apply-error-recovery.yml .github/workflows/force-error-core.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'feat(errors): integrate typed error cards'
+          git push
