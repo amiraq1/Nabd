@@ -55,6 +55,24 @@ func NewJSONL(path string) (*JSONL, error) {
 	return &JSONL{path: path, f: f, w: bufio.NewWriter(f)}, nil
 }
 
+// NewJSONLExclusive creates a new journal without ever opening an existing
+// file. Callers use a fresh candidate name and retry on os.ErrExist.
+func NewJSONLExclusive(path string) (*JSONL, error) {
+	if err := ensurePrivateParent(filepath.Dir(path)); err != nil {
+		return nil, err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.Chmod(0o600); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return nil, fmt.Errorf("store: harden new journal permissions: %w", err)
+	}
+	return &JSONL{path: path, f: f, w: bufio.NewWriter(f)}, nil
+}
+
 // ensurePrivateParent creates dir with mode 0o700 if it does not exist, and
 // leaves an existing directory untouched — not even to narrow it, because a
 // caller-supplied --dir belongs to the caller.

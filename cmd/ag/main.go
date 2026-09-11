@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -65,12 +67,13 @@ func newSessionLoop(prov provider.Provider, reg *tools.Registry, g agent.Gate, h
 		}
 	}
 	return &agent.Loop{
-		Provider: prov,
-		Tools:    reg,
-		System:   payload.DefaultSystemPrompt,
-		Gate:     g,
-		Budget:   agent.NewBudget(),
-		Human:    human,
+		Provider:    prov,
+		Tools:       reg,
+		System:      payload.DefaultSystemPrompt,
+		Gate:        g,
+		Budget:      agent.NewBudget(),
+		SpendBudget: agent.NewSpendBudget(),
+		Human:       human,
 	}
 }
 
@@ -154,19 +157,16 @@ func doChat(dir string, cont bool) error {
 	}
 
 	var journalPath string
+	var journal *store.JSONL
 	if cont {
 		journalPath, err = latestSession(dir, root.Dir())
 		if err != nil {
 			return err
 		}
+		journal, err = store.NewJSONL(journalPath)
 	} else {
-		journalPath, err = sessionPath(dir)
-		if err != nil {
-			return err
-		}
+		journal, journalPath, err = newSessionJournal(dir)
 	}
-
-	journal, err := store.NewJSONL(journalPath)
 	if err != nil {
 		return err
 	}
@@ -286,19 +286,16 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 	}
 
 	var journalPath string
+	var journal *store.JSONL
 	if cont {
 		journalPath, err = latestSession(dir, root.Dir())
 		if err != nil {
 			return err
 		}
+		journal, err = store.NewJSONL(journalPath)
 	} else {
-		journalPath, err = sessionPath(dir)
-		if err != nil {
-			return err
-		}
+		journal, journalPath, err = newSessionJournal(dir)
 	}
-
-	journal, err := store.NewJSONL(journalPath)
 	if err != nil {
 		return err
 	}
@@ -551,6 +548,26 @@ func sessionPath(dir string) (string, error) {
 	return sessionPathAt(dir, time.Now().UTC())
 }
 
+// newSessionJournal allocates a new journal atomically. --continue uses
+// NewJSONL directly because it intentionally opens an existing file.
+func newSessionJournal(dir string) (*store.JSONL, string, error) {
+	const maxAttempts = 32
+	for i := 0; i < maxAttempts; i++ {
+		path, err := sessionPath(dir)
+		if err != nil {
+			return nil, "", err
+		}
+		journal, err := store.NewJSONLExclusive(path)
+		if err == nil {
+			return journal, path, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("could not allocate a unique session journal after %d attempts", maxAttempts)
+}
+
 // sessionPathAt is the pure production naming helper behind sessionPath. It is
 // the single source of truth for new-session journal filenames. Keeping it pure
 // (dir + now -> path) lets tests exercise the real naming logic with a frozen
@@ -568,24 +585,18 @@ func sessionPathAt(dir string, now time.Time) (string, error) {
 	return filepath.Join(dir, name), nil
 }
 
-// newSessionSuffix builds the disambiguation suffix for a new-session journal.
-// It combines the current process PID and a process-local atomic counter so
-// that concurrent allocations within the same millisecond produce distinct
-// filenames:
-//
-//   - PID separates simultaneously running processes on one host.
-//   - The atomic counter separates calls in the same process and same
-//     millisecond.
+// newSessionSuffix builds a random disambiguation suffix for a new-session
+// journal. The random component avoids PID-namespace collisions; the PID and
+// process-local counter remain a fallback if the system random source fails.
 //
 // The counter is zero-padded (%04d) so that lexicographic order of the suffix
 // reflects counter order within one timestamp prefix up to 9999 allocations;
 // beyond that the width grows.
-//
-// PID alone is intentionally insufficient: every call in one process shares a
-// PID, so PID-only naming would still collide for same-millisecond allocations
-// inside a single process. The counter closes that gap deterministically and
-// without filesystem races.
 func newSessionSuffix() string {
+	var random [8]byte
+	if _, err := crand.Read(random[:]); err == nil {
+		return "-r" + hex.EncodeToString(random[:])
+	}
 	return fmt.Sprintf("-p%d-c%04d", os.Getpid(), newSessionCounter())
 }
 

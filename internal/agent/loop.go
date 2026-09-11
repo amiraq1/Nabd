@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"nabd/internal/config"
 	"nabd/internal/provider"
 )
 
@@ -47,6 +48,7 @@ type Loop struct {
 	Gate             Gate
 	Human            Asker
 	Budget           *Budget
+	SpendBudget      *SpendBudget
 	EstimateMessages MessageEstimator
 	CompactBudget    int
 	KeepFullRounds   int
@@ -222,6 +224,9 @@ func (l *Loop) Start(banner, projectRoot string) error {
 // the partial text already emitted stays in the journal, followed by an
 // Interrupted event, because pretending it was never said is a lie.
 func (l *Loop) Run(ctx context.Context, userText string) error {
+	if l.SpendBudget != nil && l.SpendBudget.Exhausted() {
+		return ErrSpendBudget
+	}
 	if err := l.emit(Event{Type: UserMsg, Text: userText}); err != nil {
 		return err
 	}
@@ -399,6 +404,16 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 	return ErrMaxTurns
 }
 
+func providerTurnContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := 2 * time.Minute
+	if raw := config.Get("NABD_PROVIDER_TURN_TIMEOUT"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			timeout = d
+		}
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
 // streamTurn consumes exactly one assistant turn.
 // It returns errTurnRateLimited (not a fatal error) when the provider
 // responded with a 429, so Run() can wait and retry instead of resetting
@@ -413,7 +428,9 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 		specs = l.Tools.Specs()
 	}
 
-	ch, err := l.Provider.Stream(ctx, provider.Request{
+	turnCtx, cancel := providerTurnContext(ctx)
+	defer cancel()
+	ch, err := l.Provider.Stream(turnCtx, provider.Request{
 		System:   l.System,
 		Messages: ms,
 		Tools:    specs,
@@ -442,6 +459,23 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 
 		case provider.ChunkStop:
 			stop = c.Stop
+			promptTokens := c.PromptTokens
+			if promptTokens <= 0 {
+				if l.Budget != nil {
+					promptTokens = l.Budget.Estimate(ms)
+				} else {
+					promptTokens = EstimateMessages(ms)
+				}
+			}
+			unknown := 0
+			if c.PromptTokens <= 0 || c.CompletionTokens <= 0 {
+				unknown = maxOutputTokens()
+			}
+			if err := l.SpendBudget.Charge(promptTokens, c.CompletionTokens, unknown); err != nil {
+				for range ch {
+				}
+				return nil, "", err
+			}
 			// Record the provider's measured usage and the request parameters
 			// for this successful turn. These are the raw inputs needed to
 			// derive the charge model: prompt_tokens, completion_tokens,

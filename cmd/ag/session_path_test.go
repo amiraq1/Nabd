@@ -51,6 +51,7 @@ func TestSessionPathConcurrentAllocationsAreDistinct(t *testing.T) {
 			}
 			if err := j.Close(); err != nil {
 				errs <- err
+				return
 			}
 			errs <- nil
 		}(i)
@@ -100,8 +101,8 @@ func TestSessionPathConcurrentAllocationsAreDistinct(t *testing.T) {
 		}
 	}
 
-	// Cross-file isolation: no Seq collision across files, and each
-	// file's RunStart text identifies its own session.
+	// Cross-file isolation: each file's RunStart text identifies its own
+	// session. Reusing Seq=1,2,3 in independent files is expected.
 	for _, p := range paths {
 		evs, err := store.Read(p)
 		if err != nil {

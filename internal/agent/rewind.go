@@ -34,10 +34,12 @@ func (l *Loop) Rewind(n int) (string, error) {
 	cut := live[idx[len(idx)-n]] // the user message that dies, and all after it
 	dropped := len(live) - idx[len(idx)-n]
 
-	l.emitAt(cut.Parent, Event{
+	if err := l.emitAt(cut.Parent, Event{
 		Type: Rewind,
 		Text: fmt.Sprintf("rewound %d turns (%d events)", n, dropped),
-	})
+	}); err != nil {
+		return "", err
+	}
 	return cut.Text, nil
 }
 
@@ -59,16 +61,19 @@ func (l *Loop) emitAt(parent int, e Event) error {
 // back into the same Loop (e.g. calling emit or emitAt) will deadlock
 // (pre-existing hazard noted in NOTES.md P0-1.5).
 func (l *Loop) emitLocked(parent int, e Event) error {
-	l.seq++
-	e.Seq, e.Parent = l.seq, parent
+	nextSeq := l.seq + 1
+	e.Seq, e.Parent = nextSeq, parent
 	if e.Time.IsZero() {
 		e.Time = l.clockNowUTC()
 	}
+	if l.Sink != nil {
+		if err := l.Sink.Emit(e); err != nil {
+			return err
+		}
+	}
+	l.seq = nextSeq
 	l.parent = e.Seq
 	l.hist = append(l.hist, e)
-	if l.Sink != nil {
-		return l.Sink.Emit(e)
-	}
 	return nil
 }
 

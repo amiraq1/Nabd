@@ -5,6 +5,7 @@
 package agent
 
 import (
+	"errors"
 	"math"
 	"strconv"
 	"sync"
@@ -13,6 +14,57 @@ import (
 	"nabd/internal/config"
 	"nabd/internal/provider"
 )
+
+var ErrSpendBudget = errors.New("run token spend budget exhausted")
+
+// SpendBudget bounds estimated or provider-reported tokens across every
+// attempt in one run. Unknown usage is charged conservatively.
+type SpendBudget struct {
+	mu    sync.Mutex
+	Limit int
+	Used  int
+}
+
+func NewSpendBudget() *SpendBudget {
+	v := config.Get("NABD_MAX_TOKENS_PER_RUN")
+	limit, err := strconv.Atoi(v)
+	if err != nil || limit <= 0 {
+		return nil
+	}
+	return &SpendBudget{Limit: limit}
+}
+
+func (b *SpendBudget) Charge(prompt, completion, unknown int) error {
+	if b == nil || b.Limit <= 0 {
+		return nil
+	}
+	if prompt < 0 {
+		prompt = 0
+	}
+	if completion < 0 {
+		completion = 0
+	}
+	if unknown < 0 {
+		unknown = 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	charge := prompt + completion + unknown
+	if b.Used+charge > b.Limit {
+		return ErrSpendBudget
+	}
+	b.Used += charge
+	return nil
+}
+
+func (b *SpendBudget) Exhausted() bool {
+	if b == nil || b.Limit <= 0 {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Used >= b.Limit
+}
 
 const (
 	runesPerTokASCII = 4.0
