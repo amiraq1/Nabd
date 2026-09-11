@@ -60,6 +60,7 @@ type Event struct {
 	// it means this is an old record where Decision holds the only known value.
 	RawDecision Decision `json:"raw_decision,omitempty"`
 	Err         string   `json:"err,omitempty"`
+	ErrorCode   string   `json:"error_code,omitempty"`
 	Code        int      `json:"code,omitempty"`
 	Limit       int      `json:"limit,omitempty"`
 	Used        int      `json:"used,omitempty"`
