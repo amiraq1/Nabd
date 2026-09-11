@@ -15,7 +15,6 @@ const (
 	WidthWide    WidthMode = "wide"
 )
 
-// widthMode is the shared responsive contract for every UI component.
 func widthMode(width int) WidthMode {
 	switch {
 	case width < 40:
@@ -28,16 +27,25 @@ func widthMode(width int) WidthMode {
 }
 
 type semanticTheme struct {
-	Dim, Bold, Success, Error, Warning, Running, Info lipgloss.Style
-	UserCard, UserRole                                  lipgloss.Style
+	Dim      lipgloss.Style
+	Bold     lipgloss.Style
+	Success  lipgloss.Style
+	Error    lipgloss.Style
+	Warning  lipgloss.Style
+	Running  lipgloss.Style
+	Info     lipgloss.Style
+	UserCard lipgloss.Style
+	UserRole lipgloss.Style
 }
 
 func newSemanticTheme(noColor bool) semanticTheme {
 	if noColor {
-		// NO_COLOR means no SGR styling at all. Meaning remains in visible
-		// marks and words supplied by renderers.
 		plain := lipgloss.NewStyle()
-		return semanticTheme{Dim: plain, Bold: plain, Success: plain, Error: plain, Warning: plain, Running: plain, Info: plain, UserCard: plain, UserRole: plain}
+		return semanticTheme{
+			Dim: plain, Bold: plain, Success: plain, Error: plain,
+			Warning: plain, Running: plain, Info: plain,
+			UserCard: plain, UserRole: plain,
+		}
 	}
 	userBg := lipgloss.CompleteColor{TrueColor: "#303030", ANSI256: "236", ANSI: "8"}
 	userFg := lipgloss.CompleteColor{TrueColor: "#E0E0E0", ANSI256: "254", ANSI: "15"}
@@ -67,8 +75,6 @@ func navigationHint(width int) string {
 	}
 }
 
-// formatCodeSpan keeps commands and mixed-language paths visually distinct
-// without inserting bidi control characters into copyable terminal output.
 func formatCodeSpan(s string) string {
 	clean := SanitizeForDisplay(s, DisplayPolicy{AllowNewline: false, Redact: true})
 	clean = strings.Join(strings.Fields(clean), " ")
