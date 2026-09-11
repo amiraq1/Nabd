@@ -62,3 +62,4 @@ jobs:
           git add -A
           git commit -m 'feat(config): add safe v1 operator commands'
           git push origin HEAD:fix/config-v1-hardening
+          # triggered after PR creation
