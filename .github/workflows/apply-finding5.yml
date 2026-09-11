@@ -100,3 +100,4 @@ var ErrHistoryMutationInProgress = errors.New("history mutation already in progr
           git add -A
           git commit -m 'fix(agent): serialize compact and rewind history mutations'
           git push
+          # triggered after PR creation
