@@ -293,7 +293,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		if hits >= l.rateLimitCeiling() {
 			_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
 				"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits)})
-			_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})
+			_ = l.emit(RunErrorEvent(ErrRateLimitBudget))
 			return ErrRateLimitBudget
 		}
 
@@ -350,7 +350,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 				l.mu.Unlock()
 				_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
 					"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits2)})
-				_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})
+				_ = l.emit(RunErrorEvent(ErrRateLimitBudget))
 				return ErrRateLimitBudget
 			}
 			// A 413 on Groq is a per-minute TPM violation, not a final
@@ -363,7 +363,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			if notice, ok := tpmLimitNotice(err); ok {
 				_ = l.emit(Event{Type: Notice, Text: l.tpmNoticeText(notice), Limit: notice.Limit, Requested: notice.Requested})
 			}
-			_ = l.emit(Event{Type: RunError, Err: err.Error()})
+			_ = l.emit(RunErrorEvent(err))
 			return err
 		}
 
@@ -391,7 +391,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		// Results are appended even when interrupted: the API rejects an
 		// assistant tool_use with no matching tool_result on the next turn.
 		if err != nil {
-			_ = l.emit(Event{Type: RunError, Err: err.Error()})
+			_ = l.emit(RunErrorEvent(err))
 			return err
 		}
 		if interrupted {
@@ -400,7 +400,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		}
 	}
 
-	_ = l.emit(Event{Type: RunError, Err: ErrMaxTurns.Error()})
+	_ = l.emit(RunErrorEvent(ErrMaxTurns))
 	return ErrMaxTurns
 }
 

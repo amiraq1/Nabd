@@ -28,7 +28,8 @@ const (
 // deterministic input router that arbitrates between the permission modal,
 // the composer, the viewport and global shortcuts.
 type Feed struct {
-	proj *presentation.Projector
+	proj       *presentation.Projector
+	statusProj *presentation.StatusProjector
 
 	// Viewport state.
 	width         int
@@ -180,15 +181,16 @@ func (m *Feed) ToolsExpanded() bool {
 // NewFeed creates a feed model.
 func NewFeed() *Feed {
 	return &Feed{
-		proj:      presentation.NewProjector(),
-		width:     DefaultWidth,
-		height:    24,
-		follow:    true,
-		lines:     []string{},
-		composer:  newComposer(),
-		history:   newUserHistory(),
-		permModal: newPermissionModal(),
-		menu:      newSlashMenu(),
+		proj:       presentation.NewProjector(),
+		statusProj: presentation.NewStatusProjector(),
+		width:      DefaultWidth,
+		height:     24,
+		follow:     true,
+		lines:      []string{},
+		composer:   newComposer(),
+		history:    newUserHistory(),
+		permModal:  newPermissionModal(),
+		menu:       newSlashMenu(),
 	}
 }
 
@@ -247,6 +249,10 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 		if err := m.proj.Apply(e); err != nil {
 			m.addDiagnostic(fmt.Sprintf("unable to project event %s seq=%d: %v", e.Type, e.Seq, err))
 		}
+		if m.statusProj == nil {
+			m.statusProj = presentation.NewStatusProjector()
+		}
+		m.statusProj.Apply(e)
 		m.trackState(e)
 		if e.Seq > m.lastSeq {
 			m.lastSeq = e.Seq
