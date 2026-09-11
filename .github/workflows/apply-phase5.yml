@@ -1,0 +1,117 @@
+name: Apply phase five
+on:
+  push:
+    branches: [feat/commands-navigation]
+    paths: [.github/workflows/apply-phase5.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/commands-navigation
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('internal/ui/slash_commands.go'); s=p.read_text()
+          s=s.replace('"undo file edits recorded in the journal"','"undo recorded file edits"')
+          s=s.replace('"rewind conversation turns and restore prompt"','"cut conversation turns; files are unchanged"')
+          s=s.replace('"show context window token usage"','"show context and spend status"')
+          s=s.replace('"compact conversation history in background"','"compact history; journal file is preserved"')
+          s=s.replace('"list pending reversible file edits"','"list reversible file edits"')
+          old='''\tif len(f) > 1 {
+\t\tif v, err := strconv.Atoi(f[1]); err == nil && v > 0 {
+\t\t\tres.N = v
+\t\t\tres.HasN = true
+\t\t}
+\t}
+\treturn res
+'''
+          new='''\tif len(f) > 1 {
+\t\tif !cmd.HasArg || len(f) != 2 {
+\t\t\tres.Valid = false
+\t\t\tres.Error = "usage: " + cmd.Usage
+\t\t\treturn res
+\t\t}
+\t\tv, err := strconv.Atoi(f[1])
+\t\tif err != nil || v <= 0 {
+\t\t\tres.Valid = false
+\t\t\tres.Error = "usage: " + cmd.Usage
+\t\t\treturn res
+\t\t}
+\t\tres.N = v
+\t\tres.HasN = true
+\t}
+\treturn res
+'''
+          if old not in s: raise SystemExit('parser anchor missing')
+          p.write_text(s.replace(old,new,1))
+
+          p=Path('internal/ui/feed.go'); s=p.read_text()
+          s=s.replace('\ttoolsExpanded bool\n','\ttoolsExpanded bool\n\tselectedItem int\n\tnavigationMode bool\n',1)
+          s=s.replace('\t\tfollow:     true,\n','\t\tfollow:     true,\n\t\tselectedItem: -1,\n',1)
+          p.write_text(s)
+
+          p=Path('internal/ui/feed_input.go'); s=p.read_text()
+          anchor='''\tif m.menu.visible {
+\t\treturn m.menuKey(k)
+\t}
+'''
+          s=s.replace(anchor,anchor+'\tif m.navigationMode {\n\t\tif model, cmd, handled := m.navigationKey(k); handled { return model, cmd }\n\t}\n',1)
+          s=s.replace('''func (m *Feed) composerKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+\tswitch {
+''','''func (m *Feed) composerKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+\tif k.Type == tea.KeyEsc && m.composer.isEmpty() {
+\t\tm.enterNavigation()
+\t\treturn m, nil
+\t}
+\tswitch {
+''',1)
+          s=s.replace('''\tcase "/help":
+\t\tm.composer.clear()
+\t\tm.status = "/undo [n] · /edits · /ctx · /compact · /rewind [n]"
+\t\treturn m, nil
+''','''\tcase "/help":
+\t\tm.composer.clear()
+\t\tm.setCommandResult(CommandHelp(m.width))
+\t\treturn m, nil
+''',1)
+          s=s.replace('''\t\tif cmd, ok := m.menu.currentCommand(); ok {
+\t\t\tcompleted := cmd.Name + " "
+''','''\t\tif cmd, ok := m.menu.currentCommand(); ok {
+\t\t\tcompleted := cmd.Name
+\t\t\tif cmd.HasArg { completed += " " }
+''',1)
+          p.write_text(s)
+
+          p=Path('internal/ui/chat.go'); s=p.read_text()
+          s=s.replace('''\tcase "/help":
+\t\treturn "/undo [n] · /edits · /rewind [n] · /ctx · /compact · ctrl+c · ctrl+d"
+''','''\tcase "/help":
+\t\treturn CommandHelp(m.width)
+''',1)
+          p.write_text(s)
+
+          p=Path('internal/ui/phase5_navigation_test.go'); s=p.read_text()
+          s=s.replace('"nabd/internal/agent"\n', '"nabd/internal/agent"\n\n\t"github.com/charmbracelet/x/ansi"\n')
+          s=s.replace('displayWidth(line)', 'ansi.StringWidth(line)')
+          p.write_text(s)
+          PY
+          gofmt -w internal/ui
+          go test ./...
+          go test -race ./internal/presentation ./internal/ui
+          go vet ./...
+          git diff --check
+          rm .github/workflows/apply-phase5.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'feat(ui): improve commands and feed navigation'
+          git push
