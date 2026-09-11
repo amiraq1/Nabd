@@ -1,0 +1,22 @@
+== gofmt ==
+== vet ==
+vet_exit=0
+== tests ==
+ok  	nabd/cmd/ag	0.181s
+ok  	nabd/internal/agent	6.188s
+ok  	nabd/internal/build	(cached)
+ok  	nabd/internal/config	(cached)
+ok  	nabd/internal/display	(cached)
+ok  	nabd/internal/payload	0.022s
+ok  	nabd/internal/perm	0.004s
+--- FAIL: TestIsTruncatedRealMarker (0.00s)
+    projector_test.go:579: expected tool.Truncated to be true for real store marker "some output\n...[truncated 100 bytes]"
+FAIL
+FAIL	nabd/internal/presentation	0.005s
+ok  	nabd/internal/provider	(cached)
+ok  	nabd/internal/snap	(cached)
+ok  	nabd/internal/store	0.024s
+ok  	nabd/internal/tools	5.892s
+ok  	nabd/internal/ui	5.449s
+FAIL
+test_exit=1
