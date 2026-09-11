@@ -6,8 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -79,7 +77,7 @@ func SelectedPath() (string, int, error) {
 	explicitV1 := strings.TrimSpace(os.Getenv(EnvVar)) != ""
 	explicitV2 := strings.TrimSpace(os.Getenv(V2EnvVar)) != ""
 	if explicitV1 && explicitV2 {
-		return "", 0, errors.New("Config v1 and Config v2 cannot be selected together")
+		return "", 0, errors.New("config v1 and config v2 cannot be selected together")
 	}
 	v1Present, err := pathPresent(v1)
 	if err != nil {
@@ -90,7 +88,7 @@ func SelectedPath() (string, int, error) {
 		return "", 0, err
 	}
 	if v1Present && v2Present {
-		return "", 0, errors.New("Config v1 and Config v2 files cannot coexist")
+		return "", 0, errors.New("config v1 and config v2 files cannot coexist")
 	}
 	if explicitV2 || v2Present {
 		return v2, 2, nil
@@ -146,10 +144,10 @@ func ParseV2File(path string) (map[string]string, error) {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("Config v2: %w", err)
+		return nil, fmt.Errorf("config v2: %w", err)
 	}
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return nil, errors.New("Config v2: trailing JSON content")
+		return nil, errors.New("config v2: trailing JSON content")
 	}
 	return flattenV2(cfg)
 }
@@ -178,39 +176,34 @@ func readSecureFile(path string, limit int64) ([]byte, error) {
 
 func flattenV2(cfg V2Config) (map[string]string, error) {
 	if cfg.Version != 2 {
-		return nil, errors.New("Config v2: version must be 2")
+		return nil, errors.New("config v2: version must be 2")
 	}
 	if _, ok := providerKeyNames[cfg.Provider]; !ok && cfg.Provider != "router" {
-		return nil, fmt.Errorf("Config v2: unsupported provider %q", cfg.Provider)
-	}
-	if cfg.Provider == "router" {
-		if cfg.Model != "" || cfg.BaseURL != "" {
-			return nil, errors.New("Config v2: router forbids model and base_url")
-		}
-		if len(cfg.Routes) == 0 {
-			return nil, errors.New("Config v2: router requires routes")
-		}
-	} else if len(cfg.Routes) != 0 || cfg.RouterMode != "" || cfg.RouterPrestreamTimeout != "" {
-		return nil, errors.New("Config v2: routes and router settings require provider=router")
-	}
-	if len(cfg.Routes) > 32 {
-		return nil, errors.New("Config v2: routes exceeds 32 entries")
+		return nil, fmt.Errorf("config v2: unsupported provider %q", cfg.Provider)
 	}
 	if cfg.BaseURL != "" {
-		if err := ValidateEndpointURL(cfg.BaseURL); err != nil {
-			return nil, fmt.Errorf("Config v2 base_url: %w", err)
+		return nil, errors.New("config v2: base_url is not supported by the minimal strict schema")
+	}
+	if cfg.Provider == "router" {
+		if cfg.Model != "" {
+			return nil, errors.New("config v2: router forbids model")
 		}
+		if len(cfg.Routes) == 0 {
+			return nil, errors.New("config v2: router requires routes")
+		}
+	} else if len(cfg.Routes) != 0 || cfg.RouterMode != "" || cfg.RouterPrestreamTimeout != "" {
+		return nil, errors.New("config v2: routes and router settings require provider=router")
+	}
+	if len(cfg.Routes) > 32 {
+		return nil, errors.New("config v2: routes exceeds 32 entries")
 	}
 	out := map[string]string{"NABD_PROVIDER": cfg.Provider}
 	if cfg.Model != "" {
 		out["NABD_MODEL"] = cfg.Model
 	}
-	if cfg.BaseURL != "" {
-		out["NABD_BASE_URL"] = strings.TrimRight(cfg.BaseURL, "/")
-	}
 	if cfg.RouterMode != "" {
 		if cfg.RouterMode != "fallback" {
-			return nil, errors.New("Config v2: router_mode must be fallback")
+			return nil, errors.New("config v2: router_mode must be fallback")
 		}
 		out["NABD_ROUTER_MODE"] = cfg.RouterMode
 	}
@@ -228,10 +221,10 @@ func flattenV2(cfg V2Config) (map[string]string, error) {
 	if cfg.Provider == "router" {
 		for i, route := range cfg.Routes {
 			if _, ok := providerKeyNames[route.Provider]; !ok {
-				return nil, fmt.Errorf("Config v2: route %d has unsupported provider %q", i, route.Provider)
+				return nil, fmt.Errorf("config v2: route %d has unsupported provider %q", i, route.Provider)
 			}
 			if strings.TrimSpace(route.Model) == "" || strings.ContainsAny(route.Model, ",:\r\n") {
-				return nil, fmt.Errorf("Config v2: route %d has invalid model", i)
+				return nil, fmt.Errorf("config v2: route %d has invalid model", i)
 			}
 			routes = append(routes, route.Provider+":"+route.Model)
 			needed[route.Provider] = struct{}{}
@@ -243,7 +236,7 @@ func flattenV2(cfg V2Config) (map[string]string, error) {
 	for providerName, cred := range cfg.Credentials {
 		keyName, ok := providerKeyNames[providerName]
 		if !ok {
-			return nil, fmt.Errorf("Config v2: credential for unsupported provider %q", providerName)
+			return nil, fmt.Errorf("config v2: credential for unsupported provider %q", providerName)
 		}
 		value, err := resolveCredential(providerName, keyName, cred)
 		if err != nil {
@@ -255,7 +248,7 @@ func flattenV2(cfg V2Config) (map[string]string, error) {
 	}
 	for providerName := range needed {
 		if _, ok := cfg.Credentials[providerName]; !ok {
-			return nil, fmt.Errorf("Config v2: credential source required for provider %q", providerName)
+			return nil, fmt.Errorf("config v2: credential source required for provider %q", providerName)
 		}
 	}
 	return out, nil
@@ -264,25 +257,25 @@ func flattenV2(cfg V2Config) (map[string]string, error) {
 func flattenLimits(l V2Limits, out map[string]string) error {
 	if l.Context != 0 {
 		if l.Context <= 8000 {
-			return errors.New("Config v2: limits.context must be greater than 8000")
+			return errors.New("config v2: limits.context must be greater than 8000")
 		}
 		out["NABD_CTX"] = strconv.Itoa(l.Context)
 	}
 	if l.MaxTokens != 0 {
 		if l.MaxTokens < 128 || l.MaxTokens > 8192 {
-			return errors.New("Config v2: limits.max_tokens must be in [128,8192]")
+			return errors.New("config v2: limits.max_tokens must be in [128,8192]")
 		}
 		out["NABD_MAX_TOKENS"] = strconv.Itoa(l.MaxTokens)
 	}
 	if l.MaxTokensPerRun != 0 {
 		if l.MaxTokensPerRun < 1 {
-			return errors.New("Config v2: limits.max_tokens_per_run must be positive")
+			return errors.New("config v2: limits.max_tokens_per_run must be positive")
 		}
 		out["NABD_MAX_TOKENS_PER_RUN"] = strconv.Itoa(l.MaxTokensPerRun)
 	}
 	if l.MaxRead != 0 {
 		if l.MaxRead < 1 || l.MaxRead > MaxFileBytes {
-			return errors.New("Config v2: limits.max_read must be in [1,262144]")
+			return errors.New("config v2: limits.max_read must be in [1,262144]")
 		}
 		out["NABD_MAX_READ"] = strconv.Itoa(l.MaxRead)
 	}
@@ -293,53 +286,25 @@ func resolveCredential(providerName, keyName string, cred V2Credential) (string,
 	switch cred.Source {
 	case "env":
 		if cred.Path != "" {
-			return "", fmt.Errorf("Config v2: %s env credential forbids path", providerName)
+			return "", fmt.Errorf("config v2: %s env credential forbids path", providerName)
 		}
 		return strings.TrimSpace(os.Getenv(keyName)), nil
 	case "file":
 		if !filepath.IsAbs(cred.Path) {
-			return "", fmt.Errorf("Config v2: %s credential path must be absolute", providerName)
+			return "", fmt.Errorf("config v2: %s credential path must be absolute", providerName)
 		}
 		data, err := readSecureFile(filepath.Clean(cred.Path), MaxValueBytes)
 		if err != nil {
-			return "", fmt.Errorf("Config v2: %s credential file: %w", providerName, err)
+			return "", fmt.Errorf("config v2: %s credential file: %w", providerName, err)
 		}
 		value := strings.TrimSpace(string(data))
 		if value == "" || strings.ContainsAny(value, "\r\n") {
-			return "", fmt.Errorf("Config v2: %s credential file must contain one non-empty line", providerName)
+			return "", fmt.Errorf("config v2: %s credential file must contain one non-empty line", providerName)
 		}
 		return value, nil
 	case "command":
-		return "", fmt.Errorf("Config v2: %s credential source command is forbidden", providerName)
+		return "", fmt.Errorf("config v2: %s credential source command is forbidden", providerName)
 	default:
-		return "", fmt.Errorf("Config v2: %s credential source must be env or file", providerName)
+		return "", fmt.Errorf("config v2: %s credential source must be env or file", providerName)
 	}
-}
-
-// ValidateEndpointURL rejects endpoint shapes and literal addresses that can
-// target local services. DNS results are checked again by provider transports.
-func ValidateEndpointURL(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return err
-	}
-	if u.Scheme != "https" || u.Hostname() == "" {
-		return errors.New("HTTPS URL with a host is required")
-	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return errors.New("userinfo, query and fragment are forbidden")
-	}
-	host := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
-	if host == "localhost" || strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".internal") {
-		return errors.New("local hostnames are forbidden")
-	}
-	if ip := net.ParseIP(host); ip != nil && !PublicIP(ip) {
-		return errors.New("non-public IP addresses are forbidden")
-	}
-	return nil
-}
-
-func PublicIP(ip net.IP) bool {
-	return ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast() && !ip.IsUnspecified() && !ip.IsMulticast()
 }

@@ -78,14 +78,14 @@ func TestV2DisablesImplicitEnvironmentFallback(t *testing.T) {
 	}
 }
 
-func TestV2CredentialFileAndEndpointPolicy(t *testing.T) {
+func TestV2CredentialFileAndClosedEndpointPolicy(t *testing.T) {
 	dir := t.TempDir()
 	secret := filepath.Join(dir, "secret")
 	if err := os.WriteFile(secret, []byte("file-secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	p := filepath.Join(dir, "config.v2.json")
-	body := `{"version":2,"provider":"openrouter","base_url":"https://example.com/v1","credentials":{"openrouter":{"source":"file","path":"` + secret + `"}}}`
+	body := `{"version":2,"provider":"openrouter","credentials":{"openrouter":{"source":"file","path":"` + secret + `"}}}`
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -96,10 +96,12 @@ func TestV2CredentialFileAndEndpointPolicy(t *testing.T) {
 	if got["OPENROUTER_API_KEY"] != "file-secret" {
 		t.Fatal("credential file not loaded")
 	}
-	for _, raw := range []string{"http://example.com", "https://127.0.0.1/v1", "https://169.254.169.254/v1", "https://localhost/v1"} {
-		if err := ValidateEndpointURL(raw); err == nil {
-			t.Fatalf("unsafe URL accepted: %s", raw)
-		}
+	unsafe := `{"version":2,"provider":"openrouter","base_url":"https://example.com/v1","credentials":{"openrouter":{"source":"file","path":"` + secret + `"}}}`
+	if err := os.WriteFile(p, []byte(unsafe), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseV2File(p); err == nil {
+		t.Fatal("minimal strict v2 accepted a custom endpoint")
 	}
 }
 
