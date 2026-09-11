@@ -12,6 +12,7 @@ The existing stale-boundary validation remains defense at the append boundary. T
 - Ordinary turn/event appends remain permitted during summarisation; the existing fresh-boundary and raw-pairing validation still decides whether the final compact projection is safe.
 - Every return path releases the interlock.
 - A rejected operation appends no history event and makes no provider request.
+- Existing command error handling surfaces the sentinel text immediately, so the user is told to wait rather than seeing a late stale-boundary failure.
 
 ## Evidence
 
