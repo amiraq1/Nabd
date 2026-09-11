@@ -21,23 +21,23 @@ import (
 type ItemType string
 
 const (
-	ItemUserMsg ItemType = "user_msg"
-	ItemAssistant ItemType = "assistant"
-	ItemTool ItemType = "tool"
-	ItemPermission ItemType = "permission"
-	ItemNotice ItemType = "notice"
-	ItemError ItemType = "error"
+	ItemUserMsg     ItemType = "user_msg"
+	ItemAssistant   ItemType = "assistant"
+	ItemTool        ItemType = "tool"
+	ItemPermission  ItemType = "permission"
+	ItemNotice      ItemType = "notice"
+	ItemError       ItemType = "error"
 	ItemRunBoundary ItemType = "run_boundary"
 )
 
 type ToolStatus string
 
 const (
-	ToolPending ToolStatus = "pending"
-	ToolRunning ToolStatus = "running"
-	ToolDone ToolStatus = "done"
-	ToolFailed ToolStatus = "failed"
-	ToolDenied ToolStatus = "denied"
+	ToolPending   ToolStatus = "pending"
+	ToolRunning   ToolStatus = "running"
+	ToolDone      ToolStatus = "done"
+	ToolFailed    ToolStatus = "failed"
+	ToolDenied    ToolStatus = "denied"
 	ToolCancelled ToolStatus = "cancelled"
 )
 
@@ -48,9 +48,9 @@ const (
 type OutputState string
 
 const (
-	OutputNone OutputState = "none"
-	OutputSaved OutputState = "saved"
-	OutputTruncated OutputState = "truncated"
+	OutputNone        OutputState = "none"
+	OutputSaved       OutputState = "saved"
+	OutputTruncated   OutputState = "truncated"
 	OutputUnavailable OutputState = "unavailable"
 )
 
@@ -59,41 +59,41 @@ type PermStatus string
 const (
 	PermAsked PermStatus = "asked"
 	PermAllow PermStatus = "allowed"
-	PermDeny PermStatus = "denied"
+	PermDeny  PermStatus = "denied"
 )
 
 type ToolCard struct {
-	CallID string
-	Name string
-	Args string
-	Status ToolStatus
-	Output string
+	CallID      string
+	Name        string
+	Args        string
+	Status      ToolStatus
+	Output      string
 	OutputState OutputState
-	Duration int64
-	ExitCode int
-	Signal string
-	Err string
+	Duration    int64
+	ExitCode    int
+	Signal      string
+	Err         string
 	// Truncated is execution-level truncation. OutputTruncated is persistence-level.
-	Truncated bool
+	Truncated  bool
 	NextOffset *int
 }
 
 type PermCard struct {
-	Name string
-	Args string
-	Status PermStatus
-	Decision agent.Decision
+	Name      string
+	Args      string
+	Status    PermStatus
+	Decision  agent.Decision
 	Effective agent.Decision
 }
 
 type FeedItem struct {
-	Type ItemType `json:"type"`
-	ID string `json:"id"`
-	Seq int `json:"seq"`
-	Text string `json:"text"`
-	Tool *ToolCard `json:"tool,omitempty"`
-	Perm *PermCard `json:"permission,omitempty"`
-	RunBoundary string `json:"run_boundary,omitempty"`
+	Type        ItemType  `json:"type"`
+	ID          string    `json:"id"`
+	Seq         int       `json:"seq"`
+	Text        string    `json:"text"`
+	Tool        *ToolCard `json:"tool,omitempty"`
+	Perm        *PermCard `json:"permission,omitempty"`
+	RunBoundary string    `json:"run_boundary,omitempty"`
 }
 
 func (it FeedItem) key() string { return fmt.Sprintf("%s:%s", it.Type, it.ID) }
@@ -133,34 +133,57 @@ func (it FeedItem) Fingerprint() uint64 {
 }
 
 func hashString(h *uint64, s string) {
-	*h ^= uint64(len(s)); *h *= 1099511628211
-	for _, b := range []byte(s) { *h ^= uint64(b); *h *= 1099511628211 }
+	*h ^= uint64(len(s))
+	*h *= 1099511628211
+	for _, b := range []byte(s) {
+		*h ^= uint64(b)
+		*h *= 1099511628211
+	}
 }
 func hashInt64(h *uint64, v int64) { *h ^= uint64(v); *h *= 1099511628211 }
-func hashInt(h *uint64, v int) { *h ^= uint64(v); *h *= 1099511628211 }
-func hashBool(h *uint64, v bool) { if v { *h ^= 1 }; *h *= 1099511628211 }
+func hashInt(h *uint64, v int)     { *h ^= uint64(v); *h *= 1099511628211 }
+func hashBool(h *uint64, v bool) {
+	if v {
+		*h ^= 1
+	}
+	*h *= 1099511628211
+}
 
 func sortBySeq(items []FeedItem) {
 	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].Seq != 0 && items[j].Seq != 0 && items[i].Seq != items[j].Seq { return items[i].Seq < items[j].Seq }
+		if items[i].Seq != 0 && items[j].Seq != 0 && items[i].Seq != items[j].Seq {
+			return items[i].Seq < items[j].Seq
+		}
 		return false
 	})
 }
 
 func callArgs(c *agent.ToolCall) string {
-	if c == nil { return "" }
-	m := rawToMap(c.Args)
-	if len(m) == 0 { return "" }
-	for _, k := range []string{"cmd", "path", "pattern", "query"} {
-		if v, ok := m[k]; ok { return fmt.Sprint(v) }
+	if c == nil {
+		return ""
 	}
-	for _, v := range m { return fmt.Sprint(v) }
+	m := rawToMap(c.Args)
+	if len(m) == 0 {
+		return ""
+	}
+	for _, k := range []string{"cmd", "path", "pattern", "query"} {
+		if v, ok := m[k]; ok {
+			return fmt.Sprint(v)
+		}
+	}
+	for _, v := range m {
+		return fmt.Sprint(v)
+	}
 	return ""
 }
 
 func rawToMap(raw []byte) map[string]any {
-	if len(raw) == 0 { return nil }
+	if len(raw) == 0 {
+		return nil
+	}
 	var m map[string]any
-	if err := json.Unmarshal(raw, &m); err != nil { return nil }
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil
+	}
 	return m
 }
