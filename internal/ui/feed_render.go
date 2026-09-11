@@ -181,6 +181,9 @@ func renderNotice(it presentation.FeedItem, width int) []string {
 	return out
 }
 func renderError(it presentation.FeedItem, width int) []string {
+	if it.Error != nil {
+		return renderErrorCard(it.Error, width)
+	}
 	text := it.Text
 	if text == "" {
 		text = "error"

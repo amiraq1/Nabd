@@ -102,6 +102,10 @@ func (p *Projector) Items() []FeedItem {
 			perm := *it.Perm
 			it.Perm = &perm
 		}
+		if it.Error != nil {
+			card := *it.Error
+			it.Error = &card
+		}
 		out[i] = it
 	}
 	sortBySeq(out)
@@ -299,7 +303,7 @@ func (p *Projector) appendNotice(e agent.Event) error {
 	return p.append(FeedItem{Type: ItemNotice, ID: "notice_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: e.Text})
 }
 func (p *Projector) appendError(e agent.Event) error {
-	return p.append(FeedItem{Type: ItemError, ID: "err_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: e.Err})
+	return p.append(FeedItem{Type: ItemError, ID: "err_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: e.Err, Error: ErrorCardFromEvent(e)})
 }
 func (p *Projector) appendInterrupted(e agent.Event) error {
 	for i := range p.items {
@@ -311,7 +315,7 @@ func (p *Projector) appendInterrupted(e agent.Event) error {
 	if text == "" {
 		text = "stopped"
 	}
-	return p.append(FeedItem{Type: ItemError, ID: "intr_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: text})
+	return p.append(FeedItem{Type: ItemError, ID: "intr_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: text, Error: NewErrorCard(agent.ErrCanceled, text, "")})
 }
 func (p *Projector) append(it FeedItem) error {
 	p.byID[it.key()] = len(p.items)

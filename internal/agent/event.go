@@ -61,6 +61,7 @@ type Event struct {
 	RawDecision Decision `json:"raw_decision,omitempty"`
 	Err         string   `json:"err,omitempty"`
 	ErrorCode   string   `json:"error_code,omitempty"`
+	JournalPath string   `json:"journal_path,omitempty"`
 	Code        int      `json:"code,omitempty"`
 	Limit       int      `json:"limit,omitempty"`
 	Used        int      `json:"used,omitempty"`

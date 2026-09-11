@@ -87,13 +87,14 @@ type PermCard struct {
 }
 
 type FeedItem struct {
-	Type        ItemType  `json:"type"`
-	ID          string    `json:"id"`
-	Seq         int       `json:"seq"`
-	Text        string    `json:"text"`
-	Tool        *ToolCard `json:"tool,omitempty"`
-	Perm        *PermCard `json:"permission,omitempty"`
-	RunBoundary string    `json:"run_boundary,omitempty"`
+	Type        ItemType   `json:"type"`
+	ID          string     `json:"id"`
+	Seq         int        `json:"seq"`
+	Text        string     `json:"text"`
+	Tool        *ToolCard  `json:"tool,omitempty"`
+	Perm        *PermCard  `json:"permission,omitempty"`
+	Error       *ErrorCard `json:"error,omitempty"`
+	RunBoundary string     `json:"run_boundary,omitempty"`
 }
 
 func (it FeedItem) key() string { return fmt.Sprintf("%s:%s", it.Type, it.ID) }
@@ -121,6 +122,16 @@ func (it FeedItem) Fingerprint() uint64 {
 		} else {
 			hashBool(&h, false)
 		}
+	}
+	if it.Error != nil {
+		hashString(&h, string(it.Error.Code))
+		hashString(&h, it.Error.Title)
+		hashString(&h, it.Error.Message)
+		hashString(&h, it.Error.ActionText)
+		hashBool(&h, it.Error.Retryable)
+		hashString(&h, string(it.Error.RetryScope))
+		hashString(&h, it.Error.JournalPath)
+		hashBool(&h, it.Error.ToolExecuted)
 	}
 	if it.Perm != nil {
 		hashString(&h, it.Perm.Name)
