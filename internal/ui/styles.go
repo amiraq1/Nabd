@@ -64,11 +64,11 @@ func newSemanticTheme(noColor bool) semanticTheme {
 func navigationHint(width int) string {
 	switch widthMode(width) {
 	case WidthNarrow:
-		return "j/k cards · ? help · Esc input"
+		return "j/k cards · d diag · Esc input"
 	case WidthCompact:
-		return "j/k cards · n error · p permission · ? help · Esc input"
+		return "j/k cards · n error · p permission · d diag · Esc input"
 	default:
-		return "j/k or arrows · Enter expand · n next error · p permission · g/G ends · ? hide · Esc input"
+		return "j/k or arrows · Enter expand · n next error · p permission · d diagnostics · g/G ends · Esc input"
 	}
 }
 
