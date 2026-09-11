@@ -718,3 +718,26 @@ manual `/compact` path surfaces only a status string today; wiring the sentinel
 into user-facing text and a command-level `/compact` interlock are out of scope
 here and recorded as follow-ups.
 
+## SESSION_PATH_COLLISION (Finding 1) — PID+counter naming
+
+New sessions use `sessionPathAt` → `newSessionName`: `<timestamp>-p<PID>-c<NNNN>.jsonl`.
+The old naming (`<timestamp>.jsonl`) is unreachable for new sessions.
+
+**Residual collision is PID-NAMESPACE scoped, not filesystem scoped.**
+Two processes in separate PID namespaces (containers) sharing a session
+directory via `--dir` on a common volume can hold the same PID and start in
+the same millisecond — reproducing the original collision silently because
+`store.NewJSONL` still opens `O_CREATE|O_WRONLY|O_APPEND` (no `O_EXCL`).
+The collision manifests as duplicate Seq values and multiple Parent roots in
+one journal, exactly as proven in E1. This residual is **collision-resistant**,
+not collision-free.
+
+Closing it requires exclusive creation on the new-session path only (a
+separate constructor), which was deliberately deferred to keep this commit
+revertable and to avoid changing the constructor shared with `--continue`.
+
+The same-millisecond `'-'` (0x2D) sorts before `'.'` (0x2E), so a new
+`<ts>-pPID-cNNNN.jsonl` sorts BEFORE a legacy `<ts>.jsonl` in `os.ReadDir`
+order; `latestSession`'s reverse scan would prefer the legacy file if a
+same-timestamp legacy sibling exists. Harmless in practice, ordering across
+distinct timestamps is unaffected because the timestamp prefix is fixed width.

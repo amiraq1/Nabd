@@ -548,6 +548,14 @@ func defaultSessionDir() (string, error) {
 }
 
 func sessionPath(dir string) (string, error) {
+	return sessionPathAt(dir, time.Now().UTC())
+}
+
+// sessionPathAt is the pure production naming helper behind sessionPath. It is
+// the single source of truth for new-session journal filenames. Keeping it pure
+// (dir + now -> path) lets tests exercise the real naming logic with a frozen
+// clock without touching the filesystem clock or sleeping.
+func sessionPathAt(dir string, now time.Time) (string, error) {
 	if dir == "" {
 		var err error
 		dir, err = defaultSessionDir()
@@ -555,8 +563,45 @@ func sessionPath(dir string) (string, error) {
 			return "", err
 		}
 	}
-	name := time.Now().UTC().Format("20060102-150405.000") + ".jsonl"
+	base := now.Format("20060102-150405.000")
+	name := newSessionName(base)
 	return filepath.Join(dir, name), nil
+}
+
+// newSessionSuffix builds the disambiguation suffix for a new-session journal.
+// It combines the current process PID and a process-local atomic counter so
+// that concurrent allocations within the same millisecond produce distinct
+// filenames:
+//
+//   - PID separates simultaneously running processes on one host.
+//   - The atomic counter separates calls in the same process and same
+//     millisecond.
+//
+// The counter is zero-padded (%04d) so that lexicographic order of the suffix
+// reflects counter order within one timestamp prefix up to 9999 allocations;
+// beyond that the width grows.
+//
+// PID alone is intentionally insufficient: every call in one process shares a
+// PID, so PID-only naming would still collide for same-millisecond allocations
+// inside a single process. The counter closes that gap deterministically and
+// without filesystem races.
+func newSessionSuffix() string {
+	return fmt.Sprintf("-p%d-c%04d", os.Getpid(), newSessionCounter())
+}
+
+// sessionCounter provides process-local uniqueness. A package-global atomic is
+// sufficient because uniqueness only needs to hold within one process-lifetime;
+// cross-process uniqueness is provided by the PID component of the suffix.
+var sessionCounter atomic.Uint64
+
+func newSessionCounter() uint64 {
+	return sessionCounter.Add(1)
+}
+
+// newSessionName assembles a new-session journal name from its timestamp base,
+// appending the PID+counter suffix before the ".jsonl" extension.
+func newSessionName(base string) string {
+	return base + newSessionSuffix() + ".jsonl"
 }
 
 // ensureDefaultSessionDir creates dir with mode 0o700 if it does not exist, or
