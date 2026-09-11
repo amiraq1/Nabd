@@ -21,7 +21,7 @@ func acceptanceEvents() []agent.Event {
 		{Seq: 3, Type: agent.ToolStart, Call: read},
 		{Seq: 4, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: read.ID, Name: read.Name, Args: read.Args, OK: true, Output: "1|package main\n...[truncated 80 bytes]\nnext_offset=170"}},
 		{Seq: 5, Type: agent.ToolStart, Call: failed},
-		{Seq: 6, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: failed.ID, Name: failed.Name, Args: failed.Args, OK: false, Exit: 1, Err: "tests failed"}},
+		{Seq: 6, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: failed.ID, Name: failed.Name, Args: failed.Args, OK: false, Exit: 1, Output: "tests failed"}},
 		{Seq: 7, Type: agent.PermAsk, Call: permission},
 		{Seq: 8, Type: agent.PermReply, Call: permission, Decision: agent.Deny, RawDecision: agent.Deny},
 		{Seq: 9, Type: agent.RunError, Err: "provider unavailable", ErrorCode: string(agent.ErrProviderTemporary)},
