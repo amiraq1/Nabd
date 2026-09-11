@@ -1,6 +1,6 @@
-// Package config reads Nabd's user-scoped v1 configuration.
+// Package config reads Nabd's user-scoped configuration.
 // Provider selection, credentials, models and base URLs are accepted only
-// from NABD_CONFIG or ~/.ag/config. Project files are never consulted.
+// from explicit user paths or ~/.ag. Project files are never consulted.
 package config
 
 import (
@@ -17,6 +17,7 @@ import (
 
 const (
 	EnvVar        = "NABD_CONFIG"
+	V2EnvVar      = "NABD_CONFIG_V2"
 	MaxFileBytes  = 256 << 10
 	MaxLineBytes  = 64 << 10
 	MaxKeys       = 256
@@ -32,9 +33,10 @@ var knownV1Keys = map[string]struct{}{
 }
 
 var (
-	once    sync.Once
-	values  map[string]string
-	loadErr error
+	once          sync.Once
+	values        map[string]string
+	loadErr       error
+	activeVersion int
 )
 
 func Path() (string, error) {
@@ -52,18 +54,30 @@ func Path() (string, error) {
 }
 
 func Load() error {
-	once.Do(func() { values, loadErr = load() })
+	once.Do(func() { values, activeVersion, loadErr = loadSelected() })
 	return loadErr
 }
 
+// Version returns the selected configuration version after loading.
+func Version() int {
+	if Load() != nil {
+		return 0
+	}
+	return activeVersion
+}
+
 // Get fails closed: a present-but-invalid config never falls back to an
-// environment credential. Call Load for the diagnostic.
+// environment credential. Config v2 additionally disables implicit environment
+// fallback; every credential source must be declared in the v2 document.
 func Get(key string) string {
 	if Load() != nil {
 		return ""
 	}
 	if v, ok := values[key]; ok && v != "" {
 		return v
+	}
+	if activeVersion == 2 {
+		return ""
 	}
 	return strings.TrimSpace(os.Getenv(key))
 }
@@ -80,7 +94,7 @@ func Has(key string) bool { return Get(key) != "" }
 type Conflict struct{ Key string }
 
 func Conflicts() []Conflict {
-	if Load() != nil {
+	if Load() != nil || activeVersion == 2 {
 		return nil
 	}
 	var out []Conflict
@@ -111,18 +125,10 @@ func ResetForTest() {
 	once = sync.Once{}
 	values = nil
 	loadErr = nil
+	activeVersion = 0
 }
 
-func load() (map[string]string, error) {
-	p, err := Path()
-	if err != nil {
-		return nil, err
-	}
-	return ParseFile(p)
-}
-
-// ParseFile securely opens and validates a regular user-owned 0600 file.
-// On Unix the final component uses O_NOFOLLOW and descriptor metadata.
+// ParseFile securely opens and validates a regular user-owned 0600 v1 file.
 func ParseFile(p string) (map[string]string, error) {
 	f, fi, err := openConfigFile(p)
 	if errors.Is(err, os.ErrNotExist) {
@@ -132,19 +138,26 @@ func ParseFile(p string) (map[string]string, error) {
 		return nil, err
 	}
 	defer f.Close()
-	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("%s: regular file required", p)
-	}
-	if mode := fi.Mode().Perm(); mode&0o077 != 0 {
-		return nil, fmt.Errorf("%s: permissions %04o are open to others; run chmod 600 %s", p, mode, p)
-	}
-	if err := checkOwner(p, fi); err != nil {
+	if err := validateOpenedFile(p, fi); err != nil {
 		return nil, err
 	}
-	if fi.Size() > MaxFileBytes {
-		return nil, fmt.Errorf("%s: config exceeds %d bytes", p, MaxFileBytes)
-	}
 	return Parse(io.LimitReader(f, MaxFileBytes+1))
+}
+
+func validateOpenedFile(p string, fi os.FileInfo) error {
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%s: regular file required", p)
+	}
+	if mode := fi.Mode().Perm(); mode&0o077 != 0 {
+		return fmt.Errorf("%s: permissions %04o are open to others; run chmod 600 %s", p, mode, p)
+	}
+	if err := checkOwner(p, fi); err != nil {
+		return err
+	}
+	if fi.Size() > MaxFileBytes {
+		return fmt.Errorf("%s: config exceeds %d bytes", p, MaxFileBytes)
+	}
+	return nil
 }
 
 func checkOwner(p string, fi os.FileInfo) error { return checkOwnerPlatform(p, fi) }
