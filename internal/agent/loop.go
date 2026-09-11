@@ -122,6 +122,59 @@ const DefaultMaxTurns = 40
 // session is intact; the caller should wait before retrying.
 var ErrRateLimitBudget = errors.New("rate limit budget exhausted")
 
+// ErrCompactBoundaryStale is returned by Compact when the proposed boundary
+// is no longer safe to apply to the current history at append time. This is
+// not a provider failure or journal error — it is a deliberate rejection:
+// history changed during summarisation and applying firstKept would retain a
+// ToolEnd whose ToolStart was dropped. Messages() then synthesises a
+// fabricated tool_use for the assistant (empty/foreign Input); the request
+// stays wire-valid, so the harm is a fabricated call the model never made,
+// not a provider rejection.
+var ErrCompactBoundaryStale = errors.New("compact boundary became unsafe; concurrent turn invalidated the projection")
+
+// rawPairingInvariantHolds reports whether for every raw ToolEnd event in evs
+// that carries a tool-call ID, a matching raw ToolStart event with the same
+// tool-call ID precedes it in evs.
+//
+// This is a defense-in-depth invariant, NOT the load-bearing Finding 2 fix.
+// Under current production emission ordering it cannot fire: a compaction
+// boundary is always a UserMsg (Seq increases in emission order), and a UserMsg
+// is only emitted at the top of Loop.Run, so no boundary UserMsg can ever land
+// between a ToolStart and its ToolEnd. The orphaned-ToolEnd sequence therefore
+// cannot be produced by the running journal; it is only reachable through
+// direct event injection or a --continue of a journal that was already
+// structurally corrupt before this code existed.
+//
+// Malformed ToolEnd events (Call == nil or Call.ID == "") are skipped rather
+// than treated as pairing violations. This ensures that legacy archives or
+// corrupted records continued via --continue degrade gracefully (relying on
+// Messages() fallback handling) rather than permanently bricking /compact with
+// persistent ErrCompactBoundaryStale rejections.
+//
+// Skipping an empty-ID ToolEnd here does not make it harmless downstream:
+// Messages() still emits a tool_result with an empty id for it (see its ToolEnd
+// case). That is pre-existing behaviour, not introduced or worsened by this
+// check, and is recorded in the parking lot rather than fixed here.
+func rawPairingInvariantHolds(evs []Event) bool {
+	seenStarts := make(map[string]bool)
+	for _, e := range evs {
+		switch e.Type {
+		case ToolStart:
+			if e.Call != nil && e.Call.ID != "" {
+				seenStarts[e.Call.ID] = true
+			}
+		case ToolEnd:
+			if e.Call == nil || e.Call.ID == "" {
+				continue // skip malformed ToolEnd: not a pairing violation, preserves --continue compatibility
+			}
+			if !seenStarts[e.Call.ID] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // errTurnRateLimited is returned by streamTurn when the provider responded
 // with a 429. It signals Run() to wait and retry this turn rather than
 // counting it as a success (which would reset the consecutive-429 counter).

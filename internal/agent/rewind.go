@@ -41,13 +41,24 @@ func (l *Loop) Rewind(n int) (string, error) {
 	return cut.Text, nil
 }
 
-// emitAt is emit with the parent chosen by the caller instead of by time.
-// It is the whole mechanism: seq still grows, parent walks back. A sink
+// emitAt acquires l.mu and delegates to emitLocked, allowing the caller
+// to choose the parent event instead of using the current parent. A sink
 // failure is returned so callers can stop the loop instead of continuing
 // as if the event was durably recorded.
 func (l *Loop) emitAt(parent int, e Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	return l.emitLocked(parent, e)
+}
+
+// emitLocked stamps and appends an event. The caller must already hold l.mu.
+// Use inside a critical section where an invariant must be validated and the
+// event appended atomically.
+//
+// WARNING: l.Sink.Emit is invoked while l.mu remains held. A Sink that calls
+// back into the same Loop (e.g. calling emit or emitAt) will deadlock
+// (pre-existing hazard noted in NOTES.md P0-1.5).
+func (l *Loop) emitLocked(parent int, e Event) error {
 	l.seq++
 	e.Seq, e.Parent = l.seq, parent
 	if e.Time.IsZero() {

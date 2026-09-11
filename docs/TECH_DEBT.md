@@ -677,3 +677,44 @@ The read cap also must not become provider-keyed: Router.Name() is a
 composite display string, so any policy parsed from it would mis-key for the
 multi-provider case. TestReadCapPinsProviderIndependence_NBD401 pins that the
 cap depends only on the read and token settings.
+
+## COMPACT_BOUNDARY_STALE (Finding 2) — reject boundaries removed by rewind
+
+`Compact` picks a boundary from a snapshot, releases `l.mu` for the provider
+summarisation call, then re-validates the boundary against the *fresh* history
+under `l.mu` and appends the `Compact` event in the same critical section
+(`internal/agent/compact.go`). If the selected `firstKept` is absent from the
+current live branch, `Compact` returns `ErrCompactBoundaryStale` and appends
+nothing.
+
+The load-bearing defect is the `/compact × /rewind` overlap: `/compact` runs in
+a detached goroutine that is **not** covered by the `m.running` interlock
+(`cmd/ag/main.go`, `chat.OnCompact`). So a concurrent `/rewind` can remove
+`firstKept` from the live branch while summarisation is blocked. Baseline
+`Compact` (HEAD) searched the stale snapshot, never detected the loss, and
+appended a `Compact` event whose `FirstKept` named an event no longer on the
+live branch. The corrected `Compact` searches fresh history under `l.mu` and
+rejects with `ErrCompactBoundaryStale`, appending nothing.
+
+`Live()` (`internal/agent/event.go`) applies a `Compact` by flooring the live
+branch at `FirstKept`. If that sequence is absent from the current branch, the
+floor refers to an unreachable event — a journal may still hold it somewhere,
+but it is not on the live projection.
+
+Raw tool-event-pairing validation (`rawPairingInvariantHolds`) remains as
+**defense in depth only**. Under current production ordering it cannot fire: a
+compaction boundary is always a `UserMsg`, `Seq` increases in emission order,
+and a `UserMsg` is emitted only at the top of `Loop.Run`, so no boundary can
+land between a `ToolStart` and its `ToolEnd`. The orphaned-ToolEnd sequence is
+only reachable through direct event injection or a `--continue` of a journal
+that was already structurally corrupt. The harm prevented by raw pairing is a
+fabricated `tool_use` attributed to the assistant — `Messages()` synthesises a
+wire-valid `tool_use` for an unmatched `ToolEnd`, so the request is never
+provider-rejected — not an orphaned `tool_result` the provider would refuse.
+
+`ErrCompactBoundaryStale` is deliberately `errors.New`, so callers distinguish a
+stale-boundary refusal from a provider or journal failure via `errors.Is`. The
+manual `/compact` path surfaces only a status string today; wiring the sentinel
+into user-facing text and a command-level `/compact` interlock are out of scope
+here and recorded as follow-ups.
+
