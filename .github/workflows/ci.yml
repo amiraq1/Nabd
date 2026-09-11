@@ -2,57 +2,151 @@ name: CI
 
 on:
   push:
-    branches: ["fix/compact-command-interlock"]
+    branches: [ "master", "main", "feature/**", "fix/**" ]
+  pull_request:
+    branches: [ "master", "main" ]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch:
+  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: fix/compact-command-interlock
-      - name: Replace stale race expectation
-        shell: bash
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('internal/agent/compact_race_test.go')
-          s = p.read_text()
-          anchor = '''\t\t// Concurrent Rewind removes Turn 2 — which IS firstKept — from the live
-\t\t// branch, while Compact is blocked in summarise.
-'''
-          replacement = '''\t\t// Finding 5 closes the production overlap before the older stale-boundary
-\t\t// defense is needed: Rewind must fail immediately and leave firstKept live.
-\t\tif _, err := l.Rewind(1); !errors.Is(err, ErrHistoryMutationInProgress) {
-\t\t\tt.Fatalf("expected ErrHistoryMutationInProgress while Compact is active, got %v", err)
-\t\t}
-\t\tif !seqPresentInLive(l, turn2Seq) {
-\t\t\tt.Fatalf("rejected Rewind removed firstKept seq %d", turn2Seq)
-\t\t}
-\t\tclose(unblock)
-\t\tif err := <-compactErr; err != nil {
-\t\t\tt.Fatalf("Compact failed after conflicting Rewind was rejected: %v", err)
-\t\t}
-\t\treturn
+    - uses: actions/checkout@v5
 
-\t\t// Legacy Finding 2 assertions below document the stale-boundary defense.
-\t\t// They are unreachable through Rewind now that Finding 5 owns the higher-
-\t\t// level interlock; synthetic injection still tests that defense above.
-\t\t// Concurrent Rewind removes Turn 2 — which IS firstKept — from the live
-\t\t// branch, while Compact is blocked in summarise.
-'''
-          if anchor not in s:
-              raise SystemExit('race-test anchor missing')
-          p.write_text(s.replace(anchor, replacement, 1))
-          PY
-          gofmt -w internal/agent/compact_race_test.go
-          git fetch origin master
-          git checkout origin/master -- .github/workflows/ci.yml
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m 'test(agent): update compact rewind race contract'
-          git push origin HEAD:fix/compact-command-interlock
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.27.1'
+        check-latest: true
+
+    - name: Environment diagnostics
+      run: go env GOOS GOARCH CGO_ENABLED CC
+
+    - name: Check formatting (gofmt)
+      run: test -z "$(gofmt -l .)"
+
+    - name: Build
+      run: go build ./...
+
+    - name: Vet
+      run: go vet ./...
+
+    - name: Unit tests without race
+      run: go test ./... -count=1
+
+    - name: Nested bubbles unit tests
+      working-directory: third_party/bubbles
+      run: go test ./... -count=1
+
+    - name: Install pinned staticcheck
+      run: |
+        go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+        export PATH="$(go env GOPATH)/bin:$PATH"
+        staticcheck -version
+        staticcheck ./...
+
+    - name: Race detector on all packages
+      run: go test ./... -race -count=1
+
+    - name: Nested bubbles race tests
+      working-directory: third_party/bubbles
+      run: go test ./... -race -count=1
+
+    - name: Router intensive race test
+      run: go test ./internal/provider/... -run Router -race -count=100
+
+    - name: Agent intensive race test
+      run: go test ./internal/agent/... -run 'Router|Replay|Messages|ToolCall|Compact' -race -count=50
+
+    # Reduced to -count=20 because -race overhead on GH Actions makes the UI tests easily exceed the 15m job timeout even with optimized test payloads.
+    - name: UI and Presentation intensive race test
+      run: go test ./internal/ui/... ./internal/presentation/... -race -count=20
+
+    - name: UI row-accounting contract test
+      run: go test ./internal/ui/ -run 'Contract|RowAccounting|FrameHeight|BottomAnchor' -count=1
+
+    - name: UI rendering and streaming benchmarks
+      run: go test ./internal/ui/ -run '^$' -bench '^(BenchmarkRefreshStreaming|BenchmarkFormatInlineLong|BenchmarkFormatMarkdown|BenchmarkViewFullScreen)$' -benchmem -count=1
+
+    - name: UI layout benchmark baseline (non-gating)
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -o pipefail
+        go test ./internal/ui/ -run '^$' \
+          -bench '^(BenchmarkRenderItems500|BenchmarkFormatInlineLong|BenchmarkFormatMarkdownLong|BenchmarkViewFullScreen)$' \
+          -benchmem -benchtime=10x -count=5 2>&1 | tee bench-ui.txt
+
+    - name: Upload benchmark artifact
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: bench-ui-${{ github.sha }}
+        path: bench-ui.txt
+        if-no-files-found: warn
+
+    - name: Exec.Cmd.Env static audit
+      run: bash scripts/check-exec-env.sh
+
+    - name: Git diff check
+      run: git diff --check
+
+    - name: Clean local clone verification
+      run: |
+        tmp=$(mktemp -d)
+        git clone --no-local . "$tmp/nabd"
+        cd "$tmp/nabd"
+        go build ./...
+        go test ./... -race -count=1
+        rm -rf "$tmp"
+
+  # Catches build-tagged files (owner_other.go and friends) that the
+  # ubuntu-only job never compiles.
+  cross:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            vet: true
+          - goos: linux
+            goarch: arm64
+            vet: true
+          - goos: darwin
+            goarch: amd64
+            vet: true
+          - goos: darwin
+            goarch: arm64
+            vet: true
+          - goos: android
+            goarch: arm64
+            vet: true
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.27.1'
+        check-latest: true
+
+    - name: Cross-compile
+      env:
+        CGO_ENABLED: "0"
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: go build ./...
+
+    - name: Vet
+      if: ${{ matrix.vet }}
+      env:
+        CGO_ENABLED: "0"
+        GOOS: ${{ matrix.goos }}
+        GOARCH: ${{ matrix.goarch }}
+      run: go vet ./...
