@@ -36,6 +36,11 @@ Do not apologise, do not greet, do not invent what did not happen. Leave out poi
 // wire-valid tool_use for an unmatched ToolEnd, so the request is never
 // provider-rejected — not an orphaned tool_result. See messages.go's ToolEnd case.
 func (l *Loop) Compact(ctx context.Context, target int) error {
+	if !l.historyMu.TryLock() {
+		return ErrHistoryMutationInProgress
+	}
+	defer l.historyMu.Unlock()
+
 	// Phase 1: take a snapshot of the live branch to pick a boundary.
 	// l.mu is held only briefly so that the provider call does not block it.
 	l.mu.Lock()

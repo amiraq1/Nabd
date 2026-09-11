@@ -61,10 +61,11 @@ type Loop struct {
 	warned bool
 	ended  bool // true once End() has been called; guards against double RunEnd
 
-	mu     sync.Mutex
-	seq    int
-	parent int
-	hist   []Event
+	mu        sync.Mutex
+	historyMu sync.Mutex
+	seq       int
+	parent    int
+	hist      []Event
 	// rateLimitState tracks consecutive 429s for the active Run().
 	// It is reset at the start of each Run() and after every successful turn.
 	rateLimitHits      int           // consecutive 429s since last success
@@ -133,6 +134,11 @@ var ErrRateLimitBudget = errors.New("rate limit budget exhausted")
 // stays wire-valid, so the harm is a fabricated call the model never made,
 // not a provider rejection.
 var ErrCompactBoundaryStale = errors.New("compact boundary became unsafe; concurrent turn invalidated the projection")
+
+// ErrHistoryMutationInProgress means Compact or Rewind already owns the
+// history-mutation interlock. Callers should retry after the active operation
+// settles; waiting inside either operation would freeze an interactive command.
+var ErrHistoryMutationInProgress = errors.New("history mutation already in progress; wait for compact or rewind to finish")
 
 // rawPairingInvariantHolds reports whether for every raw ToolEnd event in evs
 // that carries a tool-call ID, a matching raw ToolStart event with the same
