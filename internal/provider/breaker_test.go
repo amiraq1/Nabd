@@ -32,3 +32,26 @@ func TestRouteBreakerBlocksOnlyTrippedRoute(t *testing.T) {
 		t.Fatal("breaker leaked to a different route")
 	}
 }
+
+type breakerClock struct{ now time.Time }
+
+func (c *breakerClock) Now() time.Time             { return c.now }
+func (*breakerClock) NewTimer(time.Duration) Timer { return nil }
+
+func TestRouteBreakerAllowsHalfOpenProbeAfterCooldown(t *testing.T) {
+	clock := &breakerClock{now: time.Unix(100, 0)}
+	r := &Router{
+		clock:           clock,
+		blockedUntil:    make(map[string]time.Time),
+		breakerCooldown: time.Minute,
+	}
+	route := Route{Provider: "anthropic", Model: "m", Client: breakerTestClient{}}
+	r.tripRoute(route)
+	if r.routeAllowed(route) {
+		t.Fatal("route allowed before cooldown elapsed")
+	}
+	clock.now = clock.now.Add(time.Minute)
+	if !r.routeAllowed(route) {
+		t.Fatal("route remained blocked after cooldown")
+	}
+}
