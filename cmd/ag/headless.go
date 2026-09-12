@@ -18,6 +18,7 @@ import (
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
+	"nabd/internal/store"
 	"nabd/internal/tools"
 )
 
@@ -111,10 +112,18 @@ func (s noticeStderr) Emit(e agent.Event) error {
 	return nil
 }
 
-type jsonlStdout struct{ w io.Writer }
+type jsonlStdout struct {
+	w      io.Writer
+	redact store.EventRedactor
+}
 
 func (s jsonlStdout) Emit(e agent.Event) error {
-	b, err := json.Marshal(e.ForStore())
+	output := e
+	if s.redact != nil {
+		output = s.redact(e)
+	}
+
+	b, err := json.Marshal(output.ForStore())
 	if err != nil {
 		return err
 	}
@@ -248,7 +257,10 @@ func runHeadlessErr(cfg headlessConfig) error {
 	var sinks agent.Fanout
 	sinks = append(sinks, journal, noticeStderr{w: cfg.stderr})
 	if cfg.json {
-		sinks = append(sinks, jsonlStdout{w: cfg.stdout})
+		sinks = append(sinks, jsonlStdout{
+			w:      cfg.stdout,
+			redact: journalEventRedactor(),
+		})
 	}
 
 	loop := newSessionLoop(prov, reg, headlessGate{inner: gate{perm.New(reg)}, mode: cfg.mode}, silentAsker{})

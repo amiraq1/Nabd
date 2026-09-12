@@ -171,7 +171,7 @@ func doChat(dir string, cont bool) error {
 		if err != nil {
 			return err
 		}
-		journal, err = store.NewJSONL(journalPath)
+		journal, err = openSessionJournal(journalPath)
 	} else {
 		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
 	}
@@ -300,7 +300,7 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		if err != nil {
 			return err
 		}
-		journal, err = store.NewJSONL(journalPath)
+		journal, err = openSessionJournal(journalPath)
 	} else {
 		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
 	}
@@ -556,16 +556,21 @@ func sessionPath(dir string) (string, error) {
 	return sessionPathAt(dir, time.Now().UTC())
 }
 
-// newSessionJournal allocates a new journal atomically. --continue uses
-// NewJSONL directly because it intentionally opens an existing file.
+// newSessionJournal allocates a raw journal atomically for callers that
+// require the backward-compatible default. Production new sessions use
+// newSessionJournalWithOptions, while --continue uses openSessionJournal.
 func newSessionJournal(dir string) (*store.JSONL, string, error) {
+	return newSessionJournalWithOptions(dir, store.Options{})
+}
+
+func newSessionJournalWithOptions(dir string, opts store.Options) (*store.JSONL, string, error) {
 	const maxAttempts = 32
 	for i := 0; i < maxAttempts; i++ {
 		path, err := sessionPath(dir)
 		if err != nil {
 			return nil, "", err
 		}
-		journal, err := store.NewJSONLExclusive(path)
+		journal, err := store.NewJSONLExclusiveWithOptions(path, opts)
 		if err == nil {
 			return journal, path, nil
 		}
