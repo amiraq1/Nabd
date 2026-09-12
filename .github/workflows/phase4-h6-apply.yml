@@ -1,0 +1,140 @@
+name: Apply phase 4 H6
+on:
+  push:
+    branches: [fix/phase4-aggregate-diff-budget]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: fix/phase4-aggregate-diff-budget
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      - name: Apply and test
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p=Path('internal/tools/registry.go'); s=p.read_text()
+          s=s.replace('\tmeta   metadata\n}', '\tmeta       metadata\n\tdiffBudget *diffBudget\n}', 1)
+          s=s.replace('r := &Registry{root: root, sh: sh, edits: log, byName: map[string]Tool{}}', 'r := &Registry{root: root, sh: sh, edits: log, byName: map[string]Tool{}, diffBudget: newDiffBudget(maxDiffCells)}', 1)
+          p.write_text(s)
+
+          p=Path('internal/tools/write_commit.go'); s=p.read_text()
+          s=s.replace('rec, rerr := buildRecord(ctx, sh, before, after, data, readLines)', 'var budget *diffBudget\n\tif reg != nil {\n\t\tbudget = reg.diffBudget\n\t}\n\trec, rerr := buildRecord(ctx, budget, sh, before, after, data, readLines)', 1)
+          s=s.replace('func buildRecord(ctx context.Context, sh *snap.Shadow, before, after snap.State, data []byte, readLines int)', 'func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, before, after snap.State, data []byte, readLines int)', 1)
+          s=s.replace('unifiedDiff(ctx, b, data, rec.Path)', 'unifiedDiffWithBudget(ctx, budget, b, data, rec.Path)', 1)
+          s=s.replace('unifiedDiff(ctx, nil, data, rec.Path)', 'unifiedDiffWithBudget(ctx, budget, nil, data, rec.Path)', 1)
+          p.write_text(s)
+
+          p=Path('internal/tools/write_diff.go'); s=p.read_text()
+          old='func unifiedDiff(ctx context.Context, before, after []byte, path string) (string, error) {\n'
+          new='func unifiedDiff(ctx context.Context, before, after []byte, path string) (string, error) {\n\treturn unifiedDiffWithBudget(ctx, nil, before, after, path)\n}\n\nfunc unifiedDiffWithBudget(ctx context.Context, budget *diffBudget, before, after []byte, path string) (string, error) {\n'
+          if old not in s: raise SystemExit('unifiedDiff marker missing')
+          s=s.replace(old,new,1)
+          marker='\t// LCS table for the two line sequences. Cancellation is checked once per\n'
+          acquire='\tcells := n * m\n\tif budget != nil {\n\t\tif err := budget.acquire(ctx, cells); err != nil {\n\t\t\treturn "", err\n\t\t}\n\t\tdefer budget.release(cells)\n\t}\n\tif err := ctx.Err(); err != nil {\n\t\treturn "", err\n\t}\n\n'
+          if marker not in s: raise SystemExit('allocation marker missing')
+          p.write_text(s.replace(marker,acquire+marker,1))
+
+          p=Path('docs/TECH_DEBT.md'); s=p.read_text()
+          old='''- **per-call budget**: these limits are PER CALL, not global. Concurrent
+  mutations multiply the allocation — N parallel edits each at the ceiling
+  consume N× the budget. There is currently no aggregate ceiling across
+  concurrent tool calls. [DEFERRED]'''
+          new='''- **aggregate budget**: each `Registry` owns a shared diff-cell budget.
+  Concurrent mutations reserve `n*m` cells before matrix allocation and wait
+  cancellably when the aggregate ceiling would be exceeded. Reservations are
+  released on every return path, so parallel edits cannot multiply the 4M-cell
+  ceiling within one registry.'''
+          if old not in s: raise SystemExit('tech debt marker missing')
+          p.write_text(s.replace(old,new,1))
+          PY
+          cat > internal/tools/diff_budget.go <<'EOF'
+          package tools
+
+          import (
+            "context"
+            "fmt"
+            "sync"
+          )
+
+          type diffBudget struct {
+            mu sync.Mutex
+            max int
+            used int
+            changed chan struct{}
+          }
+
+          func newDiffBudget(max int) *diffBudget {
+            return &diffBudget{max: max, changed: make(chan struct{})}
+          }
+
+          func (b *diffBudget) acquire(ctx context.Context, cells int) error {
+            if b == nil || cells <= 0 { return nil }
+            if cells > b.max { return fmt.Errorf("diff work budget exceeded: %d cells exceeds aggregate limit %d", cells, b.max) }
+            for {
+              b.mu.Lock()
+              if cells <= b.max-b.used {
+                b.used += cells
+                b.mu.Unlock()
+                return nil
+              }
+              changed := b.changed
+              b.mu.Unlock()
+              select {
+              case <-ctx.Done(): return ctx.Err()
+              case <-changed:
+              }
+            }
+          }
+
+          func (b *diffBudget) release(cells int) {
+            if b == nil || cells <= 0 { return }
+            b.mu.Lock()
+            b.used -= cells
+            if b.used < 0 { b.used = 0 }
+            close(b.changed)
+            b.changed = make(chan struct{})
+            b.mu.Unlock()
+          }
+          EOF
+          cat > internal/tools/diff_budget_test.go <<'EOF'
+          package tools
+
+          import (
+            "context"
+            "errors"
+            "testing"
+            "time"
+          )
+
+          func TestUnifiedDiffSharedBudgetPreventsConcurrentCeilingAllocations(t *testing.T) {
+            budget := newDiffBudget(1)
+            if err := budget.acquire(context.Background(), 1); err != nil { t.Fatal(err) }
+            ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+            defer cancel()
+            _, err := unifiedDiffWithBudget(ctx, budget, []byte("a\n"), []byte("b\n"), "x")
+            if !errors.Is(err, context.DeadlineExceeded) { t.Fatalf("error = %v, want deadline while aggregate budget is reserved", err) }
+            budget.release(1)
+            if _, err := unifiedDiffWithBudget(context.Background(), budget, []byte("a\n"), []byte("b\n"), "x"); err != nil { t.Fatalf("budget was not released: %v", err) }
+          }
+          EOF
+          cat >> docs/THREAT_MODEL.md <<'EOF'
+
+          ### Aggregate diff memory budget
+
+          Each tool registry shares one cancellable LCS cell budget across concurrent mutations. A diff reserves its `n*m` work before allocating the matrix and releases the reservation on every return path, preventing parallel writes from multiplying the per-diff memory ceiling.
+          EOF
+          gofmt -w internal/tools/registry.go internal/tools/write_commit.go internal/tools/write_diff.go internal/tools/diff_budget.go internal/tools/diff_budget_test.go
+          go test ./internal/tools -run 'Diff|Budget' -count=1
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add internal/tools docs/TECH_DEBT.md docs/THREAT_MODEL.md
+          git commit -m "fix(tools): enforce aggregate diff memory budget"
+          git push origin HEAD:fix/phase4-aggregate-diff-budget
