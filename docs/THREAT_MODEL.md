@@ -60,6 +60,7 @@ filesystem sandbox.
 | Config package never writes configuration or credentials to disk | GUARANTEED | package API and configuration tests |
 | Config descriptor opening rejects symlinks and blocking special files | REDUCED | `O_NOFOLLOW` and `O_NONBLOCK`, followed by descriptor validation |
 | Config v2 has no implicit environment credential fallback | GUARANTEED | credential sources must explicitly use `env` or a secure absolute `file` only |
+| The router's Retry-After wait budget is bounded, opt-in, and pre-commit only | GUARANTEED | `NABD_ROUTER_RETRY_AFTER_WAIT` is parsed into whole seconds in `[0, 120]` and defaults to 0 (disabled); the wait runs at most once per `Stream`, strictly before the commit point, through the injected clock and cancellable by the parent context. Evidence: `TestParseRetryAfterWait`, `TestWithRetryAfterWaitClamps`, `TestShouldWaitOut` |
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
@@ -146,6 +147,25 @@ of config loading.
 - Config v2 rejects unknown fields, trailing JSON, command credential sources, and implicit environment fallback.
 - Config v2 credential files must contain exactly one non-empty line.
 - Loaded credentials remain in package memory and are never copied into the environment of `bash` children.
+
+### Router timing keys
+
+`NABD_ROUTER_PRESTREAM_TIMEOUT` and `NABD_ROUTER_RETRY_AFTER_WAIT` are
+non-credential timing values. Both are parsed into bounded whole seconds before
+reaching the router, and neither can widen the router's authority: they change
+only how long the router waits before failing over or before reporting
+exhaustion. `NABD_ROUTER_RETRY_AFTER_WAIT` accepts `0..120` and defaults to `0`,
+which disables the wait entirely and preserves the historical fail-fast
+behavior. An out-of-range or non-numeric value is a startup error rather than a
+silently reinterpreted default.
+
+The wait itself is a bounded pre-commit pause: it happens only after every route
+has failed, only when a provider-supplied `Retry-After` is positive and fits
+inside the configured budget, at most once per request, and always through the
+router's injected clock with a `select` on the parent context, so cancellation
+and deadlines remain authoritative. It can therefore never interleave with
+already-delivered output and cannot extend the worst-case latency beyond one
+additional route cycle plus that single wait.
 
 ## Future base_url admission conditions
 
