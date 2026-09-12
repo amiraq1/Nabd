@@ -1,0 +1,29 @@
+name: Resolve PR 69
+on:
+  push:
+    branches: [dependabot/go_modules/third_party/bubbles/github.com/mattn/go-runewidth-0.0.29]
+permissions:
+  contents: write
+jobs:
+  resolve:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: dependabot/go_modules/third_party/bubbles/github.com/mattn/go-runewidth-0.0.29
+          fetch-depth: 0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      - name: Rebase dependency files
+        run: |
+          git fetch origin master
+          git checkout origin/master -- third_party/bubbles/go.mod third_party/bubbles/go.sum
+          sed -i 's/github.com\/mattn\/go-runewidth v0.0.24/github.com\/mattn\/go-runewidth v0.0.29/' third_party/bubbles/go.mod
+          (cd third_party/bubbles && go mod tidy)
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add third_party/bubbles/go.mod third_party/bubbles/go.sum
+          git commit -m 'chore(deps): rebase go-runewidth update'
+          git push origin HEAD:dependabot/go_modules/third_party/bubbles/github.com/mattn/go-runewidth-0.0.29
