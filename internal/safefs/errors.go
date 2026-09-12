@@ -26,4 +26,8 @@ var (
 	// implemented on this platform. It is fail-closed: callers must never
 	// substitute a path-based open for it.
 	ErrUnsupportedPlatform = errors.New("safefs: safe open is only supported on android")
+
+	// ErrInvalidTarget reports a path that does not name a file: the empty
+	// path, ".", or a path with a trailing separator (which names a directory).
+	ErrInvalidTarget = errors.New("safefs: invalid file target")
 )
