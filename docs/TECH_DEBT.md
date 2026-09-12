@@ -761,3 +761,10 @@ Resolution options (not done here, to keep the change reversible):
 - mark them deprecated and add a source-test ban on production callers.
 
 Until then, treat `snap.Restore` / `snap.RestoreAt` as test-only.
+
+`!unix` builds are a related gap. The tools keep documented compatibility
+paths (`sh.Capture`, `os.ReadFile`, `snap.WriteAtomic`, `os.Remove`, and an
+`os.Lstat` + `os.Open` open) that measure and act by absolute path. They carry
+no descriptor guarantee and are not covered by the Android/Termux claim in
+`docs/THREAT_MODEL.md`; the safe path is compiled under the `unix` tag so CI on
+linux and darwin exercises the same code Termux runs.
