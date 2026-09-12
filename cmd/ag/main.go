@@ -741,6 +741,14 @@ func pickRouterProvider() (provider.Provider, error) {
 		return nil, err
 	}
 
+	// How long the router may honor a provider-supplied Retry-After before
+	// declaring exhaustion. Zero (the default) keeps the historical behavior:
+	// fall through the remaining routes and fail immediately.
+	retryWaitSec, err := provider.ParseRetryAfterWait(config.Get("NABD_ROUTER_RETRY_AFTER_WAIT"))
+	if err != nil {
+		return nil, err
+	}
+
 	var routes []provider.Route
 	for _, entry := range entries {
 		r, err := provider.BuildRoute(entry)
@@ -750,7 +758,11 @@ func pickRouterProvider() (provider.Provider, error) {
 		routes = append(routes, r)
 	}
 
-	return provider.NewRouter(routes, time.Duration(timeoutSec)*time.Second, provider.RealClock{})
+	router, err := provider.NewRouter(routes, time.Duration(timeoutSec)*time.Second, provider.RealClock{})
+	if err != nil {
+		return nil, err
+	}
+	return router.WithRetryAfterWait(time.Duration(retryWaitSec) * time.Second), nil
 }
 
 type gate struct{ p *perm.Policy }
