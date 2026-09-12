@@ -64,7 +64,10 @@ filesystem sandbox.
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
 | Tool-call repair changes what runs relative to what the model asked for (NBD-420) | REDUCED | `internal/tools/repair.go` corrects malformed calls before the registry lookup, so the gate classifies and prompts on the corrected call. It is a new surface between the model and the gate, bounded by design: inference is one-directional (an unrecognised name resolves only to a ReadOnly tool — `read_file`, `glob`, `grep` — and `write_file`/`edit_file`/`bash` require a literal match); the name map is explicit, never edit distance or string similarity, and every target is verified against `known`; path resolution is untouched, because `Root.Resolve` alone decides inside/outside the root and the layer never expands `~`, absolutises or relativises anything; and a call needing more than three corrections is returned unchanged. A name still unknown after the map returns the existing unknown-tool error, which the model reads and recovers from. Proof: `TestRepairInferenceIsReadOnlyOnly`, `TestRepairNameMapTargetsAreDeclared`, `TestRepairPathResolutionIsUntouched`, `TestRepairCapReturnsUnchanged`, `TestRepairRulesSaveARound` |
-| Path opening after `Resolve` | REDUCED | `Resolve` returns a string and later open is a second lookup; a same-uid rename/symlink race remains |
+| File reads open through descriptor-relative operations and refuse symlinks and non-regular files | GUARANTEED | On unix, `internal/safefs.OpenRead` walks the relative path from a root descriptor with `O_NOFOLLOW` and validates the target from the opened descriptor with `Fstat`. Evidence: `TestOpenReadRefusesFinalSymlink`, `TestOpenReadRefusesIntermediateSymlink`, `TestOpenReadRefusesFIFO`, `TestOpenReadRefusesDirectory`, `TestCaptureFromRootRejectsFinalSymlink`, `TestCaptureFromRootRejectsIntermediateSymlink` |
+| File mutations publish relative to the parent descriptor and re-prove the target at the syscall | GUARANTEED | `write_file`, `edit_file`, and `/undo` derive one relative path and never open, stat, or rename a project file by absolute path on unix; the absolute path is reporting metadata only. Evidence: `TestWritePathFromRootRejectsTraversal`, `TestWriteFileAtomicRefusesIntermediateSymlink`, `TestWriteFileAtomicReplacesFinalSymlinkWithoutFollowing`, `TestWriteFromRootDoesNotUseAbsoluteMetadataAsAuthority`, `TestCommitRejectsSymlinkWithoutCapturingOutsideContent`, `TestReadSourceFromRootUsesRelativeAuthority`, `TestRemoveFromRootUsesRelativeAuthority`, `TestRemoveFileRemovesFinalSymlinkNotReferent`, `TestUndoRefusesModifiedAfterAgentWrite` |
+| Traversal tools never surface symlinked entries and skip the shadow store | GUARANTEED | `glob` and `grep` list and search regular files only, and `skipDir` excludes `.ag`, so the content-addressed shadow history is never read back. Evidence: `TestGrepNeverSurfacesSymlinkedEntry`, `TestGrepSingleFileRefusesSymlinkEscape`, `TestGlobOmitsSymlinkedEntries`, `TestTraversalToolsNeverSurfaceShadowStore` |
+| Path opening after `Resolve` outside the descriptor layer | REDUCED | `!unix` builds keep the resolve-then-open compatibility paths with no descriptor guarantee; `bash` is not contained; `snap.Restore` / `snap.RestoreAt` are a path-based publish path, now test-only (`docs/TECH_DEBT.md`); configuration reading still traverses parent-directory symlinks. Residual: a same-uid attacker on a `!unix` build, or through those paths |
 | Journal is raw by default | REDUCED | journal content is written unredacted unless `NABD_REDACT_JOURNAL=1`; file mode 0600 and directory mode 0700 limit cross-user reads, but same-uid readers and deliberately printed secrets remain exposed. Shadow store is always raw |
 | Opt-in redaction of new journal events | REDUCED | `NABD_REDACT_JOURNAL=1` removes recognized credential patterns (Anthropic, OpenRouter, Groq, NVIDIA, GitHub, GitLab, Slack, `Bearer`/`authorization`) before `Event.ForStore()` and output truncation, via copy-on-write that leaves the live in-memory event untouched. Unrecognized sensitive content, structural fields (paths, tool names, call IDs, hashes, blob addresses, error codes), and the shadow store are unchanged. `--json` applies the same policy so it cannot diverge |
 | Redacted export leaves the source intact | GUARANTEED | `--export --redact` decodes and re-encodes to stdout; the source is opened read-only and never written. Raw `--export` copies source bytes verbatim. Evidence: `TestExportLeavesSourceUntouched`, `TestExportRawIsByteIdentical` |
@@ -77,12 +80,28 @@ filesystem sandbox.
 input, anchors relative input to the real project root, resolves the deepest
 existing ancestor, and verifies containment using `filepath.Rel`.
 
-`Resolve` currently returns a string. Consumers perform a later filesystem
-lookup, so a cooperative same-uid process can race resolution and opening.
-This is **reduced, not eliminated**. Closing it requires descriptor-relative
-opening such as `openat2(RESOLVE_BENEATH)` plus a classified fallback.
+`Resolve` proves containment at the instant it runs and nothing later. For
+every file tool, the relative path is the reference and the operation is
+re-proved at the syscall: on unix, `internal/safefs` walks the relative path
+from a root descriptor with `O_NOFOLLOW`, opens each component exactly once,
+and acts relative to the parent's descriptor (`openat`, `unlinkat`, `mkdirat`,
+`renameat`). A component replaced after resolution therefore fails instead of
+redirecting the operation, so the resolve-then-open race is closed for
+`read_file`, `glob`, `grep`, `write_file`, `edit_file`, and `/undo`. The
+absolute path is reporting metadata: journal records, read-credit accounting,
+and messages.
 
-`bash` deliberately does not use this layer.
+Reads refuse symlinks, directories, FIFOs, sockets, and devices. Mutations
+publish atomically — a temporary file in the parent descriptor, a file fsync, a
+rename, then a directory fsync — and share one target rule. Traversal tools
+refuse symlinked entries outright and skip `.ag`, so the shadow store's
+cleartext history is never searched.
+
+`bash` deliberately does not use this layer. `!unix` builds keep documented
+compatibility paths and carry no descriptor guarantee. `snap.Restore` and
+`snap.RestoreAt` remain a second, path-based publish path and are test-only
+(see `docs/TECH_DEBT.md`). Configuration reading still traverses
+parent-directory symlinks.
 
 ## Configuration handling
 

@@ -236,6 +236,19 @@ func (s *Shadow) CaptureBytes(abs string, data []byte, mode os.FileMode) (State,
 	return st, nil
 }
 
+// CaptureAbsent records the absence of a path the caller has already proved
+// missing (ENOENT from a descriptor-relative open). It is a pure constructor:
+// it stats and reads nothing, so it cannot race the delete it describes. Rel is
+// built by the same rule as Capture and CaptureBytes, and At is owned here so
+// the caller never makes that decision itself.
+func (s *Shadow) CaptureAbsent(abs string) (State, error) {
+	rel, err := filepath.Rel(s.root, abs)
+	if err != nil {
+		return State{}, err
+	}
+	return State{Rel: filepath.ToSlash(rel), Absent: true, At: time.Now().UTC()}, nil
+}
+
 // Unchanged reports whether two states describe the same content. This is
 // the whole of "verification": one comparison, not a framework.
 func Unchanged(a, b State) bool {

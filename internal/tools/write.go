@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"nabd/internal/perm"
@@ -289,18 +288,13 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 	if old == "" {
 		return "", false, errors.New("old text is empty; use write_file for a new file")
 	}
-	abs, err := w.root.Resolve(deref(m.Path))
+	rel, abs, err := writePathFromRoot(w.root, deref(m.Path))
 	if err != nil {
 		return "", false, err
 	}
-	st, err := os.Stat(abs)
-	if err != nil {
-		return "", false, err
-	}
-	if st.Size() > int64(maxEditBytes) {
-		return "", false, fmt.Errorf("file is %d bytes, limit is %d", st.Size(), maxEditBytes)
-	}
-	src, err := os.ReadFile(abs)
+	// T3: the size check and the read share one descriptor, so the file that
+	// was measured is provably the file that was read.
+	src, err := readSourceFromRoot(w.root, rel, abs, maxEditBytes)
 	if err != nil {
 		return "", false, err
 	}

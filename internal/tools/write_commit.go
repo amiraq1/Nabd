@@ -12,9 +12,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 
 	"nabd/internal/agent"
+	"nabd/internal/safefs"
 	"nabd/internal/snap"
 )
 
@@ -91,6 +93,33 @@ func (e *editLog) all() []Edit {
 	return append([]Edit(nil), e.l...)
 }
 
+// writePathFromRoot converts a tool-supplied path into the normalized relative
+// path that is the filesystem authority, plus the absolute reporting path.
+//
+// It never touches the filesystem: no stat, no symlink resolution. Only the
+// relative path may reach a descriptor walk; the absolute path is metadata for
+// journals, read-credit accounting, and error messages. An absolute path already
+// inside root is converted lexically with filepath.Rel; one outside root yields
+// ".." components, which Normalize refuses.
+func writePathFromRoot(root *Root, input string) (relative, absolute string, err error) {
+	if filepath.IsAbs(input) {
+		relative, err = filepath.Rel(root.Dir(), filepath.Clean(input))
+		if err != nil {
+			return "", "", err
+		}
+	} else {
+		relative = input
+	}
+
+	relative, err = safefs.Normalize(relative)
+	if err != nil {
+		return "", "", err
+	}
+
+	absolute = filepath.Join(root.Dir(), relative)
+	return relative, absolute, nil
+}
+
 // commit is the shared tail of both tools: shadow, write, verify, log.
 // The read credit consumed here is the number of lines the model actually
 // read before writing (0 for a blind write or an invalid credit), recorded in
@@ -100,17 +129,22 @@ func (e *editLog) all() []Edit {
 // it. The record is always persisted (even if the diff fails) so /undo keeps
 // its hashes and blobs; a failed diff simply leaves Patch empty.
 //
-// NBD-011: the "after" state and the diff (buildRecord) are computed BEFORE
-// WriteAtomic, so the expensive LCS matrix allocation happens where failure
-// leaves no on-disk trace. The critical window — between WriteAtomic and
-// log.add — contains only log.add, shrinking the interruption window that
-// the Android lowmemorykiller could exploit.
+// NBD-011: the "after" state and the diff (buildRecord) are computed BEFORE the
+// write, so the expensive LCS matrix allocation happens where failure leaves no
+// on-disk trace. The critical window — between the write and log.add — contains
+// only log.add, shrinking the interruption window that the Android
+// lowmemorykiller could exploit.
 func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg *Registry, tool, abs string, data []byte) (snap.State, snap.State, error) {
-	before, err := sh.Capture(abs)
+	// One lexical conversion, once: relative is the filesystem authority and
+	// absPath is reporting metadata. Every project-file access below goes
+	// through the platform adapters, which on Android are descriptor-relative.
+	relative, absPath, err := writePathFromRoot(root, abs)
 	if err != nil {
-		return before, snap.State{}, err
+		return snap.State{}, snap.State{}, err
 	}
-	if err := mkdirParentDirs(abs); err != nil {
+
+	before, err := captureFromRoot(sh, root, relative, absPath)
+	if err != nil {
 		return before, snap.State{}, err
 	}
 	mode := os.FileMode(0o644)
@@ -120,7 +154,7 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	// Compute the "after" state from the in-memory data before any project-file
 	// write. CaptureBytes stores content in the shadow (a separate dir), not
 	// on the project disk path, so a diff failure leaves no on-disk trace.
-	after, err := sh.CaptureBytes(abs, data, mode)
+	after, err := sh.CaptureBytes(absPath, data, mode)
 	if err != nil {
 		return before, snap.State{}, err
 	}
@@ -137,7 +171,7 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 		readLines = reg.ConsumeLinesRead(abs, beforeHash)
 	}
 
-	// The diff (LCS matrix allocation) runs here — BEFORE WriteAtomic. If it
+	// The diff (LCS matrix allocation) runs here — BEFORE the write. If it
 	// aborts (budget exceeded, ctx cancelled), the project file is untouched.
 	var budget *diffBudget
 	if reg != nil {
@@ -151,15 +185,15 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 		_ = sh.Discard(after.Blob)
 		return before, after, rerr
 	}
-	if err := snap.WriteAtomic(abs, data, mode); err != nil {
+	if err := writeFromRoot(root, relative, absPath, data, mode); err != nil {
 		return before, after, err
 	}
 	// From here the disk has already changed. Every exit below must leave a
 	// record behind, or /undo goes blind exactly when it is needed most.
-	log.add(Edit{Tool: tool, Rel: root.Rel(abs), Before: before, After: after, Record: rec})
-	// Verify the write by reading back from disk and comparing against the
-	// expected state computed from data above.
-	actual, aerr := sh.Capture(abs)
+	log.add(Edit{Tool: tool, Rel: root.Rel(absPath), Before: before, After: after, Record: rec})
+	// Verify the write by re-reading through the same secure capture and
+	// comparing against the expected state computed from data above.
+	actual, aerr := captureFromRoot(sh, root, relative, absPath)
 	if aerr != nil {
 		return before, after, aerr
 	}

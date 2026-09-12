@@ -15,6 +15,7 @@ security_files=(
   internal/perm/policy.go
   internal/config/config.go
   internal/snap/shadow.go
+  internal/safefs
   internal/agent/fence.go
   cmd/ag/main.go
 )

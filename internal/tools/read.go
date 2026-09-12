@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 
@@ -205,23 +204,23 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 		return "", readMeta{}, false, fmt.Errorf("invalid args: %w", err)
 	}
 
-	p, err := t.root.Resolve(a.Path)
+	// openReadFromRoot opens the descriptor on Android (descriptor-relative,
+	// no resolve-then-open window) and falls back to the documented
+	// compatibility path elsewhere. Every check below reads from that
+	// descriptor, never from a second path lookup.
+	f, p, err := openReadFromRoot(t.root, a.Path)
 	if err != nil {
 		return "", readMeta{}, false, err
 	}
-	fi, err := os.Stat(p)
+	defer f.Close()
+
+	fi, err := f.Stat()
 	if err != nil {
 		return "", readMeta{}, false, err
 	}
 	if fi.IsDir() {
 		return "", readMeta{}, false, fmt.Errorf("%s is a directory · use glob", t.root.Rel(p))
 	}
-
-	f, err := os.Open(p)
-	if err != nil {
-		return "", readMeta{}, false, err
-	}
-	defer f.Close()
 
 	// Binary files are refused rather than mangled: a NUL byte in the
 	// first block is the only reliable cheap signal.

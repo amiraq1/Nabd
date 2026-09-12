@@ -5,7 +5,6 @@ import (
 	"os"
 
 	"nabd/internal/agent"
-	"nabd/internal/snap"
 )
 
 var (
@@ -47,12 +46,13 @@ func (r *Registry) PersistedUndo(recs []*agent.EditRecord, n int) []UndoResult {
 // rewindRecord restores one persisted record: verify the file still matches
 // HashAfter, then put BlobBefore back through the shadow.
 func (r *Registry) rewindRecord(rec *agent.EditRecord) UndoResult {
-	// D: Restore Only Through a Resolved Absolute Path
-	abs, err := r.root.Resolve(rec.Path)
+	// D: Restore Only Through the Descriptor-Relative Path. relative is the
+	// filesystem authority; abs is metadata for the messages and the journal.
+	rel, abs, err := writePathFromRoot(r.root, rec.Path)
 	if err != nil {
 		return UndoResult{Rel: rec.Path, Note: err.Error()}
 	}
-	now, err := r.sh.Capture(abs)
+	now, err := captureFromRoot(r.sh, r.root, rel, abs)
 	if err != nil {
 		return UndoResult{Rel: rec.Path, Note: err.Error()}
 	}
@@ -73,19 +73,32 @@ func (r *Registry) rewindRecord(rec *agent.EditRecord) UndoResult {
 
 	if rec.BlobBefore == "" {
 		// Creation: the "before" was absence.
-		if err := os.Remove(abs); err != nil && !errors.Is(err, os.ErrNotExist) {
+		if err := removeFromRoot(r.root, rel, abs); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return UndoResult{Rel: rec.Path, Note: err.Error()}
 		}
 		return UndoResult{Rel: rec.Path, OK: true, Note: "deleted (write_file)"}
 	}
 
-	// Explicitly read the recovery blob to ensure it is available and not corrupt
-	if _, err := r.sh.Read(rec.BlobBefore); err != nil {
-		return UndoResult{Rel: rec.Path, Note: err.Error()} // surface the typed shadow error
+	// Read the recovery blob once; Read surfaces the typed shadow error for a
+	// missing or corrupt blob.
+	blob, err := r.sh.Read(rec.BlobBefore)
+	if err != nil {
+		return UndoResult{Rel: rec.Path, Note: err.Error()}
 	}
 
-	// Restore through RestoreAt
-	if err := r.sh.RestoreAt(abs, snap.State{Rel: rec.Path, Blob: rec.BlobBefore, Mode: rec.ModeBefore}); err != nil {
+	// A legacy record carries no ModeBefore. Preserve the mode the file has now
+	// (as the path-based restore did), falling back to 0644.
+	mode := rec.ModeBefore
+	if mode == 0 {
+		if !now.Absent && now.Mode != 0 {
+			mode = now.Mode
+		} else {
+			mode = 0o644
+		}
+	}
+
+	// Restore through the same descriptor-relative write that commit() uses.
+	if err := writeFromRoot(r.root, rel, abs, blob, mode); err != nil {
 		return UndoResult{Rel: rec.Path, Note: err.Error()}
 	}
 	return UndoResult{Rel: rec.Path, OK: true, Note: "restored (write_file)"}
