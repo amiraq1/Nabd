@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"nabd/internal/agent"
@@ -111,7 +110,7 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	if err != nil {
 		return before, snap.State{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+	if err := mkdirParentDirs(abs); err != nil {
 		return before, snap.State{}, err
 	}
 	mode := os.FileMode(0o644)

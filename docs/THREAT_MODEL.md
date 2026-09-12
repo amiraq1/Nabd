@@ -124,3 +124,7 @@ this baseline.
 4. Treat every `bash` approval as authority equivalent to the current user.
 5. Assume `session.jsonl` and `.ag/shadow` contain sensitive cleartext.
 6. Do not attach raw journals to public issues.
+
+### Inherited directory permissions
+
+Write tools create missing parent directories with the permission bits of the nearest existing ancestor. This prevents a private `0700` project subtree from silently gaining `0755` descendants; `0755` is retained only as a documented root-level fallback when no usable ancestor exists.
