@@ -1,0 +1,110 @@
+name: Apply phase 0
+
+on:
+  push:
+    branches: ["docs/phase-0-freshness"]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor == 'amiraq1' && !contains(github.event.head_commit.message, '[phase0-applied]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Apply reviewed phase 0 changes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          readme = Path('README.md')
+          text = readme.read_text()
+          old = '''**No GitHub Release has been published yet:** `v1.2.0` is a git tag only and
+          carries no release assets — the release workflow was added to the repository
+          after `v1.2.0` was tagged. The pipeline is ready for the next `v*` tag
+          (target: v1.3.0). See `docs/RELEASING.md`.
+          '''
+          new = '''Published releases are available on the [Releases page](https://github.com/amiraq1/Nabd/releases):
+
+          | Release | Published | Assets |
+          |---|---|---|
+          | `v1.4.0` | 2026-09-11 | Platform binaries and `checksums.txt` |
+          | `v1.3.0` | 2026-09-11 | Platform binaries and `checksums.txt` |
+
+          Verify a downloaded release from its directory:
+
+          ```sh
+          sha256sum -c checksums.txt
+          ```
+
+          See `docs/RELEASING.md` for the release process.
+          '''
+          if old not in text:
+              raise SystemExit('README release block not found')
+          readme.write_text(text.replace(old, new))
+
+          security = Path('SECURITY.md')
+          text = security.read_text()
+          old = '''Only the latest tagged release is supported. Older tags, including `v1.2.0`
+          and earlier, receive no backports.
+          '''
+          new = '''Only the latest tagged release is supported. Older tagged releases receive no
+          backports.
+          '''
+          if old not in text:
+              raise SystemExit('SECURITY version block not found')
+          security.write_text(text.replace(old, new))
+
+          threat = Path('docs/THREAT_MODEL.md')
+          text = threat.read_text()
+          old = '''Sourced from the code as of commit d63da42 (the last code change in the
+          NBD-306/204 batch; the commits after it are documentation only and change no
+          code), not from intention.
+          Primary files:'''
+          new = '''Sourced from the code at `master` commit `7d9e2f07f9561d4e79b2db6164387b3eac6660ff`, not from intention.
+          Last reviewed: 2026-09-12 · `7d9e2f07f9561d4e79b2db6164387b3eac6660ff`.
+          Primary files:'''
+          if old not in text:
+              raise SystemExit('THREAT_MODEL provenance block not found')
+          threat.write_text(text.replace(old, new))
+
+          ci = Path('.github/workflows/ci.yml')
+          text = ci.read_text()
+          anchor = '''    - name: Environment diagnostics
+                run: go env GOOS GOARCH CGO_ENABLED CC
+          '''
+          step = '''    - name: Threat model freshness
+                if: github.event_name == 'pull_request'
+                run: |
+                  base=${{ github.event.pull_request.base.sha }}
+                  sec=$(git diff --name-only "$base" HEAD -- \\
+                    internal/tools/path.go internal/tools/bash.go internal/perm/policy.go \\
+                    internal/config/config.go internal/snap/shadow.go internal/agent/fence.go \\
+                    cmd/ag/main.go)
+                  doc=$(git diff --name-only "$base" HEAD -- docs/THREAT_MODEL.md)
+                  if [ -n "$sec" ] && [ -z "$doc" ]; then
+                    echo "security-relevant files changed without THREAT_MODEL.md update:"
+                    echo "$sec"
+                    exit 1
+                  fi
+          '''
+          if anchor not in text:
+              raise SystemExit('CI insertion anchor not found')
+          ci.write_text(text.replace(anchor, anchor + '\n' + step))
+          PY
+          rm .github/workflows/phase0-apply.yml
+          ! grep -qi 'no GitHub Release has been published' README.md
+          ! grep -q 'd63da42' docs/THREAT_MODEL.md
+          grep -q 'Threat model freshness' .github/workflows/ci.yml
+          git diff --check
+      - name: Commit phase 0
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add README.md SECURITY.md docs/THREAT_MODEL.md .github/workflows/ci.yml .github/workflows/phase0-apply.yml
+          git commit -m 'docs: refresh release and security claims [phase0-applied]'
+          git push
