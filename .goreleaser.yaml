@@ -41,9 +41,9 @@ signs:
     artifacts: checksum
 
 sboms:
-  - artifacts: archive
+  - artifacts: binary
     documents:
-      - "${artifact}.sbom.json"
+      - "{{ .ArtifactName }}.sbom.json"
 
 changelog:
   sort: asc
