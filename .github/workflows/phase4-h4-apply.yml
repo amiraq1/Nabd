@@ -1,0 +1,54 @@
+name: Apply phase 4 H4
+on:
+  push:
+    branches: [fix/phase4-io-eof]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: fix/phase4-io-eof
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      - name: Apply and test
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('internal/tools/grep.go')
+          s=p.read_text()
+          s=s.replace('"fmt"\n\t"io/fs"','"fmt"\n\t"io"\n\t"io/fs"',1)
+          s=s.replace('return 0, fmt.Errorf("EOF")','return 0, io.EOF',1)
+          p.write_text(s)
+          PY
+          cat > internal/tools/grep_eof_test.go <<'EOF'
+          package tools
+
+          import (
+            "errors"
+            "io"
+            "os"
+            "testing"
+          )
+
+          func TestLimitedReaderReturnsCanonicalEOFAtLimit(t *testing.T) {
+            f, err := os.CreateTemp(t.TempDir(), "limited-reader")
+            if err != nil { t.Fatal(err) }
+            defer f.Close()
+            r := &limitedReader{f: f, left: 0}
+            if _, err := r.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+              t.Fatalf("error = %v, want io.EOF", err)
+            }
+          }
+          EOF
+          gofmt -w internal/tools/grep.go internal/tools/grep_eof_test.go
+          go test ./internal/tools -run LimitedReader -count=1
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add internal/tools/grep.go internal/tools/grep_eof_test.go
+          git commit -m "fix(tools): return canonical EOF from limited reader"
+          git push origin HEAD:fix/phase4-io-eof
