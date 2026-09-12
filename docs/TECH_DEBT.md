@@ -742,3 +742,22 @@ The same-millisecond `'-'` (0x2D) sorts before `'.'` (0x2E), so a new
 order; `latestSession`'s reverse scan would prefer the legacy file if a
 same-timestamp legacy sibling exists. Harmless in practice, ordering across
 distinct timestamps is unaffected because the timestamp prefix is fixed width.
+
+## PHASE3_SNAP_RESTORE_SECOND_PATH — snap.Restore/RestoreAt bypass the descriptor guarantee
+
+After T2d and T3 routed `write_file`, `edit_file`, and `/undo` through the
+descriptor-relative adapters in `internal/tools`, nothing in production calls
+`snap.Restore` / `snap.RestoreAt` any more; only `internal/snap` tests do. Both
+remain exported and publish through `snap.WriteAtomic(abs, …)`, a path-based
+rename. They are therefore a **second publish path that the Android/Termux
+confinement guarantee does not cover**: a future caller would silently
+reintroduce the resolve-then-open window this phase removes.
+
+Resolution options (not done here, to keep the change reversible):
+
+- delete them, or
+- make `RestoreAt` restore through the same descriptor-relative primitive the
+  caller uses, so there is exactly one publish path, or
+- mark them deprecated and add a source-test ban on production callers.
+
+Until then, treat `snap.Restore` / `snap.RestoreAt` as test-only.

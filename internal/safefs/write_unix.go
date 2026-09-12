@@ -27,6 +27,35 @@ var (
 // fresh inode rather than an existing (possibly symlinked) path.
 const tempFlags = unix.O_WRONLY | unix.O_CREAT | unix.O_EXCL | unix.O_CLOEXEC | unix.O_NOFOLLOW
 
+// splitFileTarget validates a caller-supplied relative file path and splits it
+// into the cleaned relative path, its parent directory, and its base name. It
+// rejects anything that cannot name a file: the empty path, ".", a trailing
+// separator, or a base of "." / "..". WriteFileAtomic and RemoveFile share it so
+// the target rules cannot drift apart.
+func splitFileTarget(relativeFile string) (rel, parent, base string, err error) {
+	if relativeFile == "" {
+		return "", "", "", ErrEmptyPath
+	}
+	if relativeFile == "." {
+		return "", "", "", ErrInvalidTarget
+	}
+	if strings.HasSuffix(relativeFile, string(filepath.Separator)) {
+		return "", "", "", ErrInvalidTarget
+	}
+
+	rel, err = Normalize(relativeFile)
+	if err != nil {
+		return "", "", "", err
+	}
+
+	parent = filepath.Dir(rel)
+	base = filepath.Base(rel)
+	if base == "" || base == "." || base == ".." {
+		return "", "", "", ErrInvalidTarget
+	}
+	return rel, parent, base, nil
+}
+
 // WriteFileAtomic writes data to relativeFile beneath rootPath atomically.
 //
 // The parent directory is obtained once through OpenOrCreateDir (a
@@ -39,27 +68,9 @@ const tempFlags = unix.O_WRONLY | unix.O_CREAT | unix.O_EXCL | unix.O_CLOEXEC | 
 // This implementation is unix-only; other platforms return
 // ErrUnsupportedPlatform (write_other.go).
 func WriteFileAtomic(rootPath, relativeFile string, data []byte, mode os.FileMode) error {
-	// Reject targets that do not name a file before Normalize can clean them
-	// away ("." and a trailing separator both survive Clean as a directory).
-	if relativeFile == "" {
-		return ErrEmptyPath
-	}
-	if relativeFile == "." {
-		return ErrInvalidTarget
-	}
-	if strings.HasSuffix(relativeFile, string(filepath.Separator)) {
-		return ErrInvalidTarget
-	}
-
-	rel, err := Normalize(relativeFile)
+	_, parent, base, err := splitFileTarget(relativeFile)
 	if err != nil {
 		return err
-	}
-
-	parent := filepath.Dir(rel)
-	base := filepath.Base(rel)
-	if base == "" || base == "." || base == ".." {
-		return ErrInvalidTarget
 	}
 
 	// Open (creating if needed) the final parent directory once. Every later
