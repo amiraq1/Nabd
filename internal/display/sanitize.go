@@ -4,6 +4,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"nabd/internal/redact"
 )
 
 // DisplayPolicy controls text sanitization behavior at the display boundary.
@@ -13,31 +15,7 @@ type DisplayPolicy struct {
 	Redact       bool // Redact sensitive credentials (args, errors, notices)
 }
 
-const RedactedToken = "[REDACTED]"
-
-// Secret patterns for redaction at the display boundary.
-var displaySecretPatterns = []*regexp.Regexp{
-	// Anthropic
-	regexp.MustCompile(`sk-ant-[A-Za-z0-9_\-]{8,}`),
-	// OpenRouter
-	regexp.MustCompile(`sk-or-[A-Za-z0-9_\-]{8,}`),
-	// Groq
-	regexp.MustCompile(`gsk_[A-Za-z0-9_]{8,}`),
-	// NVIDIA
-	regexp.MustCompile(`nvapi-[A-Za-z0-9_\-]{8,}`),
-	// Bearer authorization
-	regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9_\-\.]{8,}`),
-	// Authorization headers
-	regexp.MustCompile(`(?i)authorization[:\s]+[A-Za-z0-9_\-\.]{8,}`),
-	// GitHub fine-grained personal access tokens
-	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{16,}`),
-	// GitHub personal access tokens
-	regexp.MustCompile(`gh[pousr]_[A-Za-z0-9_]{16,}`),
-	// GitLab personal access tokens
-	regexp.MustCompile(`glpat-[A-Za-z0-9_\-]{16,}`),
-	// Slack tokens
-	regexp.MustCompile(`xox[baprs]-[A-Za-z0-9_\-]{10,}`),
-}
+const RedactedToken = redact.Token
 
 // ANSI escape sequence patterns:
 // CSI (Control Sequence Introducer): ESC [ ... [@-~]
@@ -64,9 +42,7 @@ func SanitizeForDisplay(untrusted string, p DisplayPolicy) string {
 
 	// 1. Redact secrets before any truncation or formatting if requested.
 	if p.Redact {
-		for _, re := range displaySecretPatterns {
-			untrusted = re.ReplaceAllString(untrusted, RedactedToken)
-		}
+		untrusted = redact.Redact(untrusted)
 	}
 
 	// 2. Remove all ANSI escape sequences completely.

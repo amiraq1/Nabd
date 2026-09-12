@@ -15,12 +15,24 @@ import (
 	"nabd/internal/agent"
 )
 
+// EventRedactor returns the event representation that may be persisted.
+// Implementations must not mutate the supplied event and must be safe for
+// concurrent use.
+type EventRedactor func(agent.Event) agent.Event
+
+// Options controls optional JSONL persistence behavior.
+// The zero value preserves the original raw-journal behavior.
+type Options struct {
+	Redact EventRedactor
+}
+
 // JSONL is a single session file, safe for concurrent Append.
 type JSONL struct {
-	mu   sync.Mutex
-	path string
-	f    *os.File
-	w    *bufio.Writer
+	mu     sync.Mutex
+	path   string
+	f      *os.File
+	w      *bufio.Writer
+	redact EventRedactor
 }
 
 // NewJSONL opens path for appending, creating parents if needed.
@@ -38,6 +50,11 @@ type JSONL struct {
 //     additionally pin it to 0o700 themselves; see ensureDefaultSessionDir
 //     and defaultSessionDir in cmd/ag.
 func NewJSONL(path string) (*JSONL, error) {
+	return NewJSONLWithOptions(path, Options{})
+}
+
+// NewJSONLWithOptions opens path with explicit persistence options.
+func NewJSONLWithOptions(path string, opts Options) (*JSONL, error) {
 	if err := ensurePrivateParent(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
@@ -52,12 +69,23 @@ func NewJSONL(path string) (*JSONL, error) {
 		f.Close()
 		return nil, fmt.Errorf("store: harden journal permissions: %w", err)
 	}
-	return &JSONL{path: path, f: f, w: bufio.NewWriter(f)}, nil
+	return &JSONL{
+		path:   path,
+		f:      f,
+		w:      bufio.NewWriter(f),
+		redact: opts.Redact,
+	}, nil
 }
 
 // NewJSONLExclusive creates a new journal without ever opening an existing
 // file. Callers use a fresh candidate name and retry on os.ErrExist.
 func NewJSONLExclusive(path string) (*JSONL, error) {
+	return NewJSONLExclusiveWithOptions(path, Options{})
+}
+
+// NewJSONLExclusiveWithOptions creates a new journal with explicit persistence
+// options while retaining exclusive-create semantics.
+func NewJSONLExclusiveWithOptions(path string, opts Options) (*JSONL, error) {
 	if err := ensurePrivateParent(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
@@ -70,7 +98,12 @@ func NewJSONLExclusive(path string) (*JSONL, error) {
 		_ = os.Remove(path)
 		return nil, fmt.Errorf("store: harden new journal permissions: %w", err)
 	}
-	return &JSONL{path: path, f: f, w: bufio.NewWriter(f)}, nil
+	return &JSONL{
+		path:   path,
+		f:      f,
+		w:      bufio.NewWriter(f),
+		redact: opts.Redact,
+	}, nil
 }
 
 // ensurePrivateParent creates dir with mode 0o700 if it does not exist, and
@@ -106,7 +139,12 @@ func (j *JSONL) Path() string { return j.path }
 // on the hot path -- on a phone it costs more than the crash it prevents,
 // and Read already tolerates a truncated final line.
 func (j *JSONL) Append(e agent.Event) error {
-	b, err := json.Marshal(e.ForStore())
+	persisted := e
+	if j.redact != nil {
+		persisted = j.redact(e)
+	}
+
+	b, err := json.Marshal(persisted.ForStore())
 	if err != nil {
 		return fmt.Errorf("marshal seq %d: %w", e.Seq, err)
 	}

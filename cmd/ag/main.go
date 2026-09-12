@@ -102,7 +102,21 @@ func main() {
 	jsonOut := flag.Bool("json", false, "headless: emit journal JSONL on stdout")
 	maxTurns := flag.Int("max-turns", 0, "override turn ceiling")
 	permModeFlag := flag.String("permission-mode", "deny", "headless: ask|deny|allow-reads")
+	exportPath := flag.String("export", "", "export a session journal as JSONL to stdout and exit")
+	exportRedact := flag.Bool("redact", false, "with --export: redact recognized credential patterns")
 	flag.Parse()
+
+	provided := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	if err := checkExportFlags(*exportPath, *exportRedact, flag.NArg(), provided); err != nil {
+		die(err)
+	}
+	if *exportPath != "" {
+		if err := exportJournal(*exportPath, *exportRedact, os.Stdout, os.Stderr); err != nil {
+			die(err)
+		}
+		return
+	}
 
 	if *showVer {
 		fmt.Println(build.Line())
@@ -171,9 +185,9 @@ func doChat(dir string, cont bool) error {
 		if err != nil {
 			return err
 		}
-		journal, err = store.NewJSONL(journalPath)
+		journal, err = openSessionJournal(journalPath)
 	} else {
-		journal, journalPath, err = newSessionJournal(dir)
+		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
 	}
 	if err != nil {
 		return err
@@ -300,9 +314,9 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		if err != nil {
 			return err
 		}
-		journal, err = store.NewJSONL(journalPath)
+		journal, err = openSessionJournal(journalPath)
 	} else {
-		journal, journalPath, err = newSessionJournal(dir)
+		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
 	}
 	if err != nil {
 		return err
@@ -556,16 +570,17 @@ func sessionPath(dir string) (string, error) {
 	return sessionPathAt(dir, time.Now().UTC())
 }
 
-// newSessionJournal allocates a new journal atomically. --continue uses
-// NewJSONL directly because it intentionally opens an existing file.
-func newSessionJournal(dir string) (*store.JSONL, string, error) {
+// newSessionJournalWithOptions allocates a new journal atomically, applying the
+// supplied persistence options. Production new sessions pass the process
+// redaction policy; --continue opens an existing file via openSessionJournal.
+func newSessionJournalWithOptions(dir string, opts store.Options) (*store.JSONL, string, error) {
 	const maxAttempts = 32
 	for i := 0; i < maxAttempts; i++ {
 		path, err := sessionPath(dir)
 		if err != nil {
 			return nil, "", err
 		}
-		journal, err := store.NewJSONLExclusive(path)
+		journal, err := store.NewJSONLExclusiveWithOptions(path, opts)
 		if err == nil {
 			return journal, path, nil
 		}
