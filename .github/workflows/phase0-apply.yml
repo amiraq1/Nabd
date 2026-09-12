@@ -10,11 +10,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Verify branch write
+        with:
+          fetch-depth: 0
+      - name: Apply reviewed phase 0 changes
         run: |
-          printf 'ready\n' > .phase0-ready
+          python3 scripts/apply_phase0.py
+          ! grep -qi 'no GitHub Release has been published' README.md
+          ! grep -q 'd63da42' docs/THREAT_MODEL.md
+          grep -q 'Threat model freshness' .github/workflows/ci.yml
+          git diff --check
+      - name: Commit phase 0
+        run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .phase0-ready
-          git commit -m 'chore: verify phase workflow [phase0-applied]'
+          git add README.md SECURITY.md docs/THREAT_MODEL.md .github/workflows/ci.yml
+          git commit -m 'docs: refresh release and security claims [phase0-applied]'
           git push
