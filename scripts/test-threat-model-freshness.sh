@@ -20,7 +20,7 @@ base=$(git rev-parse HEAD)
 printf '// security change\n' >> internal/perm/policy.go
 git add .
 git commit -qm security-change
-if "$check" "$base" >/dev/null 2>&1; then
+if bash "$check" "$base" >/dev/null 2>&1; then
   echo "expected security-only change to fail" >&2
   exit 1
 fi
@@ -28,4 +28,4 @@ fi
 printf '\nReviewed.\n' >> docs/THREAT_MODEL.md
 git add .
 git commit -qm documentation-change
-"$check" "$base"
+bash "$check" "$base"
