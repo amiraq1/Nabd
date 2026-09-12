@@ -195,3 +195,85 @@ In this example:
 - Groq's key is read securely from `~/.ag/credentials/groq-key` (mode 0600).
 - NVIDIA's key is sourced from the `NVIDIA_API_KEY` environment variable.
 - Any other environment variables are disregarded.
+
+---
+
+## 7. Journal Redaction and Export (operational)
+
+`NABD_REDACT_JOURNAL` is a process-level **runtime environment variable**. It is
+**not** a Config v1 key and **not** a Config v2 field: it is never read from
+`~/.ag/config` or `~/.ag/config.v2.json`, and setting it in either file has no
+effect.
+
+### Activation
+
+Redaction is enabled only by the exact literal value `1`:
+
+```sh
+NABD_REDACT_JOURNAL=1 nabd
+```
+
+Every other spelling leaves the default raw-journal behavior in place,
+including `true`, `yes`, `on`, and `" 1 "` (with surrounding whitespace).
+
+### What it does
+
+- Redacts recognized credential patterns in **newly appended events** before
+  they are written, ahead of `Event.ForStore()` and output truncation.
+- Does **not** rewrite existing journal lines. With `--continue`, only events
+  appended during the resumed session are redacted; historical lines keep their
+  original bytes.
+- Does **not** mutate the live event held in memory: redaction is copy-on-write,
+  so the in-memory history, replay, and undo are unaffected.
+- Applies to the JSONL emitted by `--json`, so stdout and the journal follow the
+  same policy and cannot diverge.
+
+### Redacted fields
+
+Recognized patterns are removed from:
+- conversation text and notices (`Event.Text`);
+- errors and raw provider messages (`Event.Err`, `Event.RawMessage`,
+  `Event.RawRetryAfter`);
+- tool arguments (`Call.Args`);
+- tool output (`Call.Output`);
+- edit diffs (`Edit.Patch`);
+- routing reasons (`Route.Reason`).
+
+Structural fields required for replay, resume, and undo are **never** redacted:
+project, session, read, and edit paths; tool names and call IDs; content hashes
+and shadow blob addresses; error codes and provider stop states; and numeric
+usage counters.
+
+### Boundaries
+
+Redaction is not a DLP system. It:
+- only removes credential patterns it recognizes;
+- does not find arbitrary high-entropy secrets that carry no known prefix;
+- does not encrypt the journal;
+- does not redact the shadow store;
+- does not stop a same-uid user or process from reading unredacted data; and
+- does not guarantee removal of personal information or sensitive file content.
+
+### Exporting a journal
+
+`--export` writes a journal to stdout as JSONL and exits. It is independent of
+`NABD_REDACT_JOURNAL`; whether the output is redacted is controlled only by
+`--redact`:
+
+```sh
+nabd --export SESSION.jsonl             # raw, byte-for-byte copy
+nabd --export SESSION.jsonl --redact    # recognized credentials redacted
+```
+
+- **Raw (no `--redact`):** the source bytes are copied verbatim. Unknown JSON
+  fields, blank lines, and a truncated final line are preserved. A warning is
+  written to stderr because the output may be sensitive.
+- **`--redact`:** the journal is decoded and re-encoded through the same
+  redaction path as the live journal and `--json`. Unknown JSON fields are
+  dropped and a truncated final line is ignored. The source file is opened
+  read-only and is never modified.
+
+`--redact` requires `--export`, and `--export` cannot be combined with any run
+mode (`-p`, `--continue`, `--replay`, `--feed`, `--feed-touch`, `--json`,
+`--dir`, `--version`, `--max-turns`, `--permission-mode`, `--speed`) or with
+positional arguments. Diagnostics go to stderr; stdout is JSONL only.

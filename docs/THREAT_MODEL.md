@@ -16,7 +16,7 @@ This is the only place nabd states security claims. README points here.
 |---|---|
 | Provider API keys | v1: `NABD_CONFIG` or `~/.ag/config`, with process environment fallback. v2: `NABD_CONFIG_V2` or `~/.ag/config.v2.json`, with explicit `env` or secure file credential sources only. |
 | Working tree | The resolved project directory used to construct `tools.Root`. |
-| Session journal | `~/.ag/sessions/*.jsonl` by default. Append-only events can include file contents and command output in cleartext. Default directory mode is 0700 and file mode is 0600. |
+| Session journal | `~/.ag/sessions/*.jsonl` by default. Append-only events can include file contents and command output in cleartext; directory mode 0700 and file mode 0600 limit cross-user reads. `NABD_REDACT_JOURNAL=1` optionally removes recognized credential patterns from new events before write. |
 | Shadow store | `<root>/.ag/shadow`, content-addressed `s256:` blobs containing full pre/post-edit content. `.ag` and `.ag/shadow` are tightened to 0700 and `/shadow/` is added to `.ag/.gitignore`. |
 
 The journal and shadow store are high-sensitivity assets. Filesystem modes
@@ -65,7 +65,9 @@ filesystem sandbox.
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
 | Tool-call repair changes what runs relative to what the model asked for (NBD-420) | REDUCED | `internal/tools/repair.go` corrects malformed calls before the registry lookup, so the gate classifies and prompts on the corrected call. It is a new surface between the model and the gate, bounded by design: inference is one-directional (an unrecognised name resolves only to a ReadOnly tool — `read_file`, `glob`, `grep` — and `write_file`/`edit_file`/`bash` require a literal match); the name map is explicit, never edit distance or string similarity, and every target is verified against `known`; path resolution is untouched, because `Root.Resolve` alone decides inside/outside the root and the layer never expands `~`, absolutises or relativises anything; and a call needing more than three corrections is returned unchanged. A name still unknown after the map returns the existing unknown-tool error, which the model reads and recovers from. Proof: `TestRepairInferenceIsReadOnlyOnly`, `TestRepairNameMapTargetsAreDeclared`, `TestRepairPathResolutionIsUntouched`, `TestRepairCapReturnsUnchanged`, `TestRepairRulesSaveARound` |
 | Path opening after `Resolve` | REDUCED | `Resolve` returns a string and later open is a second lookup; a same-uid rename/symlink race remains |
-| Journal and shadow cleartext | REDUCED | private default modes; same-uid readers and deliberately printed secrets remain exposed |
+| Journal is raw by default | REDUCED | journal content is written unredacted unless `NABD_REDACT_JOURNAL=1`; file mode 0600 and directory mode 0700 limit cross-user reads, but same-uid readers and deliberately printed secrets remain exposed. Shadow store is always raw |
+| Opt-in redaction of new journal events | REDUCED | `NABD_REDACT_JOURNAL=1` removes recognized credential patterns (Anthropic, OpenRouter, Groq, NVIDIA, GitHub, GitLab, Slack, `Bearer`/`authorization`) before `Event.ForStore()` and output truncation, via copy-on-write that leaves the live in-memory event untouched. Unrecognized sensitive content, structural fields (paths, tool names, call IDs, hashes, blob addresses, error codes), and the shadow store are unchanged. `--json` applies the same policy so it cannot diverge |
+| Redacted export leaves the source intact | GUARANTEED | `--export --redact` decodes and re-encodes to stdout; the source is opened read-only and never written. Raw `--export` copies source bytes verbatim. Evidence: `TestExportLeavesSourceUntouched`, `TestExportRawIsByteIdentical` |
 | Bash filesystem reach after approval | OUT OF SCOPE | approved shell commands run with the current user's filesystem authority |
 | Network/resource exhaustion from approved bash | OUT OF SCOPE | no namespace, cgroup, or Landlock boundary |
 
@@ -155,8 +157,27 @@ Minimal strict Config v2 rejects `base_url` unconditionally. If custom endpoints
 Session events are append-only. Compaction and rewind are serialized against
 history mutations; compact boundary staleness has dedicated regression
 coverage. The shadow store keeps complete file bytes for undo and verifies
-content digests. Neither journal nor shadow content is redacted on write in
-this baseline.
+content digests.
+
+By default the journal is written raw. With `NABD_REDACT_JOURNAL=1`, recognized
+credential patterns are removed from each event before `Event.ForStore()` and
+before output truncation; the operation is copy-on-write, so the live event in
+the in-memory history is unchanged. The shadow store is **not** redacted, and
+unrecognized sensitive content remains cleartext.
+
+### Journal export
+
+`--export` writes a journal to stdout as JSONL and exits. It is independent of
+`NABD_REDACT_JOURNAL`; only `--redact` selects the output policy.
+
+| Mode | Behavior | Residual |
+|---|---|---|
+| `--export FILE` (raw) | source bytes copied verbatim: unknown fields, blank lines, and a truncated final line survive; a warning is written to stderr | output may contain unredacted credentials |
+| `--export FILE --redact` | decoded via `store.Read`, recognized patterns redacted, re-encoded through the same path as the journal and `--json`; unknown fields are dropped and a truncated final line is ignored | unrecognized sensitive content and structural fields remain |
+
+The source file is opened read-only in both modes and is never modified.
+`--redact` requires `--export`, and `--export` is rejected together with any
+run mode. Diagnostics go to stderr; stdout is JSONL only.
 
 ## Operator guidance
 
@@ -165,7 +186,12 @@ this baseline.
 3. Use a disposable clone rather than a tree containing production secrets.
 4. Treat every `bash` approval as authority equivalent to the current user.
 5. Assume `session.jsonl` and `.ag/shadow` contain sensitive cleartext.
+   `NABD_REDACT_JOURNAL=1` reduces recognized credentials but does not make the
+   journal safe: it does not redact the shadow store, structural fields, or
+   unrecognized sensitive content.
 6. Do not attach raw journals to public issues.
+7. Redact before sharing: `nabd --export <file.jsonl> --redact`. Raw
+   `--export` is a deliberate, byte-for-byte copy and warns on stderr.
 
 ### Inherited directory permissions
 
