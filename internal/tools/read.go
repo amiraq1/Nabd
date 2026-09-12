@@ -3,8 +3,11 @@ package tools
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -19,83 +22,69 @@ const (
 	maxOutBytes  = 48 * 1024 // what one tool result may cost in context
 	maxLines     = 1200
 	maxLineRunes = 300 // a minified bundle must not eat the whole budget
-	// Read budget derivation (STEP 1/8), written out:
-	//   tpmLimit   = 8000 tokens/min  (Groq key, measured live from 7×413)
-	//   maxTok     = NABD_MAX_TOKENS  (output reservation; default 1024)
-	//   overhead   = 2210 tokens  (MEASURED from two 413 sessions: system
-	//                prompt + tool schemas + message framing; the old 450
-	//                estimate was wrong by 5×)
-	//   bytesPerTok = 2.41  (MEASURED: 4121 read bytes over 1709 tokens
-	//                between sessions 203320 and 203954)
-	//   roundsPerMin = 2  (tool round + answer round per turn; the TPM cap
-	//                is per-minute across all requests, so the per-request
-	//                budget divides by the expected request count)
-	//   safety     = 0.5
-	//   safe_input_per_request = (tpmLimit/maxTok − overhead) / roundsPerMin
-	//   defaultMaxRead = safe_input × bytesPerTok × safety
-	// The shipped default stays 3072 (live-calibrated) until the derived
-	// value passes the disk measurement.
-	tpmLimit      = 8000
-	maxTokEnv     = "NABD_MAX_TOKENS"
-	defaultMaxTok = 1024
-	readOverhead  = 2210 // tokens; MEASURED from 413 sessions, not estimated
-	bytesPerTok   = 2.41 // MEASURED from session pair, Arabic-heavy content
-	readRounds    = 2    // requests per turn (tool + answer)
-	readSafety    = 0.5
 )
 
-// readMaxTokens mirrors the agent's NABD_MAX_TOKENS resolution so the read
-// cap follows the same output reservation. It reads through config.Get so a
-// value set in ~/.ag/config takes precedence, with the environment as the
-// documented fallback — the same contract every other limit uses.
-func readMaxTokens() int {
-	if v := config.Get(maxTokEnv); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 128 && n <= 8192 {
-			return n
-		}
-	}
-	return defaultMaxTok
-}
-
-// defaultMaxReadDerived derives the read cap from the measured input
-// budget. IMPORTANT: the derived value is NOT the default — the shipped
-// default is 3072 (live-calibrated) until the derived value passes the
-// disk measurement. The derivation is a candidate reachable via
-// NABD_MAX_READ.
-func defaultMaxReadDerived() int {
-	// Per-request input budget: the per-minute TPM cap divided by the
-	// expected request count in a turn, minus the measured overhead and the
-	// output reservation.
-	perReq := tpmLimit/readRounds - readMaxTokens() - readOverhead
-	if perReq < 0 {
-		perReq = 0
-	}
-	n := int(float64(perReq) * bytesPerTok * readSafety)
-	if n < minMaxRead {
-		return minMaxRead
-	}
-	return n
-}
-
-// defaultMaxRead is what NABD_MAX_READ falls back to when unset. Kept at
-// the live-calibrated 3072: the derived value (measured constants) still
-// needs the disk regression gate before it ships as a default.
+// defaultMaxRead is what NABD_MAX_READ falls back to when unset. Kept at the
+// live-calibrated 3072: the NBD-400 measurement showed that raising the cap
+// trades round trips against per-request input, which is the provider-specific
+// bound that produced this number (see docs/TECH_DEBT.md, READ_CAP_TURN_COST;
+// reproduce with TestReadCapEval / TestReadCapPinsMeasuredTurnCost_NBD401).
+//
+// An earlier version also carried a derivation of this cap from a tokens-per-
+// minute ceiling, a measured overhead and a bytes-per-token ratio. It was
+// removed in NBD-403: no production path ever called it (defaultMaxRead
+// returned this constant, and the derivation was reachable only from a test),
+// and its overhead constant had no reproducible provenance. The derivation is
+// recorded in docs/TECH_DEBT.md as history rather than kept here as code that
+// looks load-bearing and is not.
 func defaultMaxRead() int {
 	return 3072
 }
 
-// maxReadBytes caps a single read_file call. Read once at startup from
-// NABD_MAX_READ so the cap follows the provider's token budget instead of
-// being a hardcoded tool constant. Values outside [minMaxRead, maxMaxRead]
-// (or non-numeric) are ignored and the default is used: a zero or absurd
-// value would otherwise produce an empty read that the model answers with
-// false confidence.
+// maxReadBytes caps a single read_file call.
+//
+// It has three sources, resolved once at startup in this order:
+//
+//  1. NABD_MAX_READ, if set (config file first, environment as the documented
+//     fallback). This is the explicit override and it wins over everything,
+//     which is why a custom base URL pointed at a metered clone has an escape.
+//  2. The provider's own declared ceiling, passed to SetReadCap by cmd/ag from
+//     provider.ReadCapper. A Router reports the strictest of its routes.
+//  3. defaultMaxRead, when neither applies (tests, and a provider that declares
+//     nothing).
+//
+// Values outside [minMaxRead, maxMaxRead] (or non-numeric) are ignored and the
+// next source is used: a zero or absurd value would otherwise produce an empty
+// read that the model answers with false confidence.
+//
+// Note the shape: the cap follows what the provider DECLARES, never what it is
+// called. TestReadCapPinsProviderIndependence_NBD401 pins that a provider
+// *selection string* cannot move it, and TestProviderReadCaps pins the declared
+// values themselves.
 const (
 	minMaxRead = 512
 	maxMaxRead = 1 << 20
 )
 
 var maxReadBytes = envMaxRead()
+
+// maxReadExplicit records whether NABD_MAX_READ supplied a USABLE value, so
+// that SetReadCap knows an operator's explicit choice outranks the provider.
+//
+// It is computed from the parsed value, not from the string being non-empty:
+// an override outside [minMaxRead, maxMaxRead] is ignored by envMaxRead (the
+// fallback is used), and treating it as explicit anyway would leave the user
+// with the conservative 3072 while silently suppressing the provider's own
+// declaration. "Set to something unusable" is not the same as "set".
+var maxReadExplicit = isUsableReadCap(config.Get("NABD_MAX_READ"))
+
+func isUsableReadCap(v string) bool {
+	if v == "" {
+		return false
+	}
+	n, err := strconv.Atoi(v)
+	return err == nil && n >= minMaxRead && n <= maxMaxRead
+}
 
 func envMaxRead() int {
 	if v := config.Get("NABD_MAX_READ"); v != "" {
@@ -105,6 +94,27 @@ func envMaxRead() int {
 	}
 	return defaultMaxRead()
 }
+
+// SetReadCap applies the ceiling the selected provider declares. It is called
+// once at startup, before any session runs.
+//
+// It never overrides an explicit NABD_MAX_READ, and it rejects a value outside
+// the same bounds the override is held to, so a provider cannot accidentally
+// widen the cap to something absurd. A non-positive value means "the provider
+// declares nothing" and is ignored rather than treated as zero.
+func SetReadCap(n int) {
+	if maxReadExplicit {
+		return
+	}
+	if n < minMaxRead || n > maxMaxRead {
+		return
+	}
+	maxReadBytes = n
+}
+
+// ReadCapBytes reports the cap in force. The loop asks for it through an
+// optional interface so a 413 Notice can name the ceiling that was hit.
+func (r *Registry) ReadCapBytes() int { return maxReadBytes }
 
 type readFile struct {
 	root *Root
@@ -126,6 +136,7 @@ func (readFile) Name() string { return "read_file" }
 // plain-Run path and is drained within RunDetailed, so it cannot leak past the
 // call that produced it.
 type readMeta struct {
+	credit     agent.ReadCredit
 	linesRead  int
 	truncated  bool
 	nextOffset int
@@ -156,6 +167,7 @@ func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		Truncated:  meta.truncated,
 		NextOffset: meta.nextOffset,
 		LinesRead:  meta.linesRead,
+		ReadCredit: meta.credit,
 	}, nil
 }
 
@@ -219,6 +231,16 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 		return "", readMeta{}, false, fmt.Errorf("%s is binary (%d bytes)", t.root.Rel(p), fi.Size())
 	}
 	if _, err := f.Seek(0, 0); err != nil {
+		return "", readMeta{}, false, err
+	}
+
+	// Compute full-file SHA-256 hash at read time for composite key provenance (NBD-034).
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		return "", readMeta{}, false, err
+	}
+	fileHash := hex.EncodeToString(hasher.Sum(nil))
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return "", readMeta{}, false, err
 	}
 
@@ -301,15 +323,29 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 	}
 
 	if shown == 0 {
-		if line == 0 {
-			return fmt.Sprintf("%s is empty", t.root.Rel(p)), readMeta{}, true, nil
+		meta.credit = agent.ReadCredit{
+			Path:      p,
+			Hash:      fileHash,
+			Offset:    from,
+			Limit:     limit,
+			LinesRead: 0,
 		}
-		return fmt.Sprintf("no lines at offset=%d · file has %d lines", from, line), readMeta{}, true, nil
+		if line == 0 {
+			return fmt.Sprintf("%s is empty", t.root.Rel(p)), meta, true, nil
+		}
+		return fmt.Sprintf("no lines at offset=%d · file has %d lines", from, line), meta, true, nil
 	}
 	if capped != "" {
 		b.WriteString(capped + "\n")
 	}
 	meta.linesRead = shown
+	meta.credit = agent.ReadCredit{
+		Path:      p,
+		Hash:      fileHash,
+		Offset:    from,
+		Limit:     limit,
+		LinesRead: shown,
+	}
 	return b.String(), meta, true, nil
 }
 

@@ -1,19 +1,27 @@
 // Command ag is nabd: a coding agent that fits in a thumb's reach.
+// The installable binary is named nabd; the package path stays ./cmd/ag
+// because ag collides with the_silver_searcher on a typical PATH.
 package main
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/build"
 	"nabd/internal/config"
+	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
@@ -32,15 +40,50 @@ const (
 	// maxEventBatchSize forces a flush when this many events accumulate
 	// within one interval.
 	maxEventBatchSize = 128
+	// uiEventBuffer is the buffer of the live UI event channel. A burst of
+	// tool output must fit without dropping, and when it does not the sink
+	// drops the event instead of stalling the agent loop (see chanSink).
+	uiEventBuffer = 1024
 )
 
-const system = `You are nabd, a coding agent working inside a phone terminal 50 columns wide.
-Reply in Arabic. Be extremely brief: never repeat the question, never apologise, and never list anything without cause. Two lines suffice when two suffice.`
-
-var (
-	version = "dev"
-	commit  = "none" // full SHA injected at build time; "none" means a plain `go build`
-)
+// newSessionLoop builds the Loop the three entry points share: the same
+// model-facing system prompt, the same permission gate, the same context
+// budget. Callers set only what differs — the provider, the sinks, and any
+// turn ceiling.
+//
+// This exists because the prompt is a security-relevant contract, not a
+// string: three literals that happen to agree today are three places to
+// diverge tomorrow. TestSessionLoopPromptHasNoDivergentPaths pins it, and the
+// prompt itself lives in internal/payload because its size is a budgeted cost
+// term (see NBD-403).
+func newSessionLoop(prov provider.Provider, reg *tools.Registry, g agent.Gate, human agent.Asker) *agent.Loop {
+	// The read ceiling follows the provider's own declaration (NBD-404). This
+	// constructor is the single point all three entry points pass through, so
+	// the cap cannot differ between Chat, Feed and headless. An explicit
+	// NABD_MAX_READ still wins — SetReadCap decides that, not this call.
+	if prov != nil {
+		if rc, ok := prov.(provider.ReadCapper); ok {
+			tools.SetReadCap(rc.ReadCapBytes())
+		}
+	}
+	loop := &agent.Loop{
+		Provider:    prov,
+		Tools:       reg,
+		System:      payload.DefaultSystemPrompt,
+		Gate:        g,
+		Budget:      agent.NewBudget(),
+		SpendBudget: agent.NewSpendBudget(),
+		Human:       human,
+	}
+	// A repaired tool call is announced in the journal before it runs: a repair
+	// the user never sees is one that did not happen. Wiring it here rather
+	// than at each entry point is what keeps Chat, Feed and headless identical
+	// (see TestSessionLoopPromptHasNoDivergentPaths).
+	if reg != nil {
+		reg.OnRepair = func(f tools.Fix) { loop.Note(f.Notice()) }
+	}
+	return loop
+}
 
 func main() {
 	// NOTE: no legacy ~/.ag/env loading here. Environment-isolation policy
@@ -54,11 +97,31 @@ func main() {
 	cont := flag.Bool("continue", false, "resume the latest session")
 	showVer := flag.Bool("version", false, "print version and exit")
 	useFeed := flag.Bool("feed", false, "use the new projected feed UI (experimental)")
+	feedTouch := flag.Bool("feed-touch", false, "enable finger-swipe touch scrolling for feed UI")
+	prompt := flag.String("p", "", "headless one-shot task; \"-\" reads stdin")
+	jsonOut := flag.Bool("json", false, "headless: emit journal JSONL on stdout")
+	maxTurns := flag.Int("max-turns", 0, "override turn ceiling")
+	permModeFlag := flag.String("permission-mode", "deny", "headless: ask|deny|allow-reads")
 	flag.Parse()
 
 	if *showVer {
-		fmt.Println(version + " · " + commit)
+		fmt.Println(build.Line())
 		return
+	}
+
+	if *prompt != "" {
+		mode, err := parsePermMode(*permModeFlag)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "nabd:", err)
+			os.Exit(exitError)
+		}
+		os.Exit(runHeadless(headlessConfig{
+			prompt:   *prompt,
+			json:     *jsonOut,
+			maxTurns: *maxTurns,
+			mode:     mode,
+			sessDir:  *sessDir,
+		}))
 	}
 
 	if *replay != "" {
@@ -68,7 +131,7 @@ func main() {
 		return
 	}
 	if *useFeed {
-		if err := doChatWithFeed(*sessDir, *cont); err != nil {
+		if err := doChatWithFeed(*sessDir, *cont, *feedTouch); err != nil {
 			die(err)
 		}
 		return
@@ -96,40 +159,31 @@ func doChat(dir string, cont bool) error {
 		return err
 	}
 
-	// Determine the journal path BEFORE creating the loop: on --continue
-	// we open the existing session file itself (append); on a new session
-	// we create a fresh file. These two paths must never be confused.
 	root, err := tools.NewRoot("")
 	if err != nil {
 		return err
 	}
 
 	var journalPath string
+	var journal *store.JSONL
 	if cont {
 		journalPath, err = latestSession(dir, root.Dir())
 		if err != nil {
 			return err
 		}
+		journal, err = store.NewJSONL(journalPath)
 	} else {
-		journalPath, err = sessionPath(dir)
-		if err != nil {
-			return err
-		}
+		journal, journalPath, err = newSessionJournal(dir)
 	}
-
-	journal, err := store.NewJSONL(journalPath)
 	if err != nil {
 		return err
 	}
-	defer journal.Close()
 
-	// On --continue, seed the loop from the existing events in the journal
-	// BEFORE the UI starts emitting, so Seq/Parent continue correctly and
-	// every Parent references an event present in this same file.
 	var prevEvs []agent.Event
 	if cont {
 		evs, err := store.Read(journalPath)
 		if err != nil {
+			journal.Close()
 			return err
 		}
 		prevEvs = agent.Live(evs)
@@ -137,33 +191,26 @@ func doChat(dir string, cont bool) error {
 			filepath.Base(journalPath), len(prevEvs), len(evs))
 	}
 
-	// The UI is a sink too, behind a buffered channel: a slow terminal
-	// must not stall the loop, and the journal must never wait on paint.
 	sh, err := snap.New(root.Dir())
 	if err != nil {
+		journal.Close()
 		return err
 	}
 	reg := tools.NewRegistry(root, sh)
 	pol := perm.New(reg)
 	ap := ui.NewApprover()
 
-	ch := make(chan agent.Event, 128)
-	loop := &agent.Loop{
-		Provider: prov,
-		Tools:    reg,
-		Sink:     agent.Fanout{journal, chanSink(ch)},
-		System:   system,
-		Gate:     gate{pol},
-		Budget:   agent.NewBudget(),
-		Human:    ap,
-	}
+	uiSink := newUISink()
+	loop := newSessionLoop(prov, reg, gate{pol}, ap)
+	loop.Sink = agent.Fanout{journal, uiSink}
 	if cont {
 		loop.Seed(prevEvs)
 	}
 
 	cwd, _ := os.Getwd()
-	if err := loop.Start(fmt.Sprintf("nabd %s · %s · %s · %s",
-		version, commit, prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
+	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
+		build.BannerPrefix(), prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
+		journal.Close()
 		return err
 	}
 
@@ -171,7 +218,11 @@ func doChat(dir string, cont bool) error {
 		loop.Note(s)
 	}
 
+ backup/config-conflict-notice-pre-rebase
 	chat := ui.NewChat(loop, ch)
+
+	chat := ui.NewChat(loop, uiSink.ch)
+ master
 	chat.Approve = ap
 
 	chat.OnRewind = func(n int) string {
@@ -179,7 +230,7 @@ func doChat(dir string, cont bool) error {
 		if err != nil {
 			return err.Error()
 		}
-		chat.SetInput(txt) // the cut turn comes back to the prompt, editable
+		chat.SetInput(txt)
 		return fmt.Sprintf("rewound %d turns · disk edits remain, /undo does not cover edits after branch cut", n)
 	}
 
@@ -207,8 +258,6 @@ func doChat(dir string, cont bool) error {
 		return fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
 	}
 	chat.OnCompact = func() string {
-		// Return immediately so the UI stays responsive; run compaction in a
-		// background goroutine and surface the result via the event channel.
 		go func() {
 			if err := loop.Compact(context.Background(), loop.Budget.Usable()*4/10); err != nil {
 				loop.Note("compact failed: " + err.Error())
@@ -219,23 +268,23 @@ func doChat(dir string, cont bool) error {
 
 	_, err = tea.NewProgram(chat).Run()
 	if err != nil {
+		journal.Close()
 		return err
 	}
-	// Mark the session as finished before closing the journal so the
-	// terminal state is durably recorded. End() emits exactly one RunEnd.
-	_ = loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
-	fmt.Println("session:", journalPath)
-	return nil
+
+	// Shutdown order: surface any UI drops as a journal Notice, then mark the
+	// session ended in the journal (durability), then close the journal.
+	// Either step can fail independently; surface both without masking the
+	// original. The "session:" line is printed by reportSession regardless of
+	// whether the durable close succeeded.
+	uiSink.noteDrops(loop)
+	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
+	closeErr := journal.Close()
+	reportSession(os.Stdout, os.Stderr, journalPath, closeErr)
+	return errors.Join(endErr, closeErr)
 }
 
-// doChatWithFeed is the Phase 3A UI path: agent events flow through the
-// presentation Projector into a scrollable viewport, and user input flows
-// through a multiline composer and the deterministic input router. It is
-// opt-in via the -feed flag while the default Chat UI remains the stable
-// fallback.
-func doChatWithFeed(dir string, cont bool) error {
-	// Install the Arabic limit notice for the composer (internal/ui keeps
-	// ASCII string literals; user-facing Arabic lives here).
+func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 	ui.SetLimitNotice(limitNoticeArabic)
 
 	prov, err := pickProvider()
@@ -249,28 +298,25 @@ func doChatWithFeed(dir string, cont bool) error {
 	}
 
 	var journalPath string
+	var journal *store.JSONL
 	if cont {
 		journalPath, err = latestSession(dir, root.Dir())
 		if err != nil {
 			return err
 		}
+		journal, err = store.NewJSONL(journalPath)
 	} else {
-		journalPath, err = sessionPath(dir)
-		if err != nil {
-			return err
-		}
+		journal, journalPath, err = newSessionJournal(dir)
 	}
-
-	journal, err := store.NewJSONL(journalPath)
 	if err != nil {
 		return err
 	}
-	defer journal.Close()
 
 	var prevEvs []agent.Event
 	if cont {
 		evs, err := store.Read(journalPath)
 		if err != nil {
+			journal.Close()
 			return err
 		}
 		prevEvs = agent.Live(evs)
@@ -280,48 +326,31 @@ func doChatWithFeed(dir string, cont bool) error {
 
 	sh, err := snap.New(root.Dir())
 	if err != nil {
+		journal.Close()
 		return err
 	}
 	reg := tools.NewRegistry(root, sh)
 	pol := perm.New(reg)
 	ap := ui.NewApprover()
 
-	// Create the feed model and the event batcher.
 	feed := ui.NewFeed()
+	feed.SetTouch(feedTouch)
 
-	// Create the loop BEFORE wiring callbacks (callbacks reference it).
-	loop := &agent.Loop{
-		Provider: prov,
-		Tools:    reg,
-		System:   system,
-		Gate:     gate{pol},
-		Budget:   agent.NewBudget(),
-		Human:    ap,
-	}
+	loop := newSessionLoop(prov, reg, gate{pol}, ap)
 	if cont {
 		loop.Seed(prevEvs)
 	}
 
-	// Sink: journal first (durable), then batcher → feed. The batcher's
-	// flush callback delivers batches as Bubble Tea messages (prog.Send),
-	// so no goroutine ever mutates the feed model off the event loop.
 	batcher := ui.NewBatcher(eventBatchInterval, maxEventBatchSize, func(batch []agent.Event) {
 		feed.SendBatch(batch)
 	})
 	batcher.Start()
-	defer batcher.Stop()
 
 	loop.Sink = agent.Fanout{journal, feedSink{batcher: batcher}}
 
-	// The feed starts each run directly on the loop (same contract as the
-	// classic Chat path: one Run per accepted message, events come back
-	// through the sink). It answers permission asks through the same
-	// approver the loop blocks on.
 	feed.SetRunner(loop)
 	feed.SetApprover(ap)
 
-	// Wire up command callbacks. OnRewind restores the cut turn into the
-	// composer for editing (same contract as the classic Chat path).
 	feed.SetCallbacks(&ui.FeedCallbacks{
 		OnUndo:    func(n int) string { return fileUndo(loop, reg, n) },
 		OnCompact: func() string { return chatOnCompact(loop) },
@@ -357,15 +386,10 @@ func doChatWithFeed(dir string, cont bool) error {
 		},
 	})
 
-	// Initialize the feed from seeded events (replay).
 	if len(prevEvs) > 0 {
 		feed.BuildFromEvents(agent.Live(prevEvs))
 	}
 
-	// Start the program first: the batcher delivers event batches via
-	// prog.Send, which BLOCKS until the program's event loop is running.
-	// loop.Start below emits the RunStart banner through the batcher, so
-	// the program must already be consuming messages.
 	prog := tea.NewProgram(feed, feed.ProgramOptions()...)
 	feed.SetProgram(prog)
 
@@ -375,11 +399,10 @@ func doChatWithFeed(dir string, cont bool) error {
 		progDone <- err
 	}()
 
-	// Give the program's event loop a moment to start consuming before the
-	// first event arrives. prog.Send blocks until the loop is ready, so the
-	// RunStart below will simply wait; no event is lost.
-	if err := loop.Start(fmt.Sprintf("nabd %s · %s · %s · %s",
-		version, commit, prov.Name(), filepath.Base(journalPath)), root.Dir()); err != nil {
+	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
+		build.BannerPrefix(), prov.Name(), filepath.Base(journalPath)), root.Dir()); err != nil {
+		batcher.Stop()
+		journal.Close()
 		return err
 	}
 
@@ -387,15 +410,37 @@ func doChatWithFeed(dir string, cont bool) error {
 		loop.Note(s)
 	}
 
-	if err := <-progDone; err != nil {
-		return err
-	}
-	_ = loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
-	fmt.Println("session:", journalPath)
-	return nil
+ backup/config-conflict-notice-pre-rebase
+
+	// The batcher must outlive the interactive program: it carries every live
+	// event, and Batcher.Add is a silent no-op once stopped. finishFeedSession
+	// waits for the program to exit before stopping it, so nothing is dropped
+	// while the session runs and nothing races the End marker. (Stopping right
+	// after loop.Start here regressed exactly that: the feed showed nothing
+	// past the banner.)
+	return finishFeedSession(progDone, batcher, loop, journal, journalPath)
 }
 
-// feedSink adapts the batcher to agent.Sink.
+// finishFeedSession is the feed path's shutdown sequence, isolated so its
+// ordering is testable: wait for the interactive program to exit, stop the
+// batcher so its final flush lands, then mark the session ended and close the
+// journal. Stopping the batcher before the program exits silently drops the
+// whole session's events (Batcher.Add no-ops once stopped); stopping it after
+// loop.End lets events race the End marker.
+func finishFeedSession(progDone <-chan error, batcher *ui.Batcher, loop *agent.Loop, journal io.Closer, journalPath string) error {
+ master
+	if err := <-progDone; err != nil {
+		batcher.Stop()
+		journal.Close()
+		return err
+	}
+	batcher.Stop()
+	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
+	closeErr := journal.Close()
+	reportSession(os.Stdout, os.Stderr, journalPath, closeErr)
+	return errors.Join(endErr, closeErr)
+}
+
 type feedSink struct {
 	batcher *ui.Batcher
 }
@@ -405,18 +450,6 @@ func (s feedSink) Emit(e agent.Event) error {
 	return nil
 }
 
-// fileUndo rewinds file edits recorded in the journal (not conversation
-// turns — that is /rewind). It is the single implementation shared by the
-// classic Chat UI and the feed UI so both surfaces behave identically:
-//
-//   - the journal is the source of truth, not the in-memory edit log: after
-//     a restart (--continue) the edit log is empty, but the edit_record
-//     events from the seeded session are still there;
-//   - the undo is emitted as exactly one Notice so it survives in
-//     session.jsonl and reaches the UI through the event channel;
-//   - "" is returned so the UI status line does not duplicate what the
-//     Notice renders. A shortfall (no records) returns a visible message
-//     because the Notice text would be empty.
 func fileUndo(loop *agent.Loop, reg *tools.Registry, n int) string {
 	if loop == nil || reg == nil {
 		return "undo not supported"
@@ -427,18 +460,18 @@ func fileUndo(loop *agent.Loop, reg *tools.Registry, n int) string {
 	}
 	var b strings.Builder
 	for _, r := range reg.PersistedUndo(recs, n) {
-		mark := "✗"
+		mark := "x"
 		if r.OK {
-			mark = "✓"
+			mark = "ok"
 		}
 		if r.Rel == "" {
 			fmt.Fprintf(&b, "%s %s\n", mark, r.Note)
 			continue
 		}
-		fmt.Fprintf(&b, "%s %s — %s\n", mark, r.Rel, r.Note)
+		fmt.Fprintf(&b, "%s %s - %s\n", mark, r.Rel, r.Note)
 	}
 	s := strings.TrimRight(b.String(), "\n")
-	loop.Note(fmt.Sprintf("/undo %d — %s", n, s))
+	loop.Note(fmt.Sprintf("/undo %d - %s", n, s))
 	return ""
 }
 
@@ -454,37 +487,169 @@ func chatOnCompact(loop *agent.Loop) string {
 	return statusCompacting
 }
 
-// chanSink hands events to the UI, dropping nothing but never blocking
-// forever: if the UI is gone, the journal still gets everything.
-type chanSink chan agent.Event
+// chanSink delivers the live event stream to the interactive UI. The UI
+// channel is a best-effort view — the journal is the durable source of
+// truth — so a full channel must never stall the agent loop or kill the
+// session. Emit drops the event instantly, counts the loss, and always
+// returns nil, which keeps a UI hiccup from propagating through Fanout as
+// a fatal loop error. The drop count is surfaced as a journal Notice just
+// before RunEnd (see noteDrops).
+type chanSink struct {
+	ch      chan agent.Event
+	dropped atomic.Int64
+}
 
-func (c chanSink) Emit(e agent.Event) error {
+// newUISink builds the interactive UI sink. Its buffer is the contract value
+// (uiEventBuffer); when it overflows, Emit drops instead of blocking.
+func newUISink() *chanSink {
+	return &chanSink{ch: make(chan agent.Event, uiEventBuffer)}
+}
+
+// reportSession prints the authoritative session path and routes a close
+// failure to the error stream beside it. The path is printed unconditionally,
+// so a failed close never hides where the full transcript was written, and
+// the close error never replaces the path.
+func reportSession(out, errOut io.Writer, path string, closeErr error) {
+	fmt.Fprintln(out, "session:", path)
+	if closeErr != nil {
+		fmt.Fprintln(errOut, "nabd: session close:", closeErr)
+	}
+}
+
+func (s *chanSink) Emit(e agent.Event) error {
 	select {
-	case c <- e:
-	case <-time.After(2 * time.Second):
+	case s.ch <- e:
+	default:
+		s.dropped.Add(1)
 	}
 	return nil
 }
 
-// sessionPath returns a fresh, unique path for a new session. The name uses
-// millisecond precision to avoid collisions when two sessions start in the
-// same second. Callers must not call this when --continue is set.
+// Dropped reports how many events never reached the UI.
+func (s *chanSink) Dropped() int64 { return s.dropped.Load() }
+
+// noteDrops records the dropped-event count as a Notice, once, just before
+// the session's RunEnd event. It must be called from the session-end path,
+// never from inside Emit: loop.emit holds l.mu while sinks run, so calling
+// back into the loop from a sink would deadlock (see NOTES.md P0-1.5).
+func (s *chanSink) noteDrops(loop *agent.Loop) {
+	if n := s.Dropped(); n > 0 {
+		loop.Note(fmt.Sprintf("ui/display dropped %d event(s) · full session transcript is in the journal", n))
+	}
+}
+
+// userHomeDir is the single seam for resolving the operator's home
+// directory. Tests replace it to prove that the default session directory is
+// built in exactly one place.
+var userHomeDir = os.UserHomeDir
+
+// defaultSessionDir is the one source of the default session directory
+// (~/.ag/sessions): it resolves the home directory and guarantees the
+// directory exists with mode 0o700. A caller-supplied --dir never reaches
+// here.
+func defaultSessionDir() (string, error) {
+	home, err := userHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".ag", "sessions")
+	if err := ensureDefaultSessionDir(dir); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
 func sessionPath(dir string) (string, error) {
+	return sessionPathAt(dir, time.Now().UTC())
+}
+
+// newSessionJournal allocates a new journal atomically. --continue uses
+// NewJSONL directly because it intentionally opens an existing file.
+func newSessionJournal(dir string) (*store.JSONL, string, error) {
+	const maxAttempts = 32
+	for i := 0; i < maxAttempts; i++ {
+		path, err := sessionPath(dir)
+		if err != nil {
+			return nil, "", err
+		}
+		journal, err := store.NewJSONLExclusive(path)
+		if err == nil {
+			return journal, path, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("could not allocate a unique session journal after %d attempts", maxAttempts)
+}
+
+// sessionPathAt is the pure production naming helper behind sessionPath. It is
+// the single source of truth for new-session journal filenames. Keeping it pure
+// (dir + now -> path) lets tests exercise the real naming logic with a frozen
+// clock without touching the filesystem clock or sleeping.
+func sessionPathAt(dir string, now time.Time) (string, error) {
 	if dir == "" {
-		home, err := os.UserHomeDir()
+		var err error
+		dir, err = defaultSessionDir()
 		if err != nil {
 			return "", err
 		}
-		dir = filepath.Join(home, ".ag", "sessions")
 	}
-	name := time.Now().UTC().Format("20060102-150405.000") + ".jsonl"
+	base := now.Format("20060102-150405.000")
+	name := newSessionName(base)
 	return filepath.Join(dir, name), nil
 }
 
+ backup/config-conflict-notice-pre-rebase
 // conflictLine formats the conflict notice for the UI. It returns "" when
 // there is no conflict, so callers can skip the Notice entirely. The key
 // names are defensively sorted and joined with conflictSep; no value is
 // ever carried, only names.
+
+// newSessionSuffix builds a random disambiguation suffix for a new-session
+// journal. The random component avoids PID-namespace collisions; the PID and
+// process-local counter remain a fallback if the system random source fails.
+//
+// The counter is zero-padded (%04d) so that lexicographic order of the suffix
+// reflects counter order within one timestamp prefix up to 9999 allocations;
+// beyond that the width grows.
+func newSessionSuffix() string {
+	var random [8]byte
+	if _, err := crand.Read(random[:]); err == nil {
+		return "-r" + hex.EncodeToString(random[:])
+	}
+	return fmt.Sprintf("-p%d-c%04d", os.Getpid(), newSessionCounter())
+}
+
+// sessionCounter provides process-local uniqueness. A package-global atomic is
+// sufficient because uniqueness only needs to hold within one process-lifetime;
+// cross-process uniqueness is provided by the PID component of the suffix.
+var sessionCounter atomic.Uint64
+
+func newSessionCounter() uint64 {
+	return sessionCounter.Add(1)
+}
+
+// newSessionName assembles a new-session journal name from its timestamp base,
+// appending the PID+counter suffix before the ".jsonl" extension.
+func newSessionName(base string) string {
+	return base + newSessionSuffix() + ".jsonl"
+}
+
+// ensureDefaultSessionDir creates dir with mode 0o700 if it does not exist, or
+// tightens an existing directory to 0o700 if it is wider.  It only touches
+// directories under ~/.ag that nabd creates and owns; it never modifies a
+// caller-supplied --dir path.
+func ensureDefaultSessionDir(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	// MkdirAll does not tighten an existing directory, so chmod explicitly.
+	// This migrates a legacy 0o755 directory to 0o700 on first run.
+	return os.Chmod(dir, 0o700)
+}
+
+ master
 func conflictLine(cs []config.Conflict) string {
 	if len(cs) == 0 {
 		return ""
@@ -512,14 +677,10 @@ func sanitizeKey(k string) string {
 }
 
 func die(err error) {
-	fmt.Fprintln(os.Stderr, "ag:", err)
+	fmt.Fprintln(os.Stderr, "nabd:", err)
 	os.Exit(1)
 }
 
-// pickProvider prefers whatever key is present, in ~/.ag/config first and
-// the environment second. NABD_PROVIDER forces one. A config file with loose
-// permissions is a hard error here rather than a silent fallback: the user
-// wrote a key down and believes it is protected.
 func pickProvider() (provider.Provider, error) {
 	if err := config.Load(); err != nil {
 		return nil, err
@@ -591,8 +752,6 @@ func pickRouterProvider() (provider.Provider, error) {
 	return provider.NewRouter(routes, time.Duration(timeoutSec)*time.Second, provider.RealClock{})
 }
 
-// gate translates the policy's vocabulary into the loop's. It is the only
-// place the two packages meet, and it fails closed by default.
 type gate struct{ p *perm.Policy }
 
 func (g gate) Check(tool string) (agent.Verdict, string) {
@@ -616,17 +775,14 @@ func (g gate) Effective(tool string, d agent.Decision) agent.Decision {
 	return g.p.Effective(tool, d)
 }
 
-// latestSession returns the path to the most recent *.jsonl in the session
-// directory. It respects an explicit --dir; otherwise it defaults to
-// ~/.ag/sessions. Returns a clear error when no session exists.
 func latestSession(dir, projectRoot string) (string, error) {
 	sessDir := dir
 	if sessDir == "" {
-		home, err := os.UserHomeDir()
+		var err error
+		sessDir, err = defaultSessionDir()
 		if err != nil {
 			return "", err
 		}
-		sessDir = filepath.Join(home, ".ag", "sessions")
 	}
 	ents, err := os.ReadDir(sessDir)
 	if err != nil {
@@ -636,23 +792,17 @@ func latestSession(dir, projectRoot string) (string, error) {
 		return "", err
 	}
 
-	// ReadDir returns sorted by name (timestamp). We iterate backwards to find the newest.
 	for i := len(ents) - 1; i >= 0; i-- {
 		e := ents[i]
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
-			name := e.Name()
-			path := filepath.Join(sessDir, name)
-
-			// Check if project root matches
+			path := filepath.Join(sessDir, e.Name())
 			events, err := store.Read(path)
 			if err != nil {
 				continue
 			}
-
 			for _, ev := range events {
 				if ev.Type == agent.RunStart {
 					if ev.ProjectRoot == "" {
-						// Legacy session without root metadata is skipped
 						continue
 					}
 					if ev.ProjectRoot == projectRoot {
@@ -666,9 +816,6 @@ func latestSession(dir, projectRoot string) (string, error) {
 	return "", fmt.Errorf(errNoSessions, sessDir)
 }
 
-// editRecords pulls the persisted edit fingerprints out of a live branch,
-// newest first. This is what lets /undo work after a restart: the records
-// survive in the journal even though the in-memory edit log is gone.
 func editRecords(evs []agent.Event) []*agent.EditRecord {
 	var out []*agent.EditRecord
 	for i := len(evs) - 1; i >= 0; i-- {

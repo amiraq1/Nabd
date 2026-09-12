@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"nabd/internal/agent"
 )
 
 // fileSHA256 returns the SHA-256 hex of a file's current contents.
@@ -52,10 +54,12 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 			// A rejected request must leave this credit intact (still 7); a
 			// consumed credit would read back 0 because ConsumeLinesRead
 			// resets the slot. The invariant is "unchanged", not "zero".
+			// Credit is bound to path+hash: it can only be consumed when the
+			// target file's path and content hash match what was staged.
 			const stagedCredit = 7
-			r.SetLinesRead(stagedCredit)
-
 			beforeHash := fileSHA256(t, target)
+			r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
+
 			beforeMode := fileMode(t, target)
 
 			type tc struct {
@@ -90,7 +94,9 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 				t.Run(c.name, func(t *testing.T) {
 					// Stage fresh credit per subtest: subtests share r, and a
 					// prior subtest's invariant check resets the slot.
-					r.SetLinesRead(stagedCredit)
+					// Credit is bound to path+hash so it can only be consumed
+					// when the target file matches what was staged.
+					r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
 					var raw json.RawMessage = json.RawMessage(c.raw)
 					_, ok, err := r.Run(ctx, providerToolCall(name, raw))
 					if ok || err == nil {
@@ -106,18 +112,20 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 					}
 					// Invariant 5: read-credit not consumed. The slot must still hold
 					// the staged value, since validation failed before Consume.
-					if got := r.ConsumeLinesRead(); got != stagedCredit {
+					// Validation failure occurs before ConsumeLinesRead is reached,
+					// so the staged credit must still be intact.
+					if got := r.ConsumeLinesRead(target, beforeHash); got != stagedCredit {
 						t.Errorf("%s: read-credit consumed or altered: got %d, want %d (staged)", c.name, got, stagedCredit)
 					}
 				})
 			}
 
 			// Restore credit for the directory-creation check.
-			r.SetLinesRead(stagedCredit)
+			r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
 			// Invariant 3 & 4: no directory created, MkdirAll not reached.
 			// A valid path under a non-existent subdirectory would trigger
 			// MkdirAll for write_file; an invalid request must not.
-			var raw json.RawMessage = json.RawMessage(`{"path":"nope/sub/target.txt","content":null`)
+			var raw json.RawMessage = json.RawMessage(`{"path":"nope/sub/target.txt","content":null}`)
 			if name == "edit_file" {
 				raw = json.RawMessage(`{"path":"nope/sub/target.txt","old":"x","new":null}`)
 			}
@@ -302,10 +310,12 @@ func TestWriteValidationRejectsCrossToolFields(t *testing.T) {
 			if err := os.WriteFile(target, seedContent, 0o644); err != nil {
 				t.Fatal(err)
 			}
+			// Stage credit bound to path+hash: it can only be consumed when
+			// the target file's path and content hash match what was staged.
 			const stagedCredit = 7
-			r.SetLinesRead(stagedCredit)
-
 			beforeHash := fileSHA256(t, target)
+			r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
+
 			beforeMode := fileMode(t, target)
 
 			var raw json.RawMessage = json.RawMessage(c.raw)
@@ -321,8 +331,9 @@ func TestWriteValidationRejectsCrossToolFields(t *testing.T) {
 			if got := fileMode(t, target); got != beforeMode {
 				t.Errorf("file mode changed: before=%04o after=%04o", beforeMode, got)
 			}
-			// Invariant 3: read-credit not consumed.
-			if got := r.ConsumeLinesRead(); got != stagedCredit {
+			// Invariant 3: read-credit not consumed. Validation failure occurs
+			// before ConsumeLinesRead is reached, so credit stays intact.
+			if got := r.ConsumeLinesRead(target, beforeHash); got != stagedCredit {
 				t.Errorf("read-credit consumed: got %d, want %d", got, stagedCredit)
 			}
 		})

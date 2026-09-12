@@ -30,8 +30,8 @@ func TestEditRecordEmitted(t *testing.T) {
 	if out.LinesRead != 3 {
 		t.Fatalf("out.LinesRead=%d, want 3 (the read must be recorded)", out.LinesRead)
 	}
-	// reads are result-scoped; the loop stages the count for the next write.
-	r.SetLinesRead(out.LinesRead)
+	// reads are result-scoped; the loop stages the credit for the next write.
+	r.SetReadCredit(out.ReadCredit)
 
 	// 2. write and check the EditRecord. The staged count flows read → write
 	// without stale carry-over (the write consumes exactly what the loop staged).

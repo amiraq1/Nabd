@@ -1,0 +1,6 @@
+* @amiraq1
+/internal/perm/** @amiraq1
+/internal/tools/path.go @amiraq1
+/internal/tools/bash.go @amiraq1
+/docs/THREAT_MODEL.md @amiraq1
+/.github/workflows/** @amiraq1

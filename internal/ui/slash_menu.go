@@ -7,21 +7,15 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// maxMenuCommands is the maximum number of items displayed in the menu.
+const menuMinRows = 3
 
-// slashMenu manages state and rendering of the slash command completion menu.
 type slashMenu struct {
 	visible  bool
 	items    []SlashCommand
 	selected int
 }
 
-func newSlashMenu() *slashMenu {
-	return &slashMenu{
-		selected: 0,
-	}
-}
-
+func newSlashMenu() *slashMenu { return &slashMenu{} }
 func (m *slashMenu) open(items []SlashCommand) {
 	m.visible = true
 	m.items = items
@@ -29,27 +23,17 @@ func (m *slashMenu) open(items []SlashCommand) {
 		m.selected = 0
 	}
 }
-
-func (m *slashMenu) close() {
-	m.visible = false
-	m.items = nil
-	m.selected = 0
-}
-
+func (m *slashMenu) close() { m.visible = false; m.items = nil; m.selected = 0 }
 func (m *slashMenu) next() {
-	if len(m.items) == 0 {
-		return
+	if len(m.items) > 0 {
+		m.selected = (m.selected + 1) % len(m.items)
 	}
-	m.selected = (m.selected + 1) % len(m.items)
 }
-
 func (m *slashMenu) prev() {
-	if len(m.items) == 0 {
-		return
+	if len(m.items) > 0 {
+		m.selected = (m.selected - 1 + len(m.items)) % len(m.items)
 	}
-	m.selected = (m.selected - 1 + len(m.items)) % len(m.items)
 }
-
 func (m *slashMenu) currentCommand() (SlashCommand, bool) {
 	if !m.visible || len(m.items) == 0 || m.selected < 0 || m.selected >= len(m.items) {
 		return SlashCommand{}, false
@@ -57,81 +41,65 @@ func (m *slashMenu) currentCommand() (SlashCommand, bool) {
 	return m.items[m.selected], true
 }
 
-func (m *slashMenu) lineCount(maxRows ...int) int {
-	if !m.visible || len(m.items) == 0 {
-		return 0
-	}
-	full := len(m.items) + 2
-	if len(maxRows) > 0 && maxRows[0] > 0 && maxRows[0] < full {
-		return max(2, maxRows[0])
-	}
-	return full
-}
+type slashMenuShape struct{ rows, start, end int }
 
-// view renders the menu popup docked above the composer.
+func (m *slashMenu) shape(maxRows ...int) slashMenuShape {
+	if !m.visible || len(m.items) == 0 {
+		return slashMenuShape{}
+	}
+	full, rows := len(m.items)+2, len(m.items)+2
+	if len(maxRows) > 0 && maxRows[0] > 0 {
+		rows = maxRows[0]
+	}
+	if rows > full {
+		rows = full
+	}
+	if rows < menuMinRows {
+		rows = menuMinRows
+	}
+	itemRows, start := rows-2, 0
+	if itemRows > 0 && len(m.items) > itemRows {
+		start = m.selected - itemRows/2
+		if start < 0 {
+			start = 0
+		}
+		if start+itemRows > len(m.items) {
+			start = len(m.items) - itemRows
+		}
+	}
+	return slashMenuShape{rows: rows, start: start, end: min(start+itemRows, len(m.items))}
+}
+func (m *slashMenu) lineCount(maxRows ...int) int { return m.shape(maxRows...).rows }
+
 func (m *slashMenu) view(width int, maxRows ...int) string {
 	if !m.visible || len(m.items) == 0 {
 		return ""
 	}
-
 	w := width
 	if w < 20 {
 		w = 20
 	}
-	// Menu is at most 50 wide on narrow phones, full width on wider screens.
-	menuW := w
-	if menuW > 50 {
+	mode, menuW := widthMode(w), w
+	if mode != WidthWide && menuW > 50 {
 		menuW = 50
 	}
-
-	// Build separator line that exactly fills menuW (never auto-wraps).
-	// Header: "── Commands ─────────"
 	header := "── Commands "
-	headerW := ansi.StringWidth(header)
-	dashesNeeded := menuW - headerW
-	if dashesNeeded < 0 {
-		dashesNeeded = 0
+	dashes := menuW - ansi.StringWidth(header)
+	if dashes < 0 {
+		dashes = 0
 	}
-	headerLine := header + strings.Repeat("─", dashesNeeded)
-
-	// Footer separator.
-	footerLine := strings.Repeat("─", menuW)
-
-	targetRows := m.lineCount(maxRows...)
-	maxItemRows := targetRows - 2
-	if maxItemRows < 1 {
-		maxItemRows = 1
-	}
-
-	start := 0
-	if len(m.items) > maxItemRows {
-		start = m.selected - maxItemRows/2
-		if start < 0 {
-			start = 0
-		}
-		if start+maxItemRows > len(m.items) {
-			start = len(m.items) - maxItemRows
-			if start < 0 {
-				start = 0
-			}
-		}
-	}
-	end := min(start+maxItemRows, len(m.items))
-
+	shape := m.shape(maxRows...)
 	var b strings.Builder
-	b.WriteString(dim.Render(headerLine))
+	b.WriteString(dim.Render(header + strings.Repeat("─", dashes)))
 	b.WriteByte('\n')
-
-	for i := start; i < end; i++ {
-		cmd := m.items[i]
-		prefix := "  "
-		line := fmt.Sprintf("%-12s %s", cmd.Usage, cmd.Description)
-		maxLineW := menuW - ansi.StringWidth(prefix)
-		if maxLineW < 4 {
-			maxLineW = 4
+	for i := shape.start; i < shape.end; i++ {
+		cmd, prefix := m.items[i], "  "
+		line := cmd.Usage
+		if mode != WidthNarrow {
+			line = fmt.Sprintf("%-12s %s", cmd.Usage, cmd.Description)
 		}
-		if ansi.StringWidth(line) > maxLineW {
-			line = ansi.Truncate(line, maxLineW, "…")
+		if ansi.StringWidth(line) > menuW-2 {
+			line = ansi.Truncate(line, menuW-2, "…")
 		}
 		if i == m.selected {
 			prefix = "> "
@@ -141,7 +109,6 @@ func (m *slashMenu) view(width int, maxRows ...int) string {
 		}
 		b.WriteByte('\n')
 	}
-
-	b.WriteString(dim.Render(footerLine))
+	b.WriteString(dim.Render(strings.Repeat("─", menuW)))
 	return b.String()
 }

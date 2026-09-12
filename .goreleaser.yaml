@@ -1,0 +1,53 @@
+version: 2
+
+project_name: nabd
+
+builds:
+  - id: nabd
+    main: ./cmd/ag
+    binary: nabd
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X nabd/internal/build.version={{.Version}}
+      - -X nabd/internal/build.commit={{.FullCommit}}
+      - -X nabd/internal/build.date={{.CommitDate}}
+    goos: [linux, darwin, android]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: android
+        goarch: amd64
+
+archives:
+  - id: nabd
+    formats: [binary]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - --yes
+      - --output-certificate=${certificate}
+      - --output-signature=${signature}
+      - ${artifact}
+    artifacts: checksum
+
+sboms:
+  - artifacts: archive
+    documents:
+      - "${artifact}.sbom.json"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"

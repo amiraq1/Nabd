@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"nabd/internal/agent"
@@ -41,8 +42,11 @@ func TestOrphanToolEndReconstructed(t *testing.T) {
 			output = r.Output
 		}
 	}
-	if output != "refused to run bash: unknown tool" {
-		t.Fatalf("error text must be preserved verbatim, got %q", output)
+	const errText = "refused to run bash: unknown tool"
+	if !strings.HasPrefix(output, "<<<TOOL_OUTPUT[bash] ") ||
+		!strings.Contains(output, errText) ||
+		!strings.HasSuffix(output, ">>>") {
+		t.Fatalf("error text must be preserved verbatim inside the fence, got %q", output)
 	}
 }
 

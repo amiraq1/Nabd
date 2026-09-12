@@ -145,8 +145,8 @@ func TestFeedNoticeCountsInScroll(t *testing.T) {
 	typeIntoFeed(t, f, "x")
 	_, cmd := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	_, _ = f.Update(cmd())
-	if len(f.lines) != base+1 {
-		t.Fatalf("notice must add exactly one line: base=%d now=%d", base, len(f.lines))
+	if len(f.lines) != base+2 {
+		t.Fatalf("notice and separator must add exactly 2 lines: base=%d now=%d", base, len(f.lines))
 	}
 
 	// Leave the composer so the viewport owns keys, then scroll to the top.

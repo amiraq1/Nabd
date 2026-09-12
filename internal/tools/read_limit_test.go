@@ -241,65 +241,58 @@ func TestEnvMaxReadRoutesThroughConfig(t *testing.T) {
 	}
 }
 
-// TestReadMaxTokensRoutesThroughConfig proves NABD_MAX_TOKENS also routes
-// through config.Get with file-over-env precedence and documented bounds.
-func TestReadMaxTokensRoutesThroughConfig(t *testing.T) {
+// TestReadCapPinsProviderIndependence_NBD401 pins the Router-safety property
+// this stage requires. The read cap must not be derived from the provider's
+// name: Router.Name() is a composite display string (built as
+// "router/<provider>:<model>→<provider>:<model>", truncated at 200 bytes), so
+// any policy that parsed a provider out of it would mis-key itself for exactly
+// the multi-provider case. The cap is a pure function of NABD_MAX_READ, so
+// changing which provider is selected cannot move it.
+//
+// This is a deliberate pin on a state that is not good in itself: the read cap
+// is a fixed number precisely because the cumulative cost it stands for has
+// not been replaced by a budget-aware policy yet (docs/TECH_DEBT.md,
+// READ_CAP_TURN_COST). Keying it to the provider would look like a fix and
+// would be worse, which is why the failure message says so.
+func TestReadCapPinsProviderIndependence_NBD401(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "config")
+	cfg := filepath.Join(dir, "config")
+	t.Setenv("NABD_CONFIG", cfg)
 
-	// Env-only.
-	t.Setenv("NABD_CONFIG", path)
-	t.Setenv("NABD_MAX_TOKENS", "2048")
-	config.ResetForTest()
-	if got := readMaxTokens(); got != 2048 {
-		t.Fatalf("env NABD_MAX_TOKENS=2048 → %d, want 2048", got)
+	// A composite router route is the case a name-parsing policy would break;
+	// the single-provider selections are the contrast.
+	selections := []string{
+		"",
+		"NABD_PROVIDER=groq\n",
+		"NABD_PROVIDER=anthropic\n",
+		"NABD_PROVIDER=router\nNABD_ROUTES=groq:llama→openrouter:qwen\n",
+	}
+	for i, sel := range selections {
+		if err := os.WriteFile(cfg, []byte("NABD_MAX_READ=4096\n"+sel), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		config.ResetForTest()
+		if got := envMaxRead(); got != 4096 {
+			t.Fatalf("selection %d (%q): envMaxRead()=%d, want 4096 — provider selection leaked into the read cap. "+
+				"The cap is deliberately provider-blind; see READ_CAP_TURN_COST in docs/TECH_DEBT.md for why the fixed value exists and what would replace it.",
+				i, sel, got)
+		}
 	}
 
-	// Config file wins over env.
-	os.WriteFile(path, []byte("NABD_MAX_TOKENS=4096\n"), 0o600)
-	t.Setenv("NABD_MAX_TOKENS", "1024")
-	config.ResetForTest()
-	if got := readMaxTokens(); got != 4096 {
-		t.Fatalf("file should win over env: got %d, want 4096", got)
+	// NABD_MAX_READ unset: the cap must be the shipped constant, not something
+	// that varies with who is selected.
+	if err := os.WriteFile(cfg, []byte(""), 0o600); err != nil {
+		t.Fatal(err)
 	}
-
-	// Out-of-range falls back to default.
-	os.WriteFile(path, []byte("NABD_MAX_TOKENS=99999\n"), 0o600)
-	config.ResetForTest()
-	if got := readMaxTokens(); got != defaultMaxTok {
-		t.Fatalf("out-of-range → %d, want default %d", got, defaultMaxTok)
+	for i, sel := range selections {
+		if err := os.WriteFile(cfg, []byte(sel), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		config.ResetForTest()
+		if got := envMaxRead(); got != defaultMaxRead() {
+			t.Fatalf("selection %d (%q): unset NABD_MAX_READ gave %d, want the shipped %d; "+
+				"the cap must not depend on the provider; see READ_CAP_TURN_COST in docs/TECH_DEBT.md",
+				i, sel, got, defaultMaxRead())
+		}
 	}
-}
-
-// TestDefaultMaxReadDerivesFromMaxTok: the derived read cap must move when
-// NABD_MAX_TOKENS moves — a single derivation, not two hardcoded numbers.
-// The shipped default stays at the live-calibrated 3072 until the derived
-// value is measured on disk (STEP 1 follow-up).
-func TestDefaultMaxReadDerivesFromMaxTok(t *testing.T) {
-	// readMaxTokens now routes through config.Get, which loads once and caches.
-	// Point NABD_CONFIG at an empty file and reset the Once so the derivation
-	// reads the environment (the documented fallback) deterministically.
-	dir := t.TempDir()
-	t.Setenv("NABD_CONFIG", filepath.Join(dir, "config"))
-	os.WriteFile(filepath.Join(dir, "config"), []byte(""), 0o600)
-	config.ResetForTest()
-
-	// NABD_MAX_READ unset; the derivation recomputes with MaxTok.
-	t.Setenv("NABD_MAX_READ", "")
-	t.Setenv("NABD_MAX_TOKENS", "")
-	at1024 := defaultMaxReadDerived()
-
-	t.Setenv("NABD_MAX_TOKENS", "2048")
-	config.ResetForTest() // re-read so the new env takes effect
-	at2048 := defaultMaxReadDerived()
-
-	// Higher output reservation → smaller read cap.
-	if at2048 >= at1024 {
-		t.Errorf("derivation must shrink when MaxTok grows: MaxTok=1024→%d, MaxTok=2048→%d", at1024, at2048)
-	}
-	// The shipped default is the conservative live-calibrated value.
-	if got := defaultMaxRead(); got != 3072 {
-		t.Errorf("defaultMaxRead() = %d, want 3072 (live-calibrated)", got)
-	}
-	t.Logf("derived at MaxTok=1024: %d bytes; at 2048: %d; shipped default: %d", at1024, at2048, defaultMaxRead())
 }

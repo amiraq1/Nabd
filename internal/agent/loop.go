@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"nabd/internal/config"
 	"nabd/internal/provider"
 )
 
@@ -19,8 +20,23 @@ type Sink interface {
 	Emit(Event) error
 }
 
-// Tools runs a tool call. Empty at v0.2 -- the loop is written against
-// the interface now so that v0.4 adds tools without touching this file.
+// Repairing is implemented by a tool layer that can correct malformed calls.
+// The loop asks before it classifies, so the gate, the permission prompt and
+// every journal event name the call that will actually run rather than the one
+// the model wrote. A layer that does not implement it is left alone.
+type Repairing interface {
+	RepairCall(provider.ToolCall) provider.ToolCall
+}
+
+// Tools is the loop's view of the tool registry: it advertises the specs the
+// provider is allowed to call and executes one call at a time. The concrete
+// implementation is tools.Registry, which today serves read_file, glob, grep,
+// write_file, edit_file and bash, and owns the permission class of each. (A
+// directory listing is served by glob, not by a separate tool; this comment
+// named a "list_dir" that has never been registered.) The loop deliberately
+// knows none of that: it only sees names, specs and outcomes, and discovers
+// richer behaviour (RunDetailed, SetReadCredit, LastEdit) through optional
+// interface assertions.
 type Tools interface {
 	Specs() []provider.ToolSpec
 	Run(ctx context.Context, c provider.ToolCall) (out string, ok bool, err error)
@@ -40,6 +56,7 @@ type Loop struct {
 	Gate             Gate
 	Human            Asker
 	Budget           *Budget
+	SpendBudget      *SpendBudget
 	EstimateMessages MessageEstimator
 	CompactBudget    int
 	KeepFullRounds   int
@@ -52,10 +69,11 @@ type Loop struct {
 	warned bool
 	ended  bool // true once End() has been called; guards against double RunEnd
 
-	mu     sync.Mutex
-	seq    int
-	parent int
-	hist   []Event
+	mu        sync.Mutex
+	historyMu sync.Mutex
+	seq       int
+	parent    int
+	hist      []Event
 	// rateLimitState tracks consecutive 429s for the active Run().
 	// It is reset at the start of each Run() and after every successful turn.
 	rateLimitHits      int           // consecutive 429s since last success
@@ -106,9 +124,79 @@ func (l *Loop) pressure(ms []provider.Message) float64 {
 // a bug guard, not a normal ending: a loop that never settles is a loop.
 var ErrMaxTurns = errors.New("turn ceiling reached")
 
+// DefaultMaxTurns is the shipped turn ceiling, named so a test or a document
+// can refer to it instead of repeating the number and drifting from it. The
+// reasoning behind the value is at its use in run().
+const DefaultMaxTurns = 40
+
 // ErrRateLimitBudget means too many 429s arrived in a single Run(). The
 // session is intact; the caller should wait before retrying.
 var ErrRateLimitBudget = errors.New("rate limit budget exhausted")
+
+// ErrCompactBoundaryStale is returned by Compact when the boundary chosen from
+// an earlier snapshot is no longer safe to apply to the history that exists at
+// append time. It is a deliberate fail-closed rejection, not a provider or
+// journal failure: Compact appends nothing and the session is unchanged.
+//
+// Two causes map to this error, distinguished only in logs by the caller:
+//
+//  1. The boundary Seq is absent from the live branch. FirstKept is a numeric
+//     threshold (Live keeps e.Seq >= FirstKept), so appending a Compact that
+//     names a Seq no longer on the branch does not degrade gracefully — the
+//     live projection collapses to the Compact marker and whatever follows it,
+//     and the dropped context is recoverable only via --replay.
+//
+//  2. The retained segment violates raw tool-event pairing. Defense in depth;
+//     unreachable under current production ordering. See Compact's doc comment.
+var ErrCompactBoundaryStale = errors.New("compact boundary is no longer safe to apply")
+
+// ErrHistoryMutationInProgress means Compact or Rewind already owns the
+// history-mutation interlock. Callers should retry after the active operation
+// settles; waiting inside either operation would freeze an interactive command.
+var ErrHistoryMutationInProgress = errors.New("history mutation already in progress; wait for compact or rewind to finish")
+
+// rawPairingInvariantHolds reports whether for every raw ToolEnd event in evs
+// that carries a tool-call ID, a matching raw ToolStart event with the same
+// tool-call ID precedes it in evs.
+//
+// This is a defense-in-depth invariant, NOT the load-bearing Finding 2 fix.
+// Under current production emission ordering it cannot fire: a compaction
+// boundary is always a UserMsg (Seq increases in emission order), and a UserMsg
+// is only emitted at the top of Loop.Run, so no boundary UserMsg can ever land
+// between a ToolStart and its ToolEnd. The orphaned-ToolEnd sequence therefore
+// cannot be produced by the running journal; it is only reachable through
+// direct event injection or a --continue of a journal that was already
+// structurally corrupt before this code existed.
+//
+// Malformed ToolEnd events (Call == nil or Call.ID == "") are skipped rather
+// than treated as pairing violations. This ensures that legacy archives or
+// corrupted records continued via --continue degrade gracefully (relying on
+// Messages() fallback handling) rather than permanently bricking /compact with
+// persistent ErrCompactBoundaryStale rejections.
+//
+// Skipping an empty-ID ToolEnd here does not make it harmless downstream:
+// Messages() still emits a tool_result with an empty id for it (see its ToolEnd
+// case). That is pre-existing behaviour, not introduced or worsened by this
+// check, and is recorded in the parking lot rather than fixed here.
+func rawPairingInvariantHolds(evs []Event) bool {
+	seenStarts := make(map[string]bool)
+	for _, e := range evs {
+		switch e.Type {
+		case ToolStart:
+			if e.Call != nil && e.Call.ID != "" {
+				seenStarts[e.Call.ID] = true
+			}
+		case ToolEnd:
+			if e.Call == nil || e.Call.ID == "" {
+				continue // skip malformed ToolEnd: not a pairing violation, preserves --continue compatibility
+			}
+			if !seenStarts[e.Call.ID] {
+				return false
+			}
+		}
+	}
+	return true
+}
 
 // errTurnRateLimited is returned by streamTurn when the provider responded
 // with a 429. It signals Run() to wait and retry this turn rather than
@@ -157,6 +245,9 @@ func (l *Loop) Start(banner, projectRoot string) error {
 // the partial text already emitted stays in the journal, followed by an
 // Interrupted event, because pretending it was never said is a lie.
 func (l *Loop) Run(ctx context.Context, userText string) error {
+	if l.SpendBudget != nil && l.SpendBudget.Exhausted() {
+		return ErrSpendBudget
+	}
 	if err := l.emit(Event{Type: UserMsg, Text: userText}); err != nil {
 		return err
 	}
@@ -170,9 +261,25 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 	l.rateLimitAttempts = 0
 	l.mu.Unlock()
 
+	// The default turn ceiling.
+	//
+	// It is 40, and that is a deliberate reversal of the reasoning that set it
+	// to 12 (NBD-400). At 12 a session reading a mid-sized file spends every
+	// turn it has and then returns ErrMaxTurns: the full cost is paid and the
+	// task fails anyway. NBD-400 measured exactly that — at the default read
+	// cap a sequential reader needs 15 turns for an 800-line file, so the
+	// shipped pair could not finish it.
+	//
+	// The counter-argument was, and remains, that this loop bounds waiting (the
+	// rate-limit budget) and context (the window plus compaction) but nothing
+	// bounds spend, so the ceiling was the only spend proxy. Raising it gives
+	// that up knowingly: a looping model may now spend 40 turns. That trade is
+	// recorded in docs/TECH_DEBT.md (READ_CAP_TURN_COST) as a decision, not an
+	// oversight, so the next reader does not mistake it for one. --max-turns
+	// overrides, and a spend bound would be the way to reclaim it.
 	maxTurns := l.MaxTurns
 	if maxTurns <= 0 {
-		maxTurns = 12
+		maxTurns = DefaultMaxTurns
 	}
 
 	// Absolute rate-limit termination bounds, independent of the hits
@@ -207,7 +314,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		if hits >= l.rateLimitCeiling() {
 			_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
 				"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits)})
-			_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})
+			_ = l.emit(RunErrorEvent(ErrRateLimitBudget))
 			return ErrRateLimitBudget
 		}
 
@@ -232,7 +339,9 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		ms := Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
 		if p := l.pressure(ms); p > 0.75 {
 			if err := l.Compact(ctx, l.compactTarget()); err != nil {
-				l.emit(Event{Type: Notice, Text: "compact failed: " + err.Error()})
+				if !errors.Is(err, ErrHistoryMutationInProgress) {
+					l.emit(Event{Type: Notice, Text: "compact failed: " + err.Error()})
+				}
 			} else {
 				ms = Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
 				l.emit(Event{Type: Notice, Text: fmt.Sprintf("context compacted · %d%% → %d%%",
@@ -264,17 +373,20 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 				l.mu.Unlock()
 				_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
 					"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits2)})
-				_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})
+				_ = l.emit(RunErrorEvent(ErrRateLimitBudget))
 				return ErrRateLimitBudget
 			}
 			// A 413 on Groq is a per-minute TPM violation, not a final
 			// failure: waiting a minute resolves it. The human must know,
 			// and the requested count N goes into the journal so every
-			// future failure feeds the budget equations.
+			// future failure feeds the budget equations. The read cap in
+			// force is named too: the cap decided how large this request
+			// was, so anyone who wants to act on the notice needs to know
+			// which ceiling it came from (NBD-404).
 			if notice, ok := tpmLimitNotice(err); ok {
-				_ = l.emit(Event{Type: Notice, Text: notice.Text, Limit: notice.Limit, Requested: notice.Requested})
+				_ = l.emit(Event{Type: Notice, Text: l.tpmNoticeText(notice), Limit: notice.Limit, Requested: notice.Requested})
 			}
-			_ = l.emit(Event{Type: RunError, Err: err.Error()})
+			_ = l.emit(RunErrorEvent(err))
 			return err
 		}
 
@@ -302,7 +414,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		// Results are appended even when interrupted: the API rejects an
 		// assistant tool_use with no matching tool_result on the next turn.
 		if err != nil {
-			_ = l.emit(Event{Type: RunError, Err: err.Error()})
+			_ = l.emit(RunErrorEvent(err))
 			return err
 		}
 		if interrupted {
@@ -311,8 +423,18 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		}
 	}
 
-	_ = l.emit(Event{Type: RunError, Err: ErrMaxTurns.Error()})
+	_ = l.emit(RunErrorEvent(ErrMaxTurns))
 	return ErrMaxTurns
+}
+
+func providerTurnContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := 2 * time.Minute
+	if raw := config.Get("NABD_PROVIDER_TURN_TIMEOUT"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			timeout = d
+		}
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 // streamTurn consumes exactly one assistant turn.
@@ -329,7 +451,9 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 		specs = l.Tools.Specs()
 	}
 
-	ch, err := l.Provider.Stream(ctx, provider.Request{
+	turnCtx, cancel := providerTurnContext(ctx)
+	defer cancel()
+	ch, err := l.Provider.Stream(turnCtx, provider.Request{
 		System:   l.System,
 		Messages: ms,
 		Tools:    specs,
@@ -358,6 +482,23 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 
 		case provider.ChunkStop:
 			stop = c.Stop
+			promptTokens := c.PromptTokens
+			if promptTokens <= 0 {
+				if l.Budget != nil {
+					promptTokens = l.Budget.Estimate(ms)
+				} else {
+					promptTokens = EstimateMessages(ms)
+				}
+			}
+			unknown := 0
+			if c.PromptTokens <= 0 || c.CompletionTokens <= 0 {
+				unknown = maxOutputTokens()
+			}
+			if err := l.SpendBudget.Charge(promptTokens, c.CompletionTokens, unknown); err != nil {
+				for range ch {
+				}
+				return nil, "", err
+			}
 			// Record the provider's measured usage and the request parameters
 			// for this successful turn. These are the raw inputs needed to
 			// derive the charge model: prompt_tokens, completion_tokens,
@@ -381,7 +522,7 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 				// is session-varying state, and the log must show which
 				// budget the agent worked under.
 				if l.Budget.Calibrate(c.PromptTokens, l.Budget.Estimate(ms)) {
-					_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf("calibration: token ratio (observed prompt_tokens ÷ heuristic estimate) adopted %.2f · conservative ratchet, rises only (measured prompt_tokens=%d)", l.Budget.Ratio(), c.PromptTokens)})
+					_ = l.emit(Event{Type: Notice, Calib: &Calibration{PromptTokens: c.PromptTokens}, Text: fmt.Sprintf("calibration: token ratio (observed prompt_tokens ÷ heuristic estimate) adopted %.2f · conservative ratchet, rises only (measured prompt_tokens=%d)", l.Budget.Ratio(), c.PromptTokens)})
 				}
 			}
 
@@ -468,10 +609,10 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 		}
 	}
 
-	// Record the assistant turn even if it was pure tool calls: the next
-	// request must contain the tool_use blocks it is answering.
-	if text != "" || len(calls) > 0 {
-	}
+	// The assistant turn is already in the journal: every TextDelta was
+	// emitted as it streamed, and the tool_use blocks are reconstructed from
+	// the ToolStart/ToolEnd events by Messages(). Nothing is appended here.
+	//
 	// A length-cut answer must carry the marker inside the stored text, not
 	// only in a Notice: the next turn reads the assistant message and would
 	// otherwise build on a truncated answer as if it were complete. The
@@ -525,6 +666,14 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 			return true, nil
 		}
 
+		// Repair before anything else observes the call: the ToolStart event,
+		// the existence check, the gate and the permission prompt must all name
+		// the call that will run. The tool layer announces each fix through its
+		// own sink, so a repair is in the journal before execution.
+		if rp, ok := l.Tools.(Repairing); ok {
+			c = rp.RepairCall(c)
+		}
+
 		ac := ToolCall{ID: c.ID, Name: c.Name, Args: c.Input}
 
 		if err := l.emit(Event{Type: ToolStart, Call: &ac}); err != nil {
@@ -559,14 +708,14 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		if err != nil {
 			out.Text, out.OK = err.Error(), false
 		}
-		// read_file is result-scoped: its Outcome carries LinesRead, so the
-		// read itself no longer touches the shared linesRead slot. The loop is
-		// the single authoritative writer of that slot for the read→write
-		// audit, and it runs sequentially, so there is no race window for a
-		// write to steal a count it did not read.
+		// read_file is result-scoped: its Outcome carries LinesRead and ReadCredit, so
+		// the read itself no longer touches the shared slot. The loop is the
+		// single authoritative writer of that slot for the read→write audit,
+		// and it runs sequentially, so there is no race window for a write to
+		// steal a credit it did not read.
 		if c.Name == "read_file" && out.OK {
-			if sr, ok := l.Tools.(interface{ SetLinesRead(int) }); ok {
-				sr.SetLinesRead(out.LinesRead)
+			if sc, ok := l.Tools.(interface{ SetReadCredit(ReadCredit) }); ok {
+				sc.SetReadCredit(out.ReadCredit)
 			}
 		}
 		ms := time.Since(start).Milliseconds()
@@ -631,6 +780,19 @@ type tpmNotice struct {
 	Text      string
 	Limit     int
 	Requested int
+}
+
+// tpmNoticeText composes the 413 Notice line for a TPM hit. It names the read
+// cap in force as well as the provider's limit, because the cap decided how
+// large the rejected request was: a reader who wants to act needs to know which
+// ceiling produced it. The tool layer is asked through an optional interface,
+// so a layer that does not report a cap simply gets the provider's line.
+func (l *Loop) tpmNoticeText(notice tpmNotice) string {
+	text := notice.Text
+	if rc, ok := l.Tools.(interface{ ReadCapBytes() int }); ok {
+		text = fmt.Sprintf("%s · read cap %d bytes", text, rc.ReadCapBytes())
+	}
+	return text
 }
 
 func tpmLimitNotice(err error) (tpmNotice, bool) {
@@ -715,8 +877,9 @@ func (f Fanout) Emit(e Event) error {
 }
 
 // Seed adopts a previous branch as this run's history. The new journal
-// starts empty on purpose: sessions stay separate files, the tree lives in
-// memory. Merging files is a v0.8 problem, not a v0.7 one.
+// starts empty on purpose: each session stays its own file and the tree is
+// reassembled in memory from the seeded events. Merging several journal
+// files into one is deliberately out of scope.
 func (l *Loop) Seed(evs []Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

@@ -1,5 +1,6 @@
 # Build output
 /ag
+/nabd
 
 # Temporary files
 *.tmp
@@ -12,6 +13,9 @@
 /fix_*.py
 /probe_*.sh
 /input.txt
+
+# Benchmark outputs (e.g. bench-before.txt, CI bench-ui.txt)
+/bench-*.txt
 
 # Tooling
 .commandcode/

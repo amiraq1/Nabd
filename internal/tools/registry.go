@@ -20,57 +20,91 @@ type Tool interface {
 	Run(ctx context.Context, args json.RawMessage) (out string, ok bool, err error)
 }
 
-// Registry is the agent.Tools implementation. Read-only at v0.4: nothing
-// here can change a byte on disk, which is why no permission gate exists
-// yet. That gate arrives with write.go, not before.
+// Registry is the agent.Tools implementation: it owns the permission Class
+// lookup (perm.Classifier), stages read-credit for the next mutation
+// (NBD-034), and dispatches every tool including write_file, edit_file,
+// and bash. The gate itself lives in perm.Policy; the registry is where a
+// tool's Class is declared and found.
 // metadata is the per-invocation read state with Consume ownership: exactly
 // one consumer may take it, and it resets on take so no later unrelated call
 // can inherit a stale value. Protected by mu so concurrent tool calls cannot
 // tear or double-consume it.
 type metadata struct {
 	mu         sync.Mutex
-	linesRead  int  // set by read_file, consumed by the next commit()
-	truncated  bool // set by read_file, consumed by RunDetailed
-	nextOffset int  // set by read_file on truncation, consumed by RunDetailed
+	credit     agent.ReadCredit // composite key: path + content hash + range + linesRead (NBD-034)
+	truncated  bool             // set by read_file, consumed by RunDetailed
+	nextOffset int              // set by read_file on truncation, consumed by RunDetailed
 }
 
 type Registry struct {
-	root   *Root
-	sh     *snap.Shadow
-	edits  *editLog
-	list   []Tool
-	byName map[string]Tool
-	meta   metadata
+	root       *Root
+	sh         *snap.Shadow
+	edits      *editLog
+	list       []Tool
+	byName     map[string]Tool
+	meta       metadata
+	diffBudget *diffBudget
+
+	// OnRepair, when set, receives every fix the registry applies, before the
+	// tool runs. cmd/ag wires it to the journal as a Notice; tests record it.
+	// It must not call back into the registry.
+	OnRepair func(Fix)
+
+	// repairOff disables pre-dispatch repair. Production leaves it false; the
+	// NBD-420 measurement harness sets it to measure each rule's effect against
+	// the same call with repair enabled (see repair_rounds_test.go).
+	repairOff bool
 }
 
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 	log := &editLog{}
-	r := &Registry{root: root, sh: sh, edits: log, byName: map[string]Tool{}}
+	r := &Registry{root: root, sh: sh, edits: log, byName: map[string]Tool{}, diffBudget: newDiffBudget(maxDiffCells)}
 	r.add(readFile{root, r}, globFiles{root}, grepFiles{root})
 	r.add(writeFile{root, sh, log, r}, editFile{root, sh, log, r})
 	r.add(bashTool{root})
 	return r
 }
 
-// SetLinesRead records how many lines read_file just showed the model. The
-// next commit() stamps that number on the EditRecord: a blind write (no
-// read before it) carries ReadLines=0.
-func (r *Registry) SetLinesRead(n int) {
+// SetReadCredit records the provenance and line count of a read_file call (NBD-034).
+// The next commit() validates this credit against the target file's path
+// and pre-mutation content hash.
+func (r *Registry) SetReadCredit(c agent.ReadCredit) {
 	r.meta.mu.Lock()
-	r.meta.linesRead = n
+	r.meta.credit = c
 	r.meta.mu.Unlock()
 }
 
-// ConsumeLinesRead atomically returns the pending line count and resets it
-// to zero. Ownership is strict: one consumer takes it, and anything after
-// it sees 0 — a stale count can never bleed into a later unrelated write.
-func (r *Registry) ConsumeLinesRead() int {
+// ReadCredit returns a copy of the currently staged read credit without consuming it.
+func (r *Registry) ReadCredit() agent.ReadCredit {
 	r.meta.mu.Lock()
 	defer r.meta.mu.Unlock()
-	n := r.meta.linesRead
-	r.meta.linesRead = 0
-	return n
+	return r.meta.credit
 }
+
+// ConsumeLinesRead atomically validates and returns the pending line count,
+// then clears the staged credit so it cannot leak into a later write.
+//
+// Both abs and hashBefore are required arguments. Omitting the hash is a
+// compile error, not a silent bypass of NBD-034. An empty hashBefore is
+// valid for a brand-new file (no pre-mutation content).
+func (r *Registry) ConsumeLinesRead(abs, hashBefore string) int {
+	r.meta.mu.Lock()
+	defer r.meta.mu.Unlock()
+	credit := r.meta.credit
+	r.meta.credit = agent.ReadCredit{}
+
+	if credit.Path != "" && credit.Path != abs {
+		return 0
+	}
+	if credit.Hash != "" && credit.Hash != hashBefore {
+		return 0
+	}
+	return credit.LinesRead
+}
+
+// Compile-time proof that ConsumeLinesRead takes path and hash. The old
+// variadic ConsumeLinesRead() / ConsumeLinesRead(abs) forms do not compile.
+var _ func(*Registry, string, string) int = (*Registry).ConsumeLinesRead
 
 // SetTruncated records that the last read_file call hit the byte cap, with
 // the exact line to continue from.
@@ -97,7 +131,7 @@ func (r *Registry) ConsumeTruncated() (bool, int) {
 // call.
 func (r *Registry) ClearReadState() {
 	r.meta.mu.Lock()
-	r.meta.linesRead = 0
+	r.meta.credit = agent.ReadCredit{}
 	r.meta.truncated = false
 	r.meta.nextOffset = 0
 	r.meta.mu.Unlock()
@@ -150,15 +184,50 @@ func (r *Registry) Specs() []provider.ToolSpec {
 // Run dispatches by name. An unknown name is an error the model reads and
 // recovers from, not a crash: models do invent tools.
 func (r *Registry) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
-	t, found := r.byName[c.Name]
+	fixed, _ := r.repairCall(c)
+	name, args := fixed.Name, fixed.Input
+
+	t, found := r.byName[name]
 	if !found {
-		return "", false, fmt.Errorf("unknown tool: %s", c.Name)
+		return "", false, fmt.Errorf("unknown tool: %s", name)
 	}
-	args := c.Input
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
 	return t.Run(ctx, args)
+}
+
+// repairCall is the single point both entry points pass through, so a malformed
+// call is corrected on the plain and the rich path alike. The loop also calls
+// RepairCall before it classifies, because the gate must see what will run
+// rather than what the model wrote; repairing an already-corrected call is a
+// no-op, since a repaired call presents no further fixes.
+func (r *Registry) repairCall(c provider.ToolCall) (provider.ToolCall, []Fix) {
+	if r.repairOff {
+		return c, nil
+	}
+	name, args, fixes := Repair(c.Name, c.Input, r.Specs())
+	for _, f := range fixes {
+		if r.OnRepair != nil {
+			r.OnRepair(f)
+		}
+	}
+	c.Name, c.Input = name, args
+	return c, fixes
+}
+
+// RepairCall corrects a malformed call, announcing every fix through OnRepair.
+// It is the method the agent loop uses before classification, so the permission
+// prompt names the call that will actually be executed.
+func (r *Registry) RepairCall(c provider.ToolCall) provider.ToolCall {
+	fixed, _ := r.repairCall(c)
+	return fixed
+}
+
+// RepairCallWithFixes is RepairCall for callers that need the corrections
+// themselves (tests, and anything that wants to report them).
+func (r *Registry) RepairCallWithFixes(c provider.ToolCall) (provider.ToolCall, []Fix) {
+	return r.repairCall(c)
 }
 
 // spec is sugar so each tool declares its schema in one line.
@@ -194,6 +263,9 @@ var (
 )
 
 func (r *Registry) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
+	fixed, _ := r.repairCall(provider.ToolCall{Name: name, Input: raw})
+	name, raw = fixed.Name, fixed.Input
+
 	t, ok := r.byName[name]
 	if !ok {
 		return agent.Outcome{}, fmt.Errorf("unknown tool: %s", name)

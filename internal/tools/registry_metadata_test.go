@@ -41,13 +41,13 @@ func TestReadReportsOwnLineCount(t *testing.T) {
 		t.Fatalf("out.LinesRead=%d, want 5", out.LinesRead)
 	}
 	// The read must not have polluted the write-side slot.
-	if got := r.ConsumeLinesRead(); got != 0 {
+	if got := r.ConsumeLinesRead(f, ""); got != 0 {
 		t.Fatalf("read wrote the shared slot=%d, want 0 (reads are result-scoped)", got)
 	}
 }
 
 // TestSubsequentWriteReportsZeroReadLines (C#2): after a read is staged for the
-// next write by the loop (SetLinesRead) and consumed, a later blind write must
+// next write by the loop (SetReadCredit) and consumed, a later blind write must
 // carry 0 — the count cannot survive to an unrelated later operation.
 func TestSubsequentWriteReportsZeroReadLines(t *testing.T) {
 	r, _ := newReg(t)
@@ -62,8 +62,8 @@ func TestSubsequentWriteReportsZeroReadLines(t *testing.T) {
 	if out.LinesRead != 3 {
 		t.Fatalf("out.LinesRead=%d, want 3", out.LinesRead)
 	}
-	// The loop stages the count for the next write; the write consumes it.
-	r.SetLinesRead(out.LinesRead)
+	// The loop stages the credit for the next write; the write consumes it.
+	r.SetReadCredit(out.ReadCredit)
 	// first write consumes the 3
 	if rec := writeVia(t, r, "a.md", "x\n"); rec.ReadLines != 3 {
 		t.Fatalf("first write ReadLines=%d, want 3", rec.ReadLines)
@@ -75,8 +75,8 @@ func TestSubsequentWriteReportsZeroReadLines(t *testing.T) {
 }
 
 // TestTwoSequentialReadsDoNotAccumulate (C#3): read 3 then read 5, a write
-// must carry 5 (the latest), not 8. The loop re-stages the count on every
-// read via SetLinesRead, so the latest read wins — exactly what the next commit
+// must carry 5 (the latest), not 8. The loop re-stages the credit on every
+// read via SetReadCredit, so the latest read wins — exactly what the next commit
 // consumes.
 func TestTwoSequentialReadsDoNotAccumulate(t *testing.T) {
 	r, dir := newReg(t)
@@ -88,7 +88,7 @@ func TestTwoSequentialReadsDoNotAccumulate(t *testing.T) {
 		if err != nil || !out.OK {
 			t.Fatalf("read %s: ok=%v err=%v", p, out.OK, err)
 		}
-		r.SetLinesRead(out.LinesRead) // the loop re-stages per read; latest wins
+		r.SetReadCredit(out.ReadCredit) // the loop re-stages per read; latest wins
 	}
 	if rec := writeVia(t, r, "b.md", "x\n"); rec.ReadLines != 5 {
 		t.Fatalf("ReadLines=%d, want 5 (latest read, not accumulated 8)", rec.ReadLines)
@@ -147,7 +147,7 @@ func TestFailedReadDoesNotContaminate(t *testing.T) {
 	if out.LinesRead != 3 {
 		t.Fatalf("out.LinesRead=%d, want 3", out.LinesRead)
 	}
-	if got := r.ConsumeLinesRead(); got != 0 {
+	if got := r.ConsumeLinesRead(f, ""); got != 0 {
 		t.Fatalf("successful read polluted the shared slot=%d, want 0", got)
 	}
 
@@ -160,7 +160,7 @@ func TestFailedReadDoesNotContaminate(t *testing.T) {
 	if bad.LinesRead != 0 || bad.Truncated || bad.NextOffset != 0 {
 		t.Fatalf("failed read left metadata in Outcome: %+v", bad)
 	}
-	if got := r.ConsumeLinesRead(); got != 0 {
+	if got := r.ConsumeLinesRead(f, ""); got != 0 {
 		t.Fatalf("failed read left linesRead=%d, want 0", got)
 	}
 	if trunc, _ := r.ConsumeTruncated(); trunc {
@@ -186,7 +186,7 @@ func TestCancelledOperationDoesNotContaminate(t *testing.T) {
 	if out.Truncated {
 		t.Fatalf("cancelled read reported truncation")
 	}
-	if got := r.ConsumeLinesRead(); got != 0 {
+	if got := r.ConsumeLinesRead(f, ""); got != 0 {
 		t.Fatalf("cancelled read left linesRead=%d, want 0", got)
 	}
 }
@@ -398,10 +398,10 @@ func TestRegistryInstancesIsolated(t *testing.T) {
 		t.Fatalf("r1 out.LinesRead=%d, want 3", out.LinesRead)
 	}
 
-	if got := r2.ConsumeLinesRead(); got != 0 {
+	if got := r2.ConsumeLinesRead(f, ""); got != 0 {
 		t.Fatalf("r2 saw r1's linesRead=%d, instances not isolated", got)
 	}
-	if got := r1.ConsumeLinesRead(); got != 0 {
+	if got := r1.ConsumeLinesRead(f, ""); got != 0 {
 		t.Fatalf("r1 read polluted its write-slot=%d, want 0 (result-scoped)", got)
 	}
 }
@@ -409,7 +409,7 @@ func TestRegistryInstancesIsolated(t *testing.T) {
 // TestReadFailureClearsViaRunDetailed (C#6 rich path): the RunDetailed path
 // also clears on error so the loop's outcome never carries stale state.
 func TestReadFailureClearsViaRunDetailed(t *testing.T) {
-	r, _ := newReg(t)
+	r, dir := newReg(t)
 	rawBad, _ := json.Marshal(map[string]any{"path": "missing.md"})
 	out, err := r.RunDetailed(context.Background(), "read_file", rawBad)
 	if err == nil {
@@ -421,7 +421,7 @@ func TestReadFailureClearsViaRunDetailed(t *testing.T) {
 	if out.NextOffset != 0 {
 		t.Fatalf("failed read reported NextOffset=%d", out.NextOffset)
 	}
-	if got := r.ConsumeLinesRead(); got != 0 {
+	if got := r.ConsumeLinesRead(filepath.Join(dir, "missing.md"), ""); got != 0 {
 		t.Fatalf("failed read left linesRead=%d", got)
 	}
 }

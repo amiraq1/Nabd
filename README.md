@@ -1,43 +1,55 @@
 # nabd — نبض
 
-وكيل برمجة طرفي، يُكتب ويُشغَّل من هاتف. بلا حاويات، بلا قاعدة بيانات، بلا CGO.
-سبعة آلاف سطر Go تقريبًا، ملف تنفيذي واحد، وسجلّ جلسة واحد يمكن قراءته بـ `cat`.
+وكيل برمجة طرفي يُكتب ويُشغّل من هاتف: ملف Go تنفيذي واحد، سجل جلسة JSONL قابل للتدقيق، أذونات افتراضية بالرفض، وتراجع مستقل عن Git.
 
-**A terminal coding agent built on a phone.** Append-only event journal,
-default-deny permissions, git-backed undo, and a containment story that is
-written down rather than assumed.
+**A terminal coding agent built on a phone.** One Go binary, an append-only event journal, default-deny permissions, and git-independent undo.
 
----
+> Security and containment claims live in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md), not in this README.
 
-## لماذا
+The installable binary is `nabd`; the package path remains `./cmd/ag`.
 
-معظم وكلاء البرمجة يخفون ما فعلوه خلف واجهة جميلة. `nabd` يقلب الترتيب:
-الجلسة سجلّ أحداث قبل أن تكون واجهة، والواجهة مجرّد قارئ لذلك السجلّ.
-كل ما تراه أثناء التشغيل يمكن إعادة عرضه بعده حرفًا بحرف، لأن الحيّ والمُعاد
-يمرّان على نفس دالة العرض.
+## Releases
 
-هذا ليس تفصيلًا جماليًا. هو ما يجعل التراجع ممكنًا، والتدقيق ممكنًا،
-واستئناف الجلسة أمس ممكنًا اليوم.
+| Release | Status |
+|---|---|
+| `v1.4.0` | Published with binaries and `checksums.txt` |
+| `v1.3.0` | Published with binaries and `checksums.txt` |
 
-## التشغيل
+Download assets from [GitHub Releases](https://github.com/amiraq1/Nabd/releases). Verify a downloaded release in the directory containing its assets:
 
 ```sh
-go build -o ag ./cmd/ag
-
-export ANTHROPIC_API_KEY=...      # أو
-export NVIDIA_API_KEY=nvapi-...   # أي مزوّد يتكلّم لهجة OpenAI
-
-./ag                              # محادثة جديدة في المجلد الحالي
-./ag --continue                   # استئناف آخر جلسة
-./ag --replay <file.jsonl>        # إعادة عرض جلسة، --speed 0 للفوري
-./ag -feed                        # واجهة الشاشة الكاملة (تجريبية)
+sha256sum -c checksums.txt
 ```
 
-الأفضل ألّا يمرّ المفتاح بالبيئة أصلًا. ضعه في `~/.ag/config` بصلاحيات `600`:
+See [docs/RELEASING.md](docs/RELEASING.md) for the release process.
+
+## Build and run
+
+```sh
+go build -o nabd ./cmd/ag
+# or: ./build.sh
+
+./nabd                            # new conversation in the current directory
+./nabd --continue                 # resume the latest session
+./nabd --replay <file.jsonl>      # replay a session; --speed 0 is instant
+./nabd -feed                      # experimental full-screen UI
+./nabd --version                  # version · commit · date
+
+./nabd -p "task text"             # headless answer on stdout
+./nabd -p - < file                # task from stdin
+./nabd -p "..." --json            # journal JSONL on stdout
+./nabd -p "..." --max-turns 8
+./nabd -p "count the go files" --permission-mode allow-reads
+```
+
+## Configuration
+
+Config v1 uses `NABD_CONFIG` or `~/.ag/config`:
 
 ```sh
 mkdir -p ~/.ag && touch ~/.ag/config && chmod 600 ~/.ag/config
 cat >> ~/.ag/config <<'EOF'
+ backup/config-conflict-notice-pre-rebase
 ANTHROPIC_API_KEY=sk-ant-...
 NABD_MODEL=claude-sonnet-4-5
 EOF
@@ -182,81 +194,71 @@ Termux. ما تخسره من تمرير الطرفية يعوّضه السجل: 
 ### مثال الإعداد (`~/.ag/config`)
 
 ```ini
+
+ master
 NABD_PROVIDER=router
 NABD_ROUTER_MODE=fallback
-NABD_ROUTER_PRESTREAM_TIMEOUT=30
 NABD_ROUTES=groq:model-a,openrouter:model-b:free,nvidia:model-c
+GROQ_API_KEY=...
+OPENROUTER_API_KEY=...
+NVIDIA_API_KEY=...
+EOF
 ```
 
-### القواعد والعقود
+Config v2 uses `NABD_CONFIG_V2` or `~/.ag/config.v2.json`. It is strict JSON, rejects unknown fields and trailing documents, requires explicit credential sources (`env` or an absolute secure file), rejects command credentials, and cannot be enabled together with v1. Custom `base_url` is deliberately unsupported by the minimal v2 schema.
 
-1. **قواعد الصياغة (Grammar):**
-   - يُفصل الزوج عند **أول نقطتين `:` فقط**؛ ما قبلها هو اسم المزود (`provider`)، وما بعدها هو اسم النموذج (`model`).
-   - يُسمح لاسم النموذج باحتواء نقطتين `:` (مثل `openrouter:model-b:free`).
-   - المزودون المسموح بهم فقط: `anthropic`, `groq`, `openrouter`, `nvidia`.
-   - الفاصلة `,` هي الفاصل الوحيد بين المسارات (بين 1 إلى 16 مسارًا كحد أقصى). لا يمكن الهروب منها.
-   - يُرفض التكرار للزوج المتطابق تمامًا (`provider:model`). يُسمح باستخدام نفس المزود مع نماذج مختلفة (مثل `groq:model-a,groq:model-b`).
+Do not put credentials in project files. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for exact guarantees and residual risks. Report suspected escapes through [SECURITY.md](SECURITY.md), not a public issue.
 
-2. **عقود المتغيرات والبيئة:**
-   - `NABD_ROUTER_MODE`: القيمة المدعومة الوحيدة هي `fallback`.
-   - `NABD_ROUTER_PRESTREAM_TIMEOUT`: مهلة بدء الاستجابة بالثواني لكل مسار على حدة (بين 5 و 120 ثانية، افتراضيًا 30s) — وهي مهلة مستقلة لكل مسار وليست ميزانية كلية مجمعة.
-   - `NABD_MODEL`: يُهمل تمامًا في نمط الراوتر (مع إصدار تنبيه)، حيث يُحدد النموذج صراحة لكل مسار في `NABD_ROUTES`.
-   - `NABD_BASE_URL`: **يُرفض تشغيل الراوتر** إذا تم ضبط عنوان قاعدة عام؛ كل مزود يستخدم عنوانه القانوني الافتراضي.
-   - **المفاتيح:** يتطلب كل مزود مفتاحه الخاص في `~/.ag/config` أو البيئة (`ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`, `NVIDIA_API_KEY`). غياب أي مفتاح لمسار مُعدّ يوقف التشغيل فورًا عند البدء برسالة خطأ توضح اسم المتغير دون كشف قيمته.
+## Headless behavior
 
-3. **الالتزام والانتقال الاحتياطي (Fallback & Commit):**
-   - **Fallback قبل الإخراج فقط:** يحدث الانتقال الاحتياطي للمسار التالي فقط في حال فشل المسار قبل استلام أول قطعة دلالية (Text, ToolCall, Stop).
-   - **الالتزام الحتمي (Commit):** بمجرد تسليم أول قطعة دلالية للمستهلك، يصبح المسار ملتزمًا بالكامل ويمتنع أي انتقال احتياطي منعًا باتًا حتى لا تتكرر المخرجات أو تتشوه استدعاءات الأدوات.
-   - **إقرار التنظيف (Cleanup Acknowledgment):** عند إلغاء مسار فاشل أو منتهي الصلاحية، ينتظر الراوتر إغلاق قناة المزود السابقة بالكامل قبل بدء المسار التالي بمهلة تنظيف ثابتة (2 ثانية).
-   - **فشل التنظيف:** إذا تجاوز تنظيف أي مزود مهلة التنظيف (`RouteCleanupTimeout = 2s`)، يتوقف الراوتر بالكامل وفورًا بخطأ `route cleanup timeout` ولا يُشغّل أي مسار لاحق حماية للموارد.
+No TTY is read. The default `--permission-mode` is `deny`; a tool that would prompt is denied as a tool result rather than blocking. `allow-reads` auto-allows only ReadOnly tools. `ask` still denies without reading a terminal.
 
-4. **القيود المعروفة (Known Limitations):**
-   - **غياب قاطع الدائرة (No Circuit Breaker):** لا يحتفظ الراوتر بحالة عبر الطلبات المستقلة في v1.2.0؛ كل طلب يبدأ محاولاته من المسار الأول.
-   - **إلغاء الاتصال عن بعد (Remote Cancellation):** إلغاء السياق محليًا يقطع استهلاك البيانات، ولكن قد يستمر الخادم البعيد في المعالجة مؤقتًا حتى يكتشف انقطاع اتصال TCP.
-   - **سباق الفوترة المزدوجة (Double Billing Race):** في حال حدوث مهلة محلية وبدء مسار بديل بينما بدأ المزود الأول المعالجة عن بعد، قد تُحسب تكلفة جزئية على كلا المزودين.
-   - **أسوأ زمن انتظار (Worst-Case Latency):** الحد الأعلى النظري قبل استنفاد جميع المسارات هو: `عدد المسارات × (مهلة ما قبل الإخراج + مهلة التنظيف)`.
+stdout contains only the final assistant text, or JSONL with `--json`. Notices and `session:` go to stderr. Sessions are still written under `~/.ag/sessions`, so `--continue` and `--replay` work.
 
-## البنية
+| Exit code | Meaning |
+|---|---|
+| 0 | settled |
+| 1 | provider or tool error |
+| 2 | turn ceiling |
+| 3 | rate-limit budget exhausted |
+| 4 | permission denied with no model answer |
+| 130 | interrupted |
 
+## Supported platforms
 
-`internal/agent` عقد الحدث والحلقة والشجرة والضغط والميزانية.
-`internal/config` قراءة `~/.ag/config`؛ لا يكتب شيئًا أبدًا.
-`internal/store` سجلّ JSONL بإلحاق ذرّي.
-`internal/provider` واجهة المزوّد وتنفيذان: Anthropic، وأي خادم بلهجة OpenAI.
-`internal/tools` الاحتواء وأدوات القراءة والكتابة والصدفة.
-`internal/perm` بوّابة الأذونات.
-`internal/snap` الظلّ والتراجع.
-`internal/ui` العرض والمحادثة وإعادة العرض.
-`cmd/ag` الربط، ولا شيء غيره.
+| GOOS/GOARCH | Status |
+|---|---|
+| android/arm64 | reference (Termux) |
+| linux/amd64 | supported |
+| linux/arm64 | supported |
+| darwin/arm64 | supported |
+| darwin/amd64 | supported |
+| windows/* | **not supported** |
 
-قاعدة اتجاه واحدة: `agent` لا يستورد `tools` أبدًا.
+Windows is not a release target. Some platform helper files compile there, but the agent's shell execution contract is Unix-oriented.
 
-## الأصل
+## Core architecture
 
-كُتب من الصفر. سبقته قراءةٌ في معمار وكلاء آخرين لفهم القرارات لا لنسخها؛
-لا سطر هنا منقول من مصدر مغلق، والأسماء والبنى والأخطاء كلها من هنا.
-غير مرتبط بأي مزوّد نماذج ولا مدعوم منه.
+- `internal/agent`: event contract, loop, history tree, compaction, budgets.
+- `internal/config`: secure v1 and strict v2 configuration loading.
+- `internal/store`: append-only JSONL journal.
+- `internal/provider`: Anthropic and OpenAI-compatible providers plus ordered fallback router.
+- `internal/tools`: path containment and read/write/edit/grep/bash tools.
+- `internal/perm`: permission gate.
+- `internal/snap`: content-addressed shadow store and undo.
+- `internal/ui`: live display and replay.
+- `cmd/ag`: wiring; the output binary is `nabd`.
 
-## الرخصة
+The event is the contract: live rendering and replay consume the same append-only records. `/rewind` appends a new branch point rather than deleting history. `/undo` is intentionally separate and covers tracked file edits, not arbitrary approved shell effects.
 
-MIT License
+## Operational limits
 
-Copyright (c) 2026 nabd contributors
+- Token counts are estimates until calibrated from provider usage.
+- File reads are bounded; provider-specific limits and `NABD_MAX_READ` determine the cap.
+- Compaction may call the model and falls back to a mechanical summary on failure.
+- `bash` runs after explicit permission, outside path containment. Treat approval as access equivalent to the current OS user.
+- Session journals and the shadow store contain cleartext working data and are sensitive even with private filesystem modes.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## License
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+MIT License. Copyright (c) 2026 nabd contributors. See [LICENSE](LICENSE).

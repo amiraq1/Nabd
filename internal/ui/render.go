@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"nabd/internal/agent"
+	"nabd/internal/presentation"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
@@ -17,11 +18,18 @@ import (
 const DefaultWidth = 50
 
 var (
-	dim  = lipgloss.NewStyle().Faint(true)
-	bold = lipgloss.NewStyle().Bold(true)
-	good = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	bad  = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	warn = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	dim   = lipgloss.NewStyle().Faint(true)
+	bold  = lipgloss.NewStyle().Bold(true)
+	good  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	bad   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	warn  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	green = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+
+	userMsgBg = lipgloss.CompleteColor{TrueColor: "#303030", ANSI256: "236", ANSI: "8"}
+	userMsgFg = lipgloss.CompleteColor{TrueColor: "#E0E0E0", ANSI256: "254", ANSI: "15"}
+
+	userCardStyle = lipgloss.NewStyle().Background(userMsgBg).Foreground(userMsgFg)
+	userRoleStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true).Background(userMsgBg)
 )
 
 // AllowedUISymbols is the strict whitelist of non-ASCII glyphs permitted in UI string literals
@@ -115,6 +123,13 @@ func RenderEvent(e agent.Event, width int) string {
 
 	case agent.RunEnd:
 		return dim.Render("── " + e.Text)
+
+	case agent.EventProviderRoute:
+		text, ok := presentation.FormatRouteNotice(e.Route)
+		if !ok {
+			return ""
+		}
+		return block("⚑", text, width, warn)
 
 	case agent.TurnStart, agent.TurnEnd, agent.EventCalib:
 		// TurnEnd and calibration are structure, not content: nothing to show.
@@ -228,8 +243,8 @@ func block(sym, s string, width int, st lipgloss.Style) string {
 // ansi.StringWidth for visual measurement. This correctly handles Arabic,
 // Emoji, CJK, combining marks, and ANSI escape sequences.
 func wrap(s string, width int) []string {
-	if width < 8 {
-		width = 8
+	if width < 1 {
+		width = 1
 	}
 	if s == "" {
 		return []string{""}

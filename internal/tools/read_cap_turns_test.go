@@ -1,0 +1,254 @@
+package tools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"regexp"
+	"strconv"
+	"testing"
+
+	"nabd/internal/agent"
+	"nabd/internal/provider"
+)
+
+// NBD-400 turns-per-read-cap eval.
+//
+// Turn accounting needs both halves: the read tool (which segments a file) and
+// the loop (which spends one turn per request). internal/tools imports both, so
+// the eval lives here and drives the real Registry through the real Loop.
+//
+// The provider is scripted, not a model. It implements exactly one strategy —
+// read one truncation segment per turn, following the next_offset the previous
+// result reported — because that is the mechanical lower bound on turns for any
+// reader that does not guess offsets. It is not a claim about model behaviour:
+// a model that guessed offsets could fetch more per turn, and a model that
+// stopped early would need fewer turns and know less.
+//
+// Reproduce: go test ./internal/tools -run TestReadCapPinsMeasuredTurnCost_NBD401 -count=1 -v
+
+var nextOffsetRE = regexp.MustCompile(`next_offset=(\d+)`)
+
+// readState inspects the messages the loop built and reports whether a read has
+// happened, whether it has more to read, and the offset to continue from.
+//
+// It reads the LAST tool result only, not the last next_offset it can find
+// anywhere in the history: older results persist in the transcript, so scanning
+// for any match would re-issue an offset that the newest read already finished
+// with — a reader that loops instead of advancing.
+func readState(ms []provider.Message) (offset int, more, started bool) {
+	last := ""
+	for _, m := range ms {
+		for _, tr := range m.ToolResults {
+			last = tr.Output
+			started = true
+		}
+	}
+	if !started {
+		return 0, false, false
+	}
+	if match := nextOffsetRE.FindStringSubmatch(last); match != nil {
+		if n, err := strconv.Atoi(match[1]); err == nil {
+			return n, true, true
+		}
+	}
+	return 0, false, true
+}
+
+// sequentialReader is the scripted provider described above.
+type sequentialReader struct {
+	path     string
+	turns    int
+	requests []int
+}
+
+func (p *sequentialReader) Name() string { return "scripted-sequential-reader" }
+
+func (p *sequentialReader) Stream(_ context.Context, req provider.Request) (<-chan provider.Chunk, error) {
+	p.turns++
+
+	offset, more, started := readState(req.Messages)
+	var chunks []provider.Chunk
+	switch {
+	case !started:
+		offset = 1
+		fallthrough
+	case more:
+		input, err := json.Marshal(map[string]any{"path": p.path, "offset": offset})
+		if err != nil {
+			return nil, err
+		}
+		p.requests = append(p.requests, offset)
+		chunks = []provider.Chunk{
+			{Kind: provider.ChunkToolCall, Call: &provider.ToolCall{
+				ID:    fmt.Sprintf("read-%d", p.turns),
+				Name:  "read_file",
+				Input: input,
+			}},
+			{Kind: provider.ChunkStop, Stop: "tool_use"},
+		}
+	default:
+		chunks = []provider.Chunk{
+			{Kind: provider.ChunkText, Text: "file read"},
+			{Kind: provider.ChunkStop, Stop: "end_turn"},
+		}
+	}
+
+	ch := make(chan provider.Chunk, len(chunks))
+	for _, c := range chunks {
+		ch <- c
+	}
+	close(ch)
+	return ch, nil
+}
+
+// allowReadsGate permits every tool. The eval is about read cost, not
+// permission policy, and a denied read would silently become a no-op turn.
+type allowReadsGate struct{}
+
+func (allowReadsGate) Check(string) (agent.Verdict, string) { return agent.VerdictAllow, "" }
+func (allowReadsGate) Record(string, agent.Decision)        {}
+func (allowReadsGate) Effective(_ string, d agent.Decision) agent.Decision {
+	return d
+}
+
+// turnCostRun is one cap's turn accounting.
+type turnCostRun struct {
+	capBytes   int
+	turns      int
+	completed  bool
+	hitCeiling bool
+	offsets    []int
+}
+
+// runSequentialRead drives the real loop over the fixture at capBytes and
+// reports how many turns the sequential strategy needed. maxTurns is the
+// ceiling in force for the run; pass a large value to measure the natural cost,
+// or the shipped default to see whether the read fits inside it.
+func runSequentialRead(t *testing.T, r *Registry, dir, rel string, capBytes, maxTurns int) turnCostRun {
+	t.Helper()
+
+	old := maxReadBytes
+	maxReadBytes = capBytes
+	defer func() { maxReadBytes = old }()
+
+	prov := &sequentialReader{path: rel}
+	sink := &recordingSink{}
+	loop := &agent.Loop{
+		Provider: prov,
+		Tools:    r,
+		Sink:     sink,
+		System:   "eval",
+		MaxTurns: maxTurns,
+		Gate:     allowReadsGate{},
+		Budget:   agent.NewBudget(),
+	}
+	if err := loop.Start("eval", dir); err != nil {
+		t.Fatalf("cap=%d: loop.Start: %v", capBytes, err)
+	}
+
+	err := loop.Run(context.Background(), "read the fixture")
+
+	run := turnCostRun{capBytes: capBytes, turns: prov.turns, offsets: prov.requests}
+	run.hitCeiling = err == agent.ErrMaxTurns
+	run.completed = err == nil
+	return run
+}
+
+// recordingSink swallows every event; the loop refuses a nil sink.
+type recordingSink struct{ events []agent.Event }
+
+func (s *recordingSink) Emit(e agent.Event) error {
+	s.events = append(s.events, e)
+	return nil
+}
+
+// TestReadCapPinsMeasuredTurnCost_NBD401 measures how many turns a strictly
+// sequential reader needs to read the fixture at each cap, and pins the
+// combination the project ships.
+//
+// It is named as a pin on a MEASURED state, not a specification. NBD-400
+// recorded that the shipped pair (cap 3072, MaxTurns 12) could not finish this
+// fixture; NBD-404 raised the ceiling to agent.DefaultMaxTurns, so the shipped
+// pair now fits. Both facts are asserted below, because the second is only
+// meaningful beside the first: the low ceiling is what the change fixed, and
+// keeping it visible stops the record from reading as though the ceiling had
+// always been adequate.
+//
+// If this test fails because the pair changed again, a default moved: update
+// READ_CAP_TURN_COST in docs/TECH_DEBT.md and say what moved, rather than
+// adjusting the test.
+func TestReadCapPinsMeasuredTurnCost_NBD401(t *testing.T) {
+	r, dir := newReg(t)
+	rel, fileBytes := evalFixture(t, dir, evalLineCount)
+
+	// The shipped ceiling, read from the package that owns it rather than
+	// repeated here, so the two cannot drift apart.
+	shippedMaxTurns := agent.DefaultMaxTurns
+	// The ceiling NBD-400 shipped, kept as the historical contrast.
+	const nbd400MaxTurns = 12
+
+	t.Logf("fixture: %d lines, %d bytes; shipped MaxTurns: %d (NBD-400 shipped %d)",
+		evalLineCount, fileBytes, shippedMaxTurns, nbd400MaxTurns)
+	// fits_turns is about the TURN budget only. Whether the same schedule fits
+	// the provider's tokens-per-minute ceiling is a different question, and
+	// TestReadCapCumulativeCost reports the per-request figure that one turns
+	// on. The column is named for what it measures.
+	t.Logf("%8s %7s %11s %s", "cap", "turns", "fits_turns", "offsets")
+
+	for _, cap := range evalCaps {
+		// Measure the natural cost first, with a ceiling high enough not to
+		// interfere; then decide whether that cost fits the shipped default.
+		natural := runSequentialRead(t, r, dir, rel, cap, 4096)
+		if !natural.completed {
+			t.Fatalf("cap=%d: natural run did not complete with a 4096-turn ceiling; "+
+				"the read strategy is looping. See READ_CAP_TURN_COST in docs/TECH_DEBT.md.", cap)
+		}
+		fits := natural.turns <= shippedMaxTurns
+		t.Logf("%8d %7d %9v %v", cap, natural.turns, fits, natural.offsets)
+
+		if natural.turns <= 0 {
+			t.Errorf("cap=%d: no turns recorded", cap)
+		}
+		// Offsets must march forward: the reader only ever continues.
+		for i := 1; i < len(natural.offsets); i++ {
+			if natural.offsets[i] <= natural.offsets[i-1] {
+				t.Errorf("cap=%d: offsets not increasing: %v — see READ_CAP_TURN_COST in docs/TECH_DEBT.md", cap, natural.offsets)
+				break
+			}
+		}
+	}
+
+	// The shipped combination must finish the fixture. NBD-400 measured that it
+	// did not at MaxTurns=12; if it stops fitting again, a default moved and the
+	// record must say so.
+	shipped := runSequentialRead(t, r, dir, rel, defaultMaxRead(), shippedMaxTurns)
+	if !shipped.completed {
+		t.Fatalf("the shipped cap %d does not finish the %d-line fixture within the shipped MaxTurns=%d (%d turns); "+
+			"this contradicts READ_CAP_TURN_COST in docs/TECH_DEBT.md — update that record and say what moved",
+			defaultMaxRead(), evalLineCount, shippedMaxTurns, shipped.turns)
+	}
+	t.Logf("shipped combination: cap=%d, MaxTurns=%d, %d turns — fits", defaultMaxRead(), shippedMaxTurns, shipped.turns)
+
+	// The historical fact that motivated the change: at NBD-400's ceiling the
+	// same shipped cap cannot finish the same file.
+	atNBD400 := runSequentialRead(t, r, dir, rel, defaultMaxRead(), nbd400MaxTurns)
+	if atNBD400.completed {
+		t.Fatalf("cap %d now finishes within MaxTurns=%d (%d turns); NBD-400 recorded that it did not. "+
+			"If the read cap changed, update READ_CAP_TURN_COST in docs/TECH_DEBT.md",
+			defaultMaxRead(), nbd400MaxTurns, atNBD400.turns)
+	}
+	if !atNBD400.hitCeiling {
+		t.Fatalf("the NBD-400-ceiling run neither completed nor hit the ceiling: %+v", atNBD400)
+	}
+	t.Logf("contrast: the same cap at MaxTurns=%d hits the ceiling after %d turns (the NBD-400 finding)",
+		nbd400MaxTurns, atNBD400.turns)
+
+	// The escape hatch still works where the shipped ceiling is not enough.
+	bigger := runSequentialRead(t, r, dir, rel, 8192, nbd400MaxTurns)
+	if !bigger.completed {
+		t.Fatalf("cap 8192 did not fit MaxTurns=%d (%d turns); the escape hatch does not work — "+
+			"see READ_CAP_TURN_COST in docs/TECH_DEBT.md", nbd400MaxTurns, bigger.turns)
+	}
+	t.Logf("escape hatch: cap=8192 completes in %d turns within MaxTurns=%d", bigger.turns, nbd400MaxTurns)
+}

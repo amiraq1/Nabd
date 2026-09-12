@@ -18,40 +18,148 @@ Do not apologise, do not greet, do not invent what did not happen. Leave out poi
 
 // Compact cuts history at the newest user turn whose tail fits in target,
 // summarises everything before it, and appends one Compact entry.
+//
+// The selected boundary is re-validated against the *fresh* live history under
+// l.mu after provider summarisation, and the Compact event is appended within
+// the same critical section, so no mutation can interleave between the final
+// check and the append. If the chosen firstKept is absent from the current live
+// branch — which the historyMu interlock now prevents a concurrent /rewind from
+// causing, leaving this check as the last barrier against a stale FirstKept,
+// reachable only via injection or a structurally corrupt --continue — Compact
+// returns ErrCompactBoundaryStale and appends nothing.
+//
+// A secondary raw tool-event-pairing check runs as defense in depth. It cannot
+// fire under current production ordering (a boundary is always a UserMsg
+// emitted only at the top of Run; Seq increases in emission order), so it is
+// only reachable through direct event injection or a --continue of a journal
+// that was already structurally corrupt. The harm it guards against is a
+// fabricated tool_use attributed to the assistant — Messages() synthesises a
+// wire-valid tool_use for an unmatched ToolEnd, so the request is never
+// provider-rejected — not an orphaned tool_result. See messages.go's ToolEnd case.
+// locateBoundary returns the index of the event whose Seq equals firstKept in
+// live, or -1 when no such event remains.
+func locateBoundary(live []Event, firstKept int) int {
+	for i, e := range live {
+		if e.Seq == firstKept {
+			return i
+		}
+	}
+	return -1
+}
+
+// validateBoundary re-checks a boundary chosen from an earlier snapshot against
+// the current live branch. It returns the index of firstKept in live and a nil
+// error only when the cut is still usable.
+//
+// Two ways it can fail:
+//
+//  1. firstKept is absent from live. The threshold in a Compact event is
+//     numeric: Live() keeps e.Seq >= FirstKept. Appending a Compact whose
+//     FirstKept names a Seq that no longer exists on the branch does not
+//     degrade gracefully — no branch event satisfies the predicate except the
+//     Compact and whatever follows it, so the in-memory context collapses to a
+//     near-empty projection, recoverable only via --replay.
+//
+//  2. The retained segment violates raw tool pairing. Defense in depth; see
+//     Compact's doc comment for why it is unreachable under current ordering.
+//
+// Callers must hold l.mu (or otherwise own live) while acting on the result.
+func validateBoundary(live []Event, firstKept int) (int, error) {
+	boundary := locateBoundary(live, firstKept)
+	if boundary < 0 {
+		return -1, fmt.Errorf("%w: boundary seq %d absent from live branch (%d events)",
+			ErrCompactBoundaryStale, firstKept, len(live))
+	}
+	if !rawPairingInvariantHolds(live[boundary:]) {
+		return -1, fmt.Errorf("%w: retained segment violates raw tool pairing",
+			ErrCompactBoundaryStale)
+	}
+	return boundary, nil
+}
+
 func (l *Loop) Compact(ctx context.Context, target int) error {
+	if !l.historyMu.TryLock() {
+		return ErrHistoryMutationInProgress
+	}
+	defer l.historyMu.Unlock()
+
+	// Phase 1: take a snapshot of the live branch to pick a boundary.
+	// l.mu is held only briefly so that the provider call does not block it.
 	l.mu.Lock()
 	live := Live(l.hist)
 	l.mu.Unlock()
 
-	before := Messages(live)
 	firstKept, dropped, ok := chooseBoundaryWith(live, target, l.estimateMessages)
 	if !ok {
 		return fmt.Errorf("no valid boundary (%d live events)", len(live))
 	}
-	boundary := 0
-	for i, e := range live {
-		if e.Seq == firstKept {
-			boundary = i
-			break
-		}
+
+	// Phase 1b: cheap pre-validation (defense in depth).
+	//
+	// If the snapshot's proposed retained segment already violates the raw
+	// pairing invariant, reject before paying for a provider summarisation
+	// request. The load-bearing check is Phase 3, which re-validates the fresh
+	// history under l.mu; this guard only avoids a wasted request on an
+	// already-unsafe snapshot (e.g. a journal resumed with --continue that is
+	// missing a ToolStart).
+	//
+	// An intervening append cannot turn a snapshot that fails here into a safe
+	// fresh history: appends land after the retained segment, so they can never
+	// supply a ToolStart that precedes an already-retained ToolEnd. Only a
+	// concurrent rewind could drop the offending ToolEnd, and rejecting a
+	// snapshot that was unsafe at the moment it was read is the fail-closed
+	// choice for that case, not an over-rejection.
+	if !rawPairingInvariantHolds(live[len(dropped):]) {
+		return ErrCompactBoundaryStale
 	}
-	kept := live[boundary:]
-	after := Squeeze(Messages(kept), l.keepFullRounds())
+	promptEstimate := EstimateMessages(Messages(dropped))
+	if l.Budget != nil {
+		promptEstimate = l.Budget.Estimate(Messages(dropped))
+	}
+	if err := l.SpendBudget.Charge(promptEstimate, 0, maxOutputTokens()); err != nil {
+		return err
+	}
+
+	// Phase 2: summarise without holding l.mu (provider round-trip may be slow).
 	sum := l.summarise(ctx, dropped)
-	l.emit(Event{
+
+	// Phase 3: re-acquire l.mu and atomically validate the boundary against the
+	// current history, then append if and only if the projection is safe.
+	l.mu.Lock()
+	freshLive := Live(l.hist)
+
+	boundary, err := validateBoundary(freshLive, firstKept)
+	if err != nil {
+		l.mu.Unlock()
+		return err
+	}
+	retained := freshLive[boundary:]
+
+	// The boundary is safe. Compute statistics from the fresh state and append
+	// the compact event atomically under the same lock acquisition.
+	freshBefore := Messages(freshLive) // full current projection before compaction
+	keptMsgs := Messages(retained)
+	after := Squeeze(keptMsgs, l.keepFullRounds())
+	compactEvent := Event{
 		Type:      Compact,
 		FirstKept: firstKept,
 		Text:      sum,
 		Compact: &CompactionStats{
-			MessagesBefore: len(before),
+			MessagesBefore: len(freshBefore),
 			MessagesAfter:  len(after),
-			TokensBefore:   l.estimateMessages(before),
+			TokensBefore:   l.estimateMessages(freshBefore),
 			TokensAfter:    l.estimateMessages(after),
-			BoundaryIndex:  boundary,
-			Stubs:          countReadStubs(after),
+			// BoundaryIndex indexes the FRESH live slice (freshLive) computed
+			// under l.mu, not the Phase-1 snapshot: a concurrent append can
+			// shift it relative to the snapshot. It is a diagnostic, not a
+			// contract.
+			BoundaryIndex: boundary,
+			Stubs:         countReadStubs(after),
 		},
-	})
-	return nil
+	}
+	emitErr := l.emitLocked(l.parent, compactEvent)
+	l.mu.Unlock()
+	return emitErr
 }
 
 func countReadStubs(ms []provider.Message) int {
@@ -68,8 +176,10 @@ func countReadStubs(ms []provider.Message) int {
 
 // chooseBoundary walks user turns from newest to oldest and takes the oldest
 // tail that still fits. The boundary is always a user message: cutting inside
-// a round would leave a tool_result whose tool_use no longer exists, and the
-// next request would be rejected outright.
+// a round leaves a retained ToolEnd whose ToolStart was dropped, and Messages()
+// then synthesises a fabricated tool_use for it instead of surfacing a call the
+// model really made. (The wire payload stays valid — the harm is fabrication,
+// not rejection; see Compact's own doc comment.)
 func chooseBoundary(live []Event, target int) (int, []Event, bool) {
 	return chooseBoundaryWith(live, target, EstimateMessages)
 }

@@ -1,6 +1,10 @@
 package presentation_test
 
 import (
+	"bytes"
+	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 
 	"nabd/internal/agent"
@@ -571,8 +575,11 @@ func TestIsTruncatedRealMarker(t *testing.T) {
 	if tool == nil {
 		t.Fatal("tool not found")
 	}
-	if !tool.Tool.Truncated {
-		t.Errorf("expected tool.Truncated to be true for real store marker %q", output)
+	if tool.Tool.Truncated {
+		t.Errorf("execution truncation must not be inferred from the store marker %q", output)
+	}
+	if tool.Tool.OutputState != presentation.OutputTruncated {
+		t.Errorf("OutputState = %q, want OutputTruncated", tool.Tool.OutputState)
 	}
 }
 
@@ -605,23 +612,323 @@ func TestCallErrMeaningfulMessage(t *testing.T) {
 	}
 }
 
-// TestEventProviderRouteDeferredToU2 verifies that router decision events
-// are ignored by the presentation projector without creating items or incrementing unhandled events.
-func TestEventProviderRouteDeferredToU2(t *testing.T) {
+// TestProjectorProviderRoutePositiveBehavior verifies that router decision events
+// are correctly surfaced as ItemNotice feed items when visible, and skipped without
+// incrementing UnhandledEventTypes when hidden.
+func TestProjectorProviderRoutePositiveBehavior(t *testing.T) {
 	p := presentation.NewProjector()
+
+	// 1. failed attempt 1 -> visible
 	err := p.Apply(agent.Event{
 		Seq:  1,
 		Type: agent.EventProviderRoute,
-		Text: "router selected provider",
+		Route: &agent.ProviderRoute{
+			Provider: "groq",
+			Model:    "llama-3",
+			Attempt:  1,
+			Status:   "failed",
+			Reason:   "HTTP 404",
+		},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(p.Items()) != 0 {
-		t.Errorf("expected 0 items, got %d", len(p.Items()))
+
+	items := p.Items()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item for failed route, got %d", len(items))
 	}
+	if items[0].Type != presentation.ItemNotice {
+		t.Fatalf("expected ItemNotice, got %v", items[0].Type)
+	}
+	if items[0].ID != "notice_1" {
+		t.Fatalf("expected ID notice_1, got %q", items[0].ID)
+	}
+	if items[0].Seq != 1 {
+		t.Fatalf("expected Seq 1, got %d", items[0].Seq)
+	}
+	if !strings.Contains(items[0].Text, "route failed: groq/llama-3 (attempt 1): HTTP 404") {
+		t.Fatalf("unexpected notice text: %q", items[0].Text)
+	}
+
+	// 2. selected attempt 1 -> hidden
+	err = p.Apply(agent.Event{
+		Seq:  2,
+		Type: agent.EventProviderRoute,
+		Route: &agent.ProviderRoute{
+			Provider: "groq",
+			Model:    "llama-3",
+			Attempt:  1,
+			Status:   "selected",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(p.Items()) != 1 {
+		t.Fatalf("selected attempt 1 should not produce an item, count is %d", len(p.Items()))
+	}
+
+	// 3. selected attempt 2 -> visible
+	err = p.Apply(agent.Event{
+		Seq:  3,
+		Type: agent.EventProviderRoute,
+		Route: &agent.ProviderRoute{
+			Provider: "anthropic",
+			Model:    "claude-3-5-sonnet",
+			Attempt:  2,
+			Status:   "selected",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	items = p.Items()
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[1].ID != "notice_3" || !strings.Contains(items[1].Text, "route selected: anthropic/claude-3-5-sonnet (attempt 2)") {
+		t.Fatalf("unexpected second notice: %+v", items[1])
+	}
+
+	// 4. attempted -> hidden
+	err = p.Apply(agent.Event{
+		Seq:  4,
+		Type: agent.EventProviderRoute,
+		Route: &agent.ProviderRoute{
+			Provider: "nvidia",
+			Model:    "nemotron",
+			Attempt:  1,
+			Status:   "attempted",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(p.Items()) != 2 {
+		t.Fatalf("attempted should not produce an item, count is %d", len(p.Items()))
+	}
+
+	// 5. exhausted -> hidden
+	err = p.Apply(agent.Event{
+		Seq:  5,
+		Type: agent.EventProviderRoute,
+		Route: &agent.ProviderRoute{
+			Provider: "nvidia",
+			Model:    "nemotron",
+			Attempt:  2,
+			Status:   "exhausted",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(p.Items()) != 2 {
+		t.Fatalf("exhausted should not produce an item, count is %d", len(p.Items()))
+	}
+
+	// 6. nil Route -> hidden, no panic
+	err = p.Apply(agent.Event{
+		Seq:   6,
+		Type:  agent.EventProviderRoute,
+		Route: nil,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(p.Items()) != 2 {
+		t.Fatalf("nil route should not produce an item, count is %d", len(p.Items()))
+	}
+
+	// 7. unknown status -> hidden, no panic
+	err = p.Apply(agent.Event{
+		Seq:  7,
+		Type: agent.EventProviderRoute,
+		Route: &agent.ProviderRoute{
+			Status: "future_unknown",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(p.Items()) != 2 {
+		t.Fatalf("unknown route status should not produce an item, count is %d", len(p.Items()))
+	}
+
+	// UnhandledEventTypes must NEVER be incremented for EventProviderRoute
 	if p.UnhandledEventTypes != nil && p.UnhandledEventTypes[agent.EventProviderRoute] > 0 {
-		t.Errorf("EventProviderRoute should not be counted as unhandled")
+		t.Fatalf("EventProviderRoute should not increment UnhandledEventTypes, got count %d", p.UnhandledEventTypes[agent.EventProviderRoute])
+	}
+}
+
+// TestProjectorProviderRouteSequenceAndOrdering verifies the visible ordering
+// of a realistic multi-attempt fallback sequence and verifies Build vs Apply equivalence.
+func TestProjectorProviderRouteSequenceAndOrdering(t *testing.T) {
+	evs := []agent.Event{
+		{
+			Seq:  1,
+			Type: agent.EventProviderRoute,
+			Route: &agent.ProviderRoute{
+				Provider: "groq",
+				Model:    "llama-3",
+				Attempt:  1,
+				Status:   "attempted",
+			},
+		},
+		{
+			Seq:  2,
+			Type: agent.EventProviderRoute,
+			Route: &agent.ProviderRoute{
+				Provider: "groq",
+				Model:    "llama-3",
+				Attempt:  1,
+				Status:   "failed",
+				Reason:   "HTTP 404",
+			},
+		},
+		{
+			Seq:  3,
+			Type: agent.EventProviderRoute,
+			Route: &agent.ProviderRoute{
+				Provider: "nvidia",
+				Model:    "nemotron",
+				Attempt:  2,
+				Status:   "attempted",
+			},
+		},
+		{
+			Seq:  4,
+			Type: agent.EventProviderRoute,
+			Route: &agent.ProviderRoute{
+				Provider: "nvidia",
+				Model:    "nemotron",
+				Attempt:  2,
+				Status:   "failed",
+				Reason:   "HTTP 401",
+			},
+		},
+		{
+			Seq:  5,
+			Type: agent.EventProviderRoute,
+			Route: &agent.ProviderRoute{
+				Provider: "anthropic",
+				Model:    "claude-3-5-sonnet",
+				Attempt:  3,
+				Status:   "attempted",
+			},
+		},
+		{
+			Seq:  6,
+			Type: agent.EventProviderRoute,
+			Route: &agent.ProviderRoute{
+				Provider: "anthropic",
+				Model:    "claude-3-5-sonnet",
+				Attempt:  3,
+				Status:   "selected",
+			},
+		},
+	}
+
+	// 1. Incremental Apply
+	pApply := presentation.NewProjector()
+	for _, e := range evs {
+		if err := pApply.Apply(e); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+	}
+	itemsApply := pApply.Items()
+
+	// 2. Whole Build
+	pBuild := presentation.NewProjector()
+	itemsBuild, err := pBuild.Build(evs)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// Verify Build vs Apply equivalence
+	if len(itemsApply) != len(itemsBuild) {
+		t.Fatalf("len mismatch: Apply=%d Build=%d", len(itemsApply), len(itemsBuild))
+	}
+	for i := range itemsApply {
+		if itemsApply[i].ID != itemsBuild[i].ID || itemsApply[i].Text != itemsBuild[i].Text {
+			t.Fatalf("item %d mismatch between Build and Apply", i)
+		}
+	}
+
+	// Expected visible count is exactly 3: failed(1), failed(2), selected(3)
+	if len(itemsApply) != 3 {
+		t.Fatalf("expected exactly 3 visible items, got %d", len(itemsApply))
+	}
+
+	expectedIDs := []string{"notice_2", "notice_4", "notice_6"}
+	expectedSubstrs := []string{
+		"route failed: groq/llama-3 (attempt 1): HTTP 404",
+		"route failed: nvidia/nemotron (attempt 2): HTTP 401",
+		"route selected: anthropic/claude-3-5-sonnet (attempt 3)",
+	}
+
+	for i := 0; i < 3; i++ {
+		if itemsApply[i].ID != expectedIDs[i] {
+			t.Errorf("item %d: got ID %q, want %q", i, itemsApply[i].ID, expectedIDs[i])
+		}
+		if itemsApply[i].Seq != (i+1)*2 {
+			t.Errorf("item %d: got Seq %d, want %d", i, itemsApply[i].Seq, (i+1)*2)
+		}
+		if !strings.Contains(itemsApply[i].Text, expectedSubstrs[i]) {
+			t.Errorf("item %d: got text %q, want substr %q", i, itemsApply[i].Text, expectedSubstrs[i])
+		}
+	}
+}
+
+// TestProjectorProviderRouteImmutabilityAndSerialization proves that projecting
+// an event does not mutate the event or its Route pointer, and preserves exact serialization bytes.
+func TestProjectorProviderRouteImmutabilityAndSerialization(t *testing.T) {
+	ev := agent.Event{
+		Seq:  42,
+		Type: agent.EventProviderRoute,
+		Route: &agent.ProviderRoute{
+			StreamID: "test-stream-id-999",
+			Provider: "groq",
+			Model:    "llama-3-8b",
+			Attempt:  2,
+			Status:   "failed",
+			Reason:   "HTTP 500: internal error",
+		},
+	}
+
+	// Baseline JSON serialization
+	beforeBytes, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal before: %v", err)
+	}
+
+	// Deep snapshot of event
+	snapshot := ev
+	routeSnapshot := *ev.Route
+	snapshot.Route = &routeSnapshot
+
+	p := presentation.NewProjector()
+	if err := p.Apply(ev); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	_, err = p.Build([]agent.Event{ev})
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// Invariance assertion: struct equality
+	if !reflect.DeepEqual(ev, snapshot) {
+		t.Fatal("event was mutated by projector")
+	}
+
+	// Serialization invariance: byte-for-byte equality
+	afterBytes, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("Marshal after: %v", err)
+	}
+
+	if !bytes.Equal(beforeBytes, afterBytes) {
+		t.Fatal("event JSON serialization changed after projection")
 	}
 }
 

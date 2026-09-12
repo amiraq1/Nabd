@@ -18,7 +18,6 @@ import (
 	"nabd/internal/agent"
 )
 
-// ItemType is one kind of feed element the projector can emit.
 type ItemType string
 
 const (
@@ -31,7 +30,6 @@ const (
 	ItemRunBoundary ItemType = "run_boundary"
 )
 
-// ToolStatus tracks where a tool call is in its lifecycle.
 type ToolStatus string
 
 const (
@@ -43,7 +41,19 @@ const (
 	ToolCancelled ToolStatus = "cancelled"
 )
 
-// PermStatus tracks a permission request.
+// OutputState says which part of a tool result is available for expansion.
+// Execution truncation is represented separately by ToolCard.Truncated because
+// a read can be complete in the journal yet still represent only part of its
+// source file. OutputTruncated means the journal itself retained only a prefix.
+type OutputState string
+
+const (
+	OutputNone        OutputState = "none"
+	OutputSaved       OutputState = "saved"
+	OutputTruncated   OutputState = "truncated"
+	OutputUnavailable OutputState = "unavailable"
+)
+
 type PermStatus string
 
 const (
@@ -52,20 +62,22 @@ const (
 	PermDeny  PermStatus = "denied"
 )
 
-// ToolCard holds everything the UI needs to render one tool call.
 type ToolCard struct {
-	Name      string
-	Args      string // human-readable arg summary, not raw JSON
-	Status    ToolStatus
-	Output    string
-	Duration  int64 // milliseconds
-	ExitCode  int
-	Signal    string
-	Err       string
-	Truncated bool
+	CallID      string
+	Name        string
+	Args        string
+	Status      ToolStatus
+	Output      string
+	OutputState OutputState
+	Duration    int64
+	ExitCode    int
+	Signal      string
+	Err         string
+	// Truncated is execution-level truncation. OutputTruncated is persistence-level.
+	Truncated  bool
+	NextOffset *int
 }
 
-// PermCard holds one permission request/answer pair.
 type PermCard struct {
 	Name      string
 	Args      string
@@ -74,29 +86,80 @@ type PermCard struct {
 	Effective agent.Decision
 }
 
-// FeedItem is one element in the rendered feed. Exactly one of the pointer
-// fields is non-nil; the ItemType says which.
 type FeedItem struct {
-	Type ItemType `json:"type"`
-	ID   string   `json:"id"`  // stable identity for diffing/keying
-	Seq  int      `json:"seq"` // source event Seq, for ordering/debugging
-
-	Text string `json:"text"` // for user/assistant/notice/error/run_boundary
-
-	Tool *ToolCard `json:"tool,omitempty"`
-	Perm *PermCard `json:"permission,omitempty"`
-
-	// RunBoundary marks the start/end of a session run.
-	RunBoundary string `json:"run_boundary,omitempty"` // "start" | "end"
+	Type        ItemType   `json:"type"`
+	ID          string     `json:"id"`
+	Seq         int        `json:"seq"`
+	Text        string     `json:"text"`
+	Tool        *ToolCard  `json:"tool,omitempty"`
+	Perm        *PermCard  `json:"permission,omitempty"`
+	Error       *ErrorCard `json:"error,omitempty"`
+	RunBoundary string     `json:"run_boundary,omitempty"`
 }
 
-// key returns a stable identity for a feed item so the UI can diff.
-func (it FeedItem) key() string {
-	return fmt.Sprintf("%s:%s", it.Type, it.ID)
+func (it FeedItem) key() string { return fmt.Sprintf("%s:%s", it.Type, it.ID) }
+
+func (it FeedItem) Fingerprint() uint64 {
+	var h uint64 = 1469598103934665603
+	hashString(&h, string(it.Type))
+	hashString(&h, it.Text)
+	hashString(&h, it.RunBoundary)
+	if it.Tool != nil {
+		hashString(&h, it.Tool.CallID)
+		hashString(&h, it.Tool.Name)
+		hashString(&h, it.Tool.Args)
+		hashString(&h, string(it.Tool.Status))
+		hashString(&h, it.Tool.Output)
+		hashString(&h, string(it.Tool.OutputState))
+		hashInt64(&h, it.Tool.Duration)
+		hashInt(&h, it.Tool.ExitCode)
+		hashString(&h, it.Tool.Signal)
+		hashString(&h, it.Tool.Err)
+		hashBool(&h, it.Tool.Truncated)
+		if it.Tool.NextOffset != nil {
+			hashBool(&h, true)
+			hashInt(&h, *it.Tool.NextOffset)
+		} else {
+			hashBool(&h, false)
+		}
+	}
+	if it.Error != nil {
+		hashString(&h, string(it.Error.Code))
+		hashString(&h, it.Error.Title)
+		hashString(&h, it.Error.Message)
+		hashString(&h, it.Error.ActionText)
+		hashBool(&h, it.Error.Retryable)
+		hashString(&h, string(it.Error.RetryScope))
+		hashString(&h, it.Error.JournalPath)
+		hashBool(&h, it.Error.ToolExecuted)
+	}
+	if it.Perm != nil {
+		hashString(&h, it.Perm.Name)
+		hashString(&h, it.Perm.Args)
+		hashString(&h, string(it.Perm.Status))
+		hashString(&h, string(it.Perm.Decision))
+		hashString(&h, string(it.Perm.Effective))
+	}
+	return h
 }
 
-// sortBySeq orders items using their Seq field, preserving the original
-// event order. Items without Seq (0) or with identical Seq keep their relative positions.
+func hashString(h *uint64, s string) {
+	*h ^= uint64(len(s))
+	*h *= 1099511628211
+	for _, b := range []byte(s) {
+		*h ^= uint64(b)
+		*h *= 1099511628211
+	}
+}
+func hashInt64(h *uint64, v int64) { *h ^= uint64(v); *h *= 1099511628211 }
+func hashInt(h *uint64, v int)     { *h ^= uint64(v); *h *= 1099511628211 }
+func hashBool(h *uint64, v bool) {
+	if v {
+		*h ^= 1
+	}
+	*h *= 1099511628211
+}
+
 func sortBySeq(items []FeedItem) {
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].Seq != 0 && items[j].Seq != 0 && items[i].Seq != items[j].Seq {
@@ -106,8 +169,6 @@ func sortBySeq(items []FeedItem) {
 	})
 }
 
-// argSummary produces a one-line human-readable summary of a tool call's
-// arguments, without dumping raw JSON to the screen.
 func callArgs(c *agent.ToolCall) string {
 	if c == nil {
 		return ""
@@ -116,20 +177,17 @@ func callArgs(c *agent.ToolCall) string {
 	if len(m) == 0 {
 		return ""
 	}
-	// Show the one argument a human actually wants to see, in priority order.
 	for _, k := range []string{"cmd", "path", "pattern", "query"} {
 		if v, ok := m[k]; ok {
 			return fmt.Sprint(v)
 		}
 	}
-	// Fallback: first value.
 	for _, v := range m {
 		return fmt.Sprint(v)
 	}
 	return ""
 }
 
-// rawToMap unmarshals raw JSON args into a flat map for display.
 func rawToMap(raw []byte) map[string]any {
 	if len(raw) == 0 {
 		return nil

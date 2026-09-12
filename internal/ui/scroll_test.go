@@ -177,15 +177,17 @@ func TestItemTruncationPreservesBrowsingAnchor(t *testing.T) {
 	f.Update(tea.KeyMsg{Type: tea.KeyDown})
 	anchorTop := f.scrollTop
 
-	// Force clamp/refresh
+	if anchorTop == 0 {
+		t.Fatalf("vacuous setup: anchor is 0, refresh cannot be observed to move it")
+	}
+
 	f.refresh()
-	if f.scrollTop < 0 {
-		t.Fatalf("scrollTop went negative after refresh: %d", f.scrollTop)
+	if f.scrollTop != anchorTop {
+		t.Fatalf("refresh moved the browsing anchor: %d -> %d", anchorTop, f.scrollTop)
 	}
 	if f.follow {
 		t.Fatalf("browsing must remain follow=false")
 	}
-	_ = anchorTop
 }
 
 // TestScrollTopNeverExceedsBottomStart

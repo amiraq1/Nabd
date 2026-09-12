@@ -115,10 +115,19 @@ func ParseSlashCommand(line string) ParsedSlashCommand {
 		Valid:   true,
 	}
 	if len(f) > 1 {
-		if v, err := strconv.Atoi(f[1]); err == nil && v > 0 {
-			res.N = v
-			res.HasN = true
+		if !cmd.HasArg || len(f) != 2 {
+			res.Valid = false
+			res.Error = "usage: " + cmd.Usage
+			return res
 		}
+		v, err := strconv.Atoi(f[1])
+		if err != nil || v <= 0 {
+			res.Valid = false
+			res.Error = "usage: " + cmd.Usage
+			return res
+		}
+		res.N = v
+		res.HasN = true
 	}
 	return res
 }

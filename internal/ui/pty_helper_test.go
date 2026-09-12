@@ -223,6 +223,122 @@ func StartPTYSession(t *testing.T, width, height int, opts ...tea.ProgramOption)
 	return StartPTYSessionWithPrimaryMarker(t, width, height, "", opts...)
 }
 
+// StartPTYSessionWithTouch starts a real PTY session with touch reporting and SGR normalization enabled.
+func StartPTYSessionWithTouch(t *testing.T, width, height int, opts ...tea.ProgramOption) *PTYSession {
+	t.Helper()
+
+	master, slave, err := pty.Open()
+	if err != nil {
+		t.Fatalf("failed to open pty: %v", err)
+	}
+
+	ws := &pty.Winsize{Rows: uint16(height), Cols: uint16(width)}
+	if err := pty.Setsize(master, ws); err != nil {
+		master.Close()
+		slave.Close()
+		t.Fatalf("failed to set pty size: %v", err)
+	}
+
+	vt := vt10x.New(vt10x.WithSize(width, height))
+
+	feed := NewFeed()
+	feed.width = width
+	feed.height = height
+	feed.SetTouch(true)
+	feed.SetInput(slave)
+
+	runner := &TestPTYRunner{}
+	approver := newTestApprover()
+	feed.SetRunner(runner)
+	feed.SetApprover(approver.Approver)
+	feed.Approve = approver.Approver
+
+	allOpts := []tea.ProgramOption{
+		tea.WithOutput(slave),
+	}
+	if len(defaultFeedProgramOptions) > 0 {
+		allOpts = append(allOpts, defaultFeedProgramOptions...)
+	} else {
+		allOpts = append(allOpts, feed.ProgramOptions()...)
+	}
+	allOpts = append(allOpts, opts...)
+
+	prog := tea.NewProgram(
+		feed,
+		allOpts...,
+	)
+	feed.SetProgram(prog)
+
+	sess := &PTYSession{
+		t:        t,
+		Width:    width,
+		Height:   height,
+		Master:   master,
+		Slave:    slave,
+		VT:       vt,
+		Feed:     feed,
+		Program:  prog,
+		Approver: approver,
+		Runner:   runner,
+		doneChan: make(chan error, 1),
+	}
+
+	// Background reader: reads bytes emitted by Bubble Tea on Master and feeds VT emulator.
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := master.Read(buf)
+			if n > 0 {
+				chunk := buf[:n]
+				sess.mu.Lock()
+				sess.rawBytes = append(sess.rawBytes, chunk...)
+				rawStr := string(sess.rawBytes)
+				sess.altScreenEnters = strings.Count(rawStr, "\x1b[?1049h") +
+					strings.Count(rawStr, "\x1b[?47h") +
+					strings.Count(rawStr, "\x1b[?1047h")
+				sess.altScreenExits = strings.Count(rawStr, "\x1b[?1049l") +
+					strings.Count(rawStr, "\x1b[?47l") +
+					strings.Count(rawStr, "\x1b[?1047l")
+
+				wasAlt := sess.VT.Mode()&vt10x.ModeAltScreen != 0
+				sess.VT.Write(chunk)
+				isAlt := sess.VT.Mode()&vt10x.ModeAltScreen != 0
+
+				if !wasAlt && !isAlt {
+					sess.primaryBytes = append(sess.primaryBytes, chunk...)
+				}
+				sess.mu.Unlock()
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Run Bubble Tea program in background
+	go func() {
+		_, err := prog.Run()
+		sess.doneChan <- err
+	}()
+
+	prog.Send(tea.WindowSizeMsg{Width: width, Height: height})
+
+	t.Cleanup(func() {
+		sess.Close()
+	})
+
+	// Wait for initial render
+	err = sess.WaitForCondition("initial layout ready", 3*time.Second, func(snap ScreenSnapshot) bool {
+		_, hasComp := snap.ComposerRow()
+		return hasComp
+	})
+	if err != nil {
+		t.Fatalf("failed waiting for initial render: %v", err)
+	}
+
+	return sess
+}
+
 // StartPTYSessionWithPrimaryMarker starts a PTY session with pre-existing primary screen content.
 func StartPTYSessionWithPrimaryMarker(t *testing.T, width, height int, marker string, opts ...tea.ProgramOption) *PTYSession {
 	t.Helper()

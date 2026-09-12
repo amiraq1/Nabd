@@ -124,6 +124,14 @@ func (p *Policy) Effective(tool string, d agent.Decision) agent.Decision {
 	return d
 }
 
+// SessionGrantAllowed reports whether a standing grant is meaningful for the
+// tool. Executing tools are deliberately excluded; the UI must not offer a
+// choice that the policy will silently downgrade.
+func (p *Policy) SessionGrantAllowed(tool string) bool {
+	class, known := p.cls.Class(tool)
+	return known && class == Mutating
+}
+
 // Reset clears standing grants. Called when the working directory or the
 // conversation changes: consent is to a situation, not to a name.
 func (p *Policy) Reset() {

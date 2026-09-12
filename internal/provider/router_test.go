@@ -1834,3 +1834,189 @@ func TestRouterFailsClosedWhenStreamIDGenerationFails(t *testing.T) {
 		t.Fatalf("unexpected error message: %v", err)
 	}
 }
+
+func TestRouterSanitizesEveryErrorBodyPath(t *testing.T) {
+	// The 7 distinct error paths we need to cover:
+	adversarialBase := "gsk_12345678 "
+	adversarialBody := strings.Repeat(adversarialBase, 4096/len(adversarialBase))
+	adversarialBody += strings.Repeat("A", 4096-len(adversarialBody))
+	if len(adversarialBody) != 4096 {
+		t.Fatalf("adversarialBody length %d != 4096", len(adversarialBody))
+	}
+	// 4 via missing Stop chunk or timeout/overflow logic
+	// 3 via ChunkError with various statuses (404, 400, 502, generic)
+
+	// Create a long string with secret and markers
+	base := "error details with secret gsk_1234567890abcdef and sk-ant-1234567890abcdef "
+	longStr := strings.Repeat(base, 100) // ~7800 chars
+
+	cases := []struct {
+		name     string
+		chunk    Chunk
+		assertFn func(t *testing.T, err error)
+	}{
+		{
+			name:  "606: adversarial exact length (gsk_ fixture does not trigger truncation)",
+			chunk: Chunk{Kind: ChunkError, Err: &httpError{Status: http.StatusNotFound, Body: adversarialBody}},
+			assertFn: func(t *testing.T, err error) {
+				var re *RouterExhaustedError
+				if !errors.As(err, &re) {
+					t.Fatalf("expected ProviderError")
+				}
+				assertSanitized(t, re.Attempts[0].Body)
+				// For this gsk_ fixture: each match (12 bytes) is replaced by [REDACTED] (10 bytes),
+				// so Redact shrinks the body below maxBodyBytes; TruncateBody does not fire.
+				if strings.Contains(re.Attempts[0].Body, "…[truncated]") {
+					t.Fatalf("unexpected truncation marker for gsk_ fixture")
+				}
+			},
+		},
+		{
+			name:  "606: model not found (httpError)",
+			chunk: Chunk{Kind: ChunkError, Err: &httpError{Status: http.StatusNotFound, Body: longStr}},
+			assertFn: func(t *testing.T, err error) {
+				var re *RouterExhaustedError
+				if !errors.As(err, &re) {
+					t.Fatalf("expected ProviderError")
+				}
+				assertSanitized(t, re.Attempts[0].Body)
+			},
+		},
+		{
+			name:  "612: generic 400 (httpError)",
+			chunk: Chunk{Kind: ChunkError, Err: &httpError{Status: http.StatusBadRequest, Body: longStr}},
+			assertFn: func(t *testing.T, err error) {
+				assertSanitizedErrorText(t, err.Error(), fmt.Sprintf(nonRetryableHTTPErrFmt, "p", "m", ""))
+			},
+		},
+		{
+			name:  "615: generic fallback (httpError)",
+			chunk: Chunk{Kind: ChunkError, Err: &httpError{Status: http.StatusBadGateway, Body: longStr}},
+			assertFn: func(t *testing.T, err error) {
+				var re *RouterExhaustedError
+				if !errors.As(err, &re) {
+					t.Fatalf("expected ProviderError")
+				}
+				assertSanitized(t, re.Attempts[0].Body)
+			},
+		},
+		{
+			name:  "623: generic 400 (fmt.Errorf)",
+			chunk: Chunk{Kind: ChunkError, Err: fmt.Errorf("HTTP 400 Bad Request: %s", longStr)},
+			assertFn: func(t *testing.T, err error) {
+				assertSanitizedErrorText(t, err.Error(), fmt.Sprintf(nonRetryableTextErrFmt, "p", "m", ""))
+			},
+		},
+		{
+			name:  "629: generic fallback (fmt.Errorf)",
+			chunk: Chunk{Kind: ChunkError, Err: fmt.Errorf("Internal Server Error: %s", longStr)},
+			assertFn: func(t *testing.T, err error) {
+				var re *RouterExhaustedError
+				if !errors.As(err, &re) {
+					t.Fatalf("expected ProviderError")
+				}
+				assertSanitized(t, re.Attempts[0].Body)
+			},
+		},
+		{
+			name:  "596: nil error in ChunkError",
+			chunk: Chunk{Kind: ChunkError, Err: nil},
+			assertFn: func(t *testing.T, err error) {
+				var re *RouterExhaustedError
+				if !errors.As(err, &re) {
+					t.Fatalf("expected ProviderError")
+				}
+				assertSanitized(t, re.Attempts[0].Body)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := Route{
+				Provider: "p", Model: "m",
+				Client: &mockSingleAttempt{startFn: func(ctx context.Context, req Request) (<-chan Chunk, error) {
+					ch := make(chan Chunk, 1)
+					ch <- tc.chunk
+					close(ch)
+					return ch, nil
+				}},
+			}
+			router, _ := NewRouter([]Route{r}, 5*time.Second, RealClock{})
+			out, err := router.Stream(context.Background(), makeValidRequest())
+			if err != nil {
+				tc.assertFn(t, err)
+			} else {
+				var gotError error
+				for c := range out {
+					if c.Kind == ChunkError {
+						gotError = c.Err
+					}
+				}
+				tc.assertFn(t, gotError)
+			}
+		})
+	}
+	// Test direct makeFailure paths that are hard to trigger via Stream (449, 462, 528, 541)
+	directCases := []struct {
+		name    string
+		status  int
+		rawBody string
+		reason  string
+	}{
+		{"449: channel close", 200, "", "unexpected channel close before stop chunk"},
+		{"462: prestream timeout 1", 0, "", "prestream timeout at linearization point"},
+		{"528: buffer overflow", 0, "", "pre-commit metadata buffer overflow"},
+		{"541: prestream timeout 2", 0, "", "prestream timeout"},
+	}
+	for _, tc := range directCases {
+		t.Run(tc.name, func(t *testing.T) {
+			router := &Router{}
+			outcome := router.makeFailure(Route{}, tc.status, tc.rawBody, true, tc.reason)
+			assertSanitized(t, outcome.provErr.Body)
+		})
+	}
+}
+
+func assertSanitized(t *testing.T, s string) {
+	t.Helper()
+	marker := "…[truncated]"
+	maxLen := maxBodyBytes + len(marker)
+
+	if len(s) > maxLen {
+		t.Errorf("length %d exceeds maximum %d", len(s), maxLen)
+	}
+	if strings.Contains(s, "gsk_") || strings.Contains(s, "sk-ant-") {
+		t.Errorf("secret not redacted: %s", s)
+	}
+	if strings.Count(s, marker) > 1 {
+		t.Errorf("duplicate truncation marker found: %s", s)
+	}
+
+	// Check execution idempotence
+	redactedTwice := Redact(Redact(s))
+	if redactedTwice != Redact(s) {
+		t.Errorf("Redact(Redact(s)) != Redact(s)")
+	}
+}
+
+func assertSanitizedErrorText(t *testing.T, s string, prefix string) {
+	t.Helper()
+	marker := "…[truncated]"
+	maxLen := len(prefix) + maxBodyBytes + len(marker)
+
+	if len(s) > maxLen {
+		t.Errorf("length %d exceeds maximum %d", len(s), maxLen)
+	}
+	if strings.Contains(s, "gsk_") || strings.Contains(s, "sk-ant-") {
+		t.Errorf("secret not redacted: %s", s)
+	}
+	if strings.Count(s, marker) > 1 {
+		t.Errorf("duplicate truncation marker found: %s", s)
+	}
+	// Check idempotence
+	redactedTwice := Redact(Redact(s))
+	if redactedTwice != Redact(s) {
+		t.Errorf("Redact(Redact(s)) != Redact(s)")
+	}
+}

@@ -595,6 +595,7 @@ func TestLayoutMetricsNeverNegative(t *testing.T) {
 func TestLongToolOutputFixtureActuallyProducesLongOutput(t *testing.T) {
 	fix := newTestFixtures()
 	f := newFeedAt(t, 80, 24)
+	f.SetToolsExpanded(true)
 	f.Update(agentEventBatchMsg{Events: []agent.Event{
 		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
 		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
@@ -605,5 +606,28 @@ func TestLongToolOutputFixtureActuallyProducesLongOutput(t *testing.T) {
 	}
 	if len(f.lines) <= 2 {
 		t.Fatalf("expected multiple rendered lines for long output, got %d", len(f.lines))
+	}
+	if len(f.lines) <= 2 {
+		t.Fatalf("expected multiple rendered lines for long output, got %d", len(f.lines))
+	}
+}
+
+// TestSeparatorLineUsesASCIIWhenEnvSet verifies NABD_ASCII_ONLY forces hyphens.
+func TestSeparatorLineUsesASCIIWhenEnvSet(t *testing.T) {
+	// Without env var: Unicode box-drawing character.
+	if got := separatorLine(5); got != "─────" {
+		t.Fatalf("separatorLine(5) = %q, want %q", got, "─────")
+	}
+
+	// With env var: ASCII hyphens.
+	t.Setenv("NABD_ASCII_ONLY", "1")
+	if got := separatorLine(5); got != "-----" {
+		t.Fatalf("separatorLine(5) with NABD_ASCII_ONLY=1 = %q, want %q", got, "-----")
+	}
+
+	// Unset: back to Unicode.
+	t.Setenv("NABD_ASCII_ONLY", "")
+	if got := separatorLine(5); got != "─────" {
+		t.Fatalf("separatorLine(5) after unset = %q, want %q", got, "─────")
 	}
 }
