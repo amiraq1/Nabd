@@ -37,17 +37,18 @@ type metadata struct {
 }
 
 type Registry struct {
-	root   *Root
-	sh     *snap.Shadow
-	edits  *editLog
-	list   []Tool
-	byName map[string]Tool
-	meta   metadata
+	root       *Root
+	sh         *snap.Shadow
+	edits      *editLog
+	list       []Tool
+	byName     map[string]Tool
+	meta       metadata
+	diffBudget *diffBudget
 }
 
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 	log := &editLog{}
-	r := &Registry{root: root, sh: sh, edits: log, byName: map[string]Tool{}}
+	r := &Registry{root: root, sh: sh, edits: log, byName: map[string]Tool{}, diffBudget: newDiffBudget(maxDiffCells)}
 	r.add(readFile{root, r}, globFiles{root}, grepFiles{root})
 	r.add(writeFile{root, sh, log, r}, editFile{root, sh, log, r})
 	r.add(bashTool{root})

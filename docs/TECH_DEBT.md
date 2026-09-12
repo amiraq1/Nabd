@@ -47,10 +47,11 @@ that is ~32 MB of matrix alone, matching the 33.6 MB total observed.
   that buffers the full unified diff. Total peak exceeds the matrix by a
   non-trivial margin. The G1 benchmark B/op column (33.6 MB at 2000x2000)
   captures this real total, not just the matrix.
-- **per-call budget**: these limits are PER CALL, not global. Concurrent
-  mutations multiply the allocation — N parallel edits each at the ceiling
-  consume N× the budget. There is currently no aggregate ceiling across
-  concurrent tool calls. [DEFERRED]
+- **aggregate budget**: each `Registry` owns a shared diff-cell budget.
+  Concurrent mutations reserve `n*m` cells before matrix allocation and wait
+  cancellably when the aggregate ceiling would be exceeded. Reservations are
+  released on every return path, so parallel edits cannot multiply the 4M-cell
+  ceiling within one registry.
 - **cancellation bounds time, not memory**: the LCS row-allocation loop
   (`lcs := make([][]int, n+1)`) runs BEFORE the first `ctx.Err()` check. A
   cancellation therefore bounds COMPLETION TIME but not PEAK MEMORY — the

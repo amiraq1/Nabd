@@ -41,6 +41,10 @@ var (
 // record without the patch so hashes and blobs survive. Hunk headers track the
 // new-file line position independently so the patch is syntactically valid.
 func unifiedDiff(ctx context.Context, before, after []byte, path string) (string, error) {
+	return unifiedDiffWithBudget(ctx, nil, before, after, path)
+}
+
+func unifiedDiffWithBudget(ctx context.Context, budget *diffBudget, before, after []byte, path string) (string, error) {
 	// Check cancellation before doing any work.
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -58,6 +62,17 @@ func unifiedDiff(ctx context.Context, before, after []byte, path string) (string
 	if n != 0 && m > maxDiffCells/n {
 		return "", fmt.Errorf("diff work budget exceeded: %d×%d exceeds %d cells", n, m, maxDiffCells)
 	}
+	cells := n * m
+	if budget != nil {
+		if err := budget.acquire(ctx, cells); err != nil {
+			return "", err
+		}
+		defer budget.release(cells)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+
 	// LCS table for the two line sequences. Cancellation is checked once per
 	// outer iteration so a cancelled context terminates the build promptly.
 	lcs := make([][]int, n+1)
