@@ -58,7 +58,7 @@ type Registry struct {
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 	log := &editLog{}
 	r := &Registry{root: root, sh: sh, edits: log, byName: map[string]Tool{}}
-	r.add(readFile{root, r}, globFiles{root}, grepFiles{root})
+	r.add(&readFile{root: root, reg: r}, globFiles{root}, grepFiles{root})
 	r.add(writeFile{root, sh, log, r}, editFile{root, sh, log, r})
 	r.add(bashTool{root})
 	return r
@@ -134,6 +134,18 @@ func (r *Registry) ClearReadState() {
 	r.meta.truncated = false
 	r.meta.nextOffset = 0
 	r.meta.mu.Unlock()
+}
+
+// SetLimit installs an adaptive per-call byte cap on the read_file tool.
+// The function is called on every read to compute the current ceiling from
+// live state (provider rate-limit headers, remaining context budget). nil
+// reverts to the legacy fixed maxReadBytes. A limit that moves silently is
+// a limit the user files a bug about, so the loop emits a Notice when the
+// value changes — that is the loop's job, not this method's.
+func (r *Registry) SetLimit(fn func() int) {
+	if t, ok := r.byName["read_file"].(*readFile); ok {
+		t.SetLimit(fn)
+	}
 }
 
 // LastEdit returns the persisted record of the newest mutation, or nil if

@@ -3,6 +3,8 @@ package agent
 import (
 	"math"
 	"testing"
+
+	"nabd/internal/provider"
 )
 
 // TestCalibrateRatchetRisesOnly: within a session the calibration ratio may
@@ -89,3 +91,84 @@ func TestCalibrateZeroBudgetFirstRise(t *testing.T) {
 		t.Fatalf("ratio=%v, want 1.8 (full jump from zero base)", b.Ratio())
 	}
 }
+
+// TestCalibrateTracksError: Calibrate records the estimation error so /ctx
+// can show the human whether the estimate is trustworthy. After
+// Calibrate(500, 400) the estimate was 20% low, so LastError == 0.2
+// (|500 − 400| / 500).
+func TestCalibrateTracksError(t *testing.T) {
+	b := NewBudget()
+	if !b.Calibrate(500, 400) {
+		t.Fatal("calibration should move the ratio (1.25 > 1.0)")
+	}
+	if math.Abs(b.LastError()-0.2) > 1e-9 {
+		t.Fatalf("LastError=%v, want 0.2", b.LastError())
+	}
+	if math.Abs(b.WorstError()-0.2) > 1e-9 {
+		t.Fatalf("WorstError=%v, want 0.2", b.WorstError())
+	}
+	// A second calibration with a larger error updates both.
+	if !b.Calibrate(600, 400) {
+		t.Fatal("calibration should move the ratio (1.5 > 1.25)")
+	}
+	if math.Abs(b.LastError()-0.333333) > 1e-4 {
+		t.Fatalf("LastError=%v, want ~0.333", b.LastError())
+	}
+	if math.Abs(b.WorstError()-0.333333) > 1e-4 {
+		t.Fatalf("WorstError=%v, want ~0.333 (max)", b.WorstError())
+	}
+	// Calibrated() is true once any calibration has happened.
+	if !b.Calibrated() {
+		t.Fatal("Calibrated() must be true after a calibration")
+	}
+}
+
+// TestCalibrateErrorNoCalibration: before any calibration, LastError and
+// WorstError are 0 and Calibrated() is false — /ctx shows "uncalibrated".
+func TestCalibrateErrorNoCalibration(t *testing.T) {
+	b := NewBudget()
+	if b.LastError() != 0 || b.WorstError() != 0 {
+		t.Fatalf("before calibration: LastError=%v WorstError=%v, want 0 0", b.LastError(), b.WorstError())
+	}
+	if b.Calibrated() {
+		t.Fatal("Calibrated() must be false before any calibration")
+	}
+}
+
+// TestBudgetEstimateUsesTokenizer: when a tokenizer is installed, Estimate
+// uses it for the text portions instead of the chars/4 heuristic. For
+// Arabic text the two diverge, so the counts must differ. This is the
+// acceptance assertion that the estimator is never used when a real
+// tokenizer is available.
+func TestBudgetEstimateUsesTokenizer(t *testing.T) {
+	b := NewBudget()
+	ms := []provider.Message{{Role: provider.User, Text: "مرحبا بالعالم هذا نص طويل للاختبار"}}
+
+	heuristic := b.Estimate(ms)
+
+	// Install a tokenizer that returns a fixed small count per call.
+	fixed := &fakeTokenizer{n: 3}
+	b.SetTokenizer(fixed)
+
+	withTokenizer := b.Estimate(ms)
+
+	// The tokenizer path counts 3 tokens per message text; the heuristic
+	// counts runes/1.6 (much larger for Arabic). They must differ.
+	if withTokenizer == heuristic {
+		t.Fatalf("tokenizer path must differ from heuristic: both=%d", withTokenizer)
+	}
+	if withTokenizer >= heuristic {
+		t.Fatalf("tokenizer count (%d) should be < heuristic count (%d) for this Arabic text", withTokenizer, heuristic)
+	}
+
+	// Removing the tokenizer reverts to the heuristic.
+	b.SetTokenizer(nil)
+	if got := b.Estimate(ms); got != heuristic {
+		t.Fatalf("after removing tokenizer: Estimate=%d, want %d (heuristic)", got, heuristic)
+	}
+}
+
+// fakeTokenizer returns a fixed Count regardless of input, for tests.
+type fakeTokenizer struct{ n int }
+
+func (f *fakeTokenizer) Count(text string) int { return f.n }
