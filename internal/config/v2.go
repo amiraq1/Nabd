@@ -66,20 +66,57 @@ func V2Path() (string, error) {
 // SelectedPath selects one user-scoped configuration. Explicitly selecting
 // both versions, or having both default files present, is fatal.
 func SelectedPath() (string, int, error) {
-	v1, err := Path()
-	if err != nil {
-		return "", 0, err
-	}
-	v2, err := V2Path()
-	if err != nil {
-		return "", 0, err
-	}
+	return selectedPath(os.UserHomeDir)
+}
+
+// selectedPath is SelectedPath with an injectable home resolver. The seam lets
+// tests exercise the fail-closed home-resolution branch on platforms where
+// os.UserHomeDir never fails (e.g. android, which falls back to /sdcard).
+func selectedPath(homeFn func() (string, error)) (string, int, error) {
 	explicitV1 := strings.TrimSpace(os.Getenv(EnvVar)) != ""
 	explicitV2 := strings.TrimSpace(os.Getenv(V2EnvVar)) != ""
 	if explicitV1 && explicitV2 {
 		return "", 0, errors.New("config v1 and config v2 cannot be selected together")
 	}
-	v1Present, err := pathPresent(v1)
+	// Default discovery (neither version explicit) is the only path that
+	// consults the default home files, so it is the only path that requires a
+	// resolvable home. Explicit selection must not be defeated by an unrelated
+	// default-file inspection, and an unresolvable home must not silently skip
+	// the coexistence guard.
+	if !explicitV1 && !explicitV2 {
+		home, err := homeFn()
+		if err != nil {
+			return "", 0, fmt.Errorf("config: cannot resolve home directory for default discovery: %w", err)
+		}
+		defV1 := filepath.Join(home, ".ag", "config")
+		defV2 := filepath.Join(home, ".ag", "config.v2.json")
+		v1Present, err := pathPresent(defV1)
+		if err != nil {
+			return "", 0, err
+		}
+		v2Present, err := pathPresent(defV2)
+		if err != nil {
+			return "", 0, err
+		}
+		if v1Present && v2Present {
+			return "", 0, errors.New("config v1 and config v2 files cannot coexist")
+		}
+	}
+	if explicitV2 {
+		v2, err := V2Path()
+		if err != nil {
+			return "", 0, err
+		}
+		return v2, 2, nil
+	}
+	if explicitV1 {
+		v1, err := Path()
+		if err != nil {
+			return "", 0, err
+		}
+		return v1, 1, nil
+	}
+	v2, err := V2Path()
 	if err != nil {
 		return "", 0, err
 	}
@@ -87,11 +124,12 @@ func SelectedPath() (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	if v1Present && v2Present {
-		return "", 0, errors.New("config v1 and config v2 files cannot coexist")
-	}
-	if explicitV2 || v2Present {
+	if v2Present {
 		return v2, 2, nil
+	}
+	v1, err := Path()
+	if err != nil {
+		return "", 0, err
 	}
 	return v1, 1, nil
 }
@@ -283,6 +321,24 @@ func flattenLimits(l V2Limits, out map[string]string) error {
 }
 
 func resolveCredential(providerName, keyName string, cred V2Credential) (string, error) {
+	return resolveCredentialWithHome(providerName, keyName, cred, os.UserHomeDir)
+}
+
+// expandHome resolves a leading "~/" against the provided home resolver. Only
+// the exact "~/" prefix is supported: bare "~" and shell-style "~user" lookups
+// are not, so they fall through to the absolute-path check and are rejected.
+func expandHome(path string, homeFn func() (string, error)) (string, error) {
+	if !strings.HasPrefix(path, "~/") {
+		return path, nil
+	}
+	home, err := homeFn()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, path[2:]), nil
+}
+
+func resolveCredentialWithHome(providerName, keyName string, cred V2Credential, homeFn func() (string, error)) (string, error) {
 	switch cred.Source {
 	case "env":
 		if cred.Path != "" {
@@ -290,10 +346,14 @@ func resolveCredential(providerName, keyName string, cred V2Credential) (string,
 		}
 		return strings.TrimSpace(os.Getenv(keyName)), nil
 	case "file":
-		if !filepath.IsAbs(cred.Path) {
-			return "", fmt.Errorf("config v2: %s credential path must be absolute", providerName)
+		path, err := expandHome(cred.Path, homeFn)
+		if err != nil {
+			return "", fmt.Errorf("config v2: %s credential path home expansion failed: %w", providerName, err)
 		}
-		data, err := readSecureFile(filepath.Clean(cred.Path), MaxValueBytes)
+		if !filepath.IsAbs(path) {
+			return "", fmt.Errorf("config v2: %s credential path must be absolute or start with ~/", providerName)
+		}
+		data, err := readSecureFile(filepath.Clean(path), MaxValueBytes)
 		if err != nil {
 			return "", fmt.Errorf("config v2: %s credential file: %w", providerName, err)
 		}
