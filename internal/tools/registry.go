@@ -44,6 +44,16 @@ type Registry struct {
 	byName     map[string]Tool
 	meta       metadata
 	diffBudget *diffBudget
+
+	// OnRepair, when set, receives every fix the registry applies, before the
+	// tool runs. cmd/ag wires it to the journal as a Notice; tests record it.
+	// It must not call back into the registry.
+	OnRepair func(Fix)
+
+	// repairOff disables pre-dispatch repair. Production leaves it false; the
+	// NBD-420 measurement harness sets it to measure each rule's effect against
+	// the same call with repair enabled (see repair_rounds_test.go).
+	repairOff bool
 }
 
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
@@ -174,15 +184,50 @@ func (r *Registry) Specs() []provider.ToolSpec {
 // Run dispatches by name. An unknown name is an error the model reads and
 // recovers from, not a crash: models do invent tools.
 func (r *Registry) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
-	t, found := r.byName[c.Name]
+	fixed, _ := r.repairCall(c)
+	name, args := fixed.Name, fixed.Input
+
+	t, found := r.byName[name]
 	if !found {
-		return "", false, fmt.Errorf("unknown tool: %s", c.Name)
+		return "", false, fmt.Errorf("unknown tool: %s", name)
 	}
-	args := c.Input
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
 	return t.Run(ctx, args)
+}
+
+// repairCall is the single point both entry points pass through, so a malformed
+// call is corrected on the plain and the rich path alike. The loop also calls
+// RepairCall before it classifies, because the gate must see what will run
+// rather than what the model wrote; repairing an already-corrected call is a
+// no-op, since a repaired call presents no further fixes.
+func (r *Registry) repairCall(c provider.ToolCall) (provider.ToolCall, []Fix) {
+	if r.repairOff {
+		return c, nil
+	}
+	name, args, fixes := Repair(c.Name, c.Input, r.Specs())
+	for _, f := range fixes {
+		if r.OnRepair != nil {
+			r.OnRepair(f)
+		}
+	}
+	c.Name, c.Input = name, args
+	return c, fixes
+}
+
+// RepairCall corrects a malformed call, announcing every fix through OnRepair.
+// It is the method the agent loop uses before classification, so the permission
+// prompt names the call that will actually be executed.
+func (r *Registry) RepairCall(c provider.ToolCall) provider.ToolCall {
+	fixed, _ := r.repairCall(c)
+	return fixed
+}
+
+// RepairCallWithFixes is RepairCall for callers that need the corrections
+// themselves (tests, and anything that wants to report them).
+func (r *Registry) RepairCallWithFixes(c provider.ToolCall) (provider.ToolCall, []Fix) {
+	return r.repairCall(c)
 }
 
 // spec is sugar so each tool declares its schema in one line.
@@ -218,6 +263,9 @@ var (
 )
 
 func (r *Registry) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
+	fixed, _ := r.repairCall(provider.ToolCall{Name: name, Input: raw})
+	name, raw = fixed.Name, fixed.Input
+
 	t, ok := r.byName[name]
 	if !ok {
 		return agent.Outcome{}, fmt.Errorf("unknown tool: %s", name)
