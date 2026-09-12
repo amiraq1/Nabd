@@ -11,7 +11,7 @@ require (
 	github.com/hinshun/vt10x v0.0.0-20220301184237-5011da428d02
 	github.com/muesli/cancelreader v0.2.2
 	github.com/muesli/termenv v0.16.0
-	golang.org/x/sys v0.38.0
+	golang.org/x/sys v0.48.0
 )
 
 replace github.com/charmbracelet/bubbles => ./third_party/bubbles
