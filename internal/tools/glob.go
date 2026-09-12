@@ -92,6 +92,12 @@ func (t globFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 		if ferr != nil {
 			return nil
 		}
+		// T4: only regular files are reportable. A symlink listed here becomes
+		// a path the model will hand to read_file, and the descriptor walk
+		// refuses such a path anyway; advertising it is a containment lie.
+		if !fi.Mode().IsRegular() {
+			return nil
+		}
 		hits = append(hits, hit{rel, fi.ModTime()})
 		return nil
 	})

@@ -241,8 +241,10 @@ func spec(name, desc, schema string) provider.ToolSpec {
 // none of the agent's business.
 func skipDir(name string) bool {
 	switch name {
-	case ".git", "node_modules", "vendor", ".venv", "__pycache__",
+	case ".git", ".ag", "node_modules", "vendor", ".venv", "__pycache__",
 		"target", "dist", "build", ".next", ".cache", ".idea":
+		// .ag holds the shadow store: every historical version of every file.
+		// A traversal tool that walks it would read deleted content back out.
 		return true
 	}
 	return false

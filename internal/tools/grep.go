@@ -86,11 +86,19 @@ func (t grepFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	hits, files, truncated := 0, 0, false
 
 	scan := func(p string) error {
-		rel := filepath.ToSlash(t.root.Rel(p))
+		rel, abs, err := writePathFromRoot(t.root, p)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
 		if segs != nil && !matchSegs(segs, strings.Split(rel, "/")) {
 			return nil
 		}
-		f, err := os.Open(p)
+		// T4: WalkDir reports a symlink as a plain entry, so opening by path
+		// here would follow it and print an outside file's content under an
+		// inside path. openRegularFromRoot proves regularity on the descriptor
+		// and refuses everything else.
+		f, err := openRegularFromRoot(t.root, rel, abs)
 		if err != nil {
 			return nil
 		}
@@ -127,7 +135,10 @@ func (t grepFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 		return nil
 	}
 
-	fi, err := os.Stat(base)
+	// T4: Lstat, not Stat, so a final-component swap to a symlink is refused
+	// rather than measured and then walked. base is already symlink-resolved by
+	// Resolve, so on the ordinary path the two agree.
+	fi, err := os.Lstat(base)
 	if err != nil {
 		return "", false, err
 	}
