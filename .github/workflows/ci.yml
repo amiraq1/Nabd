@@ -151,7 +151,8 @@ jobs:
           n=${#sboms[@]}
           test "$n" -eq 5 || { ls -la dist; echo "expected 5 SBOMs, got $n"; exit 1; }
           test "$(grep -c 'sbom\.json' dist/checksums.txt)" -eq 5
-          printf '%s\n' "${sboms[@]}" | sed 's#^.*/##' | sort -u | test "$(wc -l)" -eq 5
+          unique=$(printf '%s\n' "${sboms[@]}" | sed 's#^.*/##' | sort -u | wc -l)
+          test "$unique" -eq 5 || { printf '%s\n' "${sboms[@]}"; echo "expected 5 distinct SBOM names, got $unique"; exit 1; }
           echo "SBOM coverage verified"
 
   cross:
