@@ -1,12 +1,9 @@
 name: Apply phase 0
-
 on:
   push:
     branches: ["docs/phase-0-freshness"]
-
 permissions:
   contents: write
-
 jobs:
   apply:
     if: github.actor == 'amiraq1' && !contains(github.event.head_commit.message, '[phase0-applied]')
@@ -20,15 +17,11 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
-          readme = Path('README.md')
-          text = readme.read_text()
-          old = '''**No GitHub Release has been published yet:** `v1.2.0` is a git tag only and
-          carries no release assets — the release workflow was added to the repository
-          after `v1.2.0` was tagged. The pipeline is ready for the next `v*` tag
-          (target: v1.3.0). See `docs/RELEASING.md`.
-          '''
-          new = '''Published releases are available on the [Releases page](https://github.com/amiraq1/Nabd/releases):
+          p = Path('README.md'); s = p.read_text()
+          pattern = r'\*\*No GitHub Release has been published yet:\*\*.*?See `docs/RELEASING\.md`\.\n'
+          replacement = """Published releases are available on the [Releases page](https://github.com/amiraq1/Nabd/releases):
 
           | Release | Published | Assets |
           |---|---|---|
@@ -42,42 +35,32 @@ jobs:
           ```
 
           See `docs/RELEASING.md` for the release process.
-          '''
-          if old not in text:
-              raise SystemExit('README release block not found')
-          readme.write_text(text.replace(old, new))
+          """
+          s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+          if n != 1: raise SystemExit('README release block not found')
+          p.write_text(s)
 
-          security = Path('SECURITY.md')
-          text = security.read_text()
-          old = '''Only the latest tagged release is supported. Older tags, including `v1.2.0`
-          and earlier, receive no backports.
-          '''
-          new = '''Only the latest tagged release is supported. Older tagged releases receive no
-          backports.
-          '''
-          if old not in text:
-              raise SystemExit('SECURITY version block not found')
-          security.write_text(text.replace(old, new))
+          p = Path('SECURITY.md'); s = p.read_text()
+          pattern = r'Only the latest tagged release is supported\. Older tags, including `v1\.2\.0`\nand earlier, receive no backports\.\n'
+          replacement = 'Only the latest tagged release is supported. Older tagged releases receive no\nbackports.\n'
+          s, n = re.subn(pattern, replacement, s, count=1)
+          if n != 1: raise SystemExit('SECURITY version block not found')
+          p.write_text(s)
 
-          threat = Path('docs/THREAT_MODEL.md')
-          text = threat.read_text()
-          old = '''Sourced from the code as of commit d63da42 (the last code change in the
-          NBD-306/204 batch; the commits after it are documentation only and change no
-          code), not from intention.
-          Primary files:'''
-          new = '''Sourced from the code at `master` commit `7d9e2f07f9561d4e79b2db6164387b3eac6660ff`, not from intention.
-          Last reviewed: 2026-09-12 · `7d9e2f07f9561d4e79b2db6164387b3eac6660ff`.
-          Primary files:'''
-          if old not in text:
-              raise SystemExit('THREAT_MODEL provenance block not found')
-          threat.write_text(text.replace(old, new))
+          p = Path('docs/THREAT_MODEL.md'); s = p.read_text()
+          pattern = r'Sourced from the code as of commit d63da42.*?code\), not from intention\.\n'
+          replacement = ('Sourced from the code at `master` commit '
+            '`7d9e2f07f9561d4e79b2db6164387b3eac6660ff`, not from intention.\n'
+            'Last reviewed: 2026-09-12 · `7d9e2f07f9561d4e79b2db6164387b3eac6660ff`.\n')
+          s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+          if n != 1: raise SystemExit('THREAT_MODEL provenance block not found')
+          p.write_text(s)
 
-          ci = Path('.github/workflows/ci.yml')
-          text = ci.read_text()
-          anchor = '''    - name: Environment diagnostics
-                run: go env GOOS GOARCH CGO_ENABLED CC
-          '''
-          step = '''    - name: Threat model freshness
+          p = Path('.github/workflows/ci.yml'); s = p.read_text()
+          anchor = "    - name: Environment diagnostics\n      run: go env GOOS GOARCH CGO_ENABLED CC\n"
+          step = """
+
+              - name: Threat model freshness
                 if: github.event_name == 'pull_request'
                 run: |
                   base=${{ github.event.pull_request.base.sha }}
@@ -91,10 +74,9 @@ jobs:
                     echo "$sec"
                     exit 1
                   fi
-          '''
-          if anchor not in text:
-              raise SystemExit('CI insertion anchor not found')
-          ci.write_text(text.replace(anchor, anchor + '\n' + step))
+          """
+          if anchor not in s: raise SystemExit('CI insertion anchor not found')
+          p.write_text(s.replace(anchor, anchor + step, 1))
           PY
           rm .github/workflows/phase0-apply.yml
           ! grep -qi 'no GitHub Release has been published' README.md
@@ -105,6 +87,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add README.md SECURITY.md docs/THREAT_MODEL.md .github/workflows/ci.yml .github/workflows/phase0-apply.yml
+          git add -A
           git commit -m 'docs: refresh release and security claims [phase0-applied]'
           git push
