@@ -12,7 +12,6 @@ import (
 
 	"nabd/internal/config"
 	"nabd/internal/provider"
-	"nabd/internal/token"
 )
 
 const (
@@ -55,21 +54,6 @@ type Budget struct {
 	Limit   int // context window
 	Reserve int // room for the reply plus the system prompt
 	ratio   float64
-	// tokenizer, when set, replaces EstimateText for message estimation.
-	// nil means "use the heuristic" — the safe default for an unknown model.
-	tokenizer token.Tokenizer
-	// lastError is |actual − estimated| / actual of the most recent
-	// calibration point; worstError is the session max. Both are 0 until
-	// the first calibration.
-	lastError, worstError float64
-}
-
-func init() {
-	// Register the canonical chars/4 estimator into the token package so
-	// HeuristicTokenizer uses the same implementation as EstimateText.
-	// (The token package cannot import agent — that would cycle — so the
-	// registration flows the other way.)
-	token.SetTextHeuristic(EstimateText)
 }
 
 func NewBudget() *Budget {
@@ -80,15 +64,6 @@ func NewBudget() *Budget {
 		}
 	}
 	return b
-}
-
-// SetTokenizer installs a real tokenizer for message estimation. Nil
-// reverts to the heuristic. Called once at startup from the active
-// provider's name; safe to call later if the model changes mid-session.
-func (b *Budget) SetTokenizer(t token.Tokenizer) {
-	b.mu.Lock()
-	b.tokenizer = t
-	b.mu.Unlock()
 }
 
 // maxOutputTokens is the output reservation (max_tokens) sent to the
@@ -115,30 +90,8 @@ func (b *Budget) Usable() int { return b.Limit - b.Reserve }
 func (b *Budget) Estimate(ms []provider.Message) int {
 	b.mu.Lock()
 	r := b.ratio
-	tok := b.tokenizer
 	b.mu.Unlock()
-	if tok != nil {
-		return int(float64(estimateMessagesWith(ms, tok)) * r)
-	}
 	return int(float64(EstimateMessages(ms)) * r)
-}
-
-// estimateMessagesWith is EstimateMessages using a real tokenizer instead
-// of the chars/4 heuristic for the text portions. The per-message and
-// per-tool-call framing overheads stay the same — only the text count
-// changes.
-func estimateMessagesWith(ms []provider.Message, tok token.Tokenizer) int {
-	n := 0
-	for _, m := range ms {
-		n += perMessage + tok.Count(m.Text)
-		for _, c := range m.ToolCalls {
-			n += perToolCall + tok.Count(c.Name) + tok.Count(string(c.Input))
-		}
-		for _, r := range m.ToolResults {
-			n += perMessage + tok.Count(r.Output)
-		}
-	}
-	return n
 }
 
 // Ratio exposes the current calibration factor, for journaling.
@@ -189,19 +142,6 @@ func (b *Budget) Calibrate(actual, estimated int) bool {
 	if next > maxRatio {
 		next = maxRatio
 	}
-	// Track how far off the estimate was at this calibration point, so
-	// /ctx can show the human whether the estimate is trustworthy. The
-	// error is |actual − estimated| / actual — a dimensionless fraction.
-	// Done for every valid observation, even when the ratio does not move.
-	if estimated > 0 {
-		err := math.Abs(float64(actual-estimated)) / float64(actual)
-		if !(math.IsNaN(err) || math.IsInf(err, 0)) {
-			b.lastError = err
-			if err > b.worstError {
-				b.worstError = err
-			}
-		}
-	}
 	// Conservative ratchet: downward drift is the observed failure mode
 	// (1.50 -> 1.42); pin to the session high-water mark instead of
 	// accepting the lower reading.
@@ -213,33 +153,6 @@ func (b *Budget) Calibrate(actual, estimated int) bool {
 	}
 	b.ratio = next
 	return true
-}
-
-// LastError returns |actual − estimated| / actual of the most recent
-// calibration point. 0 until the first calibration (or when the only
-// observations were degenerate). A value of 0.2 means the estimate was
-// 20% off.
-func (b *Budget) LastError() float64 {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.lastError
-}
-
-// WorstError returns the max LastError seen this session. 0 until the
-// first calibration.
-func (b *Budget) WorstError() float64 {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.worstError
-}
-
-// Calibrated reports whether any calibration has happened this session
-// (i.e. LastError is meaningful). Exposed so /ctx can show
-// "uncalibrated" instead of a misleading "0%".
-func (b *Budget) Calibrated() bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.worstError > 0
 }
 
 const (
