@@ -1,0 +1,24 @@
+name: Capture phase 4 progress
+on:
+  push:
+    branches: [chore/phase4-code-hygiene]
+permissions:
+  contents: write
+jobs:
+  capture:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: chore/phase4-code-hygiene
+      - name: Transform and commit partial progress
+        run: |
+          sed -i 's/KNOWN_LIMITATION_CIRCUIT_BREAKER: NOT_IMPLEMENTED (P section)/KNOWN_LIMITATION_CIRCUIT_BREAKER: NOT_IMPLEMENTED/' scripts/apply_phase4.py
+          python3 scripts/apply_phase4.py || true
+          gofmt -w internal/tools internal/provider/router.go internal/snap/*_windows.go internal/config/open_windows.go internal/config/owner_other.go || true
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "chore: capture phase 4 hygiene progress"
+          git push origin HEAD:chore/phase4-code-hygiene
