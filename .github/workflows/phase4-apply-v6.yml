@@ -1,0 +1,33 @@
+name: Apply phase 4 hygiene v6
+on:
+  push:
+    branches: [chore/phase4-code-hygiene]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: chore/phase4-code-hygiene
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      - name: Apply code changes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/apply_phase4.py')
+          s = p.read_text().replace('KNOWN_LIMITATION_CIRCUIT_BREAKER: NOT_IMPLEMENTED (P section)', 'KNOWN_LIMITATION_CIRCUIT_BREAKER: NOT_IMPLEMENTED')
+          s = s.split('for name in [".github/workflows/go-checks.yml"')[0]
+          p.write_text(s)
+          PY
+          python3 scripts/apply_phase4.py
+          gofmt -w internal/tools internal/provider/router.go internal/snap/*_windows.go internal/config/open_windows.go internal/config/owner_other.go
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add internal .github/workflows/ci.yml
+          git commit -m "chore: complete phase 4 code hygiene"
+          git push origin HEAD:chore/phase4-code-hygiene
