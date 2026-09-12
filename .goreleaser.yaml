@@ -15,25 +15,35 @@ builds:
       - -X nabd/internal/build.version={{.Version}}
       - -X nabd/internal/build.commit={{.FullCommit}}
       - -X nabd/internal/build.date={{.CommitDate}}
-    goos:
-      - linux
-      - darwin
-      - android
-    goarch:
-      - amd64
-      - arm64
+    goos: [linux, darwin, android]
+    goarch: [amd64, arm64]
     ignore:
       - goos: android
         goarch: amd64
 
 archives:
   - id: nabd
-    formats:
-      - binary
+    formats: [binary]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 checksum:
   name_template: checksums.txt
+
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - --yes
+      - --output-certificate=${certificate}
+      - --output-signature=${signature}
+      - ${artifact}
+    artifacts: checksum
+
+sboms:
+  - artifacts: archive
+    documents:
+      - "${artifact}.sbom.json"
 
 changelog:
   sort: asc
