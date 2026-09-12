@@ -86,7 +86,14 @@ func TestOpenOrCreateDirCreatesChain(t *testing.T) {
 
 // 4: created directories inherit the nearest existing ancestor's mode.
 func TestOpenOrCreateDirInheritsAncestorMode(t *testing.T) {
-	root := t.TempDir() // t.TempDir() is 0o700 on this platform
+	root := t.TempDir()
+	// t.TempDir() is created as 0o777&^umask (testing.makeTempDir uses
+	// os.Mkdir(dir, 0777)), so its mode is environment-dependent: 0700 under
+	// Termux's umask 0077, 0755 under CI's 0022. Pin it, so this test is about
+	// inheritance from an existing ancestor, not about the runner's umask.
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
 
 	f, err := OpenOrCreateDir(root, filepath.Join("p", "q"), 0o755)
 	if err != nil {

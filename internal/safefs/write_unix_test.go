@@ -71,7 +71,12 @@ func TestWriteFileAtomicCreatesFile(t *testing.T) {
 // 2: missing parents are created with the inherited mode; the file keeps its
 // own mode.
 func TestWriteFileAtomicCreatesParentsWithInheritedMode(t *testing.T) {
-	root := t.TempDir() // 0o700
+	root := t.TempDir()
+	// t.TempDir() is 0o777&^umask, so its mode differs between Termux (0077)
+	// and CI (0022). Pin it so the inherited mode is the subject of the test.
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
 
 	err := WriteFileAtomic(root, filepath.Join("a", "b", "file.txt"), []byte("x"), 0o600)
 	if err != nil {
