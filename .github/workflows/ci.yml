@@ -10,6 +10,39 @@ permissions:
   contents: read
 
 jobs:
+  pr-checklist:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Required PR security checklist
+        run: bash scripts/check-pr-security-checklist.sh
+
+  module-tidiness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          check-latest: true
+      - run: go mod tidy -diff
+      - run: go mod tidy -diff
+        working-directory: third_party/bubbles
+
+  vulnerability-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+          check-latest: true
+      - name: Run govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          "$(go env GOPATH)/bin/govulncheck" ./...
+
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -24,9 +57,6 @@ jobs:
         check-latest: true
     - name: Environment diagnostics
       run: go env GOOS GOARCH CGO_ENABLED CC
-    - name: Required PR security checklist
-      if: github.event_name == 'pull_request'
-      run: bash scripts/check-pr-security-checklist.sh
     - name: Threat model freshness guard tests
       run: bash scripts/test-threat-model-freshness.sh
     - name: Threat model freshness
@@ -34,14 +64,6 @@ jobs:
       env:
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
       run: bash scripts/check-threat-model-freshness.sh "$BASE_SHA"
-    - name: Module tidiness
-      run: |
-        go mod tidy -diff
-        (cd third_party/bubbles && go mod tidy -diff)
-    - name: Vulnerability scan
-      run: |
-        go install golang.org/x/vuln/cmd/govulncheck@latest
-        "$(go env GOPATH)/bin/govulncheck" ./...
     - name: Check formatting (gofmt)
       run: test -z "$(gofmt -l .)"
     - name: Build
@@ -79,9 +101,7 @@ jobs:
       shell: bash
       run: |
         set -o pipefail
-        go test ./internal/ui/ -run '^$' \
-          -bench '^(BenchmarkRenderItems500|BenchmarkFormatInlineLong|BenchmarkFormatMarkdownLong|BenchmarkViewFullScreen)$' \
-          -benchmem -benchtime=10x -count=5 2>&1 | tee bench-ui.txt
+        go test ./internal/ui/ -run '^$' -bench '^(BenchmarkRenderItems500|BenchmarkFormatInlineLong|BenchmarkFormatMarkdownLong|BenchmarkViewFullScreen)$' -benchmem -benchtime=10x -count=5 2>&1 | tee bench-ui.txt
     - name: Upload benchmark artifact
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
