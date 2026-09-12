@@ -64,6 +64,8 @@ jobs:
       env:
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
       run: bash scripts/check-threat-model-freshness.sh "$BASE_SHA"
+    - name: Threat model test citations
+      run: bash scripts/check-threat-model-tests.sh
     - name: Check formatting (gofmt)
       run: test -z "$(gofmt -l .)"
     - name: Build
@@ -121,6 +123,36 @@ jobs:
         go build ./...
         go test ./... -race -count=1
         rm -rf "$tmp"
+
+  release-dryrun:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.1'
+          check-latest: true
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      - name: Snapshot release, no publish, no sign
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean --snapshot --skip=publish,sign,announce
+      - name: Assert one distinct SBOM per binary, all checksummed
+        shell: bash
+        run: |
+          shopt -s nullglob
+          sboms=(dist/*.sbom.json)
+          n=${#sboms[@]}
+          test "$n" -eq 5 || { ls -la dist; echo "expected 5 SBOMs, got $n"; exit 1; }
+          test "$(grep -c 'sbom\.json' dist/checksums.txt)" -eq 5
+          printf '%s\n' "${sboms[@]}" | sed 's#^.*/##' | sort -u | test "$(wc -l)" -eq 5
+          echo "SBOM coverage verified"
 
   cross:
     runs-on: ubuntu-latest
