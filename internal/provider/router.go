@@ -15,7 +15,7 @@
 //
 // # Known limitations (documented, not defects)
 //
-//	KNOWN_LIMITATION_CIRCUIT_BREAKER: NOT_IMPLEMENTED (P section)
+//	CIRCUIT_BREAKER: 401/403 opens only that route for a five-minute cooldown; the first request after expiry is the half-open probe
 //	KNOWN_LIMITATION_REMOTE_CANCELLATION: YES (M section)
 //	KNOWN_LIMITATION_DOUBLE_BILLING_RACE: YES (M section)
 //	KNOWN_LIMITATION_WORST_CASE_LATENCY:
