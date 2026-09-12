@@ -61,6 +61,7 @@ filesystem sandbox.
 | Config descriptor opening rejects symlinks and blocking special files | REDUCED | `O_NOFOLLOW` and `O_NONBLOCK`, followed by descriptor validation |
 | Config v2 has no implicit environment credential fallback | GUARANTEED | credential sources must explicitly use `env` or a secure absolute `file` only |
 | The router's Retry-After wait budget is bounded, opt-in, and pre-commit only | GUARANTEED | `NABD_ROUTER_RETRY_AFTER_WAIT` is parsed into whole seconds in `[0, 120]` and defaults to 0 (disabled); the wait runs at most once per `Stream`, strictly before the commit point, through the injected clock and cancellable by the parent context. Evidence: `TestParseRetryAfterWait`, `TestWithRetryAfterWaitClamps`, `TestShouldWaitOut` |
+| The runtime status row never claims progress after a terminal failure | GUARANTEED | `RunError` and `Interrupted` retire the progress claims when the event is projected, instead of waiting for the runner goroutine to return; the send gate (`busy`) is left set so a failed run cannot be followed by a second concurrent run before `doneMsg`. Evidence: `TestRunErrorRetiresProgressStatus`, `TestRunErrorKeepsSendGate`, `TestInterruptedRetiresProgressStatus`, `TestDoneMsgClearsRunFailedStatus` |
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
@@ -246,3 +247,20 @@ Each tool registry shares one cancellable LCS cell budget across concurrent muta
 The standalone UI width-contract gate checks text measurement, truncation bounds, composed frame width, Unicode segmentation, Arabic combining marks, CJK width, emoji sequences, and cursor alignment. The gate runs on every pull request, including dependency-only changes, so text-width dependency upgrades cannot bypass the UI regression suite.
 
 Textarea vertical cursor navigation uses grapheme-cluster boundaries rather than raw rune-width accumulation. Arabic combining marks must remain zero-width during vertical movement, and the visible target column must be preserved across ASCII and Arabic lines. `TestTripwire_TextareaColumnMappingChanged` detects dependency or local-fork behavior changes, while `TestCorrectness_ComposerNavigationColumnAlignment` enforces the intended cursor-alignment contract.
+
+### Status-row truthfulness
+
+The runtime status row is a security-relevant signal, not decoration: it is the
+only place the user learns whether the agent is still acting on their behalf. A
+row that claims `Generating…` after the run is dead invites the user to wait
+instead of inspecting or re-approving, and it hides the failure that the
+journal already recorded.
+
+`RunError` and `Interrupted` are terminal. Both retire the progress claims
+(`running`, `runningTool`) at projection time and replace them with an explicit
+failure line, rather than waiting for the runner goroutine to return. The send
+gate (`busy`) is deliberately not cleared there: only `doneMsg` proves the
+runner has actually returned, so a failed run can never be overlapped by a
+second concurrent run. Evidence: `TestRunErrorRetiresProgressStatus`,
+`TestRunErrorKeepsSendGate`, `TestInterruptedRetiresProgressStatus`,
+`TestDoneMsgClearsRunFailedStatus`.

@@ -24,6 +24,10 @@ const (
 	minViewportWidth    = 20
 )
 
+// runFailedStatus is the transient row shown between a journaled terminal
+// failure and doneMsg. ASCII only, like every other visible UI string.
+const runFailedStatus = "run ended with an error"
+
 // Feed is the projected, scrollable feed plus a multiline composer and a
 // deterministic input router that arbitrates between the permission modal,
 // the composer, the viewport and global shortcuts.
@@ -281,15 +285,29 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// markRunFailed retires the progress claims the moment a terminal failure
+// is projected. RunError/Interrupted mean the turn is over, but m.running
+// is only cleared by doneMsg, which lands when the runner goroutine
+// returns — so between the two the status row kept rendering
+// "Generating…" over a dead run. m.busy is deliberately left untouched:
+// it gates a second send, and only doneMsg proves the runner returned.
+func (m *Feed) markRunFailed() {
+	m.running = false
+	m.runningTool = ""
+	m.status = runFailedStatus
+}
+
 // trackState keeps the permission modal in lockstep with the event stream:
 // PermAsk opens it, PermReply/Interrupted close it. Run busy state is NOT
 // derived from events here: RunStart/RunEnd are session boundaries (one per
 // session), not per-turn boundaries, so the feed manages busy/running from
-// trySend/doneMsg instead.
+// trySend/doneMsg instead. The one exception is a terminal failure, which
+// retires the progress claims through markRunFailed.
 func (m *Feed) trackState(e agent.Event) {
 	switch e.Type {
 	case agent.RunError:
 		m.errorSeenSinceSend = true
+		m.markRunFailed()
 	case agent.ToolStart:
 		if e.Call != nil {
 			m.runningTool = e.Call.Name
@@ -311,6 +329,7 @@ func (m *Feed) trackState(e agent.Event) {
 	case agent.PermReply, agent.Interrupted:
 		if e.Type == agent.Interrupted {
 			m.errorSeenSinceSend = true
+			m.markRunFailed()
 		}
 		if e.Type == agent.PermReply && e.Decision != agent.Deny && e.Call != nil {
 			m.runningTool = e.Call.Name
