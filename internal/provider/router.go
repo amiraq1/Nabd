@@ -13,6 +13,15 @@
 //   - The output channel is closed exactly once in every code path (E.1).
 //   - StreamID is 16 random bytes (128 bits) from crypto/rand, hex-encoded (A-01).
 //
+// # Retry-After (opt-in)
+//
+//	When every route has failed and at least one failure carried a positive
+//	Retry-After within the configured budget (WithRetryAfterWait, default 0 =
+//	disabled), the router waits once and re-runs the full route list before
+//	reporting exhaustion. The wait happens strictly before commit, so it can
+//	never interleave with delivered output, and it is performed at most once
+//	per Stream call.
+//
 // # Known limitations (documented, not defects)
 //
 //	CIRCUIT_BREAKER: 401/403 opens only that route for a five-minute cooldown; the first request after expiry is the half-open probe
@@ -20,8 +29,10 @@
 //	KNOWN_LIMITATION_DOUBLE_BILLING_RACE: YES (M section)
 //	KNOWN_LIMITATION_WORST_CASE_LATENCY:
 //	  The conservative router-controlled upper bound before full exhaustion is:
-//	  route_count × (PRESTREAM_TIMEOUT + ROUTE_CLEANUP_TIMEOUT)
-//	  plus bounded local scheduling and error-processing overhead.
+//	  cycles × route_count × (PRESTREAM_TIMEOUT + ROUTE_CLEANUP_TIMEOUT)
+//	  plus the single Retry-After wait and bounded local scheduling overhead.
+//	  cycles is 1 unless a Retry-After wait budget is configured, in which case
+//	  it is at most 2.
 //	  A parent-context deadline may shorten this duration.
 //	  If cleanup of any route exceeds ROUTE_CLEANUP_TIMEOUT, routing terminates
 //	  immediately with ErrRouteCleanupTimeout and no subsequent route is started.
@@ -139,13 +150,13 @@ func (e *RouterExhaustedError) Error() string {
 // per-attempt routing decisions (Section E). It is NOT a semantic chunk and does NOT
 // trigger commit (J.5). Consumers must tolerate its absence.
 //
-// Status values: "attempted", "failed", "selected", "exhausted".
+// Status values: "attempted", "failed", "selected", "blocked", "waiting", "exhausted".
 type ChunkRouteTrace struct {
 	StreamID string
 	Provider string
 	Model    string
 	Attempt  int
-	Status   string // attempted | failed | selected | exhausted
+	Status   string // attempted | failed | selected | blocked | waiting | exhausted
 	Reason   string // sanitized, optional
 }
 
@@ -185,13 +196,15 @@ func (r *realTimer) Reset(d time.Duration) bool { return r.t.Reset(d) }
 // pairs) in order, falling back on failure, and committing to the first route
 // that delivers a semantic chunk (Text, ToolCall, or Stop).
 //
-// All fields are unexported and fixed at construction, except newStreamID,
-// which is the sole testing-only override (WithStreamIDFunc) (I.1-I.5, I.11).
+// All fields are unexported and fixed at construction, except newStreamID and
+// retryAfterWait, which are set once immediately after construction via
+// WithStreamIDFunc / WithRetryAfterWait (I.1-I.5, I.11).
 // Router is safe for concurrent use after construction (I.8).
 type Router struct {
 	routes           []Route
 	prestreamTimeout time.Duration
 	cleanupTimeout   time.Duration
+	retryAfterWait   time.Duration
 	clock            Clock
 	name             string
 	newStreamID      func() (string, error)
@@ -282,6 +295,23 @@ func (r *Router) WithStreamIDFunc(fn func() (string, error)) *Router {
 	return r
 }
 
+// WithRetryAfterWait sets the maximum Retry-After the router is willing to wait
+// out once, after every route has failed, before re-running the full route list.
+//
+// A non-positive budget (the default) disables the behavior entirely: exhaustion
+// is reported immediately, exactly as before. The wait is performed at most once
+// per Stream call and only strictly before commit.
+func (r *Router) WithRetryAfterWait(d time.Duration) *Router {
+	if d < 0 {
+		d = 0
+	}
+	if d > maxRetryCeiling {
+		d = maxRetryCeiling
+	}
+	r.retryAfterWait = d
+	return r
+}
+
 // ─── Stream ───────────────────────────────────────────────────────────────────
 
 // Stream implements Provider. It returns promptly — all routing is asynchronous.
@@ -307,18 +337,83 @@ func (r *Router) Stream(ctx context.Context, req Request) (<-chan Chunk, error) 
 
 // ─── route: the main routing goroutine ────────────────────────────────────────
 
+// route runs one full pass over the route list and, when a Retry-After wait
+// budget is configured and the observed Retry-After fits inside it, one further
+// pass after waiting. With the default budget of zero it performs exactly one
+// pass, which is the pre-existing behavior.
 func (r *Router) route(ctx context.Context, req Request, streamID string, out chan<- Chunk) {
 	defer close(out)
 
-	var (
-		attempts []ProviderError
-		allRL    = true
-	)
+	for cycle := 0; ; cycle++ {
+		attempts, allRL, terminal := r.routeCycle(ctx, req, streamID, out)
+		if terminal {
+			return
+		}
+
+		kind := ExhaustionMixed
+		if allRL && len(attempts) > 0 {
+			kind = ExhaustionRateLimitOnly
+		}
+		retryAfter := shortestPositiveRetryAfter(attempts)
+
+		if cycle == 0 && r.shouldWaitOut(retryAfter) {
+			sendTrace(out, ChunkRouteTrace{
+				StreamID: streamID,
+				Attempt:  len(attempts),
+				Status:   "waiting",
+				Reason: fmt.Sprintf("retry-after %s; retrying all routes once",
+					retryAfter.Round(time.Second)),
+			})
+			if !r.waitOut(ctx, retryAfter) {
+				sendError(out, ctx.Err())
+				return
+			}
+			continue
+		}
+
+		r.emitExhausted(out, streamID, attempts, kind, retryAfter)
+		return
+	}
+}
+
+// shouldWaitOut reports whether the router should wait out the observed
+// Retry-After and retry the route list once more.
+func (r *Router) shouldWaitOut(retryAfter time.Duration) bool {
+	return r.retryAfterWait > 0 && retryAfter > 0 && retryAfter <= r.retryAfterWait
+}
+
+// waitOut blocks for d using the injected clock. It returns false if the parent
+// context ended first, in which case the caller must abort.
+func (r *Router) waitOut(ctx context.Context, d time.Duration) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+	t := r.clock.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C():
+		return ctx.Err() == nil
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// routeCycle attempts every route once, in order. It returns the collected
+// per-route failures, whether every failure was a rate limit, and whether the
+// cycle already produced a terminal outcome (commit, cancellation, cleanup
+// timeout, or a non-retryable error) and therefore emitted its own final chunk.
+func (r *Router) routeCycle(
+	ctx context.Context,
+	req Request,
+	streamID string,
+	out chan<- Chunk,
+) (attempts []ProviderError, allRL bool, terminal bool) {
+	allRL = true
 
 	for idx, re := range r.routes {
 		if ctx.Err() != nil {
 			sendError(out, ctx.Err())
-			return
+			return attempts, allRL, true
 		}
 		if !r.routeAllowed(re) {
 			sendTrace(out, ChunkRouteTrace{
@@ -369,20 +464,20 @@ func (r *Router) route(ctx context.Context, req Request, streamID string, out ch
 
 		switch outcome.kind {
 		case outcomeCommitted:
-			return
+			return attempts, allRL, true
 
 		case outcomeCleanupTimeout:
 			sendError(out, ErrRouteCleanupTimeout)
-			return
+			return attempts, allRL, true
 
 		case outcomeParentCancelled:
 			sendError(out, ctx.Err())
-			return
+			return attempts, allRL, true
 
 		case outcomeNonRetryableError:
 			// Non-retryable error (e.g. generic 400 Bad Request) stops fallback immediately.
 			sendError(out, outcome.nonRetryErr)
-			return
+			return attempts, allRL, true
 
 		case outcomeFallbackEligible:
 			pe := outcome.provErr
@@ -404,13 +499,18 @@ func (r *Router) route(ctx context.Context, req Request, streamID string, out ch
 		}
 	}
 
-	kind := ExhaustionMixed
-	if allRL && len(attempts) > 0 {
-		kind = ExhaustionRateLimitOnly
-	}
+	return attempts, allRL, false
+}
 
-	retryAfter := shortestPositiveRetryAfter(attempts)
-
+// emitExhausted sends the exhausted trace and the single terminal chunk that
+// describes why no route produced output.
+func (r *Router) emitExhausted(
+	out chan<- Chunk,
+	streamID string,
+	attempts []ProviderError,
+	kind ExhaustionKind,
+	retryAfter time.Duration,
+) {
 	sendTrace(out, ChunkRouteTrace{
 		StreamID: streamID,
 		Provider: "",
@@ -434,14 +534,15 @@ func (r *Router) route(ctx context.Context, req Request, streamID string, out ch
 				RawMessage: buildSanitizedAggregate(attempts),
 			},
 		}
-	} else {
-		err := &RouterExhaustedError{
-			Attempts:   attempts,
-			Kind:       kind,
-			RetryAfter: retryAfter,
-		}
-		out <- Chunk{Kind: ChunkError, Err: err, Retryable: true}
+		return
 	}
+
+	err := &RouterExhaustedError{
+		Attempts:   attempts,
+		Kind:       kind,
+		RetryAfter: retryAfter,
+	}
+	out <- Chunk{Kind: ChunkError, Err: err, Retryable: true}
 }
 
 // ─── outcomeKind ──────────────────────────────────────────────────────────────
