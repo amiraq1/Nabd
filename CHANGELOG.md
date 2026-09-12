@@ -6,6 +6,16 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+## v1.5.0
+
+Descriptor-relative file access on Android/Termux (Phase 3).
+
+- `read_file`, `glob`, `grep`, `write_file`, `edit_file`, and `/undo` open through the
+  relative path from a root descriptor with `O_NOFOLLOW` and act relative to the parent's
+  descriptor, closing the resolve-then-open race. The absolute path is reporting metadata only.
+- `glob` and `grep` no longer surface symlinked entries, and `.ag` (the shadow store) is
+  excluded from both, so deleted content cannot be read back through a traversal tool.
+- **Behavioural change:** `glob` no longer lists symlinks.
 - Supply-chain signing, SBOM, provenance, dependency automation, CodeQL, and governance hardening.
 
 ## v1.4.0
