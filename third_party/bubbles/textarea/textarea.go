@@ -18,7 +18,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	rw "github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
 )
 
@@ -373,6 +372,8 @@ func New() Model {
 		col:   0,
 		row:   0,
 
+		lastCharOffset: -1,
+
 		viewport: &vp,
 	}
 
@@ -553,19 +554,32 @@ func (m Model) Line() int {
 // CursorDown moves the cursor down by one line.
 // Returns whether or not the cursor blink should be reset.
 func (m *Model) CursorDown() {
+	if len(m.value) == 0 || m.row >= len(m.value) {
+		return
+	}
 	li := m.LineInfo()
-	charOffset := max(m.lastCharOffset, li.CharOffset)
-	m.lastCharOffset = charOffset
+	grid := m.memoizedWrap(m.value[m.row], m.width, m.row)
 
-	if li.RowOffset+1 >= li.Height && m.row < len(m.value)-1 {
+	if li.RowOffset+1 >= len(grid) && m.row >= len(m.value)-1 {
+		return
+	}
+
+	charOffset := li.CharOffset
+	if m.lastCharOffset >= 0 {
+		charOffset = m.lastCharOffset
+	} else {
+		m.lastCharOffset = charOffset
+	}
+
+	if li.RowOffset+1 >= len(grid) && m.row < len(m.value)-1 {
 		m.row++
 		m.col = 0
-	} else {
-		// Move the cursor to the start of the next line so that we can get
-		// the line information. We need to add 2 columns to account for the
-		// trailing space wrapping.
-		const trailingSpace = 2
-		m.col = min(li.StartColumn+li.Width+trailingSpace, len(m.value[m.row])-1)
+	} else if li.RowOffset+1 < len(grid) {
+		var startRune int
+		for j := 0; j <= li.RowOffset; j++ {
+			startRune += len(grid[j])
+		}
+		m.col = startRune
 	}
 
 	nli := m.LineInfo()
@@ -575,32 +589,67 @@ func (m *Model) CursorDown() {
 		return
 	}
 
+	destGrid := m.memoizedWrap(m.value[m.row], m.width, m.row)
+	if nli.RowOffset >= len(destGrid) {
+		return
+	}
+	line := destGrid[nli.RowOffset]
+
+	clusters := graphemeClusters(line)
+	maxClusters := len(clusters)
+	if nli.RowOffset < len(destGrid)-1 && maxClusters > 0 {
+		maxClusters--
+	}
+
 	offset := 0
-	for offset < charOffset {
-		if m.row >= len(m.value) || m.col >= len(m.value[m.row]) || offset >= nli.CharWidth-1 {
+	for i := 0; i < maxClusters; i++ {
+		clusterStr := clusters[i]
+		w := uniseg.StringWidth(clusterStr)
+		if offset >= charOffset {
 			break
 		}
-		offset += rw.RuneWidth(m.value[m.row][m.col])
-		m.col++
+		rCount := len([]rune(clusterStr))
+		if m.col+rCount > len(m.value[m.row]) {
+			break
+		}
+		offset += w
+		m.col += rCount
 	}
 }
 
 // CursorUp moves the cursor up by one line.
 func (m *Model) CursorUp() {
+	if len(m.value) == 0 || m.row >= len(m.value) {
+		return
+	}
 	li := m.LineInfo()
-	charOffset := max(m.lastCharOffset, li.CharOffset)
-	m.lastCharOffset = charOffset
+	if li.RowOffset <= 0 && m.row <= 0 {
+		return
+	}
+
+	charOffset := li.CharOffset
+	if m.lastCharOffset >= 0 {
+		charOffset = m.lastCharOffset
+	} else {
+		m.lastCharOffset = charOffset
+	}
+
+	grid := m.memoizedWrap(m.value[m.row], m.width, m.row)
 
 	if li.RowOffset <= 0 && m.row > 0 {
 		m.row--
-		m.col = len(m.value[m.row])
-	} else {
-		// Move the cursor to the end of the previous line.
-		// This can be done by moving the cursor to the start of the line and
-		// then subtracting 2 to account for the trailing space we keep on
-		// soft-wrapped lines.
-		const trailingSpace = 2
-		m.col = li.StartColumn - trailingSpace
+		prevGrid := m.memoizedWrap(m.value[m.row], m.width, m.row)
+		var startRune int
+		for j := 0; j < len(prevGrid)-1; j++ {
+			startRune += len(prevGrid[j])
+		}
+		m.col = startRune
+	} else if li.RowOffset > 0 {
+		var startRune int
+		for j := 0; j < li.RowOffset-1; j++ {
+			startRune += len(grid[j])
+		}
+		m.col = startRune
 	}
 
 	nli := m.LineInfo()
@@ -610,23 +659,46 @@ func (m *Model) CursorUp() {
 		return
 	}
 
+	destGrid := m.memoizedWrap(m.value[m.row], m.width, m.row)
+	if nli.RowOffset >= len(destGrid) {
+		return
+	}
+	line := destGrid[nli.RowOffset]
+
+	clusters := graphemeClusters(line)
+	maxClusters := len(clusters)
+	if nli.RowOffset < len(destGrid)-1 && maxClusters > 0 {
+		maxClusters--
+	}
+
 	offset := 0
-	for offset < charOffset {
-		if m.col >= len(m.value[m.row]) || offset >= nli.CharWidth-1 {
+	for i := 0; i < maxClusters; i++ {
+		clusterStr := clusters[i]
+		w := uniseg.StringWidth(clusterStr)
+		if offset >= charOffset {
 			break
 		}
-		offset += rw.RuneWidth(m.value[m.row][m.col])
-		m.col++
+		rCount := len([]rune(clusterStr))
+		if m.col+rCount > len(m.value[m.row]) {
+			break
+		}
+		offset += w
+		m.col += rCount
 	}
 }
 
 // SetCursor moves the cursor to the given position. If the position is
 // out of bounds the cursor will be moved to the start or end accordingly.
 func (m *Model) SetCursor(col int) {
-	m.col = clamp(col, 0, len(m.value[m.row]))
+	if m.row >= len(m.value) || len(m.value) == 0 {
+		m.col = 0
+		m.lastCharOffset = -1
+		return
+	}
+	m.col = snapToGraphemeCluster(m.value[m.row], col)
 	// Any time that we move the cursor horizontally we need to reset the last
 	// offset so that the horizontal position when navigating is adjusted.
-	m.lastCharOffset = 0
+	m.lastCharOffset = -1
 }
 
 // CursorStart moves the cursor to the start of the input field.
@@ -672,6 +744,7 @@ func (m *Model) Reset() {
 	m.value = make([][]rune, minHeight, maxLines)
 	m.col = 0
 	m.row = 0
+	m.lastCharOffset = -1
 	m.viewport.GotoTop()
 	m.SetCursor(0)
 }
@@ -709,13 +782,24 @@ func (m *Model) transposeLeft() {
 	if m.col == 0 || len(m.value[m.row]) < 2 {
 		return
 	}
-	if m.col >= len(m.value[m.row]) {
-		m.SetCursor(m.col - 1)
+	clusters := graphemeClusters(m.value[m.row])
+	if len(clusters) < 2 {
+		return
 	}
-	m.value[m.row][m.col-1], m.value[m.row][m.col] = m.value[m.row][m.col], m.value[m.row][m.col-1]
-	if m.col < len(m.value[m.row]) {
-		m.SetCursor(m.col + 1)
+	colIdx := uniseg.GraphemeClusterCount(string(m.value[m.row][:m.col]))
+	if colIdx >= len(clusters) {
+		colIdx = len(clusters) - 1
 	}
+	if colIdx <= 0 {
+		return
+	}
+	clusters[colIdx-1], clusters[colIdx] = clusters[colIdx], clusters[colIdx-1]
+	m.value[m.row] = []rune(strings.Join(clusters, ""))
+	newRuneOffset := 0
+	for i := 0; i <= colIdx && i < len(clusters); i++ {
+		newRuneOffset += len([]rune(clusters[i]))
+	}
+	m.SetCursor(newRuneOffset)
 }
 
 // deleteWordLeft deletes the word left to the cursor. Returns whether or not
@@ -730,25 +814,29 @@ func (m *Model) deleteWordLeft() {
 	// call into the corresponding if clause does not apply here.
 	oldCol := m.col
 
-	m.SetCursor(m.col - 1)
-	for unicode.IsSpace(m.value[m.row][m.col]) {
-		if m.col <= 0 {
+	for m.col > 0 {
+		clusterLen := lastGraphemeClusterLen(m.value[m.row][:m.col])
+		if clusterLen <= 0 {
+			clusterLen = 1
+		}
+		prevRunes := m.value[m.row][m.col-clusterLen : m.col]
+		if len(prevRunes) == 1 && unicode.IsSpace(prevRunes[0]) {
+			m.SetCursor(m.col - clusterLen)
+		} else {
 			break
 		}
-		// ignore series of whitespace before cursor
-		m.SetCursor(m.col - 1)
 	}
 
 	for m.col > 0 {
-		if !unicode.IsSpace(m.value[m.row][m.col]) {
-			m.SetCursor(m.col - 1)
-		} else {
-			if m.col > 0 {
-				// keep the previous space
-				m.SetCursor(m.col + 1)
-			}
+		clusterLen := lastGraphemeClusterLen(m.value[m.row][:m.col])
+		if clusterLen <= 0 {
+			clusterLen = 1
+		}
+		prevRunes := m.value[m.row][m.col-clusterLen : m.col]
+		if len(prevRunes) == 1 && unicode.IsSpace(prevRunes[0]) {
 			break
 		}
+		m.SetCursor(m.col - clusterLen)
 	}
 
 	if oldCol > len(m.value[m.row]) {
@@ -766,17 +854,23 @@ func (m *Model) deleteWordRight() {
 
 	oldCol := m.col
 
-	for m.col < len(m.value[m.row]) && unicode.IsSpace(m.value[m.row][m.col]) {
-		// ignore series of whitespace after cursor
-		m.SetCursor(m.col + 1)
-	}
-
 	for m.col < len(m.value[m.row]) {
-		if !unicode.IsSpace(m.value[m.row][m.col]) {
-			m.SetCursor(m.col + 1)
+		cluster, _, _, _ := uniseg.FirstGraphemeClusterInString(string(m.value[m.row][m.col:]), 0)
+		clusterRunes := []rune(cluster)
+		if len(clusterRunes) == 1 && unicode.IsSpace(clusterRunes[0]) {
+			m.SetCursor(m.col + len(clusterRunes))
 		} else {
 			break
 		}
+	}
+
+	for m.col < len(m.value[m.row]) {
+		cluster, _, _, _ := uniseg.FirstGraphemeClusterInString(string(m.value[m.row][m.col:]), 0)
+		clusterRunes := []rune(cluster)
+		if len(clusterRunes) == 1 && unicode.IsSpace(clusterRunes[0]) {
+			break
+		}
+		m.SetCursor(m.col + len(clusterRunes))
 	}
 
 	if m.col > len(m.value[m.row]) {
@@ -791,7 +885,12 @@ func (m *Model) deleteWordRight() {
 // characterRight moves the cursor one character to the right.
 func (m *Model) characterRight() {
 	if m.col < len(m.value[m.row]) {
-		m.SetCursor(m.col + 1)
+		cluster, _, _, _ := uniseg.FirstGraphemeClusterInString(string(m.value[m.row][m.col:]), 0)
+		clusterRunes := len([]rune(cluster))
+		if clusterRunes <= 0 {
+			clusterRunes = 1
+		}
+		m.SetCursor(m.col + clusterRunes)
 	} else {
 		if m.row < len(m.value)-1 {
 			m.row++
@@ -812,7 +911,11 @@ func (m *Model) characterLeft(insideLine bool) {
 		}
 	}
 	if m.col > 0 {
-		m.SetCursor(m.col - 1)
+		clusterLen := lastGraphemeClusterLen(m.value[m.row][:m.col])
+		if clusterLen <= 0 {
+			clusterLen = 1
+		}
+		m.SetCursor(m.col - clusterLen)
 	}
 }
 
@@ -821,6 +924,9 @@ func (m *Model) characterLeft(insideLine bool) {
 // so as not to reveal word breaks in the masked input.
 func (m *Model) wordLeft() {
 	for {
+		if m.col == 0 && m.row == 0 {
+			break
+		}
 		m.characterLeft(true /* insideLine */)
 		if m.col < len(m.value[m.row]) && !unicode.IsSpace(m.value[m.row][m.col]) {
 			break
@@ -828,10 +934,15 @@ func (m *Model) wordLeft() {
 	}
 
 	for m.col > 0 {
-		if unicode.IsSpace(m.value[m.row][m.col-1]) {
+		clusterLen := lastGraphemeClusterLen(m.value[m.row][:m.col])
+		if clusterLen <= 0 {
+			clusterLen = 1
+		}
+		prevRunes := m.value[m.row][m.col-clusterLen : m.col]
+		if len(prevRunes) == 1 && unicode.IsSpace(prevRunes[0]) {
 			break
 		}
-		m.SetCursor(m.col - 1)
+		m.SetCursor(m.col - clusterLen)
 	}
 }
 
@@ -858,7 +969,7 @@ func (m *Model) doWordRight(fn func(charIdx int, pos int)) {
 			break
 		}
 		fn(charIdx, m.col)
-		m.SetCursor(m.col + 1)
+		m.characterRight()
 		charIdx++
 	}
 }
@@ -904,20 +1015,22 @@ func (m Model) LineInfo() LineInfo {
 				ColumnOffset: 0,
 				Height:       len(grid),
 				RowOffset:    i + 1,
-				StartColumn:  m.col,
-				Width:        len(grid[i+1]),
-				CharWidth:    uniseg.StringWidth(string(line)),
+				StartColumn:  counter + len(line),
+				Width:        uniseg.GraphemeClusterCount(string(grid[i+1])),
+				CharWidth:    uniseg.StringWidth(string(grid[i+1])),
 			}
 		}
 
 		if counter+len(line) >= m.col {
+			colOffset := max(0, min(m.col-counter, len(line)))
+			prefix := string(line[:colOffset])
 			return LineInfo{
-				CharOffset:   uniseg.StringWidth(string(line[:max(0, m.col-counter)])),
-				ColumnOffset: m.col - counter,
+				CharOffset:   uniseg.StringWidth(prefix),
+				ColumnOffset: uniseg.GraphemeClusterCount(prefix),
 				Height:       len(grid),
 				RowOffset:    i,
 				StartColumn:  counter,
-				Width:        len(line),
+				Width:        uniseg.GraphemeClusterCount(string(line)),
 				CharWidth:    uniseg.StringWidth(string(line)),
 			}
 		}
@@ -1077,14 +1190,23 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 				break
 			}
 			if len(m.value[m.row]) > 0 {
-				m.value[m.row] = append(m.value[m.row][:max(0, m.col-1)], m.value[m.row][m.col:]...)
-				if m.col > 0 {
-					m.SetCursor(m.col - 1)
+				clusterLen := lastGraphemeClusterLen(m.value[m.row][:m.col])
+				if clusterLen <= 0 {
+					clusterLen = 1
 				}
+				start := max(0, m.col-clusterLen)
+				m.value[m.row] = append(m.value[m.row][:start], m.value[m.row][m.col:]...)
+				m.SetCursor(start)
 			}
 		case key.Matches(msg, m.KeyMap.DeleteCharacterForward):
 			if len(m.value[m.row]) > 0 && m.col < len(m.value[m.row]) {
-				m.value[m.row] = append(m.value[m.row][:m.col], m.value[m.row][m.col+1:]...)
+				cluster, _, _, _ := uniseg.FirstGraphemeClusterInString(string(m.value[m.row][m.col:]), 0)
+				clusterLen := len([]rune(cluster))
+				if clusterLen <= 0 {
+					clusterLen = 1
+				}
+				end := min(len(m.value[m.row]), m.col+clusterLen)
+				m.value[m.row] = append(m.value[m.row][:m.col], m.value[m.row][end:]...)
 			}
 			if m.col >= len(m.value[m.row]) {
 				m.mergeLineBelow(m.row)
@@ -1240,14 +1362,22 @@ func (m Model) View() string {
 				padding -= m.width - strwidth
 			}
 			if m.row == l && lineInfo.RowOffset == wl {
-				s.WriteString(style.Render(string(wrappedLine[:lineInfo.ColumnOffset])))
-				if m.col >= len(line) && lineInfo.CharOffset >= m.width {
+				clusters := graphemeClusters(wrappedLine)
+				colOffset := lineInfo.ColumnOffset
+				if colOffset > len(clusters) {
+					colOffset = len(clusters)
+				}
+				before := strings.Join(clusters[:colOffset], "")
+				s.WriteString(style.Render(before))
+
+				if (colOffset >= len(clusters)) || (m.col >= len(line) && lineInfo.CharOffset >= m.width) {
 					m.Cursor.SetChar(" ")
 					s.WriteString(m.Cursor.View())
 				} else {
-					m.Cursor.SetChar(string(wrappedLine[lineInfo.ColumnOffset]))
+					m.Cursor.SetChar(clusters[colOffset])
 					s.WriteString(style.Render(m.Cursor.View()))
-					s.WriteString(style.Render(string(wrappedLine[lineInfo.ColumnOffset+1:])))
+					after := strings.Join(clusters[colOffset+1:], "")
+					s.WriteString(style.Render(after))
 				}
 			} else {
 				s.WriteString(style.Render(string(wrappedLine)))
@@ -1550,12 +1680,16 @@ func wrap(runes []rune, width int) [][]rune {
 		spaces int
 	)
 
-	// Word wrap the runes
-	for _, r := range runes {
-		if unicode.IsSpace(r) {
+	// Word wrap the runes by grapheme clusters
+	g := uniseg.NewGraphemes(string(runes))
+	for g.Next() {
+		clusterRunes := g.Runes()
+		clusterWidth := g.Width()
+
+		if len(clusterRunes) == 1 && unicode.IsSpace(clusterRunes[0]) {
 			spaces++
 		} else {
-			word = append(word, r)
+			word = append(word, clusterRunes...)
 		}
 
 		if spaces > 0 { //nolint:nestif
@@ -1573,9 +1707,9 @@ func wrap(runes []rune, width int) [][]rune {
 				word = nil
 			}
 		} else {
-			// If the last character is a double-width rune, then we may not be able to add it to this line
+			// If the last character is a double-width cluster, then we may not be able to add it to this line
 			// as it might cause us to go past the width.
-			lastCharLen := rw.RuneWidth(word[len(word)-1])
+			lastCharLen := clusterWidth
 			if uniseg.StringWidth(string(word))+lastCharLen > width {
 				// If the current line has any content, let's move to the next
 				// line because the current word fills up the entire line.
@@ -1616,4 +1750,56 @@ func clamp(v, low, high int) int {
 		low, high = high, low
 	}
 	return min(high, max(low, v))
+}
+
+// lastGraphemeClusterLen returns the number of runes in the last grapheme cluster of runes.
+func lastGraphemeClusterLen(runes []rune) int {
+	if len(runes) == 0 {
+		return 0
+	}
+	g := uniseg.NewGraphemes(string(runes))
+	lastLen := 1
+	for g.Next() {
+		lastLen = len(g.Runes())
+	}
+	return lastLen
+}
+
+// graphemeClusters returns the grapheme clusters of the given rune slice.
+func graphemeClusters(runes []rune) []string {
+	if len(runes) == 0 {
+		return nil
+	}
+	var clusters []string
+	g := uniseg.NewGraphemes(string(runes))
+	for g.Next() {
+		clusters = append(clusters, g.Str())
+	}
+	return clusters
+}
+
+// snapToGraphemeCluster snaps a rune offset within runes to the nearest
+// grapheme cluster boundary.
+func snapToGraphemeCluster(runes []rune, col int) int {
+	col = clamp(col, 0, len(runes))
+	if col == 0 || col == len(runes) {
+		return col
+	}
+	g := uniseg.NewGraphemes(string(runes))
+	prevBound := 0
+	currBound := 0
+	for g.Next() {
+		prevBound = currBound
+		currBound += len(g.Runes())
+		if col <= currBound {
+			if col == currBound || col == prevBound {
+				return col
+			}
+			if col-prevBound < currBound-col {
+				return prevBound
+			}
+			return currBound
+		}
+	}
+	return col
 }

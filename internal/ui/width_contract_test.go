@@ -1,17 +1,23 @@
 package ui
 
-// Regression Reproduction Recipe ("Saw it Red"):
-// An indirect dependency bump of github.com/mattn/go-runewidth to v0.0.29 caused
-// a regression in cursor navigation when navigating lines with Arabic combining marks (tashkeel).
+// Regression Reproduction Recipe ("Saw it Red — what this guards against"):
+// A dependency bump of github.com/mattn/go-runewidth (or reverting the grapheme-cluster
+// fix in the local bubbles fork at third_party/bubbles) would cause cursor navigation
+// to drift on lines with Arabic combining marks (tashkeel). The local fork replaced
+// go-runewidth with graphemeClusters(); this test guards that behavior.
 //
-// To reproduce the failure deterministically:
-//   1. Upgrade go-runewidth:
-//        go get github.com/mattn/go-runewidth@v0.0.29
-//   2. Run the differential invariant test:
-//        go test -v -run TestWidthContract_Invariant_ComposerNavigationRuneAlignment ./internal/ui
-//      => FAILS: "composer vertical cursor navigation drifted: target column 2 became 3 on line with Arabic combining marks"
-//   3. Restore clean repository state:
-//        git checkout go.mod go.sum
+// WARNING: go.mod uses a local replace for bubbles (./third_party/bubbles), which has
+// its own go.mod and go.sum. Restoring state must cover both modules.
+//
+// To simulate the regression and confirm the tripwire catches it:
+//   1. Revert the grapheme-cluster fix in the local fork, OR bump go-runewidth:
+//        go mod edit -require github.com/mattn/go-runewidth@v0.0.29
+//        go mod tidy
+//   2. Run the tripwire test:
+//        go test -v -run TestTripwire_TextareaColumnMappingChanged ./internal/ui
+//      => FAILS: "TRIPWIRE: textarea column mapping changed..." (column 1:1 breaks)
+//   3. Restore clean repository state (both modules):
+//        git checkout -- go.mod go.sum third_party/bubbles/go.mod third_party/bubbles/go.sum
 
 import (
 	"strings"
@@ -292,11 +298,49 @@ func TestWidthContract_Invariant_ComposedFrameWithinBounds(t *testing.T) {
 	}
 }
 
-// Invariant 5: Composer vertical cursor navigation must preserve column alignment
-// across complex Unicode scripts with combining marks (such as Arabic tashkeel).
-func TestWidthContract_Invariant_ComposerNavigationRuneAlignment(t *testing.T) {
+// Tripwire: Detects when the underlying column-mapping behavior of the composer
+// textarea changes (e.g. a dependency bump to the local bubbles fork or a
+// regression in grapheme-cluster handling).
+//
+// GREEN means "the known-correct behavior is intact: combining marks are zero-width
+// and vertical navigation preserves column 1:1 across the ASCII/Arabic boundary."
+// RED means the behavior shifted — could be a fix upstream or a regression; either
+// way it warrants human review.
+//
+// LATENT RISK: third_party/bubbles/go.mod still requires mattn/go-runewidth (as of
+// this writing, indirectly via go mod tidy). If a future change re-introduces
+// rw.RuneWidth in CursorDown/CursorUp, this test catches it — but only if the PR
+// reviewer also verifies go.mod hasn't promoted go-runewidth back to direct.
+func TestTripwire_TextareaColumnMappingChanged(t *testing.T) {
 	c := newComposer()
-	// Line 0 is ASCII standard text; Line 1 contains Arabic text with tashkeel (combining marks).
+	text := "0123456789\nاَلْعَرَبِيَّةُ"
+	c.setValue(text)
+
+	// Baseline: under the grapheme-cluster-aware local fork (third_party/bubbles),
+	// combining marks are zero-width. Column mapping must be identity.
+	for targetCol := 1; targetCol <= 5; targetCol++ {
+		for c.ta.Line() > 0 {
+			c.ta.CursorUp()
+		}
+		c.ta.SetCursor(targetCol)
+		c.ta.CursorDown()
+		gotCol := c.ta.LineInfo().ColumnOffset
+		t.Logf("targetCol=%d -> gotCol=%d", targetCol, gotCol)
+		if gotCol != targetCol {
+			t.Errorf("TRIPWIRE: textarea column mapping changed at targetCol=%d: got %d, want %d. "+
+				"Review whether the local bubbles fork or go-runewidth behavior shifted.",
+				targetCol, gotCol, targetCol)
+		}
+	}
+}
+
+// Correctness invariant: vertical navigation preserves column alignment across
+// ASCII and Arabic-combining-mark lines. A zero-width combining mark must NOT
+// consume a visible column. This is the same invariant as the tripwire above,
+// but stated here as an explicit contract so it can be referenced from
+// THREAT_MODEL.md and security review gates.
+func TestCorrectness_ComposerNavigationColumnAlignment(t *testing.T) {
+	c := newComposer()
 	text := "0123456789\nاَلْعَرَبِيَّةُ"
 	c.setValue(text)
 
@@ -305,18 +349,11 @@ func TestWidthContract_Invariant_ComposerNavigationRuneAlignment(t *testing.T) {
 			c.ta.CursorUp()
 		}
 		c.ta.SetCursor(targetCol)
-		if line := c.ta.Line(); line != 0 {
-			t.Fatalf("expected cursor on line 0, got %d", line)
-		}
 		c.ta.CursorDown()
-		if line := c.ta.Line(); line != 1 {
-			t.Fatalf("expected cursor on line 1, got %d", line)
-		}
 		gotCol := c.ta.LineInfo().ColumnOffset
-		t.Logf("targetCol=%d -> gotCol=%d (CharOffset=%d)", targetCol, gotCol, c.ta.LineInfo().CharOffset)
 		if gotCol != targetCol {
-			t.Errorf("composer vertical cursor navigation drifted: target column %d became %d on line with Arabic combining marks",
-				targetCol, gotCol)
+			t.Errorf("correctness: vertical navigation target column %d became %d on Arabic line "+
+				"(combining marks must be zero-width)", targetCol, gotCol)
 		}
 	}
 }

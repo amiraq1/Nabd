@@ -2519,3 +2519,430 @@ func FuzzActualCacheWrap(f *testing.F) {
 		}
 	})
 }
+
+func TestVerticalNavigation_ArabicDiacritics(t *testing.T) {
+	m := New()
+	m.Prompt = ""
+	m.ShowLineNumbers = false
+	m.SetWidth(80)
+	m.Focus()
+
+	// Line 0 is ASCII; Line 1 is Arabic with tashkeel (combining marks).
+	// "اَلْعَرَبِيَّةُ" has 7 extended grapheme clusters, but 14 runes.
+	text := "0123456789\nاَلْعَرَبِيَّةُ"
+	m.SetValue(text)
+
+	// Navigate downwards from different column positions on line 0
+	for targetCol := 0; targetCol <= 7; targetCol++ {
+		// Reset to line 0
+		for m.Line() > 0 {
+			m.CursorUp()
+		}
+		m.SetCursor(targetCol)
+		if m.Line() != 0 {
+			t.Fatalf("expected line 0, got %d", m.Line())
+		}
+		if m.col != targetCol {
+			t.Fatalf("expected col %d, got %d", targetCol, m.col)
+		}
+
+		m.CursorDown()
+		if m.Line() != 1 {
+			t.Fatalf("targetCol %d: expected line 1, got %d", targetCol, m.Line())
+		}
+
+		// Cursor must be snapped to a valid grapheme cluster boundary
+		if snapped := snapToGraphemeCluster(m.value[m.row], m.col); snapped != m.col {
+			t.Errorf("targetCol %d: cursor split a grapheme cluster: col=%d, snapped=%d", targetCol, m.col, snapped)
+		}
+
+		// Arabic grapheme clusters each have width 1, so ColumnOffset should match targetCol
+		gotCol := m.LineInfo().ColumnOffset
+		if gotCol != targetCol {
+			t.Errorf("targetCol %d: cursor drifted: gotCol=%d", targetCol, gotCol)
+		}
+
+		// Move back up: should restore line 0 targetCol
+		m.CursorUp()
+		if m.Line() != 0 {
+			t.Fatalf("targetCol %d: expected line 0 after CursorUp, got %d", targetCol, m.Line())
+		}
+		if m.col != targetCol {
+			t.Errorf("targetCol %d: CursorUp did not restore column: got %d", targetCol, m.col)
+		}
+	}
+
+	// Test horizontal movement and deletion on the Arabic line
+	m.SetValue("اَلْعَرَبِيَّةُ")
+	m.CursorStart()
+	clusters := graphemeClusters(m.value[0])
+	if len(clusters) != 7 {
+		t.Fatalf("expected 7 grapheme clusters, got %d", len(clusters))
+	}
+
+	// Move right cluster by cluster
+	for i := 0; i < len(clusters); i++ {
+		m.characterRight()
+		if snapped := snapToGraphemeCluster(m.value[0], m.col); snapped != m.col {
+			t.Errorf("step %d: cursor split grapheme cluster at col %d", i, m.col)
+		}
+	}
+	if m.col != len(m.value[0]) {
+		t.Errorf("expected cursor at end of line (%d), got %d", len(m.value[0]), m.col)
+	}
+
+	// Move left cluster by cluster
+	for i := len(clusters) - 1; i >= 0; i-- {
+		m.characterLeft(false)
+		if snapped := snapToGraphemeCluster(m.value[0], m.col); snapped != m.col {
+			t.Errorf("step left %d: cursor split grapheme cluster at col %d", i, m.col)
+		}
+	}
+	if m.col != 0 {
+		t.Errorf("expected cursor at start (0), got %d", m.col)
+	}
+
+	// Test backspace deletes entire grapheme cluster
+	m.CursorEnd()
+	initialLen := len(clusters)
+	for i := 0; i < initialLen; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+		remainingClusters := graphemeClusters(m.value[0])
+		expectedRemaining := initialLen - 1 - i
+		if len(remainingClusters) != expectedRemaining {
+			t.Errorf("after backspace %d: expected %d clusters, got %d", i, expectedRemaining, len(remainingClusters))
+		}
+	}
+	if len(m.value[0]) != 0 {
+		t.Errorf("expected empty line after backspacing all clusters, got %q", string(m.value[0]))
+	}
+}
+
+func TestVerticalNavigation_ZWJSequences(t *testing.T) {
+	m := New()
+	m.Prompt = ""
+	m.ShowLineNumbers = false
+	m.SetWidth(80)
+	m.Focus()
+
+	// Line 0: ASCII numbers
+	// Line 1: 3 ZWJ/modifier emoji clusters (each width 2)
+	// Line 2: ASCII uppercase
+	text := "0123456789\n👨‍👩‍👧‍👦🧑🏿‍💻🏳️‍🌈\nABCDEFGHIJ"
+	m.SetValue(text)
+
+	// In line 0, start at col 4 (width offset 4).
+	// In line 1, first two emoji clusters have width 2+2=4.
+	// Moving down to line 1 should place cursor at the 2nd emoji boundary (offset 4).
+	for _, targetCol := range []int{0, 2, 4, 6} {
+		for m.Line() > 0 {
+			m.CursorUp()
+		}
+		m.SetCursor(targetCol)
+
+		m.CursorDown()
+		if m.Line() != 1 {
+			t.Fatalf("expected line 1, got %d", m.Line())
+		}
+		if snapped := snapToGraphemeCluster(m.value[1], m.col); snapped != m.col {
+			t.Errorf("cursor split emoji ZWJ cluster: col=%d, snapped=%d", m.col, snapped)
+		}
+
+		// Move down to line 2 (ASCII)
+		m.CursorDown()
+		if m.Line() != 2 {
+			t.Fatalf("expected line 2, got %d", m.Line())
+		}
+		if m.col != targetCol {
+			t.Errorf("targetCol %d: vertical navigation through emoji line drifted on line 2: got %d", targetCol, m.col)
+		}
+
+		// Move up back to line 0
+		m.CursorUp()
+		if m.Line() != 1 {
+			t.Fatalf("expected line 1, got %d", m.Line())
+		}
+		m.CursorUp()
+		if m.Line() != 0 {
+			t.Fatalf("expected line 0, got %d", m.Line())
+		}
+		if m.col != targetCol {
+			t.Errorf("targetCol %d: CursorUp failed to restore col: got %d", targetCol, m.col)
+		}
+	}
+
+	// Test backspace on ZWJ emoji sequence
+	m.SetValue("👨‍👩‍👧‍👦🧑🏿‍💻")
+	m.CursorEnd()
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.Value() != "👨‍👩‍👧‍👦" {
+		t.Errorf("expected backspace to delete entire technologist cluster, got %q", m.Value())
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.Value() != "" {
+		t.Errorf("expected backspace to delete family cluster, got %q", m.Value())
+	}
+}
+
+func TestVerticalNavigation_CJKCharacters(t *testing.T) {
+	m := New()
+	m.Prompt = ""
+	m.ShowLineNumbers = false
+	m.SetWidth(80)
+
+	// Line 0: ASCII digits
+	// Line 1: CJK characters (each width 2)
+	// Line 2: Mixed CJK with combining marks (voiced sound mark U+3099)
+	// Line 3: ASCII digits
+	text := "0123456789\n你好世界测试\nか\u3099き\u3099く\u3099け\u3099こ\u3099\n0123456789"
+	m.SetValue(text)
+
+	// Navigate vertically across all lines at even columns (0, 2, 4, 6, 8)
+	for _, targetCol := range []int{0, 2, 4, 6, 8} {
+		for m.Line() > 0 {
+			m.CursorUp()
+		}
+		m.SetCursor(targetCol)
+
+		// Line 1 (CJK)
+		m.CursorDown()
+		if m.Line() != 1 {
+			t.Fatalf("target %d: expected line 1, got %d", targetCol, m.Line())
+		}
+		if m.LineInfo().CharOffset != targetCol {
+			t.Errorf("target %d: CJK line CharOffset = %d", targetCol, m.LineInfo().CharOffset)
+		}
+
+		// Line 2 (CJK with combining voiced marks)
+		m.CursorDown()
+		if m.Line() != 2 {
+			t.Fatalf("target %d: expected line 2, got %d", targetCol, m.Line())
+		}
+		if snapped := snapToGraphemeCluster(m.value[2], m.col); snapped != m.col {
+			t.Errorf("cursor split CJK combining mark: col=%d, snapped=%d", m.col, snapped)
+		}
+		if m.LineInfo().CharOffset != targetCol {
+			t.Errorf("target %d: CJK combining line CharOffset = %d", targetCol, m.LineInfo().CharOffset)
+		}
+
+		// Line 3 (ASCII)
+		m.CursorDown()
+		if m.Line() != 3 {
+			t.Fatalf("target %d: expected line 3, got %d", targetCol, m.Line())
+		}
+		if m.col != targetCol {
+			t.Errorf("target %d: ASCII line 3 col = %d", targetCol, m.col)
+		}
+
+		// Return up to line 0
+		m.CursorUp()
+		m.CursorUp()
+		m.CursorUp()
+		if m.Line() != 0 || m.col != targetCol {
+			t.Errorf("target %d: failed to return to line 0 col %d: line=%d, col=%d", targetCol, targetCol, m.Line(), m.col)
+		}
+	}
+}
+
+func TestVerticalNavigation_SoftWrapComplexUnicode(t *testing.T) {
+	m := New()
+	m.Prompt = ""
+	m.ShowLineNumbers = false
+	// Set width narrow to force soft wrapping
+	m.SetWidth(10)
+
+	// Arabic words with tashkeel that soft wrap into 2 lines
+	text := "اَلْعَرَبِيَّةُ لُغَةٌ جَمِيلَةٌ"
+	m.SetValue(text)
+
+	grid := m.memoizedWrap(m.value[0], m.width, 0)
+	if len(grid) < 2 {
+		t.Fatalf("expected text to wrap into at least 2 lines, got %d", len(grid))
+	}
+
+	m.CursorStart()
+	if m.LineInfo().RowOffset != 0 {
+		t.Fatalf("expected cursor at wrapped row 0, got %d", m.LineInfo().RowOffset)
+	}
+
+	// Move down to wrapped line 1
+	m.CursorDown()
+	if m.LineInfo().RowOffset != 1 {
+		t.Fatalf("expected cursor at wrapped row 1 after CursorDown, got %d", m.LineInfo().RowOffset)
+	}
+	if snapped := snapToGraphemeCluster(m.value[0], m.col); snapped != m.col {
+		t.Errorf("cursor on wrapped line split grapheme cluster: col=%d, snapped=%d", m.col, snapped)
+	}
+
+	// Move back up to wrapped line 0
+	m.CursorUp()
+	if m.LineInfo().RowOffset != 0 {
+		t.Fatalf("expected cursor at wrapped row 0 after CursorUp, got %d", m.LineInfo().RowOffset)
+	}
+	if snapped := snapToGraphemeCluster(m.value[0], m.col); snapped != m.col {
+		t.Errorf("cursor on line 0 split grapheme cluster: col=%d, snapped=%d", m.col, snapped)
+	}
+}
+
+func TestVerticalNavigation_CJKCharacters_OddColumns(t *testing.T) {
+	m := New()
+	m.Prompt = ""
+	m.ShowLineNumbers = false
+	m.SetWidth(80)
+
+	// Line 0: ASCII digits
+	// Line 1: CJK characters (each width 2)
+	// Line 2: Mixed CJK with combining voiced sound marks (か\u3099)
+	// Line 3: ASCII digits
+	text := "0123456789\n你好世界测试\nか\u3099き\u3099く\u3099け\u3099こ\u3099\n0123456789"
+	m.SetValue(text)
+
+	// Test odd columns that land inside wide characters
+	for _, targetCol := range []int{1, 3, 5, 7} {
+		for m.Line() > 0 {
+			m.CursorUp()
+		}
+		m.SetCursor(targetCol)
+
+		// Move down through CJK line
+		m.CursorDown()
+		if m.Line() != 1 {
+			t.Fatalf("target %d: expected line 1, got %d", targetCol, m.Line())
+		}
+		if snapped := snapToGraphemeCluster(m.value[1], m.col); snapped != m.col {
+			t.Errorf("target %d: cursor split CJK grapheme on line 1: col=%d, snapped=%d", targetCol, m.col, snapped)
+		}
+
+		// Move down through CJK combining mark line
+		m.CursorDown()
+		if m.Line() != 2 {
+			t.Fatalf("target %d: expected line 2, got %d", targetCol, m.Line())
+		}
+		if snapped := snapToGraphemeCluster(m.value[2], m.col); snapped != m.col {
+			t.Errorf("target %d: cursor split CJK combining mark on line 2: col=%d, snapped=%d", targetCol, m.col, snapped)
+		}
+
+		// Move down to ASCII line 3: MUST restore exact targetCol without drift
+		m.CursorDown()
+		if m.Line() != 3 {
+			t.Fatalf("target %d: expected line 3, got %d", targetCol, m.Line())
+		}
+		if m.col != targetCol {
+			t.Errorf("target %d: cursor drifted on ASCII line 3: got %d", targetCol, m.col)
+		}
+
+		// Move all the way back to line 0: MUST restore exact targetCol
+		m.CursorUp()
+		m.CursorUp()
+		m.CursorUp()
+		if m.Line() != 0 || m.col != targetCol {
+			t.Errorf("target %d: failed to return to line 0 col %d: line=%d, col=%d", targetCol, targetCol, m.Line(), m.col)
+		}
+	}
+}
+
+func TestWordLeft_EmptyAndLeadingSpaces(t *testing.T) {
+	// Test 1: empty textarea must not loop infinitely
+	m := New()
+	m.wordLeft()
+	if m.col != 0 || m.row != 0 {
+		t.Errorf("expected (0, 0) on empty textarea, got (%d, %d)", m.row, m.col)
+	}
+
+	// Test 2: line starting with spaces must not loop infinitely
+	m.SetValue("   hello world")
+	m.SetCursor(2)
+	m.wordLeft()
+	if m.col != 0 {
+		t.Errorf("expected cursor at 0, got %d", m.col)
+	}
+
+	// Test 3: multiple lines of spaces
+	m.SetValue("   \n   \nhello")
+	m.CursorEnd()
+	m.wordLeft()
+	if m.Value() != "   \n   \nhello" {
+		t.Errorf("unexpected value: %q", m.Value())
+	}
+	m.wordLeft()
+	m.wordLeft()
+	m.wordLeft()
+	if m.row != 0 || m.col != 0 {
+		t.Errorf("expected cursor at (0, 0), got row=%d, col=%d", m.row, m.col)
+	}
+}
+
+func TestTransposeLeft_SoftWrap(t *testing.T) {
+	m := New()
+	m.Prompt = ""
+	m.ShowLineNumbers = false
+	// Force soft wrapping at width 5
+	m.SetWidth(5)
+
+	text := "abcdefghij"
+	m.SetValue(text)
+	grid := m.memoizedWrap(m.value[0], m.width, 0)
+	if len(grid) < 2 {
+		t.Fatalf("expected wrap into >= 2 lines, got %d", len(grid))
+	}
+
+	// Place cursor at end of line (col 10). Transpose should swap 'i' and 'j',
+	// producing "abcdefghji", staying at col 10.
+	m.CursorEnd()
+	if m.col != 10 {
+		t.Fatalf("expected col 10, got %d", m.col)
+	}
+	m.transposeLeft()
+	if m.Value() != "abcdefghji" {
+		t.Errorf("expected 'abcdefghji', got %q", m.Value())
+	}
+	if m.col != 10 {
+		t.Errorf("expected cursor to remain at end of line (10), got %d", m.col)
+	}
+
+	// Transpose with Arabic diacritics: letters with combining tashkeel must stay intact
+	m.SetWidth(80)
+	m.SetValue("بِتَ")
+	m.CursorEnd()
+	m.transposeLeft()
+	if m.Value() != "تَبِ" {
+		t.Errorf("expected 'تَبِ', got %q", m.Value())
+	}
+}
+
+func TestVerticalNavigation_BoundaryNoOp(t *testing.T) {
+	m := New()
+	m.Prompt = ""
+	m.ShowLineNumbers = false
+	m.SetWidth(80)
+	m.SetValue("first line\nsecond line\nthird line")
+
+	// Start at line 0, col 5
+	m.moveToBegin()
+	m.SetCursor(5)
+	if m.Line() != 0 || m.col != 5 {
+		t.Fatalf("setup failed: line=%d, col=%d", m.Line(), m.col)
+	}
+
+	// Pressing CursorUp when already at top line should be a no-op
+	m.CursorUp()
+	m.CursorUp()
+	if m.Line() != 0 || m.col != 5 {
+		t.Errorf("expected line 0 col 5 after CursorUp at top boundary, got line=%d, col=%d", m.Line(), m.col)
+	}
+
+	// Move to bottom line
+	m.CursorDown()
+	m.CursorDown()
+	if m.Line() != 2 {
+		t.Fatalf("expected line 2, got %d", m.Line())
+	}
+	expectedCol := m.col
+
+	// Pressing CursorDown when already at bottom line should be a no-op
+	m.CursorDown()
+	m.CursorDown()
+	if m.Line() != 2 || m.col != expectedCol {
+		t.Errorf("expected line 2 col %d after CursorDown at bottom boundary, got line=%d, col=%d", expectedCol, m.Line(), m.col)
+	}
+}
