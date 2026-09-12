@@ -55,6 +55,11 @@ filesystem sandbox.
 | Denied `bash` starts no subprocess | GUARANTEED | `TestBashDeniedRunsNoSubprocess` |
 | Bash child environment is an allowlist, strips unsafe PATH entries, and uses an isolated HOME | GUARANTEED | `TestBashChildEnvAllowlistIntegration`, `TestBashChildEnvPathStripping`, `TestBashChildEnvHomePolicy` |
 | Opened config must be regular, user-owned on Unix, and have no group/other permission bits | GUARANTEED | `internal/config` ParseFile and secure-open tests |
+| Config v1 and Config v2 default files coexistence on disk is fatal at startup | GUARANTEED | `TestV2CoexistenceOnDiskIsFatal` |
+| Config v2 rejects unknown fields, trailing JSON, and custom `base_url` | GUARANTEED | `TestV2RejectsUnknownFieldsAndTrailingJSON`, `TestV2CredentialFileAndClosedEndpointPolicy` |
+| Config package never writes configuration or credentials to disk | GUARANTEED | package API and configuration tests |
+| Config descriptor opening rejects symlinks and blocking special files | REDUCED | `O_NOFOLLOW` and `O_NONBLOCK`, followed by descriptor validation |
+| Config v2 has no implicit environment credential fallback | GUARANTEED | credential sources must explicitly use `env` or a secure absolute `file` |
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
@@ -108,6 +113,42 @@ opening such as `openat2(RESOLVE_BENEATH)` plus a classified fallback.
 The config package never writes configuration files. Bash child construction
 starts from an empty environment and copies only its allowlist, independently
 of config loading.
+
+### Config security invariants
+
+- Config v1 uses `NABD_CONFIG` or `~/.ag/config`.
+- Config v2 uses `NABD_CONFIG_V2` or `~/.ag/config.v2.json`.
+- Explicitly selecting both versions, or finding both default files, is a fatal startup error.
+- Config and credential files are opened with `O_RDONLY`, `O_CLOEXEC`, `O_NOFOLLOW`, and `O_NONBLOCK`, then validated through the opened descriptor.
+- Files must be regular, owned by the current Unix user, inaccessible to group and others, and within their configured size limits.
+- Config v2 rejects unknown fields, trailing JSON, command credential sources, and implicit environment fallback.
+- Config v2 credential files must contain exactly one non-empty line.
+- Loaded credentials remain in package memory and are never copied into the environment of `bash` children.
+
+## Future base_url admission conditions
+
+Minimal strict Config v2 rejects `base_url` unconditionally. If custom endpoints are admitted in future versions to support private or enterprise inference gateways, the implementation MUST satisfy all five security admission conditions before admittance:
+
+1. **HTTPS mandatory**:
+   The endpoint URL scheme must be strictly `https://`. Plaintext `http://` or any other URI schemes are rejected. Unencrypted network transmission of provider API credentials is forbidden.
+
+2. **Host and IP admission restrictions**:
+   The host must resolve to a globally routable public address. The system must explicitly reject:
+   - RFC 1918 private IPv4 subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).
+   - Loopback addresses: IPv4 `127.0.0.0/8` and IPv6 `::1/128`.
+   - Link-local addresses: IPv4 `169.254.0.0/16` (specifically defending against cloud metadata endpoints such as `169.254.169.254`) and IPv6 `fe80::/10`.
+   - IPv6 Unique Local Addresses (`fc00::/7`).
+   - Local network and mDNS suffixes: `.local`, `.internal`, `.lan`, `.home.arpa`, or unqualified single-label hostnames.
+   - Any address that re-resolves (DNS rebinding) to non-public space at connection dial time.
+
+3. **No embedded credentials**:
+   The URL must not include userinfo components (`user:password@host`). Embedded credentials in URLs risk leakage in log messages, metrics, and proxy logs.
+
+4. **No query parameters or fragments**:
+   The URL must contain only scheme, host, optional non-privileged port, and an optional clean path prefix. Query parameters (`?`) and fragment identifiers (`#`) are rejected.
+
+5. **Cross-host redirect containment at HTTP runtime**:
+   Redirect containment cannot rely solely on upfront URL parse validation. The HTTP client's `CheckRedirect` policy function must terminate the request if any HTTP redirect points to a host different from the original validated endpoint host, preventing redirect-based credential leakage or SSRF pivot.
 
 ## Journal, shadow, and history concurrency
 
