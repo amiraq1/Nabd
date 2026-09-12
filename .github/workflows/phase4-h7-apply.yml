@@ -1,0 +1,54 @@
+name: Apply phase 4 H7
+on:
+  push:
+    branches: [fix/phase4-router-breaker-docs]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: fix/phase4-router-breaker-docs
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: '1.27.1'
+      - name: Apply and test
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('internal/provider/router.go')
+          s=p.read_text()
+          s=s.replace('//\tKNOWN_LIMITATION_CIRCUIT_BREAKER: NOT_IMPLEMENTED (P section)', '//\tCIRCUIT_BREAKER: 401/403 opens only that route for a five-minute cooldown; the first request after expiry is the half-open probe', 1)
+          p.write_text(s)
+          PY
+          cat >> internal/provider/breaker_test.go <<'EOF'
+
+          type breakerClock struct{ now time.Time }
+
+          func (c *breakerClock) Now() time.Time { return c.now }
+          func (*breakerClock) NewTimer(time.Duration) Timer { return nil }
+
+          func TestRouteBreakerAllowsHalfOpenProbeAfterCooldown(t *testing.T) {
+            clock := &breakerClock{now: time.Unix(100, 0)}
+            r := &Router{
+              clock: clock,
+              blockedUntil: make(map[string]time.Time),
+              breakerCooldown: time.Minute,
+            }
+            route := Route{Provider: "anthropic", Model: "m", Client: breakerTestClient{}}
+            r.tripRoute(route)
+            if r.routeAllowed(route) { t.Fatal("route allowed before cooldown elapsed") }
+            clock.now = clock.now.Add(time.Minute)
+            if !r.routeAllowed(route) { t.Fatal("route remained blocked after cooldown") }
+          }
+          EOF
+          gofmt -w internal/provider/router.go internal/provider/breaker_test.go
+          go test ./internal/provider -run RouteBreaker -count=1
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add internal/provider/router.go internal/provider/breaker_test.go
+          git commit -m "docs(provider): align router breaker contract"
+          git push origin HEAD:fix/phase4-router-breaker-docs
