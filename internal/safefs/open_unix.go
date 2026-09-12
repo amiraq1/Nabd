@@ -1,4 +1,4 @@
-//go:build android
+//go:build unix
 
 package safefs
 
@@ -40,7 +40,7 @@ const openFlagsFile = unix.O_RDONLY | unix.O_CLOEXEC | unix.O_NOFOLLOW | unix.O_
 // The returned *os.File reads from the validated descriptor, not from the path.
 // Directories, FIFOs, sockets, and devices are refused via Fstat.
 //
-// This implementation is Android-only. Other platforms return
+// This implementation is unix-only. Other platforms return
 // ErrUnsupportedPlatform (open_other.go).
 func OpenRead(rootPath, relativePath string) (*os.File, error) {
 	rel, err := Normalize(relativePath)

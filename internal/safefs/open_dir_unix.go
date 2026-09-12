@@ -1,4 +1,4 @@
-//go:build android
+//go:build unix
 
 package safefs
 
@@ -50,7 +50,7 @@ func classifyDirOpenError(err error, path string) error {
 // is opened with openFlagsDir (O_NOFOLLOW|O_DIRECTORY), so a symlink or a
 // non-directory component is refused as ErrNotDirectory.
 //
-// This implementation is Android-only; other platforms return
+// This implementation is unix-only; other platforms return
 // ErrUnsupportedPlatform (open_dir_other.go).
 func OpenDir(rootPath, relativeDir string) (*os.File, error) {
 	rel, err := Normalize(relativeDir)
@@ -104,7 +104,7 @@ func walkDirFd(rootFd int, rel string) (*os.File, error) {
 // it. Directories created before a later failure are left in place, matching
 // the existing MkdirAll behaviour.
 //
-// This implementation is Android-only; other platforms return
+// This implementation is unix-only; other platforms return
 // ErrUnsupportedPlatform (open_dir_other.go).
 func OpenOrCreateDir(rootPath, relativeDir string, fallbackMode os.FileMode) (*os.File, error) {
 	rel, err := Normalize(relativeDir)

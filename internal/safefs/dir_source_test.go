@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// 12: the non-Android implementation is fail-closed and defines both entry
+// 12: the non-unix implementation is fail-closed and defines both entry
 // points, so the package compiles everywhere without a path-based fallback.
 func TestOpenDirOtherIsFailClosed(t *testing.T) {
 	src, err := os.ReadFile("open_dir_other.go")
@@ -15,8 +15,8 @@ func TestOpenDirOtherIsFailClosed(t *testing.T) {
 	}
 	body := string(src)
 
-	if !strings.Contains(body, "//go:build !android") {
-		t.Error("open_dir_other.go must carry the //go:build !android constraint")
+	if !strings.Contains(body, "//go:build !unix") {
+		t.Error("open_dir_other.go must carry the //go:build !unix constraint")
 	}
 	if !strings.Contains(body, "ErrUnsupportedPlatform") {
 		t.Error("open_dir_other.go must be fail-closed with ErrUnsupportedPlatform")

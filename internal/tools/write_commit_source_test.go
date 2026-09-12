@@ -32,12 +32,12 @@ func TestWriteCommitDelegatesToAdapters(t *testing.T) {
 // The Android adapters are descriptor-relative only: the relative path is the
 // authority, the absolute path is reporting metadata, and no path-based
 // shortcut may reappear.
-func TestWriteCommitAndroidAdapterIsDescriptorOnly(t *testing.T) {
-	body := readCommitSource(t, "write_commit_android.go")
+func TestWriteCommitUnixAdapterIsDescriptorOnly(t *testing.T) {
+	body := readCommitSource(t, "write_commit_unix.go")
 
 	for _, want := range []string{"safefs.OpenRead", "safefs.WriteFileAtomic"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("write_commit_android.go must use %s", want)
+			t.Errorf("write_commit_unix.go must use %s", want)
 		}
 	}
 	for _, banned := range []string{
@@ -49,7 +49,7 @@ func TestWriteCommitAndroidAdapterIsDescriptorOnly(t *testing.T) {
 		"EvalSymlinks",
 	} {
 		if strings.Contains(body, banned) {
-			t.Errorf("write_commit_android.go must not use %s", banned)
+			t.Errorf("write_commit_unix.go must not use %s", banned)
 		}
 	}
 }
@@ -60,8 +60,8 @@ func TestWriteCommitAndroidAdapterIsDescriptorOnly(t *testing.T) {
 func TestWriteCommitOtherIsCompatibilityPath(t *testing.T) {
 	body := readCommitSource(t, "write_commit_other.go")
 
-	if !strings.Contains(body, "//go:build !android") {
-		t.Error("write_commit_other.go must carry the //go:build !android constraint")
+	if !strings.Contains(body, "//go:build !unix") {
+		t.Error("write_commit_other.go must carry the //go:build !unix constraint")
 	}
 	if !strings.Contains(body, "compatibility") {
 		t.Error("write_commit_other.go must document itself as a compatibility path")

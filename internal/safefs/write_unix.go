@@ -1,4 +1,4 @@
-//go:build android
+//go:build unix
 
 package safefs
 
@@ -36,7 +36,7 @@ const tempFlags = unix.O_WRONLY | unix.O_CREAT | unix.O_EXCL | unix.O_CLOEXEC | 
 // the rename durable. The target path is never opened or renamed by name, so a
 // concurrent swap cannot redirect the write.
 //
-// This implementation is Android-only; other platforms return
+// This implementation is unix-only; other platforms return
 // ErrUnsupportedPlatform (write_other.go).
 func WriteFileAtomic(rootPath, relativeFile string, data []byte, mode os.FileMode) error {
 	// Reject targets that do not name a file before Normalize can clean them

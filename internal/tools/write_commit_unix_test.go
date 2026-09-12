@@ -1,4 +1,4 @@
-//go:build android
+//go:build unix
 
 package tools
 
@@ -14,7 +14,7 @@ import (
 	"nabd/internal/snap"
 )
 
-// --- 3. writePathFromRoot: lexical path authority, same contract as androidReadPath.
+// --- 3. writePathFromRoot: lexical path authority, same contract as readPathFromRoot.
 
 func TestWritePathFromRootRelative(t *testing.T) {
 	root := toolRoot(t)

@@ -6,13 +6,13 @@ import (
 	"testing"
 )
 
-// The Android write primitive must be built only from descriptor-relative
+// The unix write primitive must be built only from descriptor-relative
 // syscalls; a path-based shortcut (CreateTemp/WriteFile/Rename/MkdirAll) would
 // reintroduce the very race this work removes.
-func TestWriteAndroidUsesDescriptorOnlyOperations(t *testing.T) {
-	src, err := os.ReadFile("write_android.go")
+func TestWriteUnixUsesDescriptorOnlyOperations(t *testing.T) {
+	src, err := os.ReadFile("write_unix.go")
 	if err != nil {
-		t.Fatalf("write_android.go: %v", err)
+		t.Fatalf("write_unix.go: %v", err)
 	}
 	body := string(src)
 
@@ -22,7 +22,7 @@ func TestWriteAndroidUsesDescriptorOnlyOperations(t *testing.T) {
 	}
 	for _, tok := range required {
 		if !strings.Contains(body, tok) {
-			t.Errorf("write_android.go must use %s", tok)
+			t.Errorf("write_unix.go must use %s", tok)
 		}
 	}
 
@@ -32,7 +32,7 @@ func TestWriteAndroidUsesDescriptorOnlyOperations(t *testing.T) {
 	}
 	for _, tok := range banned {
 		if strings.Contains(body, tok) {
-			t.Errorf("write_android.go must not use %s", tok)
+			t.Errorf("write_unix.go must not use %s", tok)
 		}
 	}
 }
@@ -46,8 +46,8 @@ func TestWriteOtherIsFailClosed(t *testing.T) {
 	}
 	body := string(src)
 
-	if !strings.Contains(body, "//go:build !android") {
-		t.Error("write_other.go must carry the //go:build !android constraint")
+	if !strings.Contains(body, "//go:build !unix") {
+		t.Error("write_other.go must carry the //go:build !unix constraint")
 	}
 	if !strings.Contains(body, "ErrUnsupportedPlatform") {
 		t.Error("write_other.go must be fail-closed with ErrUnsupportedPlatform")

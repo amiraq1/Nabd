@@ -29,7 +29,7 @@ func TestReadFileUsesDescriptorStat(t *testing.T) {
 	}
 }
 
-// 11 + 12: the non-Android adapter is a documented compatibility path and must
+// 11 + 12: the non-unix adapter is a documented compatibility path and must
 // not reach into the safe-open API.
 func TestOpenReadOtherIsCompatibilityOnly(t *testing.T) {
 	src, err := os.ReadFile("open_read_other.go")
@@ -47,7 +47,7 @@ func TestOpenReadOtherIsCompatibilityOnly(t *testing.T) {
 	if !strings.Contains(body, "Resolve") {
 		t.Errorf("open_read_other.go is expected to use Root.Resolve as the compatibility path")
 	}
-	if !strings.Contains(body, "//go:build !android") {
-		t.Errorf("open_read_other.go must carry the //go:build !android constraint")
+	if !strings.Contains(body, "//go:build !unix") {
+		t.Errorf("open_read_other.go must carry the //go:build !unix constraint")
 	}
 }

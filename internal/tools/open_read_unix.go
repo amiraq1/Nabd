@@ -1,4 +1,4 @@
-//go:build android
+//go:build unix
 
 package tools
 
@@ -9,7 +9,7 @@ import (
 	"nabd/internal/safefs"
 )
 
-// androidReadPath converts a tool-supplied path into the normalized relative
+// readPathFromRoot converts a tool-supplied path into the normalized relative
 // path used for the descriptor walk, plus the absolute path used for reporting
 // and read-credit accounting.
 //
@@ -17,7 +17,7 @@ import (
 // filepath.Rel; an absolute path outside root produces ".." components, which
 // Normalize refuses. No symlink resolution happens here: only the descriptor
 // walk in the safe open touches the filesystem.
-func androidReadPath(root *Root, input string) (relative, absolute string, err error) {
+func readPathFromRoot(root *Root, input string) (relative, absolute string, err error) {
 	if filepath.IsAbs(input) {
 		relative, err = filepath.Rel(root.Dir(), filepath.Clean(input))
 		if err != nil {
@@ -42,7 +42,7 @@ func androidReadPath(root *Root, input string) (relative, absolute string, err e
 // abs is reporting/accounting metadata only. The opened descriptor, not this
 // string, is the authority for all file reads and metadata checks.
 func openReadFromRoot(root *Root, input string) (*os.File, string, error) {
-	relative, abs, err := androidReadPath(root, input)
+	relative, abs, err := readPathFromRoot(root, input)
 	if err != nil {
 		return nil, "", err
 	}

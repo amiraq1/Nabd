@@ -1,4 +1,4 @@
-//go:build android
+//go:build unix
 
 package tools
 
@@ -44,12 +44,12 @@ func toolSymlink(t *testing.T, target, name string) {
 }
 
 // 1 + 2: relative input returns a descriptor and the joined absolute path.
-func TestAndroidReadPathRelative(t *testing.T) {
+func TestReadPathFromRootRelative(t *testing.T) {
 	root := toolRoot(t)
 
-	rel, abs, err := androidReadPath(root, filepath.Join("dir", "file.txt"))
+	rel, abs, err := readPathFromRoot(root, filepath.Join("dir", "file.txt"))
 	if err != nil {
-		t.Fatalf("androidReadPath: %v", err)
+		t.Fatalf("readPathFromRoot: %v", err)
 	}
 	if rel != filepath.Join("dir", "file.txt") {
 		t.Fatalf("relative=%q", rel)
@@ -61,13 +61,13 @@ func TestAndroidReadPathRelative(t *testing.T) {
 }
 
 // 3: an absolute path inside root is converted to a relative one.
-func TestAndroidReadPathAbsoluteInside(t *testing.T) {
+func TestReadPathFromRootAbsoluteInside(t *testing.T) {
 	root := toolRoot(t)
 
 	input := filepath.Join(root.Dir(), "a", "b.txt")
-	rel, abs, err := androidReadPath(root, input)
+	rel, abs, err := readPathFromRoot(root, input)
 	if err != nil {
-		t.Fatalf("androidReadPath: %v", err)
+		t.Fatalf("readPathFromRoot: %v", err)
 	}
 	if rel != filepath.Join("a", "b.txt") {
 		t.Fatalf("relative=%q", rel)
@@ -78,11 +78,11 @@ func TestAndroidReadPathAbsoluteInside(t *testing.T) {
 }
 
 // 4: an absolute path outside root yields ".." and is refused by Normalize.
-func TestAndroidReadPathAbsoluteOutside(t *testing.T) {
+func TestReadPathFromRootAbsoluteOutside(t *testing.T) {
 	root := toolRoot(t)
 	outside := filepath.Join(t.TempDir(), "secret.txt")
 
-	if _, _, err := androidReadPath(root, outside); err == nil {
+	if _, _, err := readPathFromRoot(root, outside); err == nil {
 		t.Fatal("absolute path outside root must be refused")
 	}
 }

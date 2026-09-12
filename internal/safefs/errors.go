@@ -25,7 +25,7 @@ var (
 	// ErrUnsupportedPlatform reports that descriptor-relative open is not
 	// implemented on this platform. It is fail-closed: callers must never
 	// substitute a path-based open for it.
-	ErrUnsupportedPlatform = errors.New("safefs: safe open is only supported on android")
+	ErrUnsupportedPlatform = errors.New("safefs: descriptor-relative operations are only supported on unix")
 
 	// ErrInvalidTarget reports a path that does not name a file: the empty
 	// path, ".", or a path with a trailing separator (which names a directory).
