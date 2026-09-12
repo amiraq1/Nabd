@@ -102,7 +102,21 @@ func main() {
 	jsonOut := flag.Bool("json", false, "headless: emit journal JSONL on stdout")
 	maxTurns := flag.Int("max-turns", 0, "override turn ceiling")
 	permModeFlag := flag.String("permission-mode", "deny", "headless: ask|deny|allow-reads")
+	exportPath := flag.String("export", "", "export a session journal as JSONL to stdout and exit")
+	exportRedact := flag.Bool("redact", false, "with --export: redact recognized credential patterns")
 	flag.Parse()
+
+	provided := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	if err := checkExportFlags(*exportPath, *exportRedact, flag.NArg(), provided); err != nil {
+		die(err)
+	}
+	if *exportPath != "" {
+		if err := exportJournal(*exportPath, *exportRedact, os.Stdout, os.Stderr); err != nil {
+			die(err)
+		}
+		return
+	}
 
 	if *showVer {
 		fmt.Println(build.Line())

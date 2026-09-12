@@ -40,7 +40,12 @@ go build -o nabd ./cmd/ag
 ./nabd -p "..." --json            # journal JSONL on stdout
 ./nabd -p "..." --max-turns 8
 ./nabd -p "count the go files" --permission-mode allow-reads
+
+./nabd --export <file.jsonl>              # copy a journal to stdout, byte-for-byte
+./nabd --export <file.jsonl> --redact     # redact recognized credential patterns
 ```
+
+`--export` writes the journal as JSONL to stdout and exits; diagnostics go to stderr. Without `--redact` the source is copied verbatim (unknown fields, blank lines, and a truncated final line are preserved) and a stderr warning notes the output may be sensitive. With `--redact` the journal is re-encoded through the same redaction and encoding path as the live journal and `--json`: recognized credential patterns become `[REDACTED]`, but unknown JSON fields are dropped, a truncated final line is ignored, and unrecognized sensitive content stays cleartext. The source file is never written. `--redact` requires `--export`, and `--export` cannot be combined with any run mode (`-p`, `--continue`, `--replay`, `--feed`, `--json`, `--dir`, `--version`, and the headless tuning flags).
 
 ## Configuration
 
