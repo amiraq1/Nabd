@@ -570,13 +570,9 @@ func sessionPath(dir string) (string, error) {
 	return sessionPathAt(dir, time.Now().UTC())
 }
 
-// newSessionJournal allocates a raw journal atomically for callers that
-// require the backward-compatible default. Production new sessions use
-// newSessionJournalWithOptions, while --continue uses openSessionJournal.
-func newSessionJournal(dir string) (*store.JSONL, string, error) {
-	return newSessionJournalWithOptions(dir, store.Options{})
-}
-
+// newSessionJournalWithOptions allocates a new journal atomically, applying the
+// supplied persistence options. Production new sessions pass the process
+// redaction policy; --continue opens an existing file via openSessionJournal.
 func newSessionJournalWithOptions(dir string, opts store.Options) (*store.JSONL, string, error) {
 	const maxAttempts = 32
 	for i := 0; i < maxAttempts; i++ {
