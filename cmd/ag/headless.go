@@ -18,7 +18,6 @@ import (
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
-	"nabd/internal/store"
 	"nabd/internal/tools"
 )
 
@@ -234,11 +233,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 		return err
 	}
 
-	journalPath, err := sessionPath(cfg.sessDir)
-	if err != nil {
-		return err
-	}
-	journal, err := store.NewJSONL(journalPath)
+	journal, journalPath, err := newSessionJournal(cfg.sessDir)
 	if err != nil {
 		return err
 	}

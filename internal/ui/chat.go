@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"nabd/internal/agent"
+	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -21,25 +22,26 @@ type doneMsg struct{ err error }
 // Chat is a single-line prompt with a scrollback of printed events.
 // Deliberately not a textarea: one line, one hand, one thumb.
 type Chat struct {
-	runner    Runner
-	events    <-chan agent.Event
-	width     int
-	input     string
-	buf       string
-	running   bool
-	cancel    context.CancelFunc
-	status    string
-	Approve   *Approver
-	pending   *agent.ToolCall
-	OnUndo    func(n int) string
-	OnRewind  func(n int) string
-	OnCtx     func() string
-	OnCompact func() string
-	OnEdits   func() string
+	runner     Runner
+	events     <-chan agent.Event
+	width      int
+	input      string
+	buf        string
+	running    bool
+	cancel     context.CancelFunc
+	status     string
+	statusProj *presentation.StatusProjector
+	Approve    *Approver
+	pending    *agent.ToolCall
+	OnUndo     func(n int) string
+	OnRewind   func(n int) string
+	OnCtx      func() string
+	OnCompact  func() string
+	OnEdits    func() string
 }
 
 func NewChat(r Runner, events <-chan agent.Event) *Chat {
-	return &Chat{runner: r, events: events, width: DefaultWidth, Approve: NewApprover()}
+	return &Chat{runner: r, events: events, width: DefaultWidth, Approve: NewApprover(), statusProj: presentation.NewStatusProjector()}
 }
 
 func (m *Chat) Init() tea.Cmd { return waitEvent(m.events) }
@@ -71,6 +73,10 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case evMsg:
 		e := agent.Event(msg)
+		if m.statusProj == nil {
+			m.statusProj = presentation.NewStatusProjector()
+		}
+		m.statusProj.Apply(e)
 		if e.Type == agent.TextDelta {
 			m.buf += e.Text
 			return m, waitEvent(m.events)
@@ -259,7 +265,7 @@ func (m *Chat) command(line string) string {
 		}
 		return m.OnEdits()
 	case "/help":
-		return "/undo [n] · /edits · /rewind [n] · /ctx · /compact · ctrl+c · ctrl+d"
+		return CommandHelp(m.width)
 	}
 	return "unknown command: " + parsed.RawCmd
 }

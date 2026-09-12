@@ -47,10 +47,11 @@ that is ~32 MB of matrix alone, matching the 33.6 MB total observed.
   that buffers the full unified diff. Total peak exceeds the matrix by a
   non-trivial margin. The G1 benchmark B/op column (33.6 MB at 2000x2000)
   captures this real total, not just the matrix.
-- **per-call budget**: these limits are PER CALL, not global. Concurrent
-  mutations multiply the allocation — N parallel edits each at the ceiling
-  consume N× the budget. There is currently no aggregate ceiling across
-  concurrent tool calls. [DEFERRED]
+- **aggregate budget**: each `Registry` owns a shared diff-cell budget.
+  Concurrent mutations reserve `n*m` cells before matrix allocation and wait
+  cancellably when the aggregate ceiling would be exceeded. Reservations are
+  released on every return path, so parallel edits cannot multiply the 4M-cell
+  ceiling within one registry.
 - **cancellation bounds time, not memory**: the LCS row-allocation loop
   (`lcs := make([][]int, n+1)`) runs BEFORE the first `ctx.Err()` check. A
   cancellation therefore bounds COMPLETION TIME but not PEAK MEMORY — the
@@ -677,3 +678,67 @@ The read cap also must not become provider-keyed: Router.Name() is a
 composite display string, so any policy parsed from it would mis-key for the
 multi-provider case. TestReadCapPinsProviderIndependence_NBD401 pins that the
 cap depends only on the read and token settings.
+
+## COMPACT_BOUNDARY_STALE (Finding 2) — reject boundaries removed by rewind
+
+`Compact` picks a boundary from a snapshot, releases `l.mu` for the provider
+summarisation call, then re-validates the boundary against the *fresh* history
+under `l.mu` and appends the `Compact` event in the same critical section
+(`internal/agent/compact.go`). If the selected `firstKept` is absent from the
+current live branch, `Compact` returns `ErrCompactBoundaryStale` and appends
+nothing.
+
+The load-bearing defect is the `/compact × /rewind` overlap: `/compact` runs in
+a detached goroutine that is **not** covered by the `m.running` interlock
+(`cmd/ag/main.go`, `chat.OnCompact`). So a concurrent `/rewind` can remove
+`firstKept` from the live branch while summarisation is blocked. Baseline
+`Compact` (HEAD) searched the stale snapshot, never detected the loss, and
+appended a `Compact` event whose `FirstKept` named an event no longer on the
+live branch. The corrected `Compact` searches fresh history under `l.mu` and
+rejects with `ErrCompactBoundaryStale`, appending nothing.
+
+`Live()` (`internal/agent/event.go`) applies a `Compact` by flooring the live
+branch at `FirstKept`. If that sequence is absent from the current branch, the
+floor refers to an unreachable event — a journal may still hold it somewhere,
+but it is not on the live projection.
+
+Raw tool-event-pairing validation (`rawPairingInvariantHolds`) remains as
+**defense in depth only**. Under current production ordering it cannot fire: a
+compaction boundary is always a `UserMsg`, `Seq` increases in emission order,
+and a `UserMsg` is emitted only at the top of `Loop.Run`, so no boundary can
+land between a `ToolStart` and its `ToolEnd`. The orphaned-ToolEnd sequence is
+only reachable through direct event injection or a `--continue` of a journal
+that was already structurally corrupt. The harm prevented by raw pairing is a
+fabricated `tool_use` attributed to the assistant — `Messages()` synthesises a
+wire-valid `tool_use` for an unmatched `ToolEnd`, so the request is never
+provider-rejected — not an orphaned `tool_result` the provider would refuse.
+
+`ErrCompactBoundaryStale` is deliberately `errors.New`, so callers distinguish a
+stale-boundary refusal from a provider or journal failure via `errors.Is`. The
+manual `/compact` path surfaces only a status string today; wiring the sentinel
+into user-facing text and a command-level `/compact` interlock are out of scope
+here and recorded as follow-ups.
+
+## SESSION_PATH_COLLISION (Finding 1) — PID+counter naming
+
+New sessions use `sessionPathAt` → `newSessionName`: `<timestamp>-p<PID>-c<NNNN>.jsonl`.
+The old naming (`<timestamp>.jsonl`) is unreachable for new sessions.
+
+**Residual collision is PID-NAMESPACE scoped, not filesystem scoped.**
+Two processes in separate PID namespaces (containers) sharing a session
+directory via `--dir` on a common volume can hold the same PID and start in
+the same millisecond — reproducing the original collision silently because
+`store.NewJSONL` still opens `O_CREATE|O_WRONLY|O_APPEND` (no `O_EXCL`).
+The collision manifests as duplicate Seq values and multiple Parent roots in
+one journal, exactly as proven in E1. This residual is **collision-resistant**,
+not collision-free.
+
+Closing it requires exclusive creation on the new-session path only (a
+separate constructor), which was deliberately deferred to keep this commit
+revertable and to avoid changing the constructor shared with `--continue`.
+
+The same-millisecond `'-'` (0x2D) sorts before `'.'` (0x2E), so a new
+`<ts>-pPID-cNNNN.jsonl` sorts BEFORE a legacy `<ts>.jsonl` in `os.ReadDir`
+order; `latestSession`'s reverse scan would prefer the legacy file if a
+same-timestamp legacy sibling exists. Harmless in practice, ordering across
+distinct timestamps is unaffected because the timestamp prefix is fixed width.

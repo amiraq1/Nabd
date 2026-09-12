@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"nabd/internal/config"
 	"nabd/internal/provider"
 )
 
@@ -55,6 +56,7 @@ type Loop struct {
 	Gate             Gate
 	Human            Asker
 	Budget           *Budget
+	SpendBudget      *SpendBudget
 	EstimateMessages MessageEstimator
 	CompactBudget    int
 	KeepFullRounds   int
@@ -67,10 +69,11 @@ type Loop struct {
 	warned bool
 	ended  bool // true once End() has been called; guards against double RunEnd
 
-	mu     sync.Mutex
-	seq    int
-	parent int
-	hist   []Event
+	mu        sync.Mutex
+	historyMu sync.Mutex
+	seq       int
+	parent    int
+	hist      []Event
 	// rateLimitState tracks consecutive 429s for the active Run().
 	// It is reset at the start of each Run() and after every successful turn.
 	rateLimitHits      int           // consecutive 429s since last success
@@ -130,6 +133,71 @@ const DefaultMaxTurns = 40
 // session is intact; the caller should wait before retrying.
 var ErrRateLimitBudget = errors.New("rate limit budget exhausted")
 
+// ErrCompactBoundaryStale is returned by Compact when the boundary chosen from
+// an earlier snapshot is no longer safe to apply to the history that exists at
+// append time. It is a deliberate fail-closed rejection, not a provider or
+// journal failure: Compact appends nothing and the session is unchanged.
+//
+// Two causes map to this error, distinguished only in logs by the caller:
+//
+//  1. The boundary Seq is absent from the live branch. FirstKept is a numeric
+//     threshold (Live keeps e.Seq >= FirstKept), so appending a Compact that
+//     names a Seq no longer on the branch does not degrade gracefully — the
+//     live projection collapses to the Compact marker and whatever follows it,
+//     and the dropped context is recoverable only via --replay.
+//
+//  2. The retained segment violates raw tool-event pairing. Defense in depth;
+//     unreachable under current production ordering. See Compact's doc comment.
+var ErrCompactBoundaryStale = errors.New("compact boundary is no longer safe to apply")
+
+// ErrHistoryMutationInProgress means Compact or Rewind already owns the
+// history-mutation interlock. Callers should retry after the active operation
+// settles; waiting inside either operation would freeze an interactive command.
+var ErrHistoryMutationInProgress = errors.New("history mutation already in progress; wait for compact or rewind to finish")
+
+// rawPairingInvariantHolds reports whether for every raw ToolEnd event in evs
+// that carries a tool-call ID, a matching raw ToolStart event with the same
+// tool-call ID precedes it in evs.
+//
+// This is a defense-in-depth invariant, NOT the load-bearing Finding 2 fix.
+// Under current production emission ordering it cannot fire: a compaction
+// boundary is always a UserMsg (Seq increases in emission order), and a UserMsg
+// is only emitted at the top of Loop.Run, so no boundary UserMsg can ever land
+// between a ToolStart and its ToolEnd. The orphaned-ToolEnd sequence therefore
+// cannot be produced by the running journal; it is only reachable through
+// direct event injection or a --continue of a journal that was already
+// structurally corrupt before this code existed.
+//
+// Malformed ToolEnd events (Call == nil or Call.ID == "") are skipped rather
+// than treated as pairing violations. This ensures that legacy archives or
+// corrupted records continued via --continue degrade gracefully (relying on
+// Messages() fallback handling) rather than permanently bricking /compact with
+// persistent ErrCompactBoundaryStale rejections.
+//
+// Skipping an empty-ID ToolEnd here does not make it harmless downstream:
+// Messages() still emits a tool_result with an empty id for it (see its ToolEnd
+// case). That is pre-existing behaviour, not introduced or worsened by this
+// check, and is recorded in the parking lot rather than fixed here.
+func rawPairingInvariantHolds(evs []Event) bool {
+	seenStarts := make(map[string]bool)
+	for _, e := range evs {
+		switch e.Type {
+		case ToolStart:
+			if e.Call != nil && e.Call.ID != "" {
+				seenStarts[e.Call.ID] = true
+			}
+		case ToolEnd:
+			if e.Call == nil || e.Call.ID == "" {
+				continue // skip malformed ToolEnd: not a pairing violation, preserves --continue compatibility
+			}
+			if !seenStarts[e.Call.ID] {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // errTurnRateLimited is returned by streamTurn when the provider responded
 // with a 429. It signals Run() to wait and retry this turn rather than
 // counting it as a success (which would reset the consecutive-429 counter).
@@ -177,6 +245,9 @@ func (l *Loop) Start(banner, projectRoot string) error {
 // the partial text already emitted stays in the journal, followed by an
 // Interrupted event, because pretending it was never said is a lie.
 func (l *Loop) Run(ctx context.Context, userText string) error {
+	if l.SpendBudget != nil && l.SpendBudget.Exhausted() {
+		return ErrSpendBudget
+	}
 	if err := l.emit(Event{Type: UserMsg, Text: userText}); err != nil {
 		return err
 	}
@@ -243,7 +314,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		if hits >= l.rateLimitCeiling() {
 			_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
 				"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits)})
-			_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})
+			_ = l.emit(RunErrorEvent(ErrRateLimitBudget))
 			return ErrRateLimitBudget
 		}
 
@@ -268,7 +339,9 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		ms := Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
 		if p := l.pressure(ms); p > 0.75 {
 			if err := l.Compact(ctx, l.compactTarget()); err != nil {
-				l.emit(Event{Type: Notice, Text: "compact failed: " + err.Error()})
+				if !errors.Is(err, ErrHistoryMutationInProgress) {
+					l.emit(Event{Type: Notice, Text: "compact failed: " + err.Error()})
+				}
 			} else {
 				ms = Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
 				l.emit(Event{Type: Notice, Text: fmt.Sprintf("context compacted · %d%% → %d%%",
@@ -300,7 +373,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 				l.mu.Unlock()
 				_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
 					"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits2)})
-				_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})
+				_ = l.emit(RunErrorEvent(ErrRateLimitBudget))
 				return ErrRateLimitBudget
 			}
 			// A 413 on Groq is a per-minute TPM violation, not a final
@@ -313,7 +386,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			if notice, ok := tpmLimitNotice(err); ok {
 				_ = l.emit(Event{Type: Notice, Text: l.tpmNoticeText(notice), Limit: notice.Limit, Requested: notice.Requested})
 			}
-			_ = l.emit(Event{Type: RunError, Err: err.Error()})
+			_ = l.emit(RunErrorEvent(err))
 			return err
 		}
 
@@ -341,7 +414,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		// Results are appended even when interrupted: the API rejects an
 		// assistant tool_use with no matching tool_result on the next turn.
 		if err != nil {
-			_ = l.emit(Event{Type: RunError, Err: err.Error()})
+			_ = l.emit(RunErrorEvent(err))
 			return err
 		}
 		if interrupted {
@@ -350,8 +423,18 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		}
 	}
 
-	_ = l.emit(Event{Type: RunError, Err: ErrMaxTurns.Error()})
+	_ = l.emit(RunErrorEvent(ErrMaxTurns))
 	return ErrMaxTurns
+}
+
+func providerTurnContext(parent context.Context) (context.Context, context.CancelFunc) {
+	timeout := 2 * time.Minute
+	if raw := config.Get("NABD_PROVIDER_TURN_TIMEOUT"); raw != "" {
+		if d, err := time.ParseDuration(raw); err == nil && d > 0 {
+			timeout = d
+		}
+	}
+	return context.WithTimeout(parent, timeout)
 }
 
 // streamTurn consumes exactly one assistant turn.
@@ -368,7 +451,9 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 		specs = l.Tools.Specs()
 	}
 
-	ch, err := l.Provider.Stream(ctx, provider.Request{
+	turnCtx, cancel := providerTurnContext(ctx)
+	defer cancel()
+	ch, err := l.Provider.Stream(turnCtx, provider.Request{
 		System:   l.System,
 		Messages: ms,
 		Tools:    specs,
@@ -397,6 +482,23 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 
 		case provider.ChunkStop:
 			stop = c.Stop
+			promptTokens := c.PromptTokens
+			if promptTokens <= 0 {
+				if l.Budget != nil {
+					promptTokens = l.Budget.Estimate(ms)
+				} else {
+					promptTokens = EstimateMessages(ms)
+				}
+			}
+			unknown := 0
+			if c.PromptTokens <= 0 || c.CompletionTokens <= 0 {
+				unknown = maxOutputTokens()
+			}
+			if err := l.SpendBudget.Charge(promptTokens, c.CompletionTokens, unknown); err != nil {
+				for range ch {
+				}
+				return nil, "", err
+			}
 			// Record the provider's measured usage and the request parameters
 			// for this successful turn. These are the raw inputs needed to
 			// derive the charge model: prompt_tokens, completion_tokens,

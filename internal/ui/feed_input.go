@@ -34,6 +34,11 @@ func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.menu.visible {
 		return m.menuKey(k)
 	}
+	if m.navigationMode {
+		if model, cmd, handled := m.navigationKey(k); handled {
+			return model, cmd
+		}
+	}
 	if isToggleToolsKey(k) {
 		return m.toggleTools()
 	}
@@ -209,6 +214,9 @@ func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y":
 		return m.answerModal(agent.AllowOnce)
 	case "a", "A":
+		if m.permModal.call != nil && m.permModal.call.SessionGrantKnown && !m.permModal.call.SessionGrantAllowed {
+			return m, nil
+		}
 		return m.answerModal(agent.AllowSession)
 	case "n", "N":
 		return m.answerModal(agent.Deny)
@@ -240,6 +248,10 @@ func (m *Feed) answerModal(d agent.Decision) (tea.Model, tea.Cmd) {
 
 // composerKey routes keys while the composer is focused.
 func (m *Feed) composerKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if k.Type == tea.KeyEsc && m.composer.isEmpty() {
+		m.enterNavigation()
+		return m, nil
+	}
 	switch {
 	case isSendKey(k):
 		return m.trySend()
@@ -399,7 +411,7 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "/help":
 		m.composer.clear()
-		m.status = "/undo [n] · /edits · /ctx · /compact · /rewind [n]"
+		m.setCommandResult(CommandHelp(m.width))
 		return m, nil
 	}
 	// Unknown command: keep the text, tell the user.
@@ -547,7 +559,10 @@ func (m *Feed) menuKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case k.Type == tea.KeyTab, k.Type == tea.KeyEnter:
 		// Complete the selected command into composer text. NEVER executes simultaneously!
 		if cmd, ok := m.menu.currentCommand(); ok {
-			completed := cmd.Name + " "
+			completed := cmd.Name
+			if cmd.HasArg {
+				completed += " "
+			}
 			m.composer.setValue(completed)
 			m.history.setDraft(completed)
 			m.composer.growToContent(maxComposerHeight)

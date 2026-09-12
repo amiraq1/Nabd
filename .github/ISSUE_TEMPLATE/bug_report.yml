@@ -1,0 +1,25 @@
+name: Bug report
+description: Report a reproducible non-security defect
+title: "bug: "
+body:
+  - type: markdown
+    attributes:
+      value: "Do not report security vulnerabilities or attach raw session journals here. Use SECURITY.md."
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: nabd version
+    validations:
+      required: true

@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"nabd/internal/agent"
@@ -111,7 +110,7 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	if err != nil {
 		return before, snap.State{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+	if err := mkdirParentDirs(abs); err != nil {
 		return before, snap.State{}, err
 	}
 	mode := os.FileMode(0o644)
@@ -140,7 +139,11 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 
 	// The diff (LCS matrix allocation) runs here — BEFORE WriteAtomic. If it
 	// aborts (budget exceeded, ctx cancelled), the project file is untouched.
-	rec, rerr := buildRecord(ctx, sh, before, after, data, readLines)
+	var budget *diffBudget
+	if reg != nil {
+		budget = reg.diffBudget
+	}
+	rec, rerr := buildRecord(ctx, budget, sh, before, after, data, readLines)
 	if rerr != nil {
 		// Clean up the orphan blob that CaptureBytes wrote to the shadow
 		// store. The mutation is aborted, so no Edit will ever reference it;
@@ -176,7 +179,7 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 // event stays within the configured budget (dropping only Patch if needed).
 // If the event still exceeds the budget after dropping Patch, an error is
 // returned so commit() can abort before WriteAtomic.
-func buildRecord(ctx context.Context, sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*agent.EditRecord, error) {
+func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*agent.EditRecord, error) {
 	rec := &agent.EditRecord{
 		Path:       after.Rel,
 		HashAfter:  sha256hex(data),
@@ -190,12 +193,12 @@ func buildRecord(ctx context.Context, sh *snap.Shadow, before, after snap.State,
 			rec.HashBefore = sha256hex(b)
 			// A diff failure must not lose the record: keep hashes/blobs and
 			// simply leave Patch empty.
-			if patch, err := unifiedDiff(ctx, b, data, rec.Path); err == nil {
+			if patch, err := unifiedDiffWithBudget(ctx, budget, b, data, rec.Path); err == nil {
 				rec.Patch = patch
 			}
 		}
 	} else {
-		if patch, err := unifiedDiff(ctx, nil, data, rec.Path); err == nil {
+		if patch, err := unifiedDiffWithBudget(ctx, budget, nil, data, rec.Path); err == nil {
 			rec.Patch = patch
 		}
 	}

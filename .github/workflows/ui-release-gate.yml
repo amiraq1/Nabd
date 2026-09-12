@@ -1,0 +1,33 @@
+name: UI release gate
+
+on:
+  pull_request:
+    branches: [master, main, feat/secure-permission-experience]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ui-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+      - name: Formatting
+        run: test -z "$(gofmt -l internal/ui)"
+      - name: UI contracts
+        run: go test ./internal/ui ./internal/presentation -count=1
+      - name: Color-independent contracts
+        env:
+          NO_COLOR: "1"
+        run: go test ./internal/ui -run 'ReleaseGate|Acceptance|Diagnostics|CommandHelp' -count=1
+      - name: Race safety
+        run: go test -race ./internal/ui ./internal/presentation -count=1
+      - name: Replay scale evidence
+        run: go test ./internal/ui -run '^$' -bench 'BenchmarkAcceptanceReplay(1000|10000)$' -benchmem -benchtime=1x -count=1
+      - name: Working tree remains clean
+        run: git diff --check

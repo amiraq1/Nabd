@@ -575,8 +575,11 @@ func TestIsTruncatedRealMarker(t *testing.T) {
 	if tool == nil {
 		t.Fatal("tool not found")
 	}
-	if !tool.Tool.Truncated {
-		t.Errorf("expected tool.Truncated to be true for real store marker %q", output)
+	if tool.Tool.Truncated {
+		t.Errorf("execution truncation must not be inferred from the store marker %q", output)
+	}
+	if tool.Tool.OutputState != presentation.OutputTruncated {
+		t.Errorf("OutputState = %q, want OutputTruncated", tool.Tool.OutputState)
 	}
 }
 

@@ -3,12 +3,53 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
 	"nabd/internal/provider"
 )
+
+func TestValidateBoundary(t *testing.T) {
+	// Mirrors the real journal vocabulary: assistant output is recorded as
+	// streamed deltas, not a single assistant-message event. validateBoundary
+	// reads only Seq and the tool-pairing shape, so the exact non-UserMsg type
+	// is immaterial — it is chosen here to keep the fixture representative.
+	live := []Event{
+		{Seq: 1, Type: UserMsg, Text: "turn 1"},
+		{Seq: 2, Type: TextDelta, Text: "reply 1"},
+		{Seq: 3, Type: UserMsg, Text: "turn 2"},
+		{Seq: 4, Type: TextDelta, Text: "reply 2"},
+	}
+
+	cases := []struct {
+		name      string
+		live      []Event
+		firstKept int
+		wantIdx   int
+		wantErr   error
+	}{
+		{"present boundary resolves", live, 3, 2, nil},
+		{"first event as boundary", live, 1, 0, nil},
+		{"last event as boundary", live, 4, 3, nil},
+		{"absent boundary rejected", live, 99, -1, ErrCompactBoundaryStale},
+		{"boundary dropped by truncation", live[:2], 3, -1, ErrCompactBoundaryStale},
+		{"empty branch rejected", nil, 1, -1, ErrCompactBoundaryStale},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			idx, err := validateBoundary(tc.live, tc.firstKept)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if idx != tc.wantIdx {
+				t.Fatalf("idx = %d, want %d", idx, tc.wantIdx)
+			}
+		})
+	}
+}
 
 func TestBoundaryIsAlwaysUserMessage(t *testing.T) {
 	live2 := []Event{

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -174,7 +175,7 @@ type limitedReader struct {
 
 func (l *limitedReader) Read(p []byte) (int, error) {
 	if l.left <= 0 {
-		return 0, fmt.Errorf("EOF")
+		return 0, io.EOF
 	}
 	if len(p) > l.left {
 		p = p[:l.left]

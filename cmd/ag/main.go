@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	crand "crypto/rand"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -65,12 +67,13 @@ func newSessionLoop(prov provider.Provider, reg *tools.Registry, g agent.Gate, h
 		}
 	}
 	loop := &agent.Loop{
-		Provider: prov,
-		Tools:    reg,
-		System:   payload.DefaultSystemPrompt,
-		Gate:     g,
-		Budget:   agent.NewBudget(),
-		Human:    human,
+		Provider:    prov,
+		Tools:       reg,
+		System:      payload.DefaultSystemPrompt,
+		Gate:        g,
+		Budget:      agent.NewBudget(),
+		SpendBudget: agent.NewSpendBudget(),
+		Human:       human,
 	}
 	// A repaired tool call is announced in the journal before it runs: a repair
 	// the user never sees is one that did not happen. Wiring it here rather
@@ -162,19 +165,16 @@ func doChat(dir string, cont bool) error {
 	}
 
 	var journalPath string
+	var journal *store.JSONL
 	if cont {
 		journalPath, err = latestSession(dir, root.Dir())
 		if err != nil {
 			return err
 		}
+		journal, err = store.NewJSONL(journalPath)
 	} else {
-		journalPath, err = sessionPath(dir)
-		if err != nil {
-			return err
-		}
+		journal, journalPath, err = newSessionJournal(dir)
 	}
-
-	journal, err := store.NewJSONL(journalPath)
 	if err != nil {
 		return err
 	}
@@ -294,19 +294,16 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 	}
 
 	var journalPath string
+	var journal *store.JSONL
 	if cont {
 		journalPath, err = latestSession(dir, root.Dir())
 		if err != nil {
 			return err
 		}
+		journal, err = store.NewJSONL(journalPath)
 	} else {
-		journalPath, err = sessionPath(dir)
-		if err != nil {
-			return err
-		}
+		journal, journalPath, err = newSessionJournal(dir)
 	}
-
-	journal, err := store.NewJSONL(journalPath)
 	if err != nil {
 		return err
 	}
@@ -556,6 +553,34 @@ func defaultSessionDir() (string, error) {
 }
 
 func sessionPath(dir string) (string, error) {
+	return sessionPathAt(dir, time.Now().UTC())
+}
+
+// newSessionJournal allocates a new journal atomically. --continue uses
+// NewJSONL directly because it intentionally opens an existing file.
+func newSessionJournal(dir string) (*store.JSONL, string, error) {
+	const maxAttempts = 32
+	for i := 0; i < maxAttempts; i++ {
+		path, err := sessionPath(dir)
+		if err != nil {
+			return nil, "", err
+		}
+		journal, err := store.NewJSONLExclusive(path)
+		if err == nil {
+			return journal, path, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("could not allocate a unique session journal after %d attempts", maxAttempts)
+}
+
+// sessionPathAt is the pure production naming helper behind sessionPath. It is
+// the single source of truth for new-session journal filenames. Keeping it pure
+// (dir + now -> path) lets tests exercise the real naming logic with a frozen
+// clock without touching the filesystem clock or sleeping.
+func sessionPathAt(dir string, now time.Time) (string, error) {
 	if dir == "" {
 		var err error
 		dir, err = defaultSessionDir()
@@ -563,8 +588,39 @@ func sessionPath(dir string) (string, error) {
 			return "", err
 		}
 	}
-	name := time.Now().UTC().Format("20060102-150405.000") + ".jsonl"
+	base := now.Format("20060102-150405.000")
+	name := newSessionName(base)
 	return filepath.Join(dir, name), nil
+}
+
+// newSessionSuffix builds a random disambiguation suffix for a new-session
+// journal. The random component avoids PID-namespace collisions; the PID and
+// process-local counter remain a fallback if the system random source fails.
+//
+// The counter is zero-padded (%04d) so that lexicographic order of the suffix
+// reflects counter order within one timestamp prefix up to 9999 allocations;
+// beyond that the width grows.
+func newSessionSuffix() string {
+	var random [8]byte
+	if _, err := crand.Read(random[:]); err == nil {
+		return "-r" + hex.EncodeToString(random[:])
+	}
+	return fmt.Sprintf("-p%d-c%04d", os.Getpid(), newSessionCounter())
+}
+
+// sessionCounter provides process-local uniqueness. A package-global atomic is
+// sufficient because uniqueness only needs to hold within one process-lifetime;
+// cross-process uniqueness is provided by the PID component of the suffix.
+var sessionCounter atomic.Uint64
+
+func newSessionCounter() uint64 {
+	return sessionCounter.Add(1)
+}
+
+// newSessionName assembles a new-session journal name from its timestamp base,
+// appending the PID+counter suffix before the ".jsonl" extension.
+func newSessionName(base string) string {
+	return base + newSessionSuffix() + ".jsonl"
 }
 
 // ensureDefaultSessionDir creates dir with mode 0o700 if it does not exist, or
