@@ -41,18 +41,12 @@ jobs:
           p.write_text(s)
 
           p = Path('SECURITY.md'); s = p.read_text()
-          pattern = r'Only the latest tagged release is supported\. Older tags, including `v1\.2\.0`\nand earlier, receive no backports\.\n'
-          replacement = 'Only the latest tagged release is supported. Older tagged releases receive no\nbackports.\n'
-          s, n = re.subn(pattern, replacement, s, count=1)
+          s, n = re.subn(r'Only the latest tagged release is supported\. Older tags, including `v1\.2\.0`\nand earlier, receive no backports\.\n', 'Only the latest tagged release is supported. Older tagged releases receive no\nbackports.\n', s, count=1)
           if n != 1: raise SystemExit('SECURITY version block not found')
           p.write_text(s)
 
           p = Path('docs/THREAT_MODEL.md'); s = p.read_text()
-          pattern = r'Sourced from the code as of commit d63da42.*?code\), not from intention\.\n'
-          replacement = ('Sourced from the code at `master` commit '
-            '`7d9e2f07f9561d4e79b2db6164387b3eac6660ff`, not from intention.\n'
-            'Last reviewed: 2026-09-12 · `7d9e2f07f9561d4e79b2db6164387b3eac6660ff`.\n')
-          s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+          s, n = re.subn(r'Sourced from the code as of commit d63da42.*?code\), not from intention\.\n', 'Sourced from the code at `master` commit `7d9e2f07f9561d4e79b2db6164387b3eac6660ff`, not from intention.\nLast reviewed: 2026-09-12 · `7d9e2f07f9561d4e79b2db6164387b3eac6660ff`.\n', s, count=1, flags=re.S)
           if n != 1: raise SystemExit('THREAT_MODEL provenance block not found')
           p.write_text(s)
 
@@ -78,7 +72,6 @@ jobs:
           if anchor not in s: raise SystemExit('CI insertion anchor not found')
           p.write_text(s.replace(anchor, anchor + step, 1))
           PY
-          rm .github/workflows/phase0-apply.yml
           ! grep -qi 'no GitHub Release has been published' README.md
           ! grep -q 'd63da42' docs/THREAT_MODEL.md
           grep -q 'Threat model freshness' .github/workflows/ci.yml
@@ -87,6 +80,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
+          git add README.md SECURITY.md docs/THREAT_MODEL.md .github/workflows/ci.yml
           git commit -m 'docs: refresh release and security claims [phase0-applied]'
           git push
