@@ -114,6 +114,9 @@ func TestConfigRejectsInsecurePermissions(t *testing.T) {
 	if err := os.WriteFile(p, []byte("K=v\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Chmod(p, 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if fi, err := os.Stat(p); err == nil && fi.Mode().Perm()&0o077 == 0 {
 		t.Skip("filesystem or umask does not support loose permission bits")
 	}
