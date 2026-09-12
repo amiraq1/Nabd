@@ -1,107 +1,81 @@
 # nabd — نبض
 
-وكيل برمجة طرفي، يُكتب ويُشغَّل من هاتف. بلا حاويات، بلا قاعدة بيانات، بلا CGO.
-سبعة آلاف سطر Go تقريبًا، ملف تنفيذي واحد، وسجلّ جلسة واحد يمكن قراءته بـ `cat`.
+وكيل برمجة طرفي يُكتب ويُشغّل من هاتف: ملف Go تنفيذي واحد، سجل جلسة JSONL قابل للتدقيق، أذونات افتراضية بالرفض، وتراجع مستقل عن Git.
 
-**A terminal coding agent built on a phone.** Append-only event journal,
-default-deny permissions, git-independent undo. The containment story is
-[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) — not this README.
+**A terminal coding agent built on a phone.** One Go binary, an append-only event journal, default-deny permissions, and git-independent undo.
 
-The installable binary is `nabd`. It was previously built as `ag`, which
-collides with the_silver_searcher on a typical PATH. The package path remains
-`./cmd/ag`.
+> Security and containment claims live in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md), not in this README.
 
-الثنائي الذي تُثبّته هو `nabd`. كان يُبنى سابقًا باسم `ag`، وهذا يصطدم بـ
-the_silver_searcher على معظم مسارات PATH. مسار الحزمة يبقى `./cmd/ag`.
+The installable binary is `nabd`; the package path remains `./cmd/ag`.
 
----
+## Releases
 
-## لماذا
+| Release | Status |
+|---|---|
+| `v1.4.0` | Published with binaries and `checksums.txt` |
+| `v1.3.0` | Published with binaries and `checksums.txt` |
 
-معظم وكلاء البرمجة يخفون ما فعلوه خلف واجهة جميلة. `nabd` يقلب الترتيب:
-الجلسة سجلّ أحداث قبل أن تكون واجهة، والواجهة مجرّد قارئ لذلك السجلّ.
-كل ما تراه أثناء التشغيل يمكن إعادة عرضه بعده حرفًا بحرف، لأن الحيّ والمُعاد
-يمرّان على نفس دالة العرض.
+Download assets from [GitHub Releases](https://github.com/amiraq1/Nabd/releases). Verify a downloaded release in the directory containing its assets:
 
-هذا ليس تفصيلًا جماليًا. هو ما يجعل التراجع ممكنًا، والتدقيق ممكنًا،
-واستئناف الجلسة أمس ممكنًا اليوم.
+```sh
+sha256sum -c checksums.txt
+```
 
-## التشغيل
+See [docs/RELEASING.md](docs/RELEASING.md) for the release process.
+
+## Build and run
 
 ```sh
 go build -o nabd ./cmd/ag
 # or: ./build.sh
 
-export ANTHROPIC_API_KEY=...      # أو
-export NVIDIA_API_KEY=nvapi-...   # أي مزوّد يتكلّم لهجة OpenAI
-
-./nabd                            # محادثة جديدة في المجلد الحالي
-./nabd --continue                 # استئناف آخر جلسة
-./nabd --replay <file.jsonl>      # إعادة عرض جلسة، --speed 0 للفوري
-./nabd -feed                      # واجهة الشاشة الكاملة (تجريبية)
+./nabd                            # new conversation in the current directory
+./nabd --continue                 # resume the latest session
+./nabd --replay <file.jsonl>      # replay a session; --speed 0 is instant
+./nabd -feed                      # experimental full-screen UI
 ./nabd --version                  # version · commit · date
 
-./nabd -p "task text"             # headless: answer on stdout, exit
+./nabd -p "task text"             # headless answer on stdout
 ./nabd -p - < file                # task from stdin
 ./nabd -p "..." --json            # journal JSONL on stdout
 ./nabd -p "..." --max-turns 8
 ./nabd -p "count the go files" --permission-mode allow-reads
 ```
 
-### Headless (`-p`)
+## Configuration
 
-No TTY. The Asker never blocks. Default `--permission-mode` is `deny`:
-`agent.Decision(0)==Deny` is literal. A tool that would prompt is denied as a
-`tool_result` (and a journal Event); the run is not killed. `allow-reads` still
-auto-allows ReadOnly tools. `ask` still never reads a tty — it denies without
-blocking. YOLO is not used.
-
-stdout is only the final assistant text, or JSONL with `--json` (same schema as
-`session.jsonl`). Notices and `session:` go to stderr. ANSI is not emitted.
-The session is still written under `~/.ag/sessions`, so `--continue` and
-`--replay` work.
-
-Exit codes:
-
-| code | meaning |
-|---|---|
-| 0 | settled |
-| 1 | provider or tool error |
-| 2 | turn ceiling (`ErrMaxTurns`) |
-| 3 | rate-limit budget exhausted (`ErrRateLimitBudget`) |
-| 4 | permission denied and the model produced no answer |
-| 130 | interrupted |
-
-Static release binaries (`CGO_ENABLED=0`, trimpath, ldflags-stamped) plus a
-`checksums.txt` are built and published by the Goreleaser pipeline
-(`.github/workflows/release.yml`) when a `v*` tag is pushed.
-
-**No GitHub Release has been published yet:** `v1.2.0` is a git tag only and
-carries no release assets — the release workflow was added to the repository
-after `v1.2.0` was tagged. The pipeline is ready for the next `v*` tag
-(target: v1.3.0). See `docs/RELEASING.md`.
-
-Put keys in `~/.ag/config` with mode `600`, not in the environment:
+Config v1 uses `NABD_CONFIG` or `~/.ag/config`:
 
 ```sh
 mkdir -p ~/.ag && touch ~/.ag/config && chmod 600 ~/.ag/config
 cat >> ~/.ag/config <<'EOF'
-ANTHROPIC_API_KEY=sk-ant-...
-NABD_MODEL=claude-sonnet-4-5
+NABD_PROVIDER=router
+NABD_ROUTER_MODE=fallback
+NABD_ROUTES=groq:model-a,openrouter:model-b:free,nvidia:model-c
+GROQ_API_KEY=...
+OPENROUTER_API_KEY=...
+NVIDIA_API_KEY=...
 EOF
 ```
 
-Format is `KEY=VALUE` per line (`export`, quotes, `#` comments tolerated).
-`NABD_CONFIG` changes the path. What the file guarantees, what it does not,
-and what to do instead: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
-Report an escape with [SECURITY.md](SECURITY.md), not a public issue.
+Config v2 uses `NABD_CONFIG_V2` or `~/.ag/config.v2.json`. It is strict JSON, rejects unknown fields and trailing documents, requires explicit credential sources (`env` or an absolute secure file), rejects command credentials, and cannot be enabled together with v1. Custom `base_url` is deliberately unsupported by the minimal v2 schema.
 
-Optional knobs (file or environment): `NABD_PROVIDER`, `NABD_MODEL`,
-`NABD_BASE_URL`, `NABD_CTX`, `NABD_MAX_TOKENS` (default 1024, range 128–8192).
+Do not put credentials in project files. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for exact guarantees and residual risks. Report suspected escapes through [SECURITY.md](SECURITY.md), not a public issue.
 
-In-session: `/undo [n]`, `/edits`, `/rewind [n]`, `/ctx`, `/compact`, `/help`.
-At a permission prompt: `y` once, `a` for the rest of the session (Mutating
-only), `n` deny. `ctrl+c` stops the turn, `ctrl+d` exits.
+## Headless behavior
+
+No TTY is read. The default `--permission-mode` is `deny`; a tool that would prompt is denied as a tool result rather than blocking. `allow-reads` auto-allows only ReadOnly tools. `ask` still denies without reading a terminal.
+
+stdout contains only the final assistant text, or JSONL with `--json`. Notices and `session:` go to stderr. Sessions are still written under `~/.ag/sessions`, so `--continue` and `--replay` work.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | settled |
+| 1 | provider or tool error |
+| 2 | turn ceiling |
+| 3 | rate-limit budget exhausted |
+| 4 | permission denied with no model answer |
+| 130 | interrupted |
 
 ## Supported platforms
 
@@ -114,113 +88,30 @@ only), `n` deny. `ctrl+c` stops the turn, `ctrl+d` exits.
 | darwin/amd64 | supported |
 | windows/* | **not supported** |
 
-Windows is not a release target: the bash tool uses `syscall.Kill` and
-`Setpgid`. Snap has Windows rename/sync helpers, but the agent does not
-build or run as a supported platform.
+Windows is not a release target. Some platform helper files compile there, but the agent's shell execution contract is Unix-oriented.
 
-ويندوز غير مدعوم كمنصة تشغيل.
+## Core architecture
 
-## المعمار في ستّ فقرات
+- `internal/agent`: event contract, loop, history tree, compaction, budgets.
+- `internal/config`: secure v1 and strict v2 configuration loading.
+- `internal/store`: append-only JSONL journal.
+- `internal/provider`: Anthropic and OpenAI-compatible providers plus ordered fallback router.
+- `internal/tools`: path containment and read/write/edit/grep/bash tools.
+- `internal/perm`: permission gate.
+- `internal/snap`: content-addressed shadow store and undo.
+- `internal/ui`: live display and replay.
+- `cmd/ag`: wiring; the output binary is `nabd`.
 
-**الحدث هو العقد.** كل ما يجري — رسالة، جزء نصّ، نداء أداة، سؤال إذن، خطأ،
-مقاطعة — حدثٌ بحقول مسطّحة يُلحق بملف `session.jsonl` ولا يُعدَّل بعدها.
-الواجهة تتغيّر كل يوم؛ هذا الملف لا.
+The event is the contract: live rendering and replay consume the same append-only records. `/rewind` appends a new branch point rather than deleting history. `/undo` is intentionally separate and covers tracked file edits, not arbitrary approved shell effects.
 
-**الملف شجرة لا قائمة.** كل حدث يحمل `parent`، فالسجلّ المُلحَق فقط يصف شجرة.
-`/rewind` لا يحذف شيئًا: يُلحق حدثًا يشير أبوه إلى ما قبل الدور المقصوص.
-القصّ إضافة، لا حذف.
+## Operational limits
 
-**القيم الصفرية والحصر والتراجع** ليست فقرات README. الضمانات، وما هو
-مخفَّض، وما هو خارج النطاق، مع أسماء الاختبارات:
-[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
+- Token counts are estimates until calibrated from provider usage.
+- File reads are bounded; provider-specific limits and `NABD_MAX_READ` determine the cap.
+- Compaction may call the model and falls back to a mechanical summary on failure.
+- `bash` runs after explicit permission, outside path containment. Treat approval as access equivalent to the current OS user.
+- Session journals and the shadow store contain cleartext working data and are sensitive even with private filesystem modes.
 
-**الضغط قيدٌ لا مقصّ.** حين يقارب السياق ثلاثة أرباع النافذة تُلحق إدخالة
-`compact` تحمل `first_kept` وملخّصًا؛ لا يُعاد كتابة شيء. الحدّ يقع على رسالة
-مستخدم حصرًا، لأن القطع داخل دور يترك `tool_result` بلا `tool_use` فيُرفض
-الطلب التالي كليًا. وقبل الملخّص الغالي يمرّ مقصّ رخيص يُفرغ مخرجات الأدوات
-القديمة ويُبقي الأخطاء — الخطأ قصير ويمنع التكرار.
+## License
 
-## الحدود التشغيلية
-
-**عدّ الرموز تخمين.** لا مُرمِّز داخل البرنامج؛ التقدير قاعدة تُميّز الأحرف
-غير اللاتينية وتميل للمبالغة. تُعاير من `input_tokens` الحقيقية إن وصلت من
-المزوّد. توقّع خطأً بحدود ١٠–٢٠٪ حتى تُعايَر.
-
-**قراءة الملفات محدودة الحجم.** `read_file` يقصّ عند سقف البايتات، وقيمته تتبع
-المزوّد المختار: Groq (المحدود بـTPM) 3072 بايت، وغيره 16384، و`Router` يأخذ
-**أضيق سقف بين مساراته** لأن الطلب قد يهبط على أيّها. و`NABD_MAX_READ` يتقدّم
-على الكل: من وجّه عنوانًا مخصّصًا إلى خدمة محدودة يضبطه بنفسه. القصّ على حدّ
-سطر، والنتيجة تخبر النموذج بالنطاق وكيف يتابع بـ `offset`. القيم خارج
-[512, 1MiB] تُهمَل. إن تجاوز سطرٌ وحده السقف، يُعرض مقتطعًا ويقفز `next_offset`
-إلى ما بعده — بقية ذلك السطر غير قابلة للقراءة بهذه الأداة.
-
-**الملخّص نداء نموذج.** إن فشل، يسقط إلى ملخّص ميكانيكي يذكر طلبات المستخدم
-حرفيًا والملفات التي مُسّت.
-
-**`-feed` تستهلك الشاشة البديلة.** الواجهة الافتراضية تطبع في الشاشة
-الأساسية. `-feed` يستخدم `tea.WithAltScreen()`: عند الخروج لا يبقى أثر في
-تمرير الطرفية. التعويض هو السجل: يُطبع `session:` عند الخروج، و
-`nabd --replay` يعيد العرض.
-
-احتواء المسارات، `bash`، المفاتيح، والتراجع: ليس هنا.
-[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
-
-## موجه المزودين المتعدد (Native Multi-Provider Router)
-
-بدءًا من الإصدار v1.2.0، يتيح `nabd` توجيه الطلبات عبر قائمة مرتبة ومغلقة من المزودين والنماذج مع انتقال احتياطي آمن (fallback) يقع **قبل بدء إخراج النموذج فقط**.
-
-### مثال الإعداد (`~/.ag/config`)
-
-```ini
-NABD_PROVIDER=router
-NABD_ROUTER_MODE=fallback
-NABD_ROUTER_PRESTREAM_TIMEOUT=30
-NABD_ROUTES=groq:model-a,openrouter:model-b:free,nvidia:model-c
-```
-
-### القواعد والعقود
-
-1. **قواعد الصياغة (Grammar):**
-   - يُفصل الزوج عند **أول نقطتين `:` فقط**؛ ما قبلها هو اسم المزود (`provider`)، وما بعدها هو اسم النموذج (`model`).
-   - يُسمح لاسم النموذج باحتواء نقطتين `:` (مثل `openrouter:model-b:free`).
-   - المزودون المسموح بهم فقط: `anthropic`, `groq`, `openrouter`, `nvidia`.
-   - الفاصلة `,` هي الفاصل الوحيد بين المسارات (بين 1 إلى 16 مسارًا كحد أقصى). لا يمكن الهروب منها.
-   - يُرفض التكرار للزوج المتطابق تمامًا (`provider:model`). يُسمح باستخدام نفس المزود مع نماذج مختلفة (مثل `groq:model-a,groq:model-b`).
-
-2. **عقود المتغيرات والبيئة:**
-   - `NABD_ROUTER_MODE`: القيمة المدعومة الوحيدة هي `fallback`.
-   - `NABD_ROUTER_PRESTREAM_TIMEOUT`: مهلة بدء الاستجابة بالثواني لكل مسار على حدة (بين 5 و 120 ثانية، افتراضيًا 30s).
-   - `NABD_MODEL`: يُهمل في نمط الراوتر.
-   - `NABD_BASE_URL`: يُرفض مع الراوتر.
-   - كل مزود يحتاج مفتاحه في `~/.ag/config` أو البيئة. كيف تُحمى المفاتيح:
-     [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md).
-
-3. **الالتزام والانتقال الاحتياطي:** fallback قبل أول قطعة دلالية فقط.
-   بعد الالتزام لا انتقال. تنظيف المسار الفاشل بمهلة 2s.
-
-4. **قيود v1.2.0:** لا قاطع دائرة، إلغاء بعيد غير مضمون، سباق فوترة مزدوجة
-   ممكن، أسوأ زمن انتظار = عدد المسارات × (مهلة ما قبل الإخراج + التنظيف).
-
-## البنية
-
-`internal/agent` عقد الحدث والحلقة والشجرة والضغط والميزانية.
-`internal/config` قراءة `~/.ag/config`؛ لا يكتب شيئًا أبدًا.
-`internal/store` سجلّ JSONL بإلحاق ذرّي.
-`internal/provider` واجهة المزوّد وتنفيذان: Anthropic، وأي خادم بلهجة OpenAI.
-`internal/tools` الاحتواء وأدوات القراءة والكتابة والصدفة.
-`internal/perm` بوّابة الأذونات.
-`internal/snap` الظلّ والتراجع.
-`internal/ui` العرض والمحادثة وإعادة العرض.
-`internal/build` طوابع الإصدار لـ `--version` وراية RunStart.
-`cmd/ag` الربط. الثنائي الناتج اسمه `nabd`.
-
-قاعدة اتجاه واحدة: `agent` لا يستورد `tools` أبدًا.
-
-## الأصل
-
-كُتب من الصفر. سبقته قراءةٌ في معمار وكلاء آخرين لفهم القرارات لا لنسخها.
-غير مرتبط بأي مزوّد نماذج ولا مدعوم منه.
-
-## الرخصة
-
-MIT License. Copyright (c) 2026 nabd contributors. Full text in `LICENSE`.
+MIT License. Copyright (c) 2026 nabd contributors. See [LICENSE](LICENSE).
