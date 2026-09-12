@@ -1,0 +1,29 @@
+name: UI Contracts
+
+on:
+  push:
+    branches: [ "master", "main", "feature/**", "fix/**", "test/**", "chore/**", "dependabot/**" ]
+  pull_request:
+    branches: [ "master", "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ui-width-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: Formatting check
+        run: test -z "$(gofmt -l internal/ui internal/presentation)"
+      - name: UI package tests
+        run: go test ./internal/ui/... ./internal/presentation/... -count=1
+      - name: UI race detector
+        run: go test -race ./internal/ui ./internal/presentation -count=1
+      - name: Working tree remains clean
+        run: git diff --check
