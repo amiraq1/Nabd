@@ -1,9 +1,0 @@
-# nabd/internal/tools
-internal/tools/bash.go:102:41: unknown field Setpgid in struct literal of type syscall.SysProcAttr
-internal/tools/bash.go:179:10: undefined: syscall.Kill
-internal/tools/bash.go:182:14: undefined: syscall.Kill
-internal/tools/bash.go:187:10: undefined: syscall.Kill
-# nabd/internal/ui
-internal/ui/touch.go:93:23: undefined: unix.PollFd
-internal/ui/touch.go:93:59: undefined: unix.POLLIN
-internal/ui/touch.go:98:23: undefined: unix.Poll
