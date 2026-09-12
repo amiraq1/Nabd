@@ -233,7 +233,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 		return err
 	}
 
-	journal, journalPath, err := newSessionJournal(cfg.sessDir)
+	journal, journalPath, err := newSessionJournalWithWarning(cfg.sessDir, cfg.stderr)
 	if err != nil {
 		return err
 	}

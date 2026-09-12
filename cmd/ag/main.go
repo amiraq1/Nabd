@@ -173,7 +173,7 @@ func doChat(dir string, cont bool) error {
 		}
 		journal, err = store.NewJSONL(journalPath)
 	} else {
-		journal, journalPath, err = newSessionJournal(dir)
+		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
 	}
 	if err != nil {
 		return err
@@ -302,7 +302,7 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		}
 		journal, err = store.NewJSONL(journalPath)
 	} else {
-		journal, journalPath, err = newSessionJournal(dir)
+		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
 	}
 	if err != nil {
 		return err
