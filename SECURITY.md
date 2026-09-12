@@ -3,18 +3,18 @@
 ## Supported versions
 
 Security fixes land on `master` and are cut in the next tagged release.
-Only the latest tagged release is supported. Older tags, including `v1.2.0`
-and earlier, receive no backports.
+Only the latest tagged release is supported; older tags receive no backports.
 
 ## Reporting a vulnerability
 
 Use [GitHub private vulnerability reporting](https://github.com/amiraq1/Nabd/security/advisories/new)
-on this repository. Do not open a public issue for a suspected escape.
+on this repository. Do not open a public issue for a suspected escape and do
+not attach a raw session journal, because journals can contain file contents,
+command output, and credentials printed by tools.
 
-We aim to acknowledge a report within 7 days and to ship a fix, or a
-reasoned decline, within 90 days of a complete report. Public disclosure
-before that window needs agreement from both sides unless a fix is already
-released.
+We aim to acknowledge a report within 7 days and to ship a fix, or a reasoned
+decline, within 90 days of a complete report. Public disclosure before that
+window needs agreement from both sides unless a fix is already released.
 
 ## What is a vulnerability
 

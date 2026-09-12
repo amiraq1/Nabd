@@ -1,11 +1,12 @@
 # Threat model
 
-Sourced from the code as of commit d63da42 (the last code change in the
-NBD-306/204 batch; the commits after it are documentation only and change no
-code), not from intention.
-Primary files: `internal/tools/path.go`, `internal/tools/bash.go`,
-`internal/perm/policy.go`, `internal/config/config.go`, `internal/snap/shadow.go`,
-`internal/agent/fence.go`, `cmd/ag/main.go`.
+Last reviewed: 2026-09-12 · `7d9e2f07f9561d4e79b2db6164387b3eac6660ff`
+
+This document is based on that reviewed `master` baseline (the parent of this
+documentation change), not on intention. Primary files reviewed:
+`internal/tools/path.go`, `internal/tools/bash.go`, `internal/perm/policy.go`,
+`internal/config/config.go`, `internal/snap/shadow.go`,
+`internal/agent/fence.go`, and `cmd/ag/main.go`.
 
 This is the only place nabd states security claims. README points here.
 
@@ -13,140 +14,113 @@ This is the only place nabd states security claims. README points here.
 
 | Asset | Where it lives |
 |---|---|
-| Provider API keys | `~/.ag/config` (preferred) or process environment (fallback). The binary never writes the file. |
-| Working tree | The directory `Root` was constructed from (`NewRoot("")` uses cwd). |
-| Session journal | `~/.ag/sessions/*.jsonl` by default (`--dir` overrides). Append-only events, including file contents and command output in cleartext. Default file mode 0o600, default dir mode 0o700 (NBD-306). The default directory is built by exactly one function (`defaultSessionDir`) and is hardened to 0o700 on a fresh session and on `--continue` alike. For a caller-supplied `--dir` the mode contract is explicit: a directory that already exists keeps whatever mode the caller set, and a directory nabd has to create — along with any missing ancestors — is created private (no group/other bits) with the final element pinned to 0o700 regardless of umask. The file is 0o600 in both cases. |
-| Shadow store | `<root>/.ag/shadow`, content-addressed `s256:` blobs. Independent of git. `.ag` and `.ag/shadow` are tightened to 0o700 and nabd writes `/shadow/` to `.ag/.gitignore`. |
+| Provider API keys | v1: `NABD_CONFIG` or `~/.ag/config`, with process environment fallback. v2: `NABD_CONFIG_V2` or `~/.ag/config.v2.json`, with explicit `env` or secure file credential sources only. |
+| Working tree | The resolved project directory used to construct `tools.Root`. |
+| Session journal | `~/.ag/sessions/*.jsonl` by default. Append-only events can include file contents and command output in cleartext. Default directory mode is 0700 and file mode is 0600. |
+| Shadow store | `<root>/.ag/shadow`, content-addressed `s256:` blobs containing full pre/post-edit content. `.ag` and `.ag/shadow` are tightened to 0700 and `/shadow/` is added to `.ag/.gitignore`. |
+
+The journal and shadow store are high-sensitivity assets. Filesystem modes
+reduce cross-user disclosure; they do not protect against processes running as
+the same uid.
 
 ## Adversaries
 
-In order of realism:
+1. **Confused model.** It may invent paths, retry destructive operations, or
+   treat tool output as instructions. Path resolution, permission classes, and
+   human approval for shell execution reduce this risk.
+2. **Hostile repository/tool content.** ReadOnly output reaches the provider in
+   a nonce-fenced envelope. The fence is a semantic signal, not an injection
+   boundary; sensitive actions still rely on permission approval.
+3. **Hostile dependency invoked through bash.** Once approved, `sh -c` runs as
+   the current user with project-root cwd and no `Root.Resolve` containment.
+   Environment allowlisting protects provider keys but not the filesystem.
+4. **Same-uid local attacker.** Out of scope. OS user separation is the
+   mitigation.
 
-**(a) A confused model.** The default case. It will invent paths, retry
-destructive commands, and treat tool output as instruction. Defence is
-`Root.Resolve` for file tools, `perm.Policy` for class, and a human at
-the `bash` prompt.
+## Claims and evidence
 
-**(b) Hostile content in the repo or in tool output (prompt injection).**
-ReadOnly tools (`read_file`, `glob`, `grep`) are auto-allowed. Their
-bytes reach the next provider request inside a labeled, nonce-fenced
-envelope: a fresh random nonce in both markers, every marker token in the
-payload defanged, and the tool name echoed only when it is in the tool
-registry's allowlist — anything else is reported as the explicit marker
-`unknown`, never trimmed into a plausible-looking name (NBD-204). That is
-a semantic signal, not a security boundary: there is no injection
-detector, and a determined or confused model may still follow the
-content. Residual risk: a README can ask the model to call `bash`; the
-remaining defence is the human reading that one prompt.
+**GUARANTEED** claims must name a test or mechanically auditable invariant.
+**REDUCED** claims state the residual risk. `bash` is never treated as a
+filesystem sandbox.
 
-**(c) A hostile dependency invoked through bash.** After the operator
-types `y`, `sh -c` runs with cwd = project root and no `Resolve`.
-`cd ..` works. `rm -rf ~/x` works. `/undo` does not cover it. Env
-allowlisting reduces credential theft from the child; it does not
-contain the filesystem.
-
-**(d) A local attacker with the same uid.** Out of scope. nabd is a
-phone-first, single-user process. It cannot defend files the operator
-can already `open(2)`. Config-file TOCTOU, 0o600/0o700 discipline that
-only excludes other uids, and ptrace are this class. Mitigate with OS
-user separation, not with this binary.
-
-## Guarantees
-
-Three columns. **GUARANTEED** requires a test that fails if the claim is
-broken. **REDUCED** names the residual. **OUT OF SCOPE** names why.
-`bash` is never in the first column.
-
-| Claim | Column | Proof or reason |
+| Claim | Status | Evidence or residual |
 |---|---|---|
-| `Root.Resolve` refuses `..`, absolute paths outside the root, NUL bytes, and empty paths | GUARANTEED | `internal/tools/path_test.go` `TestResolveRefusesTraversal` |
-| Symlink to a file or directory outside the root is refused, including a missing tail under a linked parent | GUARANTEED | `TestResolveRefusesSymlinkEscape`, `TestResolveRefusesEscapeViaMissingTail` |
-| A root that is itself a symlink still contains its real children | GUARANTEED | `TestRootBehindSymlink` |
-| `read_file` / `write_file` / `edit_file` / `glob` / `grep` go through `Resolve` | GUARANTEED | package comment in `path.go`; a tool that opens another way is a bug. Covered per-tool by path tests plus write/read tests |
-| Unknown tool name is Deny; empty name is Deny | GUARANTEED | `internal/perm/policy_test.go` `TestUnknownToolIsDenied` |
-| ReadOnly tools Allow without a prompt; Mutating and Executing Ask | GUARANTEED | `TestReadIsFreeWritesAsk` |
-| `bash` cannot take a session grant; `a` becomes AllowOnce | GUARANTEED | `TestSessionGrantAppliesToWritesOnly`, `TestRawDecisionForBash` |
-| Denied `bash` starts no subprocess and writes no file | GUARANTEED | `internal/tools/bash_gate_test.go` `TestBashDeniedRunsNoSubprocess` |
-| `agent.Decision(0) == Deny` | GUARANTEED | independent zero-value test in `internal/agent` (see README architecture; the type is `Deny` at iota 0) |
-| `perm.Verdict(0) == Ask` | GUARANTEED | `internal/perm/policy.go` const block; unclassified tools Ask, unknown names Deny |
-| bash child env is an allowlist from an empty slice (PATH, TERM, LANG, LC_*, TMPDIR/TMP/TEMP), sorted, no credentials, no `BASH_ENV`/`ENV`/`LD_*` | GUARANTEED | `TestBashChildEnvAllowlistIntegration`, `TestBashChildEnvBASH_ENVNotSourced`, `TestBashChildEnvENVNotSourced` |
-| Relative and empty PATH entries are stripped | GUARANTEED | `TestBashChildEnvPathStripping` |
-| Child HOME is a fresh 0700 temp dir, not the caller's HOME | GUARANTEED | `TestBashChildEnvHomePolicy` |
-| Config file mode `& 0o077 != 0` is refused; symlink refused; non-regular refused | GUARANTEED | `internal/config` tests around `ParseFile` |
-| Config package never writes the file | GUARANTEED | package comment and the absence of create/write APIs; `scripts/check-exec-env.sh` is a related env discipline, not this file |
-| Shadow blobs are `s256:` SHA-256; restore verifies digest; no git | GUARANTEED | `internal/snap` `UsesGit() bool` is false; `get` checksum mismatch returns `ErrShadowCorruption` |
-| `/undo` refuses if on-disk bytes no longer match the recorded hash | GUARANTEED | `internal/tools/undo_test.go` / `persisted_undo_test.go` |
-| `bash` cannot escape the project via `Resolve` | OUT OF SCOPE | `bash.go` never calls `Resolve`. cwd is `root.Dir()`. `cd ..` is a shell builtin |
-| `/undo` covers bash side effects | OUT OF SCOPE | snap never sees the blast radius; stated in `bash.go` package comment |
-| Network, resource exhaustion, or killing unrelated processes from an approved bash | OUT OF SCOPE | no namespace, no cgroup, no Landlock in this version |
-| Prompt injection via ReadOnly tool output | REDUCED | tool output is labeled and fenced at the provider boundary (NBD-204): a per-call random nonce in both markers, every marker token in the payload defanged, and the tool name echoed only from the registry allowlist (`unknown` otherwise), the same value used for the tool call and both markers. **The fence is a semantic signal, not a security boundary**: a determined or confused model may still follow content despite the marker, so user approval remains the barrier for sensitive actions |
-| Same-uid local attacker (TOCTOU on `~/.ag/config` between `Lstat` and `Open`) | OUT OF SCOPE | see Path and key handling below |
-| Windows NT ACL ownership of the config file | OUT OF SCOPE | `owner_other.go` is a documented no-op |
-| bash filesystem reach after the operator types `y` | REDUCED | prompt + Executing class + no session grant. Residual: the operator's eye |
-| Config TOCTOU | REDUCED | `Lstat` then `Open`. Symlink at Lstat time is refused. Swap after Lstat is a same-uid race |
-| Key in the environment | REDUCED | file wins when both are set (`Conflicts()`). Env remains a fallback. Child bash does not inherit it |
-| Multi-process `/undo` | REDUCED | pending-edit log is process memory (IDEAS.md). Journal-backed undo after restart still works for committed edits |
-| Journal cleartext (file contents, command output, keys if a tool printed them) | REDUCED | NBD-306 lands the storage hardening only: file 0o600 and default dir 0o700, so disclosure is confined to the same uid. Redaction on the journal write path is NOT implemented; display-layer redaction in `internal/ui` does not touch the journal. |
-| Shadow store accidentally staged by git | REDUCED | nabd writes `/shadow/` to `<root>/.ag/.gitignore` (atomic, idempotent), so `git add -A` skips it. `git add -f` bypasses `.gitignore`, so this is a guard against accidental tracking, not a security boundary; the 0o700 directory mode is the storage boundary and same-uid readers are class (d). |
+| `Root.Resolve` rejects traversal, outside absolute paths, NUL, and empty paths | GUARANTEED | `TestResolveRefusesTraversal` and path tests |
+| Symlink escapes, including a missing tail under a linked parent, are rejected at resolution time | GUARANTEED | `TestResolveRefusesSymlinkEscape`, `TestResolveRefusesEscapeViaMissingTail` |
+| A root that is itself a symlink contains its real children | GUARANTEED | `TestRootBehindSymlink` |
+| File tools are expected to pass paths through `Resolve` | GUARANTEED | package contract in `internal/tools/path.go` and per-tool tests |
+| Unknown or empty tool names are denied | GUARANTEED | `TestUnknownToolIsDenied` |
+| ReadOnly tools allow without a prompt; Mutating and Executing tools ask | GUARANTEED | `TestReadIsFreeWritesAsk` |
+| `bash` cannot receive a session-wide grant | GUARANTEED | `TestSessionGrantAppliesToWritesOnly`, `TestRawDecisionForBash` |
+| Denied `bash` starts no subprocess | GUARANTEED | `TestBashDeniedRunsNoSubprocess` |
+| Bash child environment is an allowlist, strips unsafe PATH entries, and uses an isolated HOME | GUARANTEED | `TestBashChildEnvAllowlistIntegration`, `TestBashChildEnvPathStripping`, `TestBashChildEnvHomePolicy` |
+| Opened config must be regular, user-owned on Unix, and have no group/other permission bits | GUARANTEED | `internal/config` ParseFile and secure-open tests |
+| Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
+| Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
+| Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
+| Path opening after `Resolve` | REDUCED | `Resolve` returns a string and later open is a second lookup; a same-uid rename/symlink race remains |
+| Journal and shadow cleartext | REDUCED | private default modes; same-uid readers and deliberately printed secrets remain exposed |
+| Bash filesystem reach after approval | OUT OF SCOPE | approved shell commands run with the current user's filesystem authority |
+| Network/resource exhaustion from approved bash | OUT OF SCOPE | no namespace, cgroup, or Landlock boundary |
 
 ## Path layer
 
-`internal/tools/path.go`, type `Root`. There is no `root.go`.
+`internal/tools/path.go` owns path acceptance. `Resolve` rejects empty/NUL
+input, anchors relative input to the real project root, resolves the deepest
+existing ancestor, and verifies containment using `filepath.Rel`.
 
-`Resolve` is the only function allowed to accept a path:
+`Resolve` currently returns a string. Consumers perform a later filesystem
+lookup, so a cooperative same-uid process can race resolution and opening.
+This is **reduced, not eliminated**. Closing it requires descriptor-relative
+opening such as `openat2(RESOLVE_BENEATH)` plus a classified fallback.
 
-1. Reject empty / NUL.
-2. Absolute input is kept only if `within(root, Clean(p))`; otherwise `ErrAbsolute`.
-3. Relative input is joined to the already-resolved root, never to process cwd.
-4. `resolveDeepest`: `EvalSymlinks` on the deepest existing ancestor, then
-   append the missing tail (the tail cannot contain a symlink because it
-   does not exist).
-5. `within` uses `filepath.Rel`, not `HasPrefix`, so `/home/user2` does not
-   match `/home/user`.
+`bash` deliberately does not use this layer.
 
-TOCTOU that remains: `Resolve` returns a string. The later `open` is a
-second lookup. A symlink can be planted between those two syscalls by
-anything that shares the uid. Closing that window needs `openat2(RESOLVE_BENEATH)`
-or `O_NOFOLLOW` + `Fstat` on the fd (IDEAS.md). Until then the claim is
-**reduced**, not eliminated. Quantified: one rename/symlink between
-`EvalSymlinks` and `open` on a cooperative filesystem. On a single-user
-phone this is (d). On a shared uid it is in scope for a local attacker
-and out of scope for this binary.
+## Configuration handling
 
-`bash` does not use this layer.
+### Config v1
 
-## Key handling
+- Path: `NABD_CONFIG` or `~/.ag/config`; explicit paths must be absolute.
+- The file is opened through the platform secure-open helper using descriptor
+  flags equivalent to `O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK` on Unix.
+- Regular-file type, mode, size, and ownership are checked from metadata
+  obtained from the opened descriptor (`f.Stat`), not from a pre-open `Lstat`.
+- The file wins over environment values; conflicts disclose key names only.
+- Environment fallback remains available for values absent from the file.
+- Residual: parent-directory symlinks are still traversed. A hostile same-uid
+  process that can replace path components remains out of scope.
 
-`internal/config`:
+### Minimal strict Config v2
 
-- Path: `NABD_CONFIG` or `~/.ag/config`.
-- `Lstat` first: symlink refused, non-regular refused, `mode & 0o077 != 0`
-  refused, Unix owner must equal `Getuid()` (`owner_unix.go`). Windows
-  ownership check is a no-op (`owner_other.go`).
-- Then `os.Open` of the same path. Residual TOCTOU as above.
-- The package never writes.
-- File wins over environment; `Conflicts()` reports key **names** only.
-- Environment remains a fallback for keys absent from the file.
+- Selected by `NABD_CONFIG_V2` or the default `~/.ag/config.v2.json`.
+- v1 and v2 cannot be active together.
+- JSON rejects unknown fields and trailing documents.
+- Route-array order is provider priority; no separate `priority` field exists.
+- Credential sources are explicit `env` or an absolute secure `file` only.
+  Command-based credential sources are rejected.
+- Credential files are descriptor-opened and must be regular, user-owned,
+  mode 0600, and contain exactly one line.
+- Implicit environment fallback is disabled.
+- Custom `base_url` is recognized but rejected by the minimal schema until
+  redirect and post-DNS transport controls exist.
 
-`bash` child construction (`childEnv`) starts from `[]string{}` and copies
-only the allowlist. That is a separate guarantee from config loading: a
-key in the parent env does not reach `sh -c`. It can still reach the
-provider HTTP client, which is the point of the fallback.
+The config package never writes configuration files. Bash child construction
+starts from an empty environment and copies only its allowlist, independently
+of config loading.
 
-## What an operator should do
+## Journal, shadow, and history concurrency
 
-These compensate for REDUCED and OUT OF SCOPE rows. They are not extra
-guarantees in the binary.
+Session events are append-only. Compaction and rewind are serialized against
+history mutations; compact boundary staleness has dedicated regression
+coverage. The shadow store keeps complete file bytes for undo and verifies
+content digests. Neither journal nor shadow content is redacted on write in
+this baseline.
 
-1. Put keys in `~/.ag/config` with `chmod 600`. Do not export them in `.bashrc`.
-2. Run nabd as a dedicated OS user if the machine is shared.
-3. Point it at a throwaway clone, not at a tree that holds production
-   credentials or irreplaceable uncommitted work.
-4. Keep secrets out of the working tree. ReadOnly tools will send file
-   bytes to the model.
-5. Treat every `bash` prompt as a root-equivalent for your uid. `n` is the
-   containment mechanism.
-6. Do not enable YOLO (`perm.Policy.SetYOLO`) on a tree you care about.
-7. `session.jsonl` is 0o600 inside a 0o700 default dir, but redaction is
-   not implemented: assume it holds file excerpts and command output in
-   cleartext, readable by anything running as the same uid.
+## Operator guidance
+
+1. Prefer secure credential files over shell startup exports.
+2. Run nabd as a dedicated OS user on shared systems.
+3. Use a disposable clone rather than a tree containing production secrets.
+4. Treat every `bash` approval as authority equivalent to the current user.
+5. Assume `session.jsonl` and `.ag/shadow` contain sensitive cleartext.
+6. Do not attach raw journals to public issues.

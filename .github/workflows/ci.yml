@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ "master", "main", "feature/**", "fix/**" ]
+    branches: [ "master", "main", "feature/**", "fix/**", "docs/**" ]
   pull_request:
     branches: [ "master", "main" ]
 
@@ -15,6 +15,8 @@ jobs:
     timeout-minutes: 20
     steps:
     - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -24,6 +26,15 @@ jobs:
 
     - name: Environment diagnostics
       run: go env GOOS GOARCH CGO_ENABLED CC
+
+    - name: Threat model freshness guard tests
+      run: bash scripts/test-threat-model-freshness.sh
+
+    - name: Threat model freshness
+      if: github.event_name == 'pull_request'
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      run: bash scripts/check-threat-model-freshness.sh "$BASE_SHA"
 
     - name: Check formatting (gofmt)
       run: test -z "$(gofmt -l .)"
