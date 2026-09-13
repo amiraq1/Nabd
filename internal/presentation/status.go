@@ -72,9 +72,18 @@ type SessionView struct {
 // StatusProjector incrementally derives user-facing status from events. It is
 // deliberately separate from the feed projector so transient state never gets
 // persisted as a second source of truth.
+//
+// The route/timing fields below back RuntimeMeta (see status_meta.go). They are
+// unexported on purpose: SessionStatus is compared field-by-field in tests and
+// by callers, so presentation-only metadata must not widen that struct.
 type StatusProjector struct {
 	status SessionStatus
 	tools  map[string]ActiveTool
+
+	provider  string
+	model     string
+	startedAt time.Time
+	endedAt   time.Time
 }
 
 func NewStatusProjector() *StatusProjector {
@@ -84,6 +93,10 @@ func NewStatusProjector() *StatusProjector {
 func (p *StatusProjector) Reset() {
 	p.status = SessionStatus{Phase: PhaseIdle}
 	p.tools = map[string]ActiveTool{}
+	p.provider = ""
+	p.model = ""
+	p.startedAt = time.Time{}
+	p.endedAt = time.Time{}
 }
 
 func (p *StatusProjector) Apply(e agent.Event) {
@@ -94,10 +107,15 @@ func (p *StatusProjector) Apply(e agent.Event) {
 	case agent.RunStart:
 		p.status.Phase = PhaseIdle
 		p.status.LastError = nil
+		p.startedAt = e.Time
+		p.endedAt = time.Time{}
 	case agent.TurnStart:
 		p.status.Turn++
 		p.status.Phase = PhaseThinking
 		p.status.CanCancel = true
+		if p.startedAt.IsZero() {
+			p.startedAt = e.Time
+		}
 	case agent.ToolStart:
 		if e.Call != nil {
 			p.tools[e.Call.ID] = ActiveTool{CallID: e.Call.ID, Name: e.Call.Name, Summary: summarizeCall(e.Call), StartedAt: e.Time}
@@ -122,6 +140,7 @@ func (p *StatusProjector) Apply(e agent.Event) {
 	case agent.Interrupted:
 		p.status.Phase = PhaseCanceling
 		p.status.LastError = &PresentedError{Code: ErrCodeCanceled, Message: "run canceled", Retryable: true}
+		p.endedAt = e.Time
 	case agent.RunError:
 		code := ErrorCode(e.ErrorCode)
 		if code == "" {
@@ -129,14 +148,24 @@ func (p *StatusProjector) Apply(e agent.Event) {
 		}
 		p.status.LastError = &PresentedError{Code: code, Message: e.Err, Retryable: code != ErrCodePersist}
 		p.status.Phase = PhaseError
+		p.endedAt = e.Time
 	case agent.RunEnd:
 		p.status.Phase = PhaseEnded
 		p.status.CanCancel = false
+		p.endedAt = e.Time
 	case agent.EventProviderUsage:
 		if e.Usage != nil {
 			p.status.Usage.PromptTokens = e.Usage.PromptTokens
 			p.status.Usage.CompletionTokens = e.Usage.CompletionTokens
 			p.status.Usage.Complete = true
+		}
+	case agent.EventProviderRoute:
+		// Only a committed route is reported. "attempted", "failed", "waiting",
+		// and "blocked" describe routes that did not serve the request, so
+		// showing them as the current provider would be a false claim.
+		if e.Route != nil && e.Route.Status == "selected" && e.Route.Provider != "" {
+			p.provider = e.Route.Provider
+			p.model = e.Route.Model
 		}
 	}
 	p.status.ActiveTools = p.activeTools()

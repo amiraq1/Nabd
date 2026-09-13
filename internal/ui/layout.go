@@ -7,6 +7,13 @@ import (
 	"nabd/internal/presentation"
 )
 
+// runtimeMetaVariants is the presentation-owned variant list, aliased here so
+// the UI keeps its single dependency direction (ui → presentation → display).
+var runtimeMetaVariants = presentation.RuntimeMetaVariants
+
+// lineWidth reports the visual width of a rendered row.
+func lineWidth(s string) int { return ansi.StringWidth(s) }
+
 // layoutMetrics is the single source of truth for all dimensional calculations
 // in the Feed view. It is computed once by computeLayout() and consumed by
 // View() without any further dimension mutations.
@@ -61,11 +68,16 @@ func (m *Feed) computeLayout() layoutMetrics {
 	}
 
 	// Runtime status (above top separator) — 1 row or 0.
+	// The phase text is sanitized first, then runtime metadata (turn, tokens,
+	// elapsed, committed route) is appended only if it fits in the remaining
+	// width. The metadata is already sanitized by presentation.
 	rtText := m.runtimeStatusText()
 	if rtText != "" {
 		lm.RuntimeStatusRows = 1
 		cleanRt := SanitizeForDisplay(rtText, DisplayPolicy{AllowNewline: false, Redact: true})
-		lm.runtimeStatusLine = truncateToWidth("· "+cleanRt, w, "…")
+		const statusPrefix = "· "
+		withMeta := m.statusLineWithMeta(cleanRt, w-ansi.StringWidth(statusPrefix))
+		lm.runtimeStatusLine = truncateToWidth(statusPrefix+withMeta, w, "…")
 	}
 
 	// Separators — always present when width is sufficient.
