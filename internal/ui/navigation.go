@@ -91,13 +91,6 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case tea.KeyDown:
 		m.moveCard(1)
 		return m, nil, true
-	case tea.KeyEnter:
-		items := m.navigationItems()
-		if m.selectedItem >= 0 && m.selectedItem < len(items) && items[m.selectedItem].Type == presentation.ItemTool {
-			model, cmd := m.toggleTools()
-			return model, cmd, true
-		}
-		return m, nil, true
 	case tea.KeyEsc:
 		m.navigationMode = false
 		m.clearStatus()
@@ -108,6 +101,15 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, false
 	}
 	switch k.String() {
+	case "enter", " ", "space":
+		// Expansion only reveals already-projected output. It never
+		// executes a tool and never answers a permission prompt: the
+		// modal owns its own key routing, ahead of navigation.
+		if m.toggleCard(m.selectedItem) {
+			m.refreshPreservingSelection()
+			return m, nil, true
+		}
+		return m, nil, true
 	case "j":
 		m.moveCard(1)
 		return m, nil, true

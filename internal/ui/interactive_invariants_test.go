@@ -108,3 +108,35 @@ func TestInvariantNoRowExceedsWidthAllStages(t *testing.T) {
 		}
 	}
 }
+
+// TestInvariantExpansionNeverExecutesTool verifies that expanding and collapsing
+// cards is purely a display transformation: it never mutates item fingerprints,
+// never touches the journal/projection items, and never executes tools.
+func TestInvariantExpansionNeverExecutesTool(t *testing.T) {
+	m := feedWithTools(t, 3, 60)
+	before := m.proj.Items()
+	fps := make([]uint64, len(before))
+	for i, it := range before {
+		fps[i] = it.Fingerprint()
+	}
+
+	// Expand target card via navigation key
+	tools := toolIndexes(m)
+	m.selectItem(tools[0])
+	m.toggleCard(tools[0])
+	m.refreshPreservingSelection()
+
+	// Global toggle
+	m.toggleTools()
+	m.toggleTools()
+
+	after := m.proj.Items()
+	if len(after) != len(before) {
+		t.Fatalf("items length changed: %d -> %d", len(before), len(after))
+	}
+	for i, it := range after {
+		if it.Fingerprint() != fps[i] {
+			t.Fatalf("item %d mutated by expansion: fingerprint %d -> %d", i, fps[i], it.Fingerprint())
+		}
+	}
+}

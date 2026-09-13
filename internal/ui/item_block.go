@@ -41,7 +41,9 @@ func renderBlocks(items []presentation.FeedItem, width int, toolsExpanded ...boo
 }
 
 func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsExpanded ...bool) ([]string, []int) {
-	isExpanded := len(toolsExpanded) > 0 && toolsExpanded[0]
+	// Per-card expansion replaces the single incoming flag. The variadic
+	// parameter stays for call-site and test compatibility.
+	_ = toolsExpanded
 	idCount := make(map[string]int, len(items))
 	for _, it := range items {
 		if it.ID != "" {
@@ -57,6 +59,7 @@ func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsE
 	for _, it := range items {
 		isMsg := it.Type == presentation.ItemUserMsg || it.Type == presentation.ItemAssistant
 		block := ItemUIBlock{Item: it}
+		isExpanded := m.effectiveExpanded(it.ID)
 		fp := it.Fingerprint()
 		cached := m.lineCache[it.ID]
 		canUseCache := it.ID != "" && idCount[it.ID] == 1 && cached.fp == fp && cached.expanded == isExpanded

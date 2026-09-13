@@ -36,12 +36,15 @@ type Feed struct {
 	statusProj *presentation.StatusProjector
 
 	// Viewport state.
-	width          int
-	height         int
-	scrollTop      int // index of the first visible rendered line
-	follow         bool
-	unseen         int
-	toolsExpanded  bool
+	width         int
+	height        int
+	scrollTop     int // index of the first visible rendered line
+	follow        bool
+	unseen        int
+	toolsExpanded bool
+	// overrides holds per-card expansion that deviates from toolsExpanded.
+	// Absent means "follow the global default"; Ctrl+O clears it.
+	overrides      map[string]bool
 	selectedItem   int
 	navigationMode bool
 
@@ -180,6 +183,7 @@ func (m *Feed) HistoryBrowsing() bool { return m.history.browsing() }
 func (m *Feed) SetToolsExpanded(expanded bool) {
 	if m.toolsExpanded != expanded {
 		m.toolsExpanded = expanded
+		m.overrides = nil
 		m.refresh()
 	}
 }

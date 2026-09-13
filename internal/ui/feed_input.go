@@ -59,6 +59,7 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 
 	if m.follow {
 		m.toolsExpanded = !m.toolsExpanded
+		m.overrides = nil
 		m.refresh()
 		m.scrollToEnd()
 		return m, nil
@@ -83,6 +84,7 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	}
 
 	m.toolsExpanded = !m.toolsExpanded
+	m.overrides = nil
 	// Same bounded, cached path as refresh, so lines and offsets cannot
 	// drift into different coordinate spaces.
 	newLines, newOffsets := renderItemsCached(m, items, m.width, m.toolsExpanded)
