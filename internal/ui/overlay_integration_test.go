@@ -24,7 +24,7 @@ func TestOverlayFullEndToEndIntegration(t *testing.T) {
 	f.SetApprover(ap)
 
 	var undoCalls int
-	f.SetCallbacks(&FeedCallbacks{
+	f.SetCallbacks(&SessionCallbacks{
 		OnUndo: func(n int) string {
 			undoCalls++
 			return "undone"

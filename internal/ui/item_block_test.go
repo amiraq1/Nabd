@@ -60,7 +60,7 @@ func TestMultiLineSlashOutputRoutesToFeedBlock(t *testing.T) {
 	f := NewFeed()
 	f.width = 60
 	f.height = 20
-	f.SetCallbacks(&FeedCallbacks{
+	f.SetCallbacks(&SessionCallbacks{
 		OnEdits: func() string {
 			return "1· edit_file internal/a.go\n2· write_file internal/b.go"
 		},
@@ -90,7 +90,7 @@ func TestMultiLineSlashOutputRoutesToFeedBlock(t *testing.T) {
 // still use the transient status row and never become feed blocks.
 func TestSingleLineSlashOutputStaysInStatus(t *testing.T) {
 	f := NewFeed()
-	f.SetCallbacks(&FeedCallbacks{
+	f.SetCallbacks(&SessionCallbacks{
 		OnCtx:     func() string { return "context 42%" },
 		OnEdits:   func() string { return "1· edit_file internal/a.go" },
 		OnCompact: func() string { return "compacting in background" },

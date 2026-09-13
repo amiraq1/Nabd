@@ -11,7 +11,7 @@ import (
 func TestSlashCommandNotSentToRunner(t *testing.T) {
 	f, r := feedWithRunner(t)
 	var undoCalls int
-	f.SetCallbacks(&FeedCallbacks{
+	f.SetCallbacks(&SessionCallbacks{
 		OnUndo: func(n int) string {
 			undoCalls++
 			if n != 2 {
@@ -66,7 +66,7 @@ func TestUnknownSlashKeepsText(t *testing.T) {
 func TestSlashUndoEmptyStatusNoDuplicate(t *testing.T) {
 	f, r := feedWithRunner(t)
 	var undoCalls int
-	f.SetCallbacks(&FeedCallbacks{
+	f.SetCallbacks(&SessionCallbacks{
 		OnUndo: func(n int) string {
 			undoCalls++
 			if n != 3 {

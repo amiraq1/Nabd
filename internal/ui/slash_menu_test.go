@@ -134,7 +134,7 @@ func TestSlashMenuTabCompletionDoesNotExecute(t *testing.T) {
 func TestSlashMenuFirstEnterCompletesSecondEnterExecutes(t *testing.T) {
 	f, r := feedWithRunner(t)
 	var undoCalled bool
-	f.SetCallbacks(&FeedCallbacks{
+	f.SetCallbacks(&SessionCallbacks{
 		OnUndo: func(n int) string {
 			undoCalled = true
 			return "undone"
