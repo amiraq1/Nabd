@@ -673,26 +673,79 @@ func (m *Feed) viewportKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// pointerLine translates a screen row into a line index within m.lines,
+// or returns -1 if y falls outside the visible feed rows.
+func (m *Feed) pointerLine(lm layoutMetrics, y int) int {
+	top := lm.viewportTop()
+	if y < top || y >= top+lm.ViewportRows {
+		return -1
+	}
+	line := m.scrollTop + (y - top)
+	if line < 0 || line >= len(m.lines) {
+		return -1
+	}
+	return line
+}
+
+// handlePointerTap resolves a tap into a card and applies the deterministic
+// tap policy:
+//
+//	tap on another card      -> select it, in place, no scrolling
+//	tap on the selected card -> toggle its expansion
+//
+// There is no double-tap and no timer: on a phone terminal a double tap
+// arrives as two unrelated press/release pairs at unpredictable intervals,
+// so any threshold would be a coin flip. Tap-again-to-expand needs no
+// clock and matches the keyboard, where Enter expands the selected card.
+//
+// A tap can never approve anything. The modal owns the pointer before this
+// function is reachable (see handleMouse), and expansion only repaints
+// output the projector already produced.
+func (m *Feed) handlePointerTap(lm layoutMetrics, y int) (tea.Model, tea.Cmd) {
+	line := m.pointerLine(lm, y)
+	if line < 0 {
+		return m, nil
+	}
+	idx := m.itemAt(line)
+	if idx < 0 {
+		return m, nil
+	}
+	if !m.navigationMode {
+		m.navigationMode = true
+		m.composer.blur()
+		m.selectItemInPlace(idx)
+		return m, nil
+	}
+	if m.selectedItem == idx {
+		if m.toggleCard(idx) {
+			m.refreshPreservingSelection()
+		}
+		return m, nil
+	}
+	m.selectItemInPlace(idx)
+	return m, nil
+}
+
 // handleMouse processes mouse and touch events for the Feed viewport.
 // It handles finger-swipe scrolling via vertical wheel reports, scrolling by 3 rows.
 // It enforces strict viewport hit-testing and ignores gestures over chrome or during modal interaction.
 func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if !m.touchEnabled {
+	if !m.MouseEnabled() {
+		m.pointerDown = false
+		m.pointerDragged = false
 		return m, nil
 	}
 	// Ignore gestures while permission interaction is active.
 	if m.modalVisible || m.decisionPending {
-		return m, nil
-	}
-
-	isWheelUp := msg.Button == tea.MouseButtonWheelUp
-	isWheelDown := msg.Button == tea.MouseButtonWheelDown
-	if !isWheelUp && !isWheelDown {
+		m.pointerDown = false
+		m.pointerDragged = false
 		return m, nil
 	}
 
 	lm := m.computeLayout()
 	if lm.ViewportRows <= 0 {
+		m.pointerDown = false
+		m.pointerDragged = false
 		return m, nil
 	}
 
@@ -700,8 +753,57 @@ func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	vpTop := lm.viewportTop()
 	vpBottom := vpTop + lm.ViewportRows
 	if msg.Y < vpTop || msg.Y >= vpBottom || msg.X < 0 || msg.X >= lm.TerminalWidth {
+		m.pointerDown = false
+		m.pointerDragged = false
 		return m, nil
 	}
+
+	// Pointer press tracking:
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+		m.pointerDown = true
+		m.pointerStartX = msg.X
+		m.pointerStartY = msg.Y
+		m.pointerDragged = false
+		return m, nil
+	}
+
+	// Pointer motion tracking:
+	if msg.Action == tea.MouseActionMotion {
+		if m.pointerDown {
+			if msg.Y != m.pointerStartY || abs(msg.X-m.pointerStartX) > 1 {
+				m.pointerDragged = true
+			}
+		}
+		return m, nil
+	}
+
+	// Taps resolve on release, never on press or drag:
+	// A press that moves into a drag is the terminal's text selection gesture.
+	// It must keep working cleanly and never trigger card selection or expansion.
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionRelease {
+		wasDown := m.pointerDown
+		wasDragged := m.pointerDragged
+		startY := m.pointerStartY
+		startX := m.pointerStartX
+		m.pointerDown = false
+		m.pointerDragged = false
+
+		if !wasDown || wasDragged {
+			return m, nil
+		}
+		if msg.Y != startY || abs(msg.X-startX) > 1 {
+			return m, nil
+		}
+		return m.handlePointerTap(lm, msg.Y)
+	}
+
+	isWheelUp := msg.Button == tea.MouseButtonWheelUp
+	isWheelDown := msg.Button == tea.MouseButtonWheelDown
+	if !isWheelUp && !isWheelDown {
+		return m, nil
+	}
+	m.pointerDown = false
+	m.pointerDragged = false
 
 	const touchScrollStep = 3
 	bs := m.bottomStart(lm.ViewportRows)
@@ -722,4 +824,11 @@ func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }

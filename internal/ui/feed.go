@@ -122,6 +122,12 @@ type Feed struct {
 	touchEnabled bool
 	input        io.Reader
 
+	// Pointer drag-tracking state.
+	pointerDown    bool
+	pointerStartX  int
+	pointerStartY  int
+	pointerDragged bool
+
 	// Per-item line cache: key is FeedItem.ID.
 	lineCache   map[string]cacheEntry
 	cacheWidth  int // width at which cache was populated; invalid on change
