@@ -40,7 +40,7 @@ func renderBlocks(items []presentation.FeedItem, width int, toolsExpanded ...boo
 	return blocks
 }
 
-func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsExpanded ...bool) []string {
+func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsExpanded ...bool) ([]string, []int) {
 	isExpanded := len(toolsExpanded) > 0 && toolsExpanded[0]
 	idCount := make(map[string]int, len(items))
 	for _, it := range items {
@@ -88,8 +88,12 @@ func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsE
 		blocks = append(blocks, block)
 		prevIsMsg = isMsg
 	}
-	lines, _ := flattenBlocks(blocks)
-	return boundRenderedLines(lines, maxRenderedFeedLines)
+	lines, offsets := flattenBlocks(blocks)
+	trimmed := len(lines) - maxRenderedFeedLines
+	if trimmed < 0 {
+		trimmed = 0
+	}
+	return boundRenderedLines(lines, maxRenderedFeedLines), shiftOffsets(offsets, trimmed)
 }
 
 func copyLines(lines []string) []string {

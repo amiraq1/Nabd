@@ -27,10 +27,16 @@ func (m *Feed) selectItem(index int) {
 		index = len(items) - 1
 	}
 	m.selectedItem = index
-	_, offsets := renderItemsWithOffsets(items, m.width, m.toolsExpanded)
-	if index < len(offsets) {
+
+	// Defensive resync: navigationItems() and refresh() derive their item
+	// list identically, so a length mismatch means offsets predate the
+	// current feed. Rebuilding is cheap because the line cache is warm.
+	if len(m.offsets) != len(items) {
+		m.refresh()
+	}
+	if index < len(m.offsets) {
 		m.follow = false
-		m.scrollTop = offsets[index]
+		m.scrollTop = m.offsets[index]
 		m.clampScroll()
 	}
 }
@@ -65,13 +71,13 @@ func (m *Feed) selectType(kind presentation.ItemType, forward bool) {
 			return
 		}
 	}
-	m.status = "no matching card"
+	m.setStatus("no matching card", rankHint)
 }
 
 func (m *Feed) enterNavigation() {
 	m.navigationMode = true
 	m.composer.blur()
-	m.status = navigationHint(m.width)
+	m.setStatus(navigationHint(m.width), rankHint)
 	if m.selectedItem < 0 {
 		m.selectItem(len(m.navigationItems()) - 1)
 	}
@@ -94,7 +100,7 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	case tea.KeyEsc:
 		m.navigationMode = false
-		m.status = ""
+		m.clearStatus()
 		m.composer.focus()
 		return m, nil, true
 	}
@@ -127,9 +133,9 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	case "?":
 		if m.status == "" {
-			m.status = navigationHint(m.width)
+			m.setStatus(navigationHint(m.width), rankHint)
 		} else {
-			m.status = ""
+			m.clearStatus()
 		}
 		return m, nil, true
 	}

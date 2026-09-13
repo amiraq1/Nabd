@@ -46,7 +46,8 @@ type Feed struct {
 	navigationMode bool
 
 	// Cached rendered lines for the current viewport.
-	lines []string
+	lines   []string
+	offsets []int
 
 	// UI diagnostics (not written to journal).
 	diagnostics []string
@@ -106,7 +107,8 @@ type Feed struct {
 
 	// status is the transient status line above the composer. ASCII only,
 	// like every other visible UI string.
-	status string
+	status     string
+	statusRank int
 
 	// prog is the live Bubble Tea program (wired by the CLI) used to
 	// deliver event batches from the batcher goroutine.
@@ -197,6 +199,7 @@ func NewFeed() *Feed {
 		follow:       true,
 		selectedItem: -1,
 		lines:        []string{},
+		offsets:      []int{},
 		composer:     newComposer(),
 		history:      newUserHistory(),
 		permModal:    newPermissionModal(),
@@ -224,7 +227,7 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The transient row ("Generating…", "canceling…") is over. A
 		// failure is not transient: it enters the feed as a permanent,
 		// scrollable line unless the loop already journaled a RunError.
-		m.status = ""
+		m.clearStatus()
 		if msg.err != nil && !m.errorSeenSinceSend {
 			m.addNotice(presentation.ItemError, errSummary(msg.err))
 		}
@@ -297,7 +300,7 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 func (m *Feed) markRunFailed() {
 	m.running = false
 	m.runningTool = ""
-	m.status = runFailedStatus
+	m.setStatus(runFailedStatus, rankRunLifecycle)
 }
 
 // trackState keeps the permission modal in lockstep with the event stream:

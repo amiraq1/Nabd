@@ -65,7 +65,11 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	}
 
 	// Follow is false: preserve visible content anchor.
-	_, oldOffsets := renderItemsWithOffsets(items, m.width, m.toolsExpanded)
+	// Use stored offsets: they are already in m.lines coordinate space.
+	oldOffsets := m.offsets
+	if len(oldOffsets) != len(items) {
+		_, oldOffsets = renderItemsCached(m, items, m.width, m.toolsExpanded)
+	}
 
 	// Find which item currently anchors scrollTop.
 	anchorIdx := 0
@@ -79,10 +83,10 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	}
 
 	m.toolsExpanded = !m.toolsExpanded
-	newLines, newOffsets := renderItemsWithOffsets(items, m.width, m.toolsExpanded)
-	m.lines = newLines
-	// toggleTools writes m.lines directly (not via refresh), so the render
-	// signature must be resynced to avoid a stale baseline for applyBatch.
+	// Same bounded, cached path as refresh, so lines and offsets cannot
+	// drift into different coordinate spaces.
+	newLines, newOffsets := renderItemsCached(m, items, m.width, m.toolsExpanded)
+	m.lines, m.offsets = newLines, newOffsets
 	m.syncRenderSig()
 
 	if anchorIdx < len(newOffsets) {
@@ -127,7 +131,7 @@ func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
 		m.composer.clear()
 		m.history.resetBrowsing()
 		m.menu.close()
-		m.status = ""
+		m.clearStatus()
 		return m, nil
 	}
 	// Empty composer, idle: quit.
@@ -152,7 +156,7 @@ func (m *Feed) onCtrlD() (tea.Model, tea.Cmd) {
 	if m.safeToQuit() {
 		return m, tea.Quit
 	}
-	m.status = "cannot exit now: run in progress or state not clean"
+	m.setStatus("cannot exit now: run in progress or state not clean", rankResult)
 	return m, nil
 }
 
@@ -176,7 +180,7 @@ func (m *Feed) cancelRun(status string) {
 	}
 	m.runningTool = ""
 	if status != "" {
-		m.status = status
+		m.setStatus(status, rankRunLifecycle)
 	}
 }
 
@@ -323,22 +327,22 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 	}
 	if strings.HasPrefix(text, "/") {
 		if m.busy {
-			m.status = "wait for the current run to finish first"
+			m.setStatus("wait for the current run to finish first", rankResult)
 			return m, nil
 		}
 		return m.runCommand(text)
 	}
 	if m.runner == nil {
 		// Nothing can ever accept this message: keep the text, show why.
-		m.status = "error: no runner available"
+		m.setStatus("error: no runner available", rankResult)
 		return m, nil
 	}
 	if m.busy {
-		m.status = "a run is in progress; cancel it or wait before sending"
+		m.setStatus("a run is in progress; cancel it or wait before sending", rankResult)
 		return m, nil
 	}
 	if inputTooLong(text) {
-		m.status = limitNotice
+		m.setStatus(limitNotice, rankResult)
 		return m, nil
 	}
 	// Accept the send.
@@ -348,7 +352,7 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 	m.running = true
 	m.busy = true
 	m.errorSeenSinceSend = false
-	m.status = ""
+	m.clearStatus()
 	return m, m.startRun(text)
 }
 
@@ -359,36 +363,36 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 	parsed := ParseSlashCommand(line)
 	if !parsed.Valid {
-		m.status = parsed.Error
+		m.setStatus(parsed.Error, rankResult)
 		return m, nil
 	}
 	switch parsed.Command.Name {
 	case "/undo":
 		m.composer.clear()
 		if m.callbacks.OnUndo == nil {
-			m.status = "undo not supported in this version"
+			m.setStatus("undo not supported in this version", rankResult)
 			return m, nil
 		}
-		m.status = m.callbacks.OnUndo(parsed.N)
+		m.setStatus(m.callbacks.OnUndo(parsed.N), rankResult)
 		return m, nil
 	case "/rewind":
 		if m.callbacks.OnRewind == nil {
-			m.status = "rewind not supported in this version"
+			m.setStatus("rewind not supported in this version", rankResult)
 			return m, nil
 		}
 		restored, status := m.callbacks.OnRewind(parsed.N)
 		m.composer.clear()
 		m.composer.setValue(restored)
 		m.history.resetBrowsing()
-		m.status = status
+		m.setStatus(status, rankResult)
 		if status == "" {
-			m.status = "rewound"
+			m.setStatus("rewound", rankResult)
 		}
 		return m, nil
 	case "/ctx":
 		m.composer.clear()
 		if m.callbacks.OnCtx == nil {
-			m.status = "—"
+			m.setStatus("—", rankResult)
 			return m, nil
 		}
 		m.setCommandResult(m.callbacks.OnCtx())
@@ -396,7 +400,7 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 	case "/compact":
 		m.composer.clear()
 		if m.callbacks.OnCompact == nil {
-			m.status = "—"
+			m.setStatus("—", rankResult)
 			return m, nil
 		}
 		m.setCommandResult(m.callbacks.OnCompact())
@@ -404,7 +408,7 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 	case "/edits":
 		m.composer.clear()
 		if m.callbacks.OnEdits == nil {
-			m.status = "—"
+			m.setStatus("—", rankResult)
 			return m, nil
 		}
 		m.setCommandResult(m.callbacks.OnEdits())
@@ -415,7 +419,7 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// Unknown command: keep the text, tell the user.
-	m.status = "unknown command: " + parsed.RawCmd
+	m.setStatus("unknown command: "+parsed.RawCmd, rankResult)
 	return m, nil
 }
 
@@ -433,7 +437,7 @@ func (m *Feed) setCommandResult(text string) {
 		m.addNotice(presentation.ItemNotice, text)
 		return
 	}
-	m.status = text
+	m.setStatus(text, rankResult)
 }
 
 // startRun launches the accepted message on the runner. The caller (trySend)
@@ -454,7 +458,7 @@ func (m *Feed) startRun(text string) tea.Cmd {
 func (m *Feed) insertNewline() (tea.Model, tea.Cmd) {
 	text := m.composer.value()
 	if countInputLines(text)+1 > maxInputLines {
-		m.status = limitNotice
+		m.setStatus(limitNotice, rankResult)
 		return m, nil
 	}
 	// Enter as a rune insert is handled by giving the textarea its own
@@ -533,14 +537,14 @@ func (m *Feed) composerEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		alreadyOver := inputTooLong(before)
 		if inputTooLong(after) && !alreadyOver {
 			m.composer.setValue(before)
-			m.status = limitNotice
+			m.setStatus(limitNotice, rankResult)
 			return m, nil
 		}
 		// Any real edit ends history browsing; the edited text becomes the
 		// new draft.
 		m.history.edited()
 		m.history.setDraft(after)
-		m.status = ""
+		m.clearStatus()
 		m.composer.growToContent(maxComposerHeight)
 	}
 	m.syncSlashMenu()

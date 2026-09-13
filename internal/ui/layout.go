@@ -199,23 +199,20 @@ func (m *Feed) computeLayout() layoutMetrics {
 // runtimeStatusText returns the current runtime status string (one line, no newlines).
 // This drives the Runtime Status row (above top separator). Empty when idle and no error.
 func (m *Feed) runtimeStatusText() string {
-	if m.status != "" {
-		return m.status
+	if m.modalVisible {
+		return "Permission Required"
 	}
 	if m.decisionPending {
 		return "Waiting for permission…"
 	}
-	if m.modalVisible {
-		return "Permission Required"
+	if m.status != "" && m.statusRank >= rankRunLifecycle {
+		return m.status
 	}
-	if m.runningTool != "" {
-		return "Running " + m.runningTool + "…"
+	if text := m.phaseText(); text != "" {
+		return text
 	}
-	if m.running {
-		return "Generating…"
-	}
-	if m.busy {
-		return "Working…"
+	if m.status != "" {
+		return m.status
 	}
 	if m.statusProj != nil {
 		s := m.statusProj.Status()
