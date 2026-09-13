@@ -256,3 +256,52 @@ func TestSingleToolNamedInStatus(t *testing.T) {
 		t.Fatalf("single tool not named: %q", got)
 	}
 }
+
+func TestProgressRequiresLiveRun(t *testing.T) {
+	m := NewFeed()
+	// 1. Tool starts during run
+	m.running, m.busy = true, true
+	m.statusProj.Apply(agent.Event{
+		Type: agent.ToolStart,
+		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+	})
+	if got := m.runtimeStatusText(); !strings.Contains(got, "Running bash") {
+		t.Fatalf("expected running tool during live run, got %q", got)
+	}
+
+	// 2. Interrupted arrives: run canceled
+	m.statusProj.Apply(agent.Event{
+		Type: agent.Interrupted,
+	})
+	m.markRunFailed()
+
+	// 3. doneMsg arrives: clears transient status, unlocks busy gate
+	m.clearStatus()
+	m.busy = false
+
+	// Feed is now idle. StatusProjector still holds "c1" in its internal
+	// tools map (StatusProjector only deletes on ToolEnd). But runtimeStatusText
+	// must NOT claim progress because neither running nor busy is set.
+	if got := m.runtimeStatusText(); got != "" {
+		t.Fatalf("idle feed claimed progress with lingering tool: %q", got)
+	}
+}
+
+func TestCompactionReportedOutsideRunGate(t *testing.T) {
+	m := NewFeed()
+	m.statusProj.Apply(agent.Event{
+		Type: agent.Compact,
+	})
+	if got := m.runtimeStatusText(); got != "Compacting context…" {
+		t.Fatalf("compaction not reported on idle feed: %q", got)
+	}
+}
+
+func TestPermissionDecisionPendingOutranksModal(t *testing.T) {
+	m := NewFeed()
+	m.modalVisible = true
+	m.decisionPending = true
+	if got := m.runtimeStatusText(); got != "Waiting for permission…" {
+		t.Fatalf("decisionPending did not outrank modalVisible: %q", got)
+	}
+}

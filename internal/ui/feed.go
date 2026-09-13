@@ -315,6 +315,8 @@ func (m *Feed) trackState(e agent.Event) {
 		m.errorSeenSinceSend = true
 		m.markRunFailed()
 	case agent.ToolStart:
+		m.running = true
+		m.busy = true
 		if e.Call != nil {
 			m.runningTool = e.Call.Name
 		}

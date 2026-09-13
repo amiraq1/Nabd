@@ -29,24 +29,32 @@ func (m *Feed) clearStatus() {
 }
 
 func (m *Feed) phaseText() string {
+	// Compaction is background work that outlives a turn, so it is
+	// reported outside the run gate.
+	if m.statusProj != nil && m.statusProj.Status().Phase == presentation.PhaseCompacting {
+		return "Compacting context…"
+	}
+
+	// Everything below claims progress, so it requires a live run.
+	//
+	// StatusProjector deletes a tool from its map on ToolEnd only:
+	// Interrupted, RunError and RunEnd leave it in place. Reading
+	// ActiveTools without this gate therefore reports a tool that stopped
+	// when the run was canceled, forever, on an idle feed.
+	if !m.running && !m.busy {
+		return ""
+	}
 	if m.statusProj != nil {
-		s := m.statusProj.Status()
-		if len(s.ActiveTools) == 1 {
-			return "Running " + s.ActiveTools[0].Name + "…"
-		}
-		if len(s.ActiveTools) > 1 {
-			return fmt.Sprintf("Running %d tools…", len(s.ActiveTools))
-		}
-		switch s.Phase {
-		case presentation.PhaseCompacting:
-			return "Compacting context…"
+		switch active := m.statusProj.Status().ActiveTools; len(active) {
+		case 0:
+		case 1:
+			return "Running " + active[0].Name + "…"
+		default:
+			return fmt.Sprintf("Running %d tools…", len(active))
 		}
 	}
 	if m.running {
 		return "Generating…"
 	}
-	if m.busy {
-		return "Working…"
-	}
-	return ""
+	return "Working…"
 }

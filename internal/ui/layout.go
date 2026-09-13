@@ -199,11 +199,11 @@ func (m *Feed) computeLayout() layoutMetrics {
 // runtimeStatusText returns the current runtime status string (one line, no newlines).
 // This drives the Runtime Status row (above top separator). Empty when idle and no error.
 func (m *Feed) runtimeStatusText() string {
-	if m.modalVisible {
-		return "Permission Required"
-	}
 	if m.decisionPending {
 		return "Waiting for permission…"
+	}
+	if m.modalVisible {
+		return "Permission Required"
 	}
 	if m.status != "" && m.statusRank >= rankRunLifecycle {
 		return m.status
@@ -219,8 +219,6 @@ func (m *Feed) runtimeStatusText() string {
 		switch s.Phase {
 		case presentation.PhasePermission:
 			return "Permission Required"
-		case presentation.PhaseCompacting:
-			return "Compacting context…"
 		case presentation.PhaseError:
 			if s.LastError != nil {
 				return "Error: " + s.LastError.Message

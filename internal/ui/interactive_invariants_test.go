@@ -14,7 +14,7 @@ import (
 // tool running, navigation mode, permission modal, error state), no single
 // rendered line in View() exceeds the terminal width.
 func TestInvariantNoRowExceedsWidthAllStages(t *testing.T) {
-	widths := []int{20, 40, 60, 80, 100, 120}
+	widths := []int{20, 39, 40, 79, 80, 120}
 
 	stages := []struct {
 		name  string
