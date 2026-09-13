@@ -467,6 +467,30 @@ headless `deny`), so adopting plan mode is opt-in and cannot silently
 change current behaviour. Evidence: `TestModeTable`,
 `TestModePlanOverridesGrants`, `TestModePlanAllowsReads`.
 
+### Goal mode
+
+`internal/goal` builds a bounded, model-facing execution contract from one
+objective. It does **not** create a privileged execution path: `goal.Run`
+delegates to `agent.Loop.Run`, so every tool call still passes through the
+existing permission gate (`internal/agent/gate.go`). The objective and the
+generated contract are model-facing input, not trusted repository
+instructions.
+
+**What Goal Mode does not grant:** shell, write, network, secret, or
+production access. It cannot bypass the permission gate, YOLO override, or
+plan-mode deny branch. A generated contract is handled like any other user
+message — journaled, subject to compaction, and replayable.
+
+**Input bounds (integrity, not sandbox):** objectives are capped at 8 KiB
+and must be valid UTF-8 without control characters (except `\n`, `\t`).
+These limits reject pathological input; they are not a sandbox and do not
+replace tool-level permission checks.
+
+Evidence: `internal/goal/contract_test.go` (UTF-8, limits, determinism),
+`internal/goal/runner_test.go` (nil-runner, single-dispatch, error
+propagation), `var _ Runner = (*agent.Loop)(nil)` compile-time assertion
+in `internal/goal/runner.go`.
+
 ### OSC 52 clipboard boundaries
 
 OSC 52 copy operates only on projected card content after recognized

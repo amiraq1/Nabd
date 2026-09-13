@@ -17,10 +17,10 @@ func TestStripCardGutterPreservesSingleSpaceArabic(t *testing.T) {
 	if !utf8.ValidString(stripCardGutter(indentedArabic)) {
 		t.Fatal("stripCardGutter produced invalid UTF-8")
 	}
-	if got := stripCardGutter("> "+indentedArabic); got != indentedArabic {
+	if got := stripCardGutter("> " + indentedArabic); got != indentedArabic {
 		t.Fatalf("selected gutter: got %q, want %q", got, indentedArabic)
 	}
-	if got := stripCardGutter("  "+indentedArabic); got != indentedArabic {
+	if got := stripCardGutter("  " + indentedArabic); got != indentedArabic {
 		t.Fatalf("unselected gutter: got %q, want %q", got, indentedArabic)
 	}
 }
