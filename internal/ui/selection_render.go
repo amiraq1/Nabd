@@ -1,5 +1,7 @@
 package ui
 
+import "fmt"
+
 // selectionPrefixWidth is the gutter every card reserves, selected or not.
 // A constant gutter is what keeps the layout from twitching on every move:
 // if only the selected card paid for it, each cursor step would reflow the
@@ -14,4 +16,22 @@ func selectionPrefix(selected bool) string {
 		return "> "
 	}
 	return "  "
+}
+
+// scrollPositionText reports where the viewport sits, as "line/total".
+// Returns "" when everything fits, because a position indicator that always
+// reads 1/1 is noise.
+func (m *Feed) scrollPositionText(viewportRows int) string {
+	total := len(m.lines)
+	if total == 0 || viewportRows >= total {
+		return ""
+	}
+	first := m.scrollTop + 1
+	if first > total {
+		first = total
+	}
+	if first < 1 {
+		first = 1
+	}
+	return fmt.Sprintf("%d/%d", first, total)
 }

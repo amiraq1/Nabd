@@ -74,10 +74,6 @@ func (m *Feed) computeLayout() layoutMetrics {
 	rtText := m.runtimeStatusText()
 	if rtText != "" {
 		lm.RuntimeStatusRows = 1
-		cleanRt := SanitizeForDisplay(rtText, DisplayPolicy{AllowNewline: false, Redact: true})
-		const statusPrefix = "· "
-		withMeta := m.statusLineWithMeta(cleanRt, w-ansi.StringWidth(statusPrefix))
-		lm.runtimeStatusLine = truncateToWidth(statusPrefix+withMeta, w, "…")
 	}
 
 	// Separators — always present when width is sufficient.
@@ -193,6 +189,19 @@ func (m *Feed) computeLayout() layoutMetrics {
 	}
 
 	lm.ViewportRows = max(0, lm.TerminalHeight-chrome())
+	if lm.RuntimeStatusRows > 0 {
+		cleanRt := SanitizeForDisplay(rtText, DisplayPolicy{AllowNewline: false, Redact: true})
+		const statusPrefix = "· "
+		withMeta := m.statusLineWithMeta(cleanRt, w-ansi.StringWidth(statusPrefix))
+		// Position is appended last and only if it fits: it is orientation,
+		// not status, so it must never push out Generating/Permission text.
+		if pos := m.scrollPositionText(lm.ViewportRows); pos != "" {
+			if ansi.StringWidth(statusPrefix+withMeta+" · "+pos) <= w {
+				withMeta = withMeta + " · " + pos
+			}
+		}
+		lm.runtimeStatusLine = truncateToWidth(statusPrefix+withMeta, w, "…")
+	}
 	return lm
 }
 
@@ -225,6 +234,9 @@ func (m *Feed) runtimeStatusText() string {
 			}
 			return "Error"
 		}
+	}
+	if m.navigationMode {
+		return "browsing"
 	}
 	return ""
 }

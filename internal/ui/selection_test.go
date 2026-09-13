@@ -3,6 +3,8 @@ package ui
 import (
 	"strings"
 	"testing"
+
+	"nabd/internal/agent"
 )
 
 func cardLines(m *Feed, idx int) []string {
@@ -144,5 +146,61 @@ func TestSelectionMarkerIsAsciiOnly(t *testing.T) {
 				t.Fatalf("selectionPrefix(%v) contains non-ASCII byte: %d", selected, p[i])
 			}
 		}
+	}
+}
+
+func TestScrollPositionHiddenWhenEverythingFits(t *testing.T) {
+	m := feedWithTools(t, 2, 60)
+	// Viewport is large enough to fit all rendered lines
+	if pos := m.scrollPositionText(len(m.lines) + 5); pos != "" {
+		t.Fatalf("expected empty position when everything fits, got %q", pos)
+	}
+	if pos := m.scrollPositionText(len(m.lines)); pos != "" {
+		t.Fatalf("expected empty position when viewport equals line count, got %q", pos)
+	}
+}
+
+func TestScrollPositionSurvivesLiveRun(t *testing.T) {
+	m := feedWithTools(t, 8, 80)
+	m.running = true
+	m.busy = true
+	m.height = 10 // small enough so viewportRows < total lines
+	lm := m.computeLayout()
+	if !strings.Contains(lm.runtimeStatusLine, "/") {
+		t.Fatalf("scroll position missing during live run: %q", lm.runtimeStatusLine)
+	}
+	if !strings.Contains(lm.runtimeStatusLine, "Generating") {
+		t.Fatalf("live run status missing: %q", lm.runtimeStatusLine)
+	}
+}
+
+func TestPositionNeverDisplacesRunStatus(t *testing.T) {
+	m := feedWithTools(t, 8, 20)
+	m.running = true
+	m.busy = true
+	m.height = 10
+	m.statusProj.Apply(agent.Event{
+		Type: agent.ToolStart,
+		Call: &agent.ToolCall{ID: "c1", Name: "read_file"},
+	})
+	lm := m.computeLayout()
+	if !strings.Contains(lm.runtimeStatusLine, "Running read_file") {
+		t.Fatalf("status line did not keep run status on narrow width: %q", lm.runtimeStatusLine)
+	}
+	if strings.Contains(lm.runtimeStatusLine, "/") {
+		t.Fatalf("scroll position displaced run status on width 20: %q", lm.runtimeStatusLine)
+	}
+}
+
+func TestNavigationModeIsVisibleWhenIdle(t *testing.T) {
+	m := NewFeed()
+	m.width, m.height = 80, 24
+	m.enterNavigation()
+	if got := m.runtimeStatusText(); !strings.Contains(got, "browsing") {
+		t.Fatalf("expected browsing in status when idle, got %q", got)
+	}
+	lm := m.computeLayout()
+	if !strings.Contains(lm.runtimeStatusLine, "browsing") {
+		t.Fatalf("expected browsing in runtimeStatusLine when idle, got %q", lm.runtimeStatusLine)
 	}
 }

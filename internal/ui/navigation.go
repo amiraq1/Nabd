@@ -77,7 +77,7 @@ func (m *Feed) selectType(kind presentation.ItemType, forward bool) {
 func (m *Feed) enterNavigation() {
 	m.navigationMode = true
 	m.composer.blur()
-	m.setStatus(navigationHint(m.width), rankHint)
+	m.setStatus("browsing", rankHint)
 	if m.selectedItem < 0 {
 		m.selectItem(len(m.navigationItems()) - 1)
 	}
