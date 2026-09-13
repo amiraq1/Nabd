@@ -63,6 +63,7 @@ filesystem sandbox.
 | The router's Retry-After wait budget is bounded, opt-in, and pre-commit only | GUARANTEED | `NABD_ROUTER_RETRY_AFTER_WAIT` is parsed into whole seconds in `[0, 120]` and defaults to 0 (disabled); the wait runs at most once per `Stream`, strictly before the commit point, through the injected clock and cancellable by the parent context. Evidence: `TestParseRetryAfterWait`, `TestWithRetryAfterWaitClamps`, `TestShouldWaitOut` |
 | The runtime status row never claims progress after a terminal failure | GUARANTEED | `RunError` and `Interrupted` retire the progress claims when the event is projected, instead of waiting for the runner goroutine to return; the send gate (`busy`) is left set so a failed run cannot be followed by a second concurrent run before `doneMsg`. Evidence: `TestRunErrorRetiresProgressStatus`, `TestRunErrorKeepsSendGate`, `TestInterruptedRetiresProgressStatus`, `TestDoneMsgClearsRunFailedStatus` |
 | Newly visible route statuses disclose no more than the existing ones | GUARANTEED | `waiting` and `blocked` notices go through the same `display.SanitizeForDisplay` policy with redaction enabled, are single-line, never include `StreamID`, and fall back to fixed placeholders for blank fields. `attempted` and `exhausted` remain hidden. Evidence: `TestFormatRouteNoticeWaitingIsVisible`, `TestFormatRouteNoticeWaitingRedactsSecrets`, `TestFormatRouteNoticeBlockedIsVisible`, `TestFormatRouteNoticeStillHidesStructuralStatuses` |
+| Status-row runtime metadata reports only committed routes and discloses no new fields | GUARANTEED | `StatusProjector.Meta` reports a provider/model only from a `selected` route trace, never from `attempted`, `failed`, `waiting`, or `blocked`; elapsed time freezes at the terminal event; provider and model pass through the same sanitizer as route notices; `StreamID`, credentials, and file paths are never included. Evidence: `TestMetaTracksTurnTokensAndCommittedRoute`, `TestMetaElapsedFreezesAtTerminalEvent`, `TestRuntimeMetaSanitizesRouteFields`, `TestRuntimeStatusRowStaysOneRow` |
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
@@ -285,3 +286,34 @@ first is noise, the second is already reported as a run error. Evidence:
 `TestFormatRouteNoticeWaitingRedactsSecrets`,
 `TestFormatRouteNoticeBlockedIsVisible`,
 `TestFormatRouteNoticeStillHidesStructuralStatuses`.
+
+### Status-row runtime metadata
+
+The status row now also answers "which turn, how expensive, how long, and who
+is actually serving this" (`turn 3 · 6.6k tok · 12s · nvidia/…`). Three rules
+keep that from becoming either a false claim or a new disclosure channel.
+
+**Only committed routes are named.** `StatusProjector.Meta` adopts a provider
+and model exclusively from a `selected` route trace. `attempted`, `failed`,
+`waiting`, and `blocked` describe routes that did not serve the request, so
+naming them would tell the user their prompt went somewhere it did not.
+
+**Elapsed time is not a liveness claim.** The clock is injected rather than read
+inside the projector, and elapsed freezes at `RunEnd`, `RunError`, or
+`Interrupted`. A dead run cannot appear to keep working, which is the same
+property as status-row truthfulness above.
+
+**No new fields are disclosed.** Provider and model pass through the same
+`cleanField` sanitizer as route notices (redaction on, single line, no control
+sequences). Token counts are the provider's own aggregate numbers, already
+present in `provider_usage` journal events. `StreamID`, credentials, file
+paths, tool arguments, and error bodies are never part of the metadata. The row
+remains exactly one row at every width, and when the metadata does not fit it is
+dropped variant by variant rather than truncated, so the phase text — the part
+that carries the safety signal — is never cut. Evidence:
+`TestMetaTracksTurnTokensAndCommittedRoute`,
+`TestMetaElapsedFreezesAtTerminalEvent`,
+`TestRuntimeMetaSanitizesRouteFields`,
+`TestRuntimeStatusRowCarriesMeta`,
+`TestRuntimeStatusRowDegradesInsteadOfTruncating`,
+`TestRuntimeStatusRowStaysOneRow`.
