@@ -200,4 +200,3 @@ func (m *Feed) searchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 }
-
