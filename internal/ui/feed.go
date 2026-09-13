@@ -131,6 +131,9 @@ type Feed struct {
 	// Search state.
 	search searchState
 
+	// Clipboard output writer (OSC 52). Defaults to os.Stdout.
+	clipboardWriter io.Writer
+
 	// Per-item line cache: key is FeedItem.ID.
 	lineCache   map[string]cacheEntry
 	cacheWidth  int // width at which cache was populated; invalid on change
@@ -422,6 +425,9 @@ func (m *Feed) MouseEnabled() bool {
 
 // SetInput overrides the input reader used by ProgramOptions. Defaults to os.Stdin.
 func (m *Feed) SetInput(r io.Reader) { m.input = r }
+
+// SetClipboardWriter overrides the output destination for OSC 52 clipboard sequences (tests).
+func (m *Feed) SetClipboardWriter(w io.Writer) { m.clipboardWriter = w }
 
 // ProgramOptions returns the standard Bubble Tea options for running the full-screen Feed UI.
 // It activates alternate-screen mode so full-height frames, viewport padding, and continuous
