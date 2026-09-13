@@ -131,8 +131,15 @@ func TestSinkFailureNamesTheCallInFlight(t *testing.T) {
 	if err == nil {
 		t.Fatal("a sink failure must stop the batch")
 	}
-	if err.Error() != boom.Error() {
-		t.Fatalf("message changed: %q", err.Error())
+	// emit already wraps a sink failure in a *PersistError; the attribution
+	// wrapper must leave that message byte-identical and stay transparent to
+	// the underlying sink failure.
+	want := NewPersistError(boom, "").Error()
+	if err.Error() != want {
+		t.Fatalf("message changed: got %q, want %q", err.Error(), want)
+	}
+	if !errors.Is(err, boom) {
+		t.Fatal("the wrapper must stay transparent to the sink failure")
 	}
 
 	id, name, ok := ToolCallOf(err)
