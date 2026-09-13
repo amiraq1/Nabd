@@ -23,7 +23,7 @@ func selectionPrefix(selected bool) string {
 // reads 1/1 is noise.
 func (m *Feed) scrollPositionText(viewportRows int) string {
 	total := len(m.lines)
-	if total == 0 || viewportRows >= total {
+	if total == 0 || viewportRows <= 0 || viewportRows >= total {
 		return ""
 	}
 	first := m.scrollTop + 1

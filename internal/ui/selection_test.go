@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func cardLines(m *Feed, idx int) []string {
@@ -202,5 +204,81 @@ func TestNavigationModeIsVisibleWhenIdle(t *testing.T) {
 	lm := m.computeLayout()
 	if !strings.Contains(lm.runtimeStatusLine, "browsing") {
 		t.Fatalf("expected browsing in runtimeStatusLine when idle, got %q", lm.runtimeStatusLine)
+	}
+}
+
+// These tests deliberately never call m.refresh(): the production path must
+// do it. The existing selection tests pass only because they refresh by hand.
+
+func TestMarkerFollowsCursorThroughUpdate(t *testing.T) {
+	m := feedWithTools(t, 5, 60)
+	m.enterNavigation()
+	m.selectItem(1)
+	m.refresh()
+
+	m.Update(tea.KeyMsg{Type: tea.KeyDown})
+
+	if lines := cardLines(m, 1); len(lines) > 0 && strings.HasPrefix(lines[0], "> ") {
+		t.Fatal("card 1 kept the marker after the cursor left it")
+	}
+	lines := cardLines(m, 2)
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], "> ") {
+		t.Fatalf("card 2 did not gain the marker: %q", lines)
+	}
+}
+
+func TestEnteringNavigationPaintsTheMarker(t *testing.T) {
+	m := feedWithTools(t, 3, 60)
+	m.selectItem(2) // already on the card enterNavigation would pick
+	m.enterNavigation()
+	lines := cardLines(m, 2)
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], "> ") {
+		t.Fatalf("marker absent on entering navigation: %q", lines)
+	}
+}
+
+func TestLeavingNavigationRetractsTheMarker(t *testing.T) {
+	m := feedWithTools(t, 3, 60)
+	m.enterNavigation()
+	m.selectItem(1)
+	m.refresh()
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	for _, l := range m.lines {
+		if strings.HasPrefix(l, "> ") {
+			t.Fatalf("marker survived leaving navigation: %q", l)
+		}
+	}
+}
+
+func TestHelpKeyShowsHintOnFirstPress(t *testing.T) {
+	m := feedWithTools(t, 3, 80)
+	m.enterNavigation()
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
+	if m.status == "" {
+		t.Fatal("first '?' cleared the status instead of showing the hint")
+	}
+}
+
+func TestPositionHiddenWhenViewportIsZero(t *testing.T) {
+	m := feedWithTools(t, 8, 60)
+	if pos := m.scrollPositionText(0); pos != "" {
+		t.Fatalf("position reported for a zero-row viewport: %q", pos)
+	}
+}
+
+func TestCursorSweepStaysWithinRenderBudget(t *testing.T) {
+	// A full sweep must cost ~2 repaints per step, not a full re-render.
+	m := feedWithTools(t, 20, 60)
+	m.enterNavigation()
+	m.selectItem(0)
+	m.refresh()
+	before := m.renderCount
+	for i := 0; i < 10; i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	delta := m.renderCount - before
+	t.Logf("actual sweep render delta: %d", delta)
+	if delta > 20 {
+		t.Fatalf("10 cursor steps repainted %d cards, want <= 20", delta)
 	}
 }

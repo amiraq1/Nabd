@@ -26,12 +26,17 @@ func (m *Feed) selectItem(index int) {
 	if index >= len(items) {
 		index = len(items) - 1
 	}
+	prev := m.selectedItem
 	m.selectedItem = index
 
-	// Defensive resync: navigationItems() and refresh() derive their item
-	// list identically, so a length mismatch means offsets predate the
-	// current feed. Rebuilding is cheap because the line cache is warm.
-	if len(m.offsets) != len(items) {
+	// The gutter marker lives inside m.lines, so changing the selection is a
+	// render change, not just a scroll change. Two cards repaint (the one
+	// losing the marker, the one gaining it); the warm line cache serves the
+	// rest, which is what keeps this affordable on every keystroke.
+	//
+	// The length check stays as a defensive resync: a mismatch means offsets
+	// predate the current feed.
+	if prev != index || len(m.offsets) != len(items) {
 		m.refresh()
 	}
 	if index < len(m.offsets) {
@@ -77,10 +82,10 @@ func (m *Feed) selectType(kind presentation.ItemType, forward bool) {
 func (m *Feed) enterNavigation() {
 	m.navigationMode = true
 	m.composer.blur()
-	m.setStatus("browsing", rankHint)
 	if m.selectedItem < 0 {
 		m.selectItem(len(m.navigationItems()) - 1)
 	}
+	m.refresh()
 }
 
 func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
@@ -95,6 +100,7 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		m.navigationMode = false
 		m.clearStatus()
 		m.composer.focus()
+		m.refresh()
 		return m, nil, true
 	}
 	if k.Paste {
