@@ -128,6 +128,9 @@ type Feed struct {
 	pointerStartY  int
 	pointerDragged bool
 
+	// Search state.
+	search searchState
+
 	// Per-item line cache: key is FeedItem.ID.
 	lineCache   map[string]cacheEntry
 	cacheWidth  int // width at which cache was populated; invalid on change
