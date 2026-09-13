@@ -18,20 +18,58 @@ type SlashCommand struct {
 
 // supportedSlashCommands is the single source of truth for all slash commands.
 var supportedSlashCommands = []SlashCommand{
-	{Name: "/undo", Usage: "/undo [n]", Description: "undo file edits recorded in the journal", HasArg: true},
-	{Name: "/rewind", Usage: "/rewind [n]", Description: "rewind conversation turns and restore prompt", HasArg: true},
-	{Name: "/ctx", Usage: "/ctx", Description: "show context window token usage"},
-	{Name: "/compact", Usage: "/compact", Description: "compact conversation history in background"},
-	{Name: "/edits", Usage: "/edits", Description: "list pending reversible file edits"},
-	{Name: "/help", Usage: "/help", Description: "show supported slash commands"},
+	{
+		Name:        "/undo",
+		Usage:       "/undo [n]",
+		Description: "undo file edits recorded in the journal",
+		HasArg:      true,
+		AllowBusy:   false,
+	},
+	{
+		Name:        "/rewind",
+		Usage:       "/rewind [n]",
+		Description: "rewind conversation turns and restore prompt",
+		HasArg:      true,
+		AllowBusy:   false,
+	},
+	{
+		Name:        "/ctx",
+		Usage:       "/ctx",
+		Description: "show context window token usage",
+		HasArg:      false,
+		AllowBusy:   false,
+	},
+	{
+		Name:        "/compact",
+		Usage:       "/compact",
+		Description: "compact conversation history in background",
+		HasArg:      false,
+		AllowBusy:   false,
+	},
+	{
+		Name:        "/edits",
+		Usage:       "/edits",
+		Description: "list pending reversible file edits",
+		HasArg:      false,
+		AllowBusy:   false,
+	},
+	{
+		Name:        "/help",
+		Usage:       "/help",
+		Description: "show supported slash commands",
+		HasArg:      false,
+		AllowBusy:   false,
+	},
 }
 
+// AllSlashCommands returns a copy of all registered slash commands.
 func AllSlashCommands() []SlashCommand {
 	out := make([]SlashCommand, len(supportedSlashCommands))
 	copy(out, supportedSlashCommands)
 	return out
 }
 
+// LookupSlashCommand resolves a command name or alias to its definition.
 func LookupSlashCommand(name string) (SlashCommand, bool) {
 	for _, cmd := range supportedSlashCommands {
 		if cmd.Name == name {
@@ -46,6 +84,7 @@ func LookupSlashCommand(name string) (SlashCommand, bool) {
 	return SlashCommand{}, false
 }
 
+// ParsedSlashCommand holds the parsed components of a slash command input.
 type ParsedSlashCommand struct {
 	Command SlashCommand
 	RawCmd  string
@@ -55,6 +94,7 @@ type ParsedSlashCommand struct {
 	Error   string
 }
 
+// ParseSlashCommand parses a command line (e.g. "/undo 2").
 func ParseSlashCommand(line string) ParsedSlashCommand {
 	f := strings.Fields(line)
 	if len(f) == 0 {
@@ -62,9 +102,18 @@ func ParseSlashCommand(line string) ParsedSlashCommand {
 	}
 	cmd, ok := LookupSlashCommand(f[0])
 	if !ok {
-		return ParsedSlashCommand{RawCmd: f[0], Error: "unknown command: " + f[0]}
+		return ParsedSlashCommand{
+			RawCmd: f[0],
+			Valid:  false,
+			Error:  "unknown command: " + f[0],
+		}
 	}
-	res := ParsedSlashCommand{Command: cmd, RawCmd: f[0], N: 1, Valid: true}
+	res := ParsedSlashCommand{
+		Command: cmd,
+		RawCmd:  f[0],
+		N:       1,
+		Valid:   true,
+	}
 	if len(f) > 1 {
 		if !cmd.HasArg || len(f) != 2 {
 			res.Valid = false
@@ -83,25 +132,37 @@ func ParseSlashCommand(line string) ParsedSlashCommand {
 	return res
 }
 
+// FilterSlashCommands deterministically filters and ranks commands matching query.
+// Ranking:
+//  1. Exact match
+//  2. Prefix match
+//  3. Alias prefix match
+//  4. Substring match
+//  5. Alphabetical tie-break
 func FilterSlashCommands(query string) []SlashCommand {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" || trimmed == "/" {
+		// Return all commands in their defined order (capped at 8)
 		all := AllSlashCommands()
 		if len(all) > 8 {
 			return all[:8]
 		}
 		return all
 	}
+
 	q := strings.ToLower(trimmed)
 	qNoSlash := strings.TrimPrefix(q, "/")
+
 	type match struct {
 		cmd  SlashCommand
 		rank int
 	}
+
 	var matches []match
 	for _, cmd := range supportedSlashCommands {
 		name := strings.ToLower(cmd.Name)
 		nameNoSlash := strings.TrimPrefix(name, "/")
+
 		rank := 99
 		switch {
 		case name == q || nameNoSlash == qNoSlash:
@@ -127,12 +188,14 @@ func FilterSlashCommands(query string) []SlashCommand {
 			matches = append(matches, match{cmd: cmd, rank: rank})
 		}
 	}
+
 	sort.Slice(matches, func(i, j int) bool {
 		if matches[i].rank != matches[j].rank {
 			return matches[i].rank < matches[j].rank
 		}
 		return matches[i].cmd.Name < matches[j].cmd.Name
 	})
+
 	out := make([]SlashCommand, 0, len(matches))
 	for _, m := range matches {
 		out = append(out, m.cmd)
