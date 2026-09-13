@@ -184,6 +184,7 @@ func FilterSlashCommands(query string) []SlashCommand {
 				rank = 4
 			}
 		}
+
 		if rank <= 4 {
 			matches = append(matches, match{cmd: cmd, rank: rank})
 		}

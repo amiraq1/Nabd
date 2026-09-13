@@ -5,22 +5,30 @@ import (
 	"testing"
 )
 
+// TestSlashCommandsRegistryDefinitions verifies that all required commands are
+// present and match expected properties.
 func TestSlashCommandsRegistryDefinitions(t *testing.T) {
 	cmds := AllSlashCommands()
 	if len(cmds) != 6 {
 		t.Fatalf("expected 6 commands, got %d", len(cmds))
 	}
+
 	expected := map[string]struct {
 		hasArg    bool
 		allowBusy bool
 	}{
-		"/undo": {true, false}, "/rewind": {true, false}, "/ctx": {false, false},
-		"/compact": {false, false}, "/edits": {false, false}, "/help": {false, false},
+		"/undo":    {hasArg: true, allowBusy: false},
+		"/rewind":  {hasArg: true, allowBusy: false},
+		"/ctx":     {hasArg: false, allowBusy: false},
+		"/compact": {hasArg: false, allowBusy: false},
+		"/edits":   {hasArg: false, allowBusy: false},
+		"/help":    {hasArg: false, allowBusy: false},
 	}
+
 	for _, c := range cmds {
 		exp, ok := expected[c.Name]
 		if !ok {
-			t.Errorf("unexpected command: %s", c.Name)
+			t.Errorf("unexpected command in registry: %s", c.Name)
 			continue
 		}
 		if c.HasArg != exp.hasArg {
@@ -35,35 +43,63 @@ func TestSlashCommandsRegistryDefinitions(t *testing.T) {
 	}
 }
 
+// TestParseSlashCommand verifies parser behavior on empty, valid, invalid, and parameterized lines.
 func TestParseSlashCommand(t *testing.T) {
-	if got := ParseSlashCommand(""); got.Valid || got.Error == "" {
-		t.Fatalf("empty = %+v", got)
+	empty := ParseSlashCommand("")
+	if empty.Valid || empty.Error == "" {
+		t.Fatalf("expected error on empty line, got valid=%v", empty.Valid)
 	}
-	if got := ParseSlashCommand("/notacommand"); got.Valid || !strings.Contains(got.Error, "unknown command") {
-		t.Fatalf("unknown = %+v", got)
+
+	unknown := ParseSlashCommand("/notacommand")
+	if unknown.Valid || !strings.Contains(unknown.Error, "unknown command") {
+		t.Fatalf("expected unknown command error, got %+v", unknown)
 	}
-	if got := ParseSlashCommand("/undo"); !got.Valid || got.N != 1 || got.HasN {
-		t.Fatalf("undo = %+v", got)
+
+	undoDefault := ParseSlashCommand("/undo")
+	if !undoDefault.Valid || undoDefault.N != 1 || undoDefault.HasN {
+		t.Fatalf("expected undo default n=1, got %+v", undoDefault)
 	}
-	if got := ParseSlashCommand("/undo 5"); !got.Valid || got.N != 5 || !got.HasN {
-		t.Fatalf("undo 5 = %+v", got)
+
+	undoN := ParseSlashCommand("/undo 5")
+	if !undoN.Valid || undoN.N != 5 || !undoN.HasN {
+		t.Fatalf("expected undo n=5, got %+v", undoN)
 	}
-	if got := ParseSlashCommand("/rewind 3"); !got.Valid || got.N != 3 || !got.HasN {
-		t.Fatalf("rewind = %+v", got)
+
+	rewindN := ParseSlashCommand("/rewind 3")
+	if !rewindN.Valid || rewindN.N != 3 || !rewindN.HasN {
+		t.Fatalf("expected rewind n=3, got %+v", rewindN)
 	}
 }
 
+// TestFilterSlashCommandsDeterministic verifies deterministic ordering:
+// exact > prefix > alias > substring > alphabetical.
 func TestFilterSlashCommandsDeterministic(t *testing.T) {
-	if got := FilterSlashCommands("/"); len(got) != 6 {
-		t.Fatalf("expected 6 commands, got %d", len(got))
+	// Empty or "/" returns all commands
+	all := FilterSlashCommands("/")
+	if len(all) != 6 {
+		t.Fatalf("expected 6 commands for '/', got %d", len(all))
 	}
-	if got := FilterSlashCommands("/re"); len(got) == 0 || got[0].Name != "/rewind" {
-		t.Fatalf("rewind filter = %+v", got)
+
+	// "/re" -> prefix match "/rewind"
+	re := FilterSlashCommands("/re")
+	if len(re) == 0 || re[0].Name != "/rewind" {
+		t.Fatalf("expected /rewind first for '/re', got %+v", re)
 	}
+
+	// "/c" -> prefix match "/compact" and "/ctx", alphabetical tie-break
+	c := FilterSlashCommands("/c")
+	if len(c) < 2 {
+		t.Fatalf("expected at least 2 commands for '/c', got %d", len(c))
+	}
+	if c[0].Name != "/compact" || c[1].Name != "/ctx" {
+		t.Fatalf("expected /compact then /ctx, got %s, %s", c[0].Name, c[1].Name)
+	}
+
+	// Same query must produce identical ordering on repeated calls
 	for i := 0; i < 5; i++ {
-		got := FilterSlashCommands("/c")
-		if len(got) < 2 || got[0].Name != "/compact" || got[1].Name != "/ctx" {
-			t.Fatalf("non-deterministic iteration %d: %+v", i, got)
+		res := FilterSlashCommands("/c")
+		if res[0].Name != "/compact" || res[1].Name != "/ctx" {
+			t.Fatalf("non-deterministic results on iteration %d", i)
 		}
 	}
 }
