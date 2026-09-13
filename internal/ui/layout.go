@@ -246,6 +246,18 @@ func (m *Feed) footerText(width int) string {
 				"y/a/n",
 			}
 		}
+	} else if m.navigationMode {
+		// Navigation mode rebinds Enter: it expands the selected card and
+		// never sends. Advertising "Enter send" here would print a false
+		// instruction, so navigation owns its own candidate ladder.
+		candidates = []string{
+			"Up/Down select · Enter expand · n error · p perm · Esc leave · Ctrl+C quit",
+			"Up/Down select · Enter expand · n/p jump · Esc leave · ^C quit",
+			"Up/Dn select · Enter expand · Esc leave · ^C quit",
+			"Enter expand · Esc leave · ^C",
+			"Enter expand · Esc",
+			"Esc",
+		}
 	} else {
 		hasTools := m.hasTools()
 		hintFull := "Ctrl+O details"

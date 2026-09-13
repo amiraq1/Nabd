@@ -254,3 +254,41 @@ func TestNavigationEnterAndSpaceToggleCard(t *testing.T) {
 		t.Fatalf("Space failed to collapse card back: %d, want %d", got, base)
 	}
 }
+
+func TestNavigationFooterNeverAdvertisesSend(t *testing.T) {
+	for _, width := range []int{20, 39, 40, 79, 80, 120} {
+		m := feedWithTools(t, 3, width)
+		m.enterNavigation()
+		foot := m.footerText(width)
+		if strings.Contains(foot, "send") {
+			t.Fatalf("width=%d: navigation footer still advertises send: %q", width, foot)
+		}
+		if lineWidth(foot) > width {
+			t.Fatalf("width=%d: footer is %d wide", width, lineWidth(foot))
+		}
+	}
+}
+
+func TestNavigationFooterAdvertisesExpand(t *testing.T) {
+	// At every width that can hold it, the rebound key must be discoverable.
+	for _, width := range []int{40, 79, 80, 120} {
+		m := feedWithTools(t, 3, width)
+		m.enterNavigation()
+		if foot := m.footerText(width); !strings.Contains(foot, "expand") {
+			t.Fatalf("width=%d: expand not discoverable: %q", width, foot)
+		}
+	}
+}
+
+func TestEnterOnNonExpandableCardExplainsItself(t *testing.T) {
+	m := NewFeed()
+	m.width, m.height = 60, 24
+	m.lastSeq = 1
+	m.addNotice(presentation.ItemNotice, "a notice")
+	m.enterNavigation()
+	m.selectItem(0)
+	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.status == "" {
+		t.Fatal("Enter on a non-expandable card gave no feedback")
+	}
+}

@@ -109,6 +109,8 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 			m.refreshPreservingSelection()
 			return m, nil, true
 		}
+		// Swallowing the key silently reads as a frozen UI; say why.
+		m.setStatus("this card has no collapsed output", rankHint)
 		return m, nil, true
 	case "j":
 		m.moveCard(1)
