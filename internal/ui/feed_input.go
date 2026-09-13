@@ -31,6 +31,9 @@ func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.modalVisible || m.decisionPending {
 		return m.modalKey(k)
 	}
+	if m.search.active {
+		return m.searchKey(k)
+	}
 	if m.menu.visible {
 		return m.menuKey(k)
 	}
@@ -128,6 +131,9 @@ func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
 	if m.running || m.busy {
 		m.cancelRun("canceling…")
 		return m, nil
+	}
+	if m.search.active {
+		return m.cancelSearch()
 	}
 	if !m.composer.isEmpty() {
 		m.composer.clear()

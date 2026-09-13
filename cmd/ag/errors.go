@@ -18,4 +18,8 @@ const (
 	conflictNotice = "تجاهلتُ من البيئة (الأسبقية لـ~/.ag/config): %s"
 	// conflictSep is the Arabic comma separator for conflict key lists.
 	conflictSep = "، "
+	// Clipboard status notices.
+	copySuccessArabic     = "تم نسخ البطاقة المحددة"
+	copyUnavailableArabic = "النسخ غير متاح"
+	copyBlockedArabic     = "تعذر النسخ: المحتوى كبير جدًا"
 )
