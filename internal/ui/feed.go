@@ -139,6 +139,7 @@ type Feed struct {
 type cacheEntry struct {
 	fp       uint64
 	expanded bool
+	selected bool // part of the key, not an invalidator: see refresh()
 	lines    []string
 }
 

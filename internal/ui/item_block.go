@@ -56,33 +56,48 @@ func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsE
 	blocks := make([]ItemUIBlock, 0, len(items))
 	var prevIsMsg bool
 	hasLines := false
-	for _, it := range items {
+	for i, it := range items {
 		isMsg := it.Type == presentation.ItemUserMsg || it.Type == presentation.ItemAssistant
 		block := ItemUIBlock{Item: it}
 		isExpanded := m.effectiveExpanded(it.ID)
+		isSelected := m.navigationMode && i == m.selectedItem
 		fp := it.Fingerprint()
 		cached := m.lineCache[it.ID]
-		canUseCache := it.ID != "" && idCount[it.ID] == 1 && cached.fp == fp && cached.expanded == isExpanded
+		canUseCache := it.ID != "" && idCount[it.ID] == 1 &&
+			cached.fp == fp && cached.expanded == isExpanded &&
+			cached.selected == isSelected
 		if hasLines && (isMsg || prevIsMsg) {
 			block.Lines = append(block.Lines, "")
 		}
 		if canUseCache {
 			block.Lines = append(block.Lines, copyLines(cached.lines)...)
 		} else {
-			raw := renderItem(it, width, isExpanded)
+			contentWidth := width - selectionPrefixWidth
+			if contentWidth < 1 {
+				contentWidth = 1
+			}
+			prefix := selectionPrefix(isSelected)
+			raw := renderItem(it, contentWidth, isExpanded)
 			m.renderCount++
 			content := make([]string, 0, len(raw))
 			for _, line := range raw {
-				if width > 0 && ansi.StringWidth(line) > width {
-					content = append(content, strings.Split(ansi.Hardwrap(line, width, false), "\n")...)
+				if contentWidth > 0 && ansi.StringWidth(line) > contentWidth {
+					for _, w := range strings.Split(ansi.Hardwrap(line, contentWidth, false), "\n") {
+						content = append(content, prefix+w)
+					}
 				} else {
-					content = append(content, line)
+					content = append(content, prefix+line)
 				}
 			}
 			content = boundRenderedLines(content, maxRenderedFeedLines)
 			block.Lines = append(block.Lines, content...)
 			if it.ID != "" && idCount[it.ID] == 1 {
-				m.lineCache[it.ID] = cacheEntry{fp: fp, expanded: isExpanded, lines: copyLines(content)}
+				m.lineCache[it.ID] = cacheEntry{
+					fp:       fp,
+					expanded: isExpanded,
+					selected: isSelected,
+					lines:    copyLines(content),
+				}
 			}
 		}
 		if len(block.Lines) > 0 {
