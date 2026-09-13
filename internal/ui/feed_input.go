@@ -697,8 +697,8 @@ func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Hit-test: coordinates must fall strictly within the conversation viewport.
-	vpTop := lm.HeaderRows
-	vpBottom := lm.HeaderRows + lm.ViewportRows
+	vpTop := lm.viewportTop()
+	vpBottom := vpTop + lm.ViewportRows
 	if msg.Y < vpTop || msg.Y >= vpBottom || msg.X < 0 || msg.X >= lm.TerminalWidth {
 		return m, nil
 	}

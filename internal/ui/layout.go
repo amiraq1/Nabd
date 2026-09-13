@@ -44,6 +44,11 @@ type layoutMetrics struct {
 	pausedLine        string
 }
 
+// viewportTop returns the 0-based screen row where the feed viewport starts in View().
+func (lm layoutMetrics) viewportTop() int {
+	return lm.HeaderRows
+}
+
 // computeLayout calculates the layout for the current Feed state.
 // It does NOT mutate the composer or viewport; it only reads dimensions.
 func (m *Feed) computeLayout() layoutMetrics {
