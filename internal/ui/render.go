@@ -185,7 +185,24 @@ func toolEnd(c *agent.ToolCall, width int) string {
 	if c.MS > 0 {
 		head += " · " + dur(c.MS)
 	}
-	out := st.Render(mark+" ") + dim.Render(head)
+	// How much of the result nobody saw is part of the verdict, not a
+	// footnote: the in-payload marker sits at the bottom of the output and
+	// the feed keeps only the last few lines, so the marker can be clipped
+	// away by the very truncation it announces.
+	if c.TruncatedBytes > 0 {
+		head += fmt.Sprintf(" · ✂ %d bytes cut", c.TruncatedBytes)
+	}
+	// The head is wrapped rather than emitted as one line: it now carries
+	// enough facts to exceed a phone terminal, and an overflowing row breaks
+	// the layout's width contract.
+	lines := wrap(head, width-2)
+	var b strings.Builder
+	b.WriteString(st.Render(mark + " "))
+	b.WriteString(dim.Render(lines[0]))
+	for _, l := range lines[1:] {
+		b.WriteString("\n  " + dim.Render(l))
+	}
+	out := b.String()
 	if t := tail(c.Output); t != "" {
 		out += "\n" + block(" ", t, width, dim)
 	}
