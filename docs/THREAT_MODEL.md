@@ -66,6 +66,7 @@ filesystem sandbox.
 | Status-row runtime metadata reports only committed routes and discloses no new fields | GUARANTEED | `StatusProjector.Meta` reports a provider/model only from a `selected` route trace, never from `attempted`, `failed`, `waiting`, or `blocked`; elapsed time freezes at the terminal event; provider and model pass through the same sanitizer as route notices; `StreamID`, credentials, and file paths are never included. Evidence: `TestMetaTracksTurnTokensAndCommittedRoute`, `TestMetaElapsedFreezesAtTerminalEvent`, `TestRuntimeMetaSanitizesRouteFields`, `TestRuntimeStatusRowStaysOneRow` |
 | Rendered failure detail is redacted, bounded, and adds no new source of data | GUARANTEED | `FormatRunError` reads only fields already in the `run_error` event (`Err`, `ErrorCode`, `Code`), passes every line through `cleanField` (sanitizer with redaction enabled), emits single logical lines only, caps detail lines at `maxRunErrorDetails`, and discloses that the remainder stayed in the journal. Hints are fixed literals keyed by `ErrorCode`, never provider text. Evidence: `TestFormatRunErrorKeepsCodeAndRouteDetail`, `TestFormatRunErrorRedactsSecrets`, `TestFormatRunErrorCapsDetails`, `TestRenderRunErrorRedactsSecrets`, `TestRenderRunErrorRespectsWidth` |
 | Tool-output truncation is recorded as data and disclosed on the row that reports the result | GUARANTEED | `Event.ForStore()` records the number of discarded bytes in `ToolCall.TruncatedBytes` alongside the existing in-output marker; the field is additive (`omitempty`, legacy journals decode to `0`), the live in-memory event is never mutated, and the renderer states the loss on the `tool_end` row within the terminal width. Evidence: `TestForStoreRecordsTruncatedBytes`, `TestForStoreLeavesSmallOutputAlone`, `TestForStoreDoesNotMutateLiveEvent`, `TestTruncatedBytesIsAdditive`, `TestToolEndStatesTheLoss`, `TestToolEndSaysNothingWhenNothingWasCut`, `TestTruncatedToolRowRespectsWidth` |
+| A run failure names the tool call that was in flight, and nothing else about it | GUARANTEED | `WrapToolCallError` attaches only `CallID` and `ToolName`, leaves the message byte-identical, stays transparent to `errors.Is`/`errors.As` so `ErrorCodeOf` and `JournalPathOf` are unaffected, and keeps the innermost attribution. `RunErrorEvent` reports it through the event's existing `Call` field with no output, arguments, or exit status. Evidence: `TestWrapToolCallErrorKeepsTheMessage`, `TestWrapToolCallErrorStaysTransparent`, `TestWrapToolCallErrorKeepsTheInnermostCall`, `TestWrapToolCallErrorIsANoOpWhenThereIsNothingToSay`, `TestRunErrorEventNamesTheFailingCall`, `TestRunErrorEventReportsNoResultForTheFailingCall`, `TestRunErrorEventStaysQuietWhenNoCallIsKnown`, `TestSinkFailureNamesTheCallInFlight` |
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
@@ -394,3 +395,47 @@ so the signal stays meaningful. Evidence:
 `TestForStoreDoesNotMutateLiveEvent`, `TestTruncatedBytesIsAdditive`,
 `TestToolEndStatesTheLoss`, `TestToolEndSaysNothingWhenNothingWasCut`,
 `TestTruncatedToolRowRespectsWidth`.
+
+### Failure attribution
+
+A sink failure inside `runCalls` is the one failure mode where the agent may
+have acted without recording it. The loop returned a bare error, so the
+`run_error` event read `session event was not saved: no space left on device`
+and nothing more. The reader could not tell whether the unrecorded event was a
+`read_file` result — in which case the working tree is untouched — or a
+`write_file` result, in which case a mutation exists on disk with no journal
+entry and no shadow record of its outcome. Those are different situations and
+they call for different recovery, so the distinction has to survive the return
+statement.
+
+`ToolCallError` carries it. Three properties keep it from becoming either a
+behavior change or a new disclosure channel.
+
+**The message does not change.** `Error()` returns the wrapped message
+byte-identical. The rendered failure block, the exit path, and several existing
+tests assert exact error text, and a prefix here would rewrite what the user
+reads on every persistence failure while adding nothing actionable. Attribution
+travels as fields, not as prose.
+
+**Classification is unaffected.** `Unwrap` keeps `errors.Is` and `errors.As`
+transparent, so `ErrorCodeOf` still returns `persist` for a wrapped
+`*PersistError` and `JournalPathOf` still finds the path. Wrapping is also
+idempotent and keeps the innermost attribution: the call that actually failed
+is the one reported, never an outer frame.
+
+**Only the identity travels.** `RunErrorEvent` reports the call through the
+event's existing `Call` field — the same shape `tool_start`, `tool_end`,
+`perm_ask`, and `perm_reply` already use, so every existing decoder reads it
+without change — and copies only `ID` and `Name`. Output, arguments, exit
+status, and duration are deliberately left empty, because a call whose result
+could not be recorded has no result to report, and the arguments may name a
+path the journal was not able to protect. An unattributable failure reports no
+call at all rather than an empty one. Evidence:
+`TestWrapToolCallErrorKeepsTheMessage`,
+`TestWrapToolCallErrorStaysTransparent`,
+`TestWrapToolCallErrorKeepsTheInnermostCall`,
+`TestWrapToolCallErrorIsANoOpWhenThereIsNothingToSay`,
+`TestRunErrorEventNamesTheFailingCall`,
+`TestRunErrorEventReportsNoResultForTheFailingCall`,
+`TestRunErrorEventStaysQuietWhenNoCallIsKnown`,
+`TestSinkFailureNamesTheCallInFlight`.
