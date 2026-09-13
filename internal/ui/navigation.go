@@ -14,7 +14,12 @@ func (m *Feed) navigationItems() []presentation.FeedItem {
 	return items
 }
 
-func (m *Feed) selectItem(index int) {
+// selectItemInPlace updates the selected card index and repaints the feed
+// so the gutter marker moves, but leaves the viewport scroll position
+// untouched. Pointer taps use this because the tapped card is already
+// on screen; keyboard navigation uses selectItem, which scrolls the card
+// into view.
+func (m *Feed) selectItemInPlace(index int) {
 	items := m.navigationItems()
 	if len(items) == 0 {
 		m.selectedItem = -1
@@ -39,9 +44,13 @@ func (m *Feed) selectItem(index int) {
 	if prev != index || len(m.offsets) != len(items) {
 		m.refresh()
 	}
-	if index < len(m.offsets) {
+}
+
+func (m *Feed) selectItem(index int) {
+	m.selectItemInPlace(index)
+	if m.selectedItem >= 0 && m.selectedItem < len(m.offsets) {
 		m.follow = false
-		m.scrollTop = m.offsets[index]
+		m.scrollTop = m.offsets[m.selectedItem]
 		m.clampScroll()
 	}
 }
