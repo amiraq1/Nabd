@@ -65,6 +65,7 @@ filesystem sandbox.
 | Newly visible route statuses disclose no more than the existing ones | GUARANTEED | `waiting` and `blocked` notices go through the same `display.SanitizeForDisplay` policy with redaction enabled, are single-line, never include `StreamID`, and fall back to fixed placeholders for blank fields. `attempted` and `exhausted` remain hidden. Evidence: `TestFormatRouteNoticeWaitingIsVisible`, `TestFormatRouteNoticeWaitingRedactsSecrets`, `TestFormatRouteNoticeBlockedIsVisible`, `TestFormatRouteNoticeStillHidesStructuralStatuses` |
 | Status-row runtime metadata reports only committed routes and discloses no new fields | GUARANTEED | `StatusProjector.Meta` reports a provider/model only from a `selected` route trace, never from `attempted`, `failed`, `waiting`, or `blocked`; elapsed time freezes at the terminal event; provider and model pass through the same sanitizer as route notices; `StreamID`, credentials, and file paths are never included. Evidence: `TestMetaTracksTurnTokensAndCommittedRoute`, `TestMetaElapsedFreezesAtTerminalEvent`, `TestRuntimeMetaSanitizesRouteFields`, `TestRuntimeStatusRowStaysOneRow` |
 | Rendered failure detail is redacted, bounded, and adds no new source of data | GUARANTEED | `FormatRunError` reads only fields already in the `run_error` event (`Err`, `ErrorCode`, `Code`), passes every line through `cleanField` (sanitizer with redaction enabled), emits single logical lines only, caps detail lines at `maxRunErrorDetails`, and discloses that the remainder stayed in the journal. Hints are fixed literals keyed by `ErrorCode`, never provider text. Evidence: `TestFormatRunErrorKeepsCodeAndRouteDetail`, `TestFormatRunErrorRedactsSecrets`, `TestFormatRunErrorCapsDetails`, `TestRenderRunErrorRedactsSecrets`, `TestRenderRunErrorRespectsWidth` |
+| Tool-output truncation is recorded as data and disclosed on the row that reports the result | GUARANTEED | `Event.ForStore()` records the number of discarded bytes in `ToolCall.TruncatedBytes` alongside the existing in-output marker; the field is additive (`omitempty`, legacy journals decode to `0`), the live in-memory event is never mutated, and the renderer states the loss on the `tool_end` row within the terminal width. Evidence: `TestForStoreRecordsTruncatedBytes`, `TestForStoreLeavesSmallOutputAlone`, `TestForStoreDoesNotMutateLiveEvent`, `TestTruncatedBytesIsAdditive`, `TestToolEndStatesTheLoss`, `TestToolEndSaysNothingWhenNothingWasCut`, `TestTruncatedToolRowRespectsWidth` |
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
@@ -355,3 +356,41 @@ Evidence: `TestFormatRunErrorKeepsCodeAndRouteDetail`,
 `TestFormatRunErrorCapsDetails`, `TestRenderRunErrorShowsCodeAndHint`,
 `TestRenderRunErrorKeepsRouteCauses`, `TestRenderRunErrorRespectsWidth`,
 `TestRenderRunErrorRedactsSecrets`.
+
+### Output-truncation disclosure
+
+Tool output persisted to the journal is capped at `MaxPersistedOutput`. Until
+now the only trace of that cap was a marker appended inside the stored text
+(`...[truncated N bytes]`), which means the fact that evidence was discarded was
+readable only by a human scrolling the output, and was not queryable over a
+journal at all. A reviewer auditing what the agent actually saw could not
+distinguish a complete command output from a silently shortened one without
+string-matching free text.
+
+`Event.ForStore()` now also records the discarded byte count in
+`ToolCall.TruncatedBytes`, and the renderer states it on the `tool_end` row that
+reports the result. Three properties bound the change.
+
+**No new data source.** The byte count was already computed by `ForStore` and
+already written into the output text. Promoting it to a field exposes nothing
+that the journal did not contain; it only makes an existing disclosure
+machine-readable. File contents, tool arguments, paths, and credentials are
+untouched, and the count is a length, not content.
+
+**Additive and copy-on-write.** The field is `omitempty`, so an untruncated call
+serializes exactly as before and journals written by older builds decode to
+`0` — indistinguishable from "nothing was cut", which is the truthful reading.
+`ForStore` continues to operate on a copy, so the live in-memory event keeps its
+full output and the redaction path is unaffected. The in-output marker is kept
+deliberately: the two statements are redundant on purpose, so neither a reader
+of raw text nor a reader of fields is misled.
+
+**Bounded rendering.** The loss is reported as one short segment appended to the
+existing `tool_end` row, and that row is now wrapped to the available width
+rather than emitted raw, so adding the segment cannot push the row past the
+terminal edge at 20, 40, 66, or 80 columns. A row that cut nothing says nothing,
+so the signal stays meaningful. Evidence:
+`TestForStoreRecordsTruncatedBytes`, `TestForStoreLeavesSmallOutputAlone`,
+`TestForStoreDoesNotMutateLiveEvent`, `TestTruncatedBytesIsAdditive`,
+`TestToolEndStatesTheLoss`, `TestToolEndSaysNothingWhenNothingWasCut`,
+`TestTruncatedToolRowRespectsWidth`.
