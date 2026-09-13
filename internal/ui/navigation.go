@@ -14,7 +14,12 @@ func (m *Feed) navigationItems() []presentation.FeedItem {
 	return items
 }
 
-func (m *Feed) selectItem(index int) {
+// selectItemInPlace updates the selected card index and repaints the feed
+// so the gutter marker moves, but leaves the viewport scroll position
+// untouched. Pointer taps use this because the tapped card is already
+// on screen; keyboard navigation uses selectItem, which scrolls the card
+// into view.
+func (m *Feed) selectItemInPlace(index int) {
 	items := m.navigationItems()
 	if len(items) == 0 {
 		m.selectedItem = -1
@@ -26,11 +31,26 @@ func (m *Feed) selectItem(index int) {
 	if index >= len(items) {
 		index = len(items) - 1
 	}
+	prev := m.selectedItem
 	m.selectedItem = index
-	_, offsets := renderItemsWithOffsets(items, m.width, m.toolsExpanded)
-	if index < len(offsets) {
+
+	// The gutter marker lives inside m.lines, so changing the selection is a
+	// render change, not just a scroll change. Two cards repaint (the one
+	// losing the marker, the one gaining it); the warm line cache serves the
+	// rest, which is what keeps this affordable on every keystroke.
+	//
+	// The length check stays as a defensive resync: a mismatch means offsets
+	// predate the current feed.
+	if prev != index || len(m.offsets) != len(items) {
+		m.refresh()
+	}
+}
+
+func (m *Feed) selectItem(index int) {
+	m.selectItemInPlace(index)
+	if m.selectedItem >= 0 && m.selectedItem < len(m.offsets) {
 		m.follow = false
-		m.scrollTop = offsets[index]
+		m.scrollTop = m.offsets[m.selectedItem]
 		m.clampScroll()
 	}
 }
@@ -65,16 +85,16 @@ func (m *Feed) selectType(kind presentation.ItemType, forward bool) {
 			return
 		}
 	}
-	m.status = "no matching card"
+	m.setStatus("no matching card", rankHint)
 }
 
 func (m *Feed) enterNavigation() {
 	m.navigationMode = true
 	m.composer.blur()
-	m.status = navigationHint(m.width)
 	if m.selectedItem < 0 {
 		m.selectItem(len(m.navigationItems()) - 1)
 	}
+	m.refresh()
 }
 
 func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
@@ -85,23 +105,28 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case tea.KeyDown:
 		m.moveCard(1)
 		return m, nil, true
-	case tea.KeyEnter:
-		items := m.navigationItems()
-		if m.selectedItem >= 0 && m.selectedItem < len(items) && items[m.selectedItem].Type == presentation.ItemTool {
-			model, cmd := m.toggleTools()
-			return model, cmd, true
-		}
-		return m, nil, true
 	case tea.KeyEsc:
 		m.navigationMode = false
-		m.status = ""
+		m.clearStatus()
 		m.composer.focus()
+		m.refresh()
 		return m, nil, true
 	}
 	if k.Paste {
 		return m, nil, false
 	}
 	switch k.String() {
+	case "enter", " ", "space":
+		// Expansion only reveals already-projected output. It never
+		// executes a tool and never answers a permission prompt: the
+		// modal owns its own key routing, ahead of navigation.
+		if m.toggleCard(m.selectedItem) {
+			m.refreshPreservingSelection()
+			return m, nil, true
+		}
+		// Swallowing the key silently reads as a frozen UI; say why.
+		m.setStatus("this card has no collapsed output", rankHint)
+		return m, nil, true
 	case "j":
 		m.moveCard(1)
 		return m, nil, true
@@ -127,9 +152,9 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 		return m, nil, true
 	case "?":
 		if m.status == "" {
-			m.status = navigationHint(m.width)
+			m.setStatus(navigationHint(m.width), rankHint)
 		} else {
-			m.status = ""
+			m.clearStatus()
 		}
 		return m, nil, true
 	}

@@ -36,17 +36,21 @@ type Feed struct {
 	statusProj *presentation.StatusProjector
 
 	// Viewport state.
-	width          int
-	height         int
-	scrollTop      int // index of the first visible rendered line
-	follow         bool
-	unseen         int
-	toolsExpanded  bool
+	width         int
+	height        int
+	scrollTop     int // index of the first visible rendered line
+	follow        bool
+	unseen        int
+	toolsExpanded bool
+	// overrides holds per-card expansion that deviates from toolsExpanded.
+	// Absent means "follow the global default"; Ctrl+O clears it.
+	overrides      map[string]bool
 	selectedItem   int
 	navigationMode bool
 
 	// Cached rendered lines for the current viewport.
-	lines []string
+	lines   []string
+	offsets []int
 
 	// UI diagnostics (not written to journal).
 	diagnostics []string
@@ -106,7 +110,8 @@ type Feed struct {
 
 	// status is the transient status line above the composer. ASCII only,
 	// like every other visible UI string.
-	status string
+	status     string
+	statusRank int
 
 	// prog is the live Bubble Tea program (wired by the CLI) used to
 	// deliver event batches from the batcher goroutine.
@@ -116,6 +121,12 @@ type Feed struct {
 	// Touch and input settings.
 	touchEnabled bool
 	input        io.Reader
+
+	// Pointer drag-tracking state.
+	pointerDown    bool
+	pointerStartX  int
+	pointerStartY  int
+	pointerDragged bool
 
 	// Per-item line cache: key is FeedItem.ID.
 	lineCache   map[string]cacheEntry
@@ -134,6 +145,7 @@ type Feed struct {
 type cacheEntry struct {
 	fp       uint64
 	expanded bool
+	selected bool // part of the key, not an invalidator: see refresh()
 	lines    []string
 }
 
@@ -178,6 +190,7 @@ func (m *Feed) HistoryBrowsing() bool { return m.history.browsing() }
 func (m *Feed) SetToolsExpanded(expanded bool) {
 	if m.toolsExpanded != expanded {
 		m.toolsExpanded = expanded
+		m.overrides = nil
 		m.refresh()
 	}
 }
@@ -197,6 +210,7 @@ func NewFeed() *Feed {
 		follow:       true,
 		selectedItem: -1,
 		lines:        []string{},
+		offsets:      []int{},
 		composer:     newComposer(),
 		history:      newUserHistory(),
 		permModal:    newPermissionModal(),
@@ -224,7 +238,7 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// The transient row ("Generating…", "canceling…") is over. A
 		// failure is not transient: it enters the feed as a permanent,
 		// scrollable line unless the loop already journaled a RunError.
-		m.status = ""
+		m.clearStatus()
 		if msg.err != nil && !m.errorSeenSinceSend {
 			m.addNotice(presentation.ItemError, errSummary(msg.err))
 		}
@@ -297,7 +311,7 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 func (m *Feed) markRunFailed() {
 	m.running = false
 	m.runningTool = ""
-	m.status = runFailedStatus
+	m.setStatus(runFailedStatus, rankRunLifecycle)
 }
 
 // trackState keeps the permission modal in lockstep with the event stream:
@@ -312,6 +326,8 @@ func (m *Feed) trackState(e agent.Event) {
 		m.errorSeenSinceSend = true
 		m.markRunFailed()
 	case agent.ToolStart:
+		m.running = true
+		m.busy = true
 		if e.Call != nil {
 			m.runningTool = e.Call.Name
 		}

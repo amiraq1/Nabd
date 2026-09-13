@@ -44,6 +44,11 @@ type layoutMetrics struct {
 	pausedLine        string
 }
 
+// viewportTop returns the 0-based screen row where the feed viewport starts in View().
+func (lm layoutMetrics) viewportTop() int {
+	return lm.HeaderRows
+}
+
 // computeLayout calculates the layout for the current Feed state.
 // It does NOT mutate the composer or viewport; it only reads dimensions.
 func (m *Feed) computeLayout() layoutMetrics {
@@ -74,10 +79,6 @@ func (m *Feed) computeLayout() layoutMetrics {
 	rtText := m.runtimeStatusText()
 	if rtText != "" {
 		lm.RuntimeStatusRows = 1
-		cleanRt := SanitizeForDisplay(rtText, DisplayPolicy{AllowNewline: false, Redact: true})
-		const statusPrefix = "· "
-		withMeta := m.statusLineWithMeta(cleanRt, w-ansi.StringWidth(statusPrefix))
-		lm.runtimeStatusLine = truncateToWidth(statusPrefix+withMeta, w, "…")
 	}
 
 	// Separators — always present when width is sufficient.
@@ -193,43 +194,54 @@ func (m *Feed) computeLayout() layoutMetrics {
 	}
 
 	lm.ViewportRows = max(0, lm.TerminalHeight-chrome())
+	if lm.RuntimeStatusRows > 0 {
+		cleanRt := SanitizeForDisplay(rtText, DisplayPolicy{AllowNewline: false, Redact: true})
+		const statusPrefix = "· "
+		withMeta := m.statusLineWithMeta(cleanRt, w-ansi.StringWidth(statusPrefix))
+		// Position is appended last and only if it fits: it is orientation,
+		// not status, so it must never push out Generating/Permission text.
+		if pos := m.scrollPositionText(lm.ViewportRows); pos != "" {
+			if ansi.StringWidth(statusPrefix+withMeta+" · "+pos) <= w {
+				withMeta = withMeta + " · " + pos
+			}
+		}
+		lm.runtimeStatusLine = truncateToWidth(statusPrefix+withMeta, w, "…")
+	}
 	return lm
 }
 
 // runtimeStatusText returns the current runtime status string (one line, no newlines).
 // This drives the Runtime Status row (above top separator). Empty when idle and no error.
 func (m *Feed) runtimeStatusText() string {
-	if m.status != "" {
-		return m.status
-	}
 	if m.decisionPending {
 		return "Waiting for permission…"
 	}
 	if m.modalVisible {
 		return "Permission Required"
 	}
-	if m.runningTool != "" {
-		return "Running " + m.runningTool + "…"
+	if m.status != "" && m.statusRank >= rankRunLifecycle {
+		return m.status
 	}
-	if m.running {
-		return "Generating…"
+	if text := m.phaseText(); text != "" {
+		return text
 	}
-	if m.busy {
-		return "Working…"
+	if m.status != "" {
+		return m.status
 	}
 	if m.statusProj != nil {
 		s := m.statusProj.Status()
 		switch s.Phase {
 		case presentation.PhasePermission:
 			return "Permission Required"
-		case presentation.PhaseCompacting:
-			return "Compacting context…"
 		case presentation.PhaseError:
 			if s.LastError != nil {
 				return "Error: " + s.LastError.Message
 			}
 			return "Error"
 		}
+	}
+	if m.navigationMode {
+		return "browsing"
 	}
 	return ""
 }
@@ -250,6 +262,18 @@ func (m *Feed) footerText(width int) string {
 				"y once · a/n · Enter ok",
 				"y/a/n",
 			}
+		}
+	} else if m.navigationMode {
+		// Navigation mode rebinds Enter: it expands the selected card and
+		// never sends. Advertising "Enter send" here would print a false
+		// instruction, so navigation owns its own candidate ladder.
+		candidates = []string{
+			"Up/Down select · Enter expand · n error · p perm · Esc leave · Ctrl+C quit",
+			"Up/Down select · Enter expand · n/p jump · Esc leave · ^C quit",
+			"Up/Dn select · Enter expand · Esc leave · ^C quit",
+			"Enter expand · Esc leave · ^C",
+			"Enter expand · Esc",
+			"Esc",
 		}
 	} else {
 		hasTools := m.hasTools()

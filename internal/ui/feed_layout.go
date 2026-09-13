@@ -121,7 +121,8 @@ func (m *Feed) refresh() bool {
 		m.cacheWidth = m.width
 	}
 
-	m.lines = renderItemsCached(m, items, m.width, m.toolsExpanded)
+	m.lines, m.offsets = renderItemsCached(m, items, m.width, m.toolsExpanded)
+	m.pruneOverrides(items)
 
 	// Evict cache entries for items no longer in the feed.
 	if m.lineCache != nil {

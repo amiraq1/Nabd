@@ -212,7 +212,7 @@ func TestCacheEmptyOrDuplicateIDNoLeakage(t *testing.T) {
 		{Type: presentation.ItemUserMsg, ID: "dup", Text: "FIRST CONTENT"},
 		{Type: presentation.ItemUserMsg, ID: "dup", Text: "SECOND CONTENT"},
 	}
-	lines := renderItemsCached(f, items, 80, false)
+	lines, _ := renderItemsCached(f, items, 80, false)
 	joined := strings.Join(lines, "\n")
 	if !strings.Contains(joined, "FIRST CONTENT") || !strings.Contains(joined, "SECOND CONTENT") {
 		t.Fatalf("duplicate ID leaked lines between items:\n%s", joined)

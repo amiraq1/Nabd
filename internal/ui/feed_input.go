@@ -59,13 +59,18 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 
 	if m.follow {
 		m.toolsExpanded = !m.toolsExpanded
+		m.overrides = nil
 		m.refresh()
 		m.scrollToEnd()
 		return m, nil
 	}
 
 	// Follow is false: preserve visible content anchor.
-	_, oldOffsets := renderItemsWithOffsets(items, m.width, m.toolsExpanded)
+	// Use stored offsets: they are already in m.lines coordinate space.
+	oldOffsets := m.offsets
+	if len(oldOffsets) != len(items) {
+		_, oldOffsets = renderItemsCached(m, items, m.width, m.toolsExpanded)
+	}
 
 	// Find which item currently anchors scrollTop.
 	anchorIdx := 0
@@ -79,10 +84,11 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	}
 
 	m.toolsExpanded = !m.toolsExpanded
-	newLines, newOffsets := renderItemsWithOffsets(items, m.width, m.toolsExpanded)
-	m.lines = newLines
-	// toggleTools writes m.lines directly (not via refresh), so the render
-	// signature must be resynced to avoid a stale baseline for applyBatch.
+	m.overrides = nil
+	// Same bounded, cached path as refresh, so lines and offsets cannot
+	// drift into different coordinate spaces.
+	newLines, newOffsets := renderItemsCached(m, items, m.width, m.toolsExpanded)
+	m.lines, m.offsets = newLines, newOffsets
 	m.syncRenderSig()
 
 	if anchorIdx < len(newOffsets) {
@@ -127,7 +133,7 @@ func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
 		m.composer.clear()
 		m.history.resetBrowsing()
 		m.menu.close()
-		m.status = ""
+		m.clearStatus()
 		return m, nil
 	}
 	// Empty composer, idle: quit.
@@ -152,7 +158,7 @@ func (m *Feed) onCtrlD() (tea.Model, tea.Cmd) {
 	if m.safeToQuit() {
 		return m, tea.Quit
 	}
-	m.status = "cannot exit now: run in progress or state not clean"
+	m.setStatus("cannot exit now: run in progress or state not clean", rankResult)
 	return m, nil
 }
 
@@ -176,7 +182,7 @@ func (m *Feed) cancelRun(status string) {
 	}
 	m.runningTool = ""
 	if status != "" {
-		m.status = status
+		m.setStatus(status, rankRunLifecycle)
 	}
 }
 
@@ -323,22 +329,22 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 	}
 	if strings.HasPrefix(text, "/") {
 		if m.busy {
-			m.status = "wait for the current run to finish first"
+			m.setStatus("wait for the current run to finish first", rankResult)
 			return m, nil
 		}
 		return m.runCommand(text)
 	}
 	if m.runner == nil {
 		// Nothing can ever accept this message: keep the text, show why.
-		m.status = "error: no runner available"
+		m.setStatus("error: no runner available", rankResult)
 		return m, nil
 	}
 	if m.busy {
-		m.status = "a run is in progress; cancel it or wait before sending"
+		m.setStatus("a run is in progress; cancel it or wait before sending", rankResult)
 		return m, nil
 	}
 	if inputTooLong(text) {
-		m.status = limitNotice
+		m.setStatus(limitNotice, rankResult)
 		return m, nil
 	}
 	// Accept the send.
@@ -348,7 +354,7 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 	m.running = true
 	m.busy = true
 	m.errorSeenSinceSend = false
-	m.status = ""
+	m.clearStatus()
 	return m, m.startRun(text)
 }
 
@@ -359,36 +365,36 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 	parsed := ParseSlashCommand(line)
 	if !parsed.Valid {
-		m.status = parsed.Error
+		m.setStatus(parsed.Error, rankResult)
 		return m, nil
 	}
 	switch parsed.Command.Name {
 	case "/undo":
 		m.composer.clear()
 		if m.callbacks.OnUndo == nil {
-			m.status = "undo not supported in this version"
+			m.setStatus("undo not supported in this version", rankResult)
 			return m, nil
 		}
-		m.status = m.callbacks.OnUndo(parsed.N)
+		m.setStatus(m.callbacks.OnUndo(parsed.N), rankResult)
 		return m, nil
 	case "/rewind":
 		if m.callbacks.OnRewind == nil {
-			m.status = "rewind not supported in this version"
+			m.setStatus("rewind not supported in this version", rankResult)
 			return m, nil
 		}
 		restored, status := m.callbacks.OnRewind(parsed.N)
 		m.composer.clear()
 		m.composer.setValue(restored)
 		m.history.resetBrowsing()
-		m.status = status
+		m.setStatus(status, rankResult)
 		if status == "" {
-			m.status = "rewound"
+			m.setStatus("rewound", rankResult)
 		}
 		return m, nil
 	case "/ctx":
 		m.composer.clear()
 		if m.callbacks.OnCtx == nil {
-			m.status = "—"
+			m.setStatus("—", rankResult)
 			return m, nil
 		}
 		m.setCommandResult(m.callbacks.OnCtx())
@@ -396,7 +402,7 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 	case "/compact":
 		m.composer.clear()
 		if m.callbacks.OnCompact == nil {
-			m.status = "—"
+			m.setStatus("—", rankResult)
 			return m, nil
 		}
 		m.setCommandResult(m.callbacks.OnCompact())
@@ -404,7 +410,7 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 	case "/edits":
 		m.composer.clear()
 		if m.callbacks.OnEdits == nil {
-			m.status = "—"
+			m.setStatus("—", rankResult)
 			return m, nil
 		}
 		m.setCommandResult(m.callbacks.OnEdits())
@@ -415,7 +421,7 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	// Unknown command: keep the text, tell the user.
-	m.status = "unknown command: " + parsed.RawCmd
+	m.setStatus("unknown command: "+parsed.RawCmd, rankResult)
 	return m, nil
 }
 
@@ -433,7 +439,7 @@ func (m *Feed) setCommandResult(text string) {
 		m.addNotice(presentation.ItemNotice, text)
 		return
 	}
-	m.status = text
+	m.setStatus(text, rankResult)
 }
 
 // startRun launches the accepted message on the runner. The caller (trySend)
@@ -454,7 +460,7 @@ func (m *Feed) startRun(text string) tea.Cmd {
 func (m *Feed) insertNewline() (tea.Model, tea.Cmd) {
 	text := m.composer.value()
 	if countInputLines(text)+1 > maxInputLines {
-		m.status = limitNotice
+		m.setStatus(limitNotice, rankResult)
 		return m, nil
 	}
 	// Enter as a rune insert is handled by giving the textarea its own
@@ -533,14 +539,14 @@ func (m *Feed) composerEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		alreadyOver := inputTooLong(before)
 		if inputTooLong(after) && !alreadyOver {
 			m.composer.setValue(before)
-			m.status = limitNotice
+			m.setStatus(limitNotice, rankResult)
 			return m, nil
 		}
 		// Any real edit ends history browsing; the edited text becomes the
 		// new draft.
 		m.history.edited()
 		m.history.setDraft(after)
-		m.status = ""
+		m.clearStatus()
 		m.composer.growToContent(maxComposerHeight)
 	}
 	m.syncSlashMenu()
@@ -667,16 +673,128 @@ func (m *Feed) viewportKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
+// pointerLine translates a screen row into a line index within m.lines,
+// or returns -1 if y falls outside the visible feed rows.
+func (m *Feed) pointerLine(lm layoutMetrics, y int) int {
+	top := lm.viewportTop()
+	if y < top || y >= top+lm.ViewportRows {
+		return -1
+	}
+	line := m.scrollTop + (y - top)
+	if line < 0 || line >= len(m.lines) {
+		return -1
+	}
+	return line
+}
+
+// handlePointerTap resolves a tap into a card and applies the deterministic
+// tap policy:
+//
+//	tap on another card      -> select it, in place, no scrolling
+//	tap on the selected card -> toggle its expansion
+//
+// There is no double-tap and no timer: on a phone terminal a double tap
+// arrives as two unrelated press/release pairs at unpredictable intervals,
+// so any threshold would be a coin flip. Tap-again-to-expand needs no
+// clock and matches the keyboard, where Enter expands the selected card.
+//
+// A tap can never approve anything. The modal owns the pointer before this
+// function is reachable (see handleMouse), and expansion only repaints
+// output the projector already produced.
+func (m *Feed) handlePointerTap(lm layoutMetrics, y int) (tea.Model, tea.Cmd) {
+	line := m.pointerLine(lm, y)
+	if line < 0 {
+		return m, nil
+	}
+	idx := m.itemAt(line)
+	if idx < 0 {
+		return m, nil
+	}
+	if !m.navigationMode {
+		m.navigationMode = true
+		m.composer.blur()
+		m.selectItemInPlace(idx)
+		return m, nil
+	}
+	if m.selectedItem == idx {
+		if m.toggleCard(idx) {
+			m.refreshPreservingSelection()
+		}
+		return m, nil
+	}
+	m.selectItemInPlace(idx)
+	return m, nil
+}
+
 // handleMouse processes mouse and touch events for the Feed viewport.
 // It handles finger-swipe scrolling via vertical wheel reports, scrolling by 3 rows.
 // It enforces strict viewport hit-testing and ignores gestures over chrome or during modal interaction.
 func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
-	if !m.touchEnabled {
+	if !m.MouseEnabled() {
+		m.pointerDown = false
+		m.pointerDragged = false
 		return m, nil
 	}
 	// Ignore gestures while permission interaction is active.
 	if m.modalVisible || m.decisionPending {
+		m.pointerDown = false
+		m.pointerDragged = false
 		return m, nil
+	}
+
+	lm := m.computeLayout()
+	if lm.ViewportRows <= 0 {
+		m.pointerDown = false
+		m.pointerDragged = false
+		return m, nil
+	}
+
+	// Hit-test: coordinates must fall strictly within the conversation viewport.
+	vpTop := lm.viewportTop()
+	vpBottom := vpTop + lm.ViewportRows
+	if msg.Y < vpTop || msg.Y >= vpBottom || msg.X < 0 || msg.X >= lm.TerminalWidth {
+		m.pointerDown = false
+		m.pointerDragged = false
+		return m, nil
+	}
+
+	// Pointer press tracking:
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionPress {
+		m.pointerDown = true
+		m.pointerStartX = msg.X
+		m.pointerStartY = msg.Y
+		m.pointerDragged = false
+		return m, nil
+	}
+
+	// Pointer motion tracking:
+	if msg.Action == tea.MouseActionMotion {
+		if m.pointerDown {
+			if msg.Y != m.pointerStartY || abs(msg.X-m.pointerStartX) > 1 {
+				m.pointerDragged = true
+			}
+		}
+		return m, nil
+	}
+
+	// Taps resolve on release, never on press or drag:
+	// A press that moves into a drag is the terminal's text selection gesture.
+	// It must keep working cleanly and never trigger card selection or expansion.
+	if msg.Button == tea.MouseButtonLeft && msg.Action == tea.MouseActionRelease {
+		wasDown := m.pointerDown
+		wasDragged := m.pointerDragged
+		startY := m.pointerStartY
+		startX := m.pointerStartX
+		m.pointerDown = false
+		m.pointerDragged = false
+
+		if !wasDown || wasDragged {
+			return m, nil
+		}
+		if msg.Y != startY || abs(msg.X-startX) > 1 {
+			return m, nil
+		}
+		return m.handlePointerTap(lm, msg.Y)
 	}
 
 	isWheelUp := msg.Button == tea.MouseButtonWheelUp
@@ -684,18 +802,8 @@ func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if !isWheelUp && !isWheelDown {
 		return m, nil
 	}
-
-	lm := m.computeLayout()
-	if lm.ViewportRows <= 0 {
-		return m, nil
-	}
-
-	// Hit-test: coordinates must fall strictly within the conversation viewport.
-	vpTop := lm.HeaderRows
-	vpBottom := lm.HeaderRows + lm.ViewportRows
-	if msg.Y < vpTop || msg.Y >= vpBottom || msg.X < 0 || msg.X >= lm.TerminalWidth {
-		return m, nil
-	}
+	m.pointerDown = false
+	m.pointerDragged = false
 
 	const touchScrollStep = 3
 	bs := m.bottomStart(lm.ViewportRows)
@@ -716,4 +824,11 @@ func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }

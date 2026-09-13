@@ -28,7 +28,7 @@ func BenchmarkRefreshStreaming(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		last.Text = base + strings.Repeat(delta, 50)
-		_ = renderItemsCached(f, items, 80, false)
+		_, _ = renderItemsCached(f, items, 80, false)
 	}
 }
 
