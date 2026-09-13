@@ -1,12 +1,6 @@
-# Threat model
+# Threat model — v9
 
-Last reviewed: 2026-09-13 · `c36cbdf74fc38dd9cd12a9b40e4f4248ea7b7aee`
-
-This document is based on that reviewed `master` baseline (the parent of this
-documentation change), not on intention. Primary files reviewed:
-`internal/tools/path.go`, `internal/tools/bash.go`, `internal/perm/policy.go`,
-`internal/config/config.go`, `internal/snap/shadow.go`,
-`internal/agent/fence.go`, and `cmd/ag/main.go`.
+Last reviewed: 2026-09-13
 
 This is the only place nabd states security claims. README points here.
 
@@ -66,7 +60,7 @@ filesystem sandbox.
 | Status-row runtime metadata reports only committed routes and discloses no new fields | GUARANTEED | `StatusProjector.Meta` reports a provider/model only from a `selected` route trace, never from `attempted`, `failed`, `waiting`, or `blocked`; elapsed time freezes at the terminal event; provider and model pass through the same sanitizer as route notices; `StreamID`, credentials, and file paths are never included. Evidence: `TestMetaTracksTurnTokensAndCommittedRoute`, `TestMetaElapsedFreezesAtTerminalEvent`, `TestRuntimeMetaSanitizesRouteFields`, `TestRuntimeStatusRowStaysOneRow` |
 | Rendered failure detail is redacted, bounded, and adds no new source of data | GUARANTEED | `FormatRunError` reads only fields already in the `run_error` event (`Err`, `ErrorCode`, `Code`), passes every line through `cleanField` (sanitizer with redaction enabled), emits single logical lines only, caps detail lines at `maxRunErrorDetails`, and discloses that the remainder stayed in the journal. Hints are fixed literals keyed by `ErrorCode`, never provider text. Evidence: `TestFormatRunErrorKeepsCodeAndRouteDetail`, `TestFormatRunErrorRedactsSecrets`, `TestFormatRunErrorCapsDetails`, `TestRenderRunErrorRedactsSecrets`, `TestRenderRunErrorRespectsWidth` |
 | Tool-output truncation is recorded as data and disclosed on the row that reports the result | GUARANTEED | `Event.ForStore()` records the number of discarded bytes in `ToolCall.TruncatedBytes` alongside the existing in-output marker; the field is additive (`omitempty`, legacy journals decode to `0`), the live in-memory event is never mutated, and the renderer states the loss on the `tool_end` row within the terminal width. Evidence: `TestForStoreRecordsTruncatedBytes`, `TestForStoreLeavesSmallOutputAlone`, `TestForStoreDoesNotMutateLiveEvent`, `TestTruncatedBytesIsAdditive`, `TestToolEndStatesTheLoss`, `TestToolEndSaysNothingWhenNothingWasCut`, `TestTruncatedToolRowRespectsWidth` |
-| A run failure names the tool call that was in flight, and nothing else about it | GUARANTEED | `WrapToolCallError` attaches only `CallID` and `ToolName`, leaves the message byte-identical, stays transparent to `errors.Is`/`errors.As` so `ErrorCodeOf` and `JournalPathOf` are unaffected, and keeps the innermost attribution. `RunErrorEvent` reports it through the event's existing `Call` field with no output, arguments, or exit status. Evidence: `TestWrapToolCallErrorKeepsTheMessage`, `TestWrapToolCallErrorStaysTransparent`, `TestWrapToolCallErrorKeepsTheInnermostCall`, `TestWrapToolCallErrorIsANoOpWhenThereIsNothingToSay`, `TestRunErrorEventNamesTheFailingCall`, `TestRunErrorEventReportsNoResultForTheFailingCall`, `TestRunErrorEventStaysQuietWhenNoCallIsKnown`, `TestSinkFailureNamesTheCallInFlight` |
+| Plan mode is strict read-only and cannot be overridden by a session grant or YOLO | GUARANTEED | `perm.Policy` carries a `Mode`; when it is `ModePlan`, `Check` returns `Deny` for every `Mutating`/`Executing` tool and short-circuits before the YOLO and standing-grant branches, so neither a per-session "allow for this session" nor `SetYOLO(true)` can write a byte or run a command. Reads (`ReadOnly`) still pass, so a plan-mode run can inspect the tree but never change it. The mode is applied to both the interactive gate (`gate{pol}` in `doChat`/`doChatWithFeed`) and the headless gate, so the same rule holds with and without a TTY. Evidence: `TestModeTable`, `TestModePlanOverridesGrants`, `TestModePlanAllowsReads` |
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
@@ -439,3 +433,26 @@ call at all rather than an empty one. Evidence:
 `TestRunErrorEventReportsNoResultForTheFailingCall`,
 `TestRunErrorEventStaysQuietWhenNoCallIsKnown`,
 `TestSinkFailureNamesTheCallInFlight`.
+
+### Plan mode
+
+`--permission-mode plan` switches `perm.Policy` into a strict read-only
+mode. The goal is a session that can inspect the working tree but is
+guaranteed not to mutate it or run commands — useful for review, auditing,
+or letting a model propose changes without applying them.
+
+`Policy.Check` implements it as a high-priority branch: once the tool is
+known to be `Mutating` or `Executing`, plan mode returns `Deny` before the
+YOLO override and before the per-session standing grant are consulted. A
+user who previously granted `write_file` for the session, or code that
+calls `SetYOLO(true)`, cannot widen permission in plan mode. `ReadOnly`
+tools (`read_file`, `glob`, `grep`) still return `Allow`, so inspection
+works. Because `plan` is a value of the same `--permission-mode` flag that
+already governs headless runs, the interactive gate (`gate{pol}` in
+`doChat`/`doChatWithFeed`) and the headless gate both call the same
+`Policy.Check`, and the rule is identical with or without a TTY.
+
+The empty flag preserves each path's existing default (interactive `ask`,
+headless `deny`), so adopting plan mode is opt-in and cannot silently
+change current behaviour. Evidence: `TestModeTable`,
+`TestModePlanOverridesGrants`, `TestModePlanAllowsReads`.

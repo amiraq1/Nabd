@@ -357,11 +357,18 @@ floor, visualRowsOf, the frame contract, separator width - lives in the Feed
 path. Users on the default path do not see it. This is the right order for
 promoting Feed to default, but it must not be described as a production fix.
 
-Chat (internal/ui/chat.go, 284 lines) has no computeLayout, no frame contract
-and no layout tests at all, while Feed (feed.go, 427 lines) now has both. The
-callbacks are wired on both paths (Approve/OnUndo/OnRewind/OnCtx/OnEdits at
-main.go:185-214 for Chat and :312-332 for Feed), so there is no functional gap;
-OnRewind returns two strings on Feed versus one on Chat.
+Chat (internal/ui/chat.go) has no computeLayout, no frame contract and no
+layout tests at all, while Feed (feed.go) now has both.
+
+The interactive session (root, registry, policy, approver, loop) and the five
+slash-command callbacks are now built once by `newInteractiveSession` in
+cmd/ag/session.go and wired through a single `ui.SessionCallbacks` contract
+shared by Chat (`chat.SetCallbacks`) and Feed (`feed.SetCallbacks`). This
+resolves the previous divergence where `OnRewind` returned two strings on Feed
+versus one on Chat, and removes the duplicated permission-gate construction —
+there is now one gate (`gate{pol}`) and one `agent.Gate` contract for both
+paths. The command bodies themselves live in named helpers in session.go
+(`rewindSummary`, `ctxSummary`, `editsSummary`), so they cannot drift.
 
 Open decision: promote Feed to default and retire Chat, or keep both and
 duplicate every layout contract. Until it is decided, no layout finding should

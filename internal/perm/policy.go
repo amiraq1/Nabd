@@ -4,6 +4,7 @@
 package perm
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
@@ -19,6 +20,46 @@ const (
 	Allow
 	Deny
 )
+
+// Mode is the permission policy the session runs under. It lives in perm,
+// not in the UI, so the same rule applies whether the human answers through
+// a TUI or the run is headless. The zero value is ModeAsk, which is the
+// current interactive behaviour (every ungranted Mutating/Executing tool
+// stops to ask).
+type Mode uint8
+
+const (
+	// ModeAsk stops for an answer on every ungranted write or command.
+	ModeAsk Mode = iota
+	// ModeDeny answers "deny" to every ungranted write or command, so the
+	// run never waits and never changes a byte.
+	ModeDeny
+	// ModeAllowReads is kept for compatibility: reads are always allowed,
+	// and everything else is denied, which is identical to ModeDeny today.
+	ModeAllowReads
+	// ModePlan is strict read-only: reads pass, every Mutating and
+	// Executing call is denied regardless of standing grants or YOLO. A
+	// session in plan mode can inspect the tree but never change it.
+	ModePlan
+)
+
+// ParseMode maps the CLI string to a Mode. The empty string means "ask",
+// which is the interactive default and lets the caller apply per-path
+// defaults without the policy knowing about the CLI.
+func ParseMode(s string) (Mode, error) {
+	switch s {
+	case "", "ask":
+		return ModeAsk, nil
+	case "deny":
+		return ModeDeny, nil
+	case "allow-reads":
+		return ModeAllowReads, nil
+	case "plan":
+		return ModePlan, nil
+	default:
+		return ModeAsk, fmt.Errorf("unknown permission-mode %q (want ask|deny|allow-reads|plan)", s)
+	}
+}
 
 // Class is what a tool does to the world, declared by the tool itself.
 type Class uint8
@@ -46,10 +87,26 @@ type Policy struct {
 	cls     Classifier
 	granted map[string]bool
 	yolo    bool
+	mode    Mode
 }
 
 func New(cls Classifier) *Policy {
 	return &Policy{cls: cls, granted: map[string]bool{}}
+}
+
+// SetMode sets the permission policy the session runs under. It is set by the
+// CLI after construction, so a Policy can be built once and reused across
+// modes.
+func (p *Policy) SetMode(m Mode) {
+	p.mu.Lock()
+	p.mode = m
+	p.mu.Unlock()
+}
+
+func (p *Policy) Mode() Mode {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.mode
 }
 
 // SetYOLO disables asking. It exists because it will be demanded; it is
@@ -68,6 +125,16 @@ func (p *Policy) YOLO() bool {
 }
 
 // Check returns the verdict for one call, plus a short reason to show.
+//
+// The ladder, highest priority first:
+//  1. No name, unknown tool → Deny.
+//  2. ReadOnly → Allow in every mode, including plan.
+//  3. ModePlan → Deny for Mutating/Execuring, ignoring YOLO and standing
+//     grants. Plan mode is read-only, full stop.
+//  4. YOLO → Allow (plan already returned).
+//  5. Standing session grant → Allow.
+//  6. ModeDeny / ModeAllowReads → Deny (never wait).
+//  7. Otherwise → Ask.
 func (p *Policy) Check(tool string) (Verdict, string) {
 	if strings.TrimSpace(tool) == "" {
 		return Deny, "tool with no name"
@@ -82,15 +149,22 @@ func (p *Policy) Check(tool string) (Verdict, string) {
 	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.yolo {
+	mode := p.mode
+	yolo := p.yolo
+	granted := p.granted[tool]
+	p.mu.Unlock()
+
+	if mode == ModePlan {
+		return Deny, "plan mode: read-only"
+	}
+	if yolo {
 		return Allow, ""
 	}
-	// Executing is deliberately excluded from session grants. A blanket
-	// yes to write_file risks a file; a blanket yes to a shell risks the
-	// machine, and the second command is never the one you approved.
-	if class == Mutating && p.granted[tool] {
+	if class == Mutating && granted {
 		return Allow, "مسموح لهذه الجلسة"
+	}
+	if mode == ModeDeny || mode == ModeAllowReads {
+		return Deny, "denied by policy"
 	}
 	return Ask, ""
 }

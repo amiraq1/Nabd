@@ -6,6 +6,15 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+- `--permission-mode` now applies to the interactive TUI as well as headless runs, and
+  accepts a new `plan` mode: strict read-only that denies every write and command even when
+  a session grant or YOLO would allow it. The interactive default stays `ask` and the headless
+  default stays `deny`, so an empty flag changes no existing behaviour.
+- The interactive session (root, registry, policy, approver, loop, and the five slash-command
+  callbacks) is now built by one `interactiveSession` helper used by both `Chat` and `Feed`,
+  removing the duplicated wiring in `cmd/ag/main.go`. `Chat` and `Feed` share a single
+  `ui.SessionCallbacks` contract, so `/rewind` has one signature on both paths.
+
 ## v1.5.0
 
 Descriptor-relative file access on Android/Termux (Phase 3).
