@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -202,13 +201,3 @@ func (m *Feed) searchKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// runeOffsetAt returns the rune count up to byte offset within s.
-func runeOffsetAt(s string, byteOffset int) int {
-	if byteOffset <= 0 {
-		return 0
-	}
-	if byteOffset > len(s) {
-		byteOffset = len(s)
-	}
-	return utf8.RuneCountInString(s[:byteOffset])
-}
