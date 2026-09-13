@@ -7,6 +7,12 @@ import (
 	"nabd/internal/agent"
 )
 
+const renderExhaustedErr = "all 2 route(s) exhausted (mixed failures); shortest retry-after: 20s\n" +
+	"  [groq:openai/gpt-oss-120b]: rate limit reached\n" +
+	"  [nvidia:moonshotai/kimi-k2.6]: prestream timeout"
+
+const renderLeakyErr = "auth failed: Authorization: Bearer sk-ant-api03-abcdef0123456789abcdef0123456789"
+
 // TestRenderRunErrorShowsCodeAndHint is the E-series fix: the failure row
 // used to print the provider message alone, dropping the journaled code and
 // the remedy.
@@ -17,7 +23,7 @@ func TestRenderRunErrorShowsCodeAndHint(t *testing.T) {
 		ErrorCode: "provider_auth",
 	}, 66)
 
-	if !strings.HasPrefix(out, "✗") && !strings.Contains(out, "✗") {
+	if !strings.Contains(out, "✗") {
 		t.Errorf("failure marker missing: %q", out)
 	}
 	for _, want := range []string{"provider rejected the request", "provider_auth", "~/.ag/config"} {
@@ -29,10 +35,8 @@ func TestRenderRunErrorShowsCodeAndHint(t *testing.T) {
 
 func TestRenderRunErrorKeepsRouteCauses(t *testing.T) {
 	out := RenderEvent(agent.Event{
-		Type: agent.RunError,
-		Err: "all 2 route(s) exhausted (mixed failures); shortest retry-after: 20s\n" +
-			"  [groq:openai/gpt-oss-120b]: rate limit reached\n" +
-			"  [nvidia:moonshotai/kimi-k2.6]: prestream timeout",
+		Type:      agent.RunError,
+		Err:       renderExhaustedErr,
 		ErrorCode: "budget",
 	}, 80)
 
@@ -49,7 +53,7 @@ func TestRenderRunErrorRespectsWidth(t *testing.T) {
 	for _, width := range []int{20, 40, 66, 80} {
 		out := RenderEvent(agent.Event{
 			Type:      agent.RunError,
-			Err:       "all routes exhausted\n  [groq:openai/gpt-oss-120b]: rate limit reached",
+			Err:       renderExhaustedErr,
 			ErrorCode: "budget",
 		}, width)
 		for _, line := range strings.Split(out, "\n") {
@@ -63,7 +67,7 @@ func TestRenderRunErrorRespectsWidth(t *testing.T) {
 func TestRenderRunErrorRedactsSecrets(t *testing.T) {
 	out := RenderEvent(agent.Event{
 		Type:      agent.RunError,
-		Err:       "auth failed: Authorization: Bearer sk-ant-api03-abcdef0123456789abcdef0123456789",
+		Err:       renderLeakyErr,
 		ErrorCode: "provider_auth",
 	}, 66)
 	if strings.Contains(out, "sk-ant-api03-") {

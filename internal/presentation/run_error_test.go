@@ -10,14 +10,18 @@ import (
 )
 
 // exhaustedErr is the real error body from the reported session: the
-// headline says the run is over, the indented line says why.
+// headline says the run is over, the indented lines say why.
 const exhaustedErr = "all 2 route(s) exhausted (mixed failures); shortest retry-after: 20s\n" +
 	"  [groq:openai/gpt-oss-120b]: Rate limit reached for model in organization on tokens per minute (TPM): Limit 8000, Used 6605, Requested 3990\n" +
 	"  [nvidia:moonshotai/kimi-k2.6]: prestream timeout"
 
+const leakyErr = "auth failed\n  Authorization: Bearer sk-ant-api03-abcdef0123456789abcdef0123456789"
+
 func TestFormatRunErrorKeepsCodeAndRouteDetail(t *testing.T) {
 	v := presentation.FormatRunError(agent.Event{
-		Type: agent.RunError, Err: exhaustedErr, ErrorCode: "budget",
+		Type:      agent.RunError,
+		Err:       exhaustedErr,
+		ErrorCode: "budget",
 	})
 
 	if !strings.Contains(v.Headline, "exhausted") || !strings.Contains(v.Headline, "budget") {
@@ -35,9 +39,14 @@ func TestFormatRunErrorKeepsCodeAndRouteDetail(t *testing.T) {
 }
 
 func TestFormatRunErrorHidesUnknownCode(t *testing.T) {
-	for name, code := range map[string]string{"empty": "", "explicit": "unknown"} {
+	cases := map[string]string{"empty": "", "explicit": "unknown"}
+	for name, code := range cases {
 		t.Run(name, func(t *testing.T) {
-			v := presentation.FormatRunError(agent.Event{Type: agent.RunError, Err: "boom", ErrorCode: code})
+			v := presentation.FormatRunError(agent.Event{
+				Type:      agent.RunError,
+				Err:       "boom",
+				ErrorCode: code,
+			})
 			if v.Headline != "boom" {
 				t.Fatalf("headline = %q, want %q", v.Headline, "boom")
 			}
@@ -55,7 +64,11 @@ func TestFormatRunErrorHintsPerCode(t *testing.T) {
 		"budget":        "NABD_ROUTER_RETRY_AFTER_WAIT",
 	}
 	for code, want := range cases {
-		v := presentation.FormatRunError(agent.Event{Type: agent.RunError, Err: "x", ErrorCode: code})
+		v := presentation.FormatRunError(agent.Event{
+			Type:      agent.RunError,
+			Err:       "x",
+			ErrorCode: code,
+		})
 		if !strings.Contains(v.Hint, want) {
 			t.Errorf("code %s: hint = %q, want it to mention %q", code, v.Hint, want)
 		}
@@ -76,7 +89,10 @@ func TestFormatRunErrorNeverRendersEmpty(t *testing.T) {
 
 func TestFormatRunErrorIncludesHTTPStatus(t *testing.T) {
 	v := presentation.FormatRunError(agent.Event{
-		Type: agent.RunError, Err: "provider refused", ErrorCode: "provider_auth", Code: 401,
+		Type:      agent.RunError,
+		Err:       "provider refused",
+		ErrorCode: "provider_auth",
+		Code:      401,
 	})
 	if !strings.Contains(v.Headline, "401") {
 		t.Fatalf("headline = %q, want the HTTP status", v.Headline)
@@ -87,8 +103,8 @@ func TestFormatRunErrorIncludesHTTPStatus(t *testing.T) {
 // disclosure contract: an error body is provider-controlled text.
 func TestFormatRunErrorRedactsSecrets(t *testing.T) {
 	v := presentation.FormatRunError(agent.Event{
-		Type: agent.RunError,
-		Err:  "auth failed\n  Authorization: Bearer sk-ant-api03-abcdef0123456789abcdef0123456789",
+		Type:      agent.RunError,
+		Err:       leakyErr,
 		ErrorCode: "provider_auth",
 	})
 	for _, line := range v.Lines() {
