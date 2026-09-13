@@ -36,62 +36,11 @@ var (
 	errInterrupted     = errors.New("interrupted")
 )
 
-type permMode string
-
-const (
-	permDeny       permMode = "deny"
-	permAsk        permMode = "ask"
-	permAllowReads permMode = "allow-reads"
-)
-
-func parsePermMode(s string) (permMode, error) {
-	switch s {
-	case "", "deny":
-		return permDeny, nil
-	case "ask":
-		return permAsk, nil
-	case "allow-reads":
-		return permAllowReads, nil
-	default:
-		return "", fmt.Errorf("unknown permission-mode %q (want ask|deny|allow-reads)", s)
-	}
-}
-
 // silentAsker never blocks and never reads a tty. Decision(0)==Deny.
 type silentAsker struct{}
 
 func (silentAsker) Ask(context.Context, agent.ToolCall) agent.Decision {
 	return agent.Deny
-}
-
-// headlessGate wraps the interactive policy. deny and allow-reads convert
-// Ask into Deny so the model receives a tool_result and the run continues.
-// YOLO is never engaged.
-type headlessGate struct {
-	inner agent.Gate
-	mode  permMode
-}
-
-func (g headlessGate) Check(tool string) (agent.Verdict, string) {
-	v, why := g.inner.Check(tool)
-	if v == agent.VerdictAllow {
-		return v, why
-	}
-	if g.mode == permAsk {
-		return v, why
-	}
-	if v == agent.VerdictAsk {
-		return agent.VerdictDeny, "headless " + string(g.mode)
-	}
-	return v, why
-}
-
-func (g headlessGate) Record(tool string, d agent.Decision) {
-	g.inner.Record(tool, d)
-}
-
-func (g headlessGate) Effective(tool string, d agent.Decision) agent.Decision {
-	return g.inner.Effective(tool, d)
 }
 
 type noticeStderr struct{ w io.Writer }
@@ -135,7 +84,7 @@ type headlessConfig struct {
 	prompt   string
 	json     bool
 	maxTurns int
-	mode     permMode
+	mode     perm.Mode
 	sessDir  string
 	stdout   io.Writer
 	stderr   io.Writer
@@ -253,6 +202,8 @@ func runHeadlessErr(cfg headlessConfig) error {
 		return err
 	}
 	reg := tools.NewRegistry(root, sh)
+	pol := perm.New(reg)
+	pol.SetMode(cfg.mode)
 
 	var sinks agent.Fanout
 	sinks = append(sinks, journal, noticeStderr{w: cfg.stderr})
@@ -263,7 +214,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 		})
 	}
 
-	loop := newSessionLoop(prov, reg, headlessGate{inner: gate{perm.New(reg)}, mode: cfg.mode}, silentAsker{})
+	loop := newSessionLoop(prov, reg, gate{pol}, silentAsker{})
 	loop.Sink = sinks
 	loop.MaxTurns = cfg.maxTurns
 

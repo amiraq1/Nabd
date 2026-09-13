@@ -16,7 +16,7 @@ func TestSlashCommandParityBetweenFeedAndChat(t *testing.T) {
 	// Track Feed callbacks
 	feedCalls := make(map[string]bool)
 	f := NewFeed()
-	f.SetCallbacks(&FeedCallbacks{
+	f.SetCallbacks(&SessionCallbacks{
 		OnUndo: func(n int) string {
 			feedCalls["/undo"] = true
 			return ""
@@ -42,26 +42,28 @@ func TestSlashCommandParityBetweenFeedAndChat(t *testing.T) {
 	// Track Chat callbacks
 	chatCalls := make(map[string]bool)
 	c := NewChat(runnerStub{}, make(chan agent.Event, 1))
-	c.OnUndo = func(n int) string {
-		chatCalls["/undo"] = true
-		return ""
-	}
-	c.OnRewind = func(n int) string {
-		chatCalls["/rewind"] = true
-		return "rewound"
-	}
-	c.OnCtx = func() string {
-		chatCalls["/ctx"] = true
-		return "ctx"
-	}
-	c.OnCompact = func() string {
-		chatCalls["/compact"] = true
-		return "compact"
-	}
-	c.OnEdits = func() string {
-		chatCalls["/edits"] = true
-		return "edits"
-	}
+	c.SetCallbacks(&SessionCallbacks{
+		OnUndo: func(n int) string {
+			chatCalls["/undo"] = true
+			return ""
+		},
+		OnRewind: func(n int) (string, string) {
+			chatCalls["/rewind"] = true
+			return "", "rewound"
+		},
+		OnCtx: func() string {
+			chatCalls["/ctx"] = true
+			return "ctx"
+		},
+		OnCompact: func() string {
+			chatCalls["/compact"] = true
+			return "compact"
+		},
+		OnEdits: func() string {
+			chatCalls["/edits"] = true
+			return "edits"
+		},
+	})
 
 	for _, cmd := range cmds {
 		// Test Feed

@@ -70,7 +70,7 @@ type Feed struct {
 	header string
 
 	// Callbacks wired by the CLI.
-	callbacks FeedCallbacks
+	callbacks SessionCallbacks
 
 	// Composer.
 	composer *composer
@@ -137,8 +137,11 @@ type cacheEntry struct {
 	lines    []string
 }
 
-// FeedCallbacks holds the hooks the feed uses to talk back to the loop.
-type FeedCallbacks struct {
+// SessionCallbacks holds the hooks a view uses to talk back to the loop.
+// It is shared by Chat and Feed so the same slash command cannot mean two
+// different things depending on which TUI is running: one contract, one
+// implementation, wired once by the CLI.
+type SessionCallbacks struct {
 	OnUndo    func(n int) string
 	OnCompact func() string
 	// OnRewind returns the restored text (for the composer) and a status
@@ -153,7 +156,7 @@ type FeedCallbacks struct {
 func (m *Feed) SetHeader(h string) { m.header = h }
 
 // SetCallbacks wires the command hooks.
-func (m *Feed) SetCallbacks(cb *FeedCallbacks) {
+func (m *Feed) SetCallbacks(cb *SessionCallbacks) {
 	if cb != nil {
 		m.callbacks = *cb
 	}

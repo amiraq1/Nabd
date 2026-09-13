@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
 
@@ -88,8 +89,8 @@ func runHL(t *testing.T, cfg headlessConfig) (int, string, string) {
 	if cfg.sessDir == "" {
 		cfg.sessDir = t.TempDir()
 	}
-	if cfg.mode == "" {
-		cfg.mode = permDeny
+	if cfg.mode == perm.ModeAsk {
+		cfg.mode = perm.ModeDeny
 	}
 	code := runHeadless(cfg)
 	return code, stdout.String(), stderr.String()
@@ -162,7 +163,7 @@ func TestHeadlessJSONEmitsJournal(t *testing.T) {
 func TestHeadlessDenyDoesNotKillRun(t *testing.T) {
 	code, out, _ := runHL(t, headlessConfig{
 		prompt: "write then talk",
-		mode:   permDeny,
+		mode:   perm.ModeDeny,
 		provider: &scriptedProvider{turns: []scriptTurn{
 			{call: writeCall("x.txt", "nope")},
 			{text: "refused and continued"},
@@ -179,7 +180,7 @@ func TestHeadlessDenyDoesNotKillRun(t *testing.T) {
 func TestHeadlessPermissionStuck(t *testing.T) {
 	code, _, _ := runHL(t, headlessConfig{
 		prompt: "write",
-		mode:   permDeny,
+		mode:   perm.ModeDeny,
 		provider: &scriptedProvider{turns: []scriptTurn{
 			{call: writeCall("x.txt", "nope")},
 			{text: ""},
@@ -224,11 +225,15 @@ func TestHeadlessRateLimitBudget(t *testing.T) {
 }
 
 func TestParsePermMode(t *testing.T) {
-	m, err := parsePermMode("allow-reads")
-	if err != nil || m != permAllowReads {
+	m, err := perm.ParseMode("allow-reads")
+	if err != nil || m != perm.ModeAllowReads {
 		t.Fatalf("got %q %v", m, err)
 	}
-	if _, err := parsePermMode("yolo"); err == nil {
+	m, err = perm.ParseMode("plan")
+	if err != nil || m != perm.ModePlan {
+		t.Fatalf("plan: got %q %v", m, err)
+	}
+	if _, err := perm.ParseMode("yolo"); err == nil {
 		t.Fatal("yolo must be rejected")
 	}
 }

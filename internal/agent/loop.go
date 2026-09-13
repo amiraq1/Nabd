@@ -660,6 +660,12 @@ func (l *Loop) knownTool(name string) bool {
 // runCalls executes the batch in order. Order matters: the model asked
 // for read-then-write for a reason, and parallelism would gain a phone
 // nothing but a race.
+//
+// Every failure returned from here is attributed to the call that was in
+// flight (WrapToolCallError). The loop is the only place that still knows
+// which call it was, and a persistence failure on a write is a different
+// situation from one on a read: the caller, the journal, and the reader all
+// need to be told which it was. The message is not changed by the wrapper.
 func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, error) {
 	for _, c := range calls {
 		if ctx.Err() != nil {
@@ -677,7 +683,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		ac := ToolCall{ID: c.ID, Name: c.Name, Args: c.Input}
 
 		if err := l.emit(Event{Type: ToolStart, Call: &ac}); err != nil {
-			return false, err
+			return false, WrapToolCallError(ac, err)
 		}
 
 		// An unknown tool is not a permission question: the registry has
@@ -720,11 +726,12 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		}
 		ms := time.Since(start).Milliseconds()
 
-		if eerr := l.emit(Event{Type: ToolEnd, Call: &ToolCall{
+		done := ToolCall{
 			ID: c.ID, Name: c.Name, Output: out.Text, OK: out.OK,
 			Exit: out.Exit, Signal: out.Signal, MS: ms,
-		}}); eerr != nil {
-			return false, eerr
+		}
+		if eerr := l.emit(Event{Type: ToolEnd, Call: &done}); eerr != nil {
+			return false, WrapToolCallError(done, eerr)
 		}
 
 		// A mutation leaves a persisted fingerprint behind. The loop is the
@@ -734,7 +741,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 			if er, ok := l.Tools.(interface{ LastEdit() *EditRecord }); ok {
 				if rec := er.LastEdit(); rec != nil {
 					if eerr := l.emit(Event{Type: EventEdit, Edit: rec}); eerr != nil {
-						return false, eerr
+						return false, WrapToolCallError(ac, eerr)
 					}
 				}
 			}
@@ -748,7 +755,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 				Truncated:  true,
 				NextOffset: out.NextOffset,
 			}}); eerr != nil {
-				return false, eerr
+				return false, WrapToolCallError(ac, eerr)
 			}
 		}
 	}

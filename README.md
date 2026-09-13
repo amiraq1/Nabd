@@ -40,6 +40,7 @@ go build -o nabd ./cmd/ag
 ./nabd -p "..." --json            # journal JSONL on stdout
 ./nabd -p "..." --max-turns 8
 ./nabd -p "count the go files" --permission-mode allow-reads
+./nabd "review the plan" --permission-mode plan   # interactive, read-only
 
 ./nabd --export <file.jsonl>              # copy a journal to stdout, byte-for-byte
 ./nabd --export <file.jsonl> --redact     # redact recognized credential patterns
@@ -69,7 +70,7 @@ Do not put credentials in project files. See [docs/THREAT_MODEL.md](docs/THREAT_
 
 ## Headless behavior
 
-No TTY is read. The default `--permission-mode` is `deny`; a tool that would prompt is denied as a tool result rather than blocking. `allow-reads` auto-allows only ReadOnly tools. `ask` still denies without reading a terminal.
+No TTY is read. The default `--permission-mode` is `deny`; a tool that would prompt is denied as a tool result rather than blocking. `allow-reads` auto-allows only ReadOnly tools. `ask` still denies without reading a terminal. `plan` is strict read-only: every write and command is denied, overriding session grants and YOLO, so a headless plan-mode run can inspect the tree but never change it.
 
 stdout contains only the final assistant text, or JSONL with `--json`. Notices and `session:` go to stderr. Sessions are still written under `~/.ag/sessions`, so `--continue` and `--replay` work.
 

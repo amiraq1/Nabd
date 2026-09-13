@@ -33,15 +33,18 @@ type Chat struct {
 	statusProj *presentation.StatusProjector
 	Approve    *Approver
 	pending    *agent.ToolCall
-	OnUndo     func(n int) string
-	OnRewind   func(n int) string
-	OnCtx      func() string
-	OnCompact  func() string
-	OnEdits    func() string
+	callbacks  SessionCallbacks
 }
 
 func NewChat(r Runner, events <-chan agent.Event) *Chat {
 	return &Chat{runner: r, events: events, width: DefaultWidth, Approve: NewApprover(), statusProj: presentation.NewStatusProjector()}
+}
+
+// SetCallbacks wires the command hooks, the same contract the Feed uses.
+func (m *Chat) SetCallbacks(cb *SessionCallbacks) {
+	if cb != nil {
+		m.callbacks = *cb
+	}
 }
 
 func (m *Chat) Init() tea.Cmd { return waitEvent(m.events) }
@@ -240,30 +243,35 @@ func (m *Chat) command(line string) string {
 	}
 	switch parsed.Command.Name {
 	case "/rewind":
-		if m.OnRewind == nil {
+		if m.callbacks.OnRewind == nil {
 			return "rewind not supported in this version"
 		}
-		return m.OnRewind(parsed.N)
+		restored, status := m.callbacks.OnRewind(parsed.N)
+		m.SetInput(restored)
+		if status == "" {
+			status = "rewound"
+		}
+		return status
 	case "/ctx":
-		if m.OnCtx == nil {
+		if m.callbacks.OnCtx == nil {
 			return "—"
 		}
-		return m.OnCtx()
+		return m.callbacks.OnCtx()
 	case "/compact":
-		if m.OnCompact == nil {
+		if m.callbacks.OnCompact == nil {
 			return "—"
 		}
-		return m.OnCompact()
+		return m.callbacks.OnCompact()
 	case "/undo":
-		if m.OnUndo == nil {
+		if m.callbacks.OnUndo == nil {
 			return "undo not supported in this version"
 		}
-		return m.OnUndo(parsed.N)
+		return m.callbacks.OnUndo(parsed.N)
 	case "/edits":
-		if m.OnEdits == nil {
+		if m.callbacks.OnEdits == nil {
 			return "—"
 		}
-		return m.OnEdits()
+		return m.callbacks.OnEdits()
 	case "/help":
 		return CommandHelp(m.width)
 	}

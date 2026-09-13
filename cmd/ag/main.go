@@ -24,7 +24,6 @@ import (
 	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
-	"nabd/internal/snap"
 	"nabd/internal/store"
 	"nabd/internal/tools"
 	"nabd/internal/ui"
@@ -101,7 +100,7 @@ func main() {
 	prompt := flag.String("p", "", "headless one-shot task; \"-\" reads stdin")
 	jsonOut := flag.Bool("json", false, "headless: emit journal JSONL on stdout")
 	maxTurns := flag.Int("max-turns", 0, "override turn ceiling")
-	permModeFlag := flag.String("permission-mode", "deny", "headless: ask|deny|allow-reads")
+	permModeFlag := flag.String("permission-mode", "", "ask|deny|allow-reads|plan (interactive and headless; empty = path default)")
 	exportPath := flag.String("export", "", "export a session journal as JSONL to stdout and exit")
 	exportRedact := flag.Bool("redact", false, "with --export: redact recognized credential patterns")
 	flag.Parse()
@@ -123,17 +122,27 @@ func main() {
 		return
 	}
 
+	// Resolve the permission mode once. An empty flag means "use each path's
+	// default": interactive defaults to ask (the current behaviour), headless
+	// defaults to deny. An explicit value applies to both, so a single flag
+	// cannot silently change interactive behaviour.
+	mode, err := perm.ParseMode(*permModeFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "nabd:", err)
+		os.Exit(exitError)
+	}
+	interactiveMode, headlessMode := mode, mode
+	if *permModeFlag == "" {
+		interactiveMode = perm.ModeAsk
+		headlessMode = perm.ModeDeny
+	}
+
 	if *prompt != "" {
-		mode, err := parsePermMode(*permModeFlag)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "nabd:", err)
-			os.Exit(exitError)
-		}
 		os.Exit(runHeadless(headlessConfig{
 			prompt:   *prompt,
 			json:     *jsonOut,
 			maxTurns: *maxTurns,
-			mode:     mode,
+			mode:     headlessMode,
 			sessDir:  *sessDir,
 		}))
 	}
@@ -145,12 +154,12 @@ func main() {
 		return
 	}
 	if *useFeed {
-		if err := doChatWithFeed(*sessDir, *cont, *feedTouch); err != nil {
+		if err := doChatWithFeed(interactiveMode, *sessDir, *cont, *feedTouch); err != nil {
 			die(err)
 		}
 		return
 	}
-	if err := doChat(*sessDir, *cont); err != nil {
+	if err := doChat(interactiveMode, *sessDir, *cont); err != nil {
 		die(err)
 	}
 }
@@ -167,16 +176,18 @@ func doReplay(path string, speed float64) error {
 	return err
 }
 
-func doChat(dir string, cont bool) error {
+func doChat(mode perm.Mode, dir string, cont bool) error {
 	prov, err := pickProvider()
 	if err != nil {
 		return err
 	}
 
-	root, err := tools.NewRoot("")
+	sess, err := newInteractiveSession(prov)
 	if err != nil {
 		return err
 	}
+	sess.SetMode(mode)
+	root := sess.root
 
 	var journalPath string
 	var journal *store.JSONL
@@ -205,76 +216,26 @@ func doChat(dir string, cont bool) error {
 			filepath.Base(journalPath), len(prevEvs), len(evs))
 	}
 
-	sh, err := snap.New(root.Dir())
-	if err != nil {
-		journal.Close()
-		return err
-	}
-	reg := tools.NewRegistry(root, sh)
-	pol := perm.New(reg)
-	ap := ui.NewApprover()
-
 	uiSink := newUISink()
-	loop := newSessionLoop(prov, reg, gate{pol}, ap)
-	loop.Sink = agent.Fanout{journal, uiSink}
+	sess.loop.Sink = agent.Fanout{journal, uiSink}
 	if cont {
-		loop.Seed(prevEvs)
+		sess.loop.Seed(prevEvs)
 	}
 
 	cwd, _ := os.Getwd()
-	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
+	if err := sess.loop.Start(fmt.Sprintf("%s · %s · %s",
 		build.BannerPrefix(), prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
 		journal.Close()
 		return err
 	}
 
 	if s := conflictLine(config.Conflicts()); s != "" {
-		loop.Note(s)
+		sess.loop.Note(s)
 	}
 
-	chat := ui.NewChat(loop, uiSink.ch)
-	chat.Approve = ap
-
-	chat.OnRewind = func(n int) string {
-		txt, err := loop.Rewind(n)
-		if err != nil {
-			return err.Error()
-		}
-		chat.SetInput(txt)
-		return fmt.Sprintf("rewound %d turns · disk edits remain, /undo does not cover edits after branch cut", n)
-	}
-
-	chat.OnUndo = func(n int) string { return fileUndo(loop, reg, n) }
-
-	chat.OnEdits = func() string {
-		p := editRecords(agent.Live(loop.Hist()))
-		if len(p) == 0 {
-			return "no reversible edits pending"
-		}
-		var b strings.Builder
-		for i, e := range p {
-			tool := "edit_file"
-			if e.Patch == "" {
-				tool = "write_file"
-			}
-			fmt.Fprintf(&b, "%d· %s %s\n", i+1, tool, e.Path)
-		}
-		return strings.TrimRight(b.String(), "\n")
-	}
-
-	chat.OnCtx = func() string {
-		ms := agent.Squeeze(agent.Messages(agent.Live(loop.Hist())), agent.KeepFullRounds)
-		p := loop.Budget.Pressure(ms)
-		return fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
-	}
-	chat.OnCompact = func() string {
-		go func() {
-			if err := loop.Compact(context.Background(), loop.Budget.Usable()*4/10); err != nil {
-				loop.Note("compact failed: " + err.Error())
-			}
-		}()
-		return statusCompacting
-	}
+	chat := ui.NewChat(sess.loop, uiSink.ch)
+	chat.Approve = sess.ap
+	chat.SetCallbacks(sess.callbacks())
 
 	_, err = tea.NewProgram(chat).Run()
 	if err != nil {
@@ -287,14 +248,14 @@ func doChat(dir string, cont bool) error {
 	// Either step can fail independently; surface both without masking the
 	// original. The "session:" line is printed by reportSession regardless of
 	// whether the durable close succeeded.
-	uiSink.noteDrops(loop)
-	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
+	uiSink.noteDrops(sess.loop)
+	endErr := sess.loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
 	closeErr := journal.Close()
 	reportSession(os.Stdout, os.Stderr, journalPath, closeErr)
 	return errors.Join(endErr, closeErr)
 }
 
-func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
+func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error {
 	ui.SetLimitNotice(limitNoticeArabic)
 
 	prov, err := pickProvider()
@@ -302,10 +263,12 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		return err
 	}
 
-	root, err := tools.NewRoot("")
+	sess, err := newInteractiveSession(prov)
 	if err != nil {
 		return err
 	}
+	sess.SetMode(mode)
+	root := sess.root
 
 	var journalPath string
 	var journal *store.JSONL
@@ -334,21 +297,11 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 			filepath.Base(journalPath), len(prevEvs), len(evs))
 	}
 
-	sh, err := snap.New(root.Dir())
-	if err != nil {
-		journal.Close()
-		return err
-	}
-	reg := tools.NewRegistry(root, sh)
-	pol := perm.New(reg)
-	ap := ui.NewApprover()
-
 	feed := ui.NewFeed()
 	feed.SetTouch(feedTouch)
 
-	loop := newSessionLoop(prov, reg, gate{pol}, ap)
 	if cont {
-		loop.Seed(prevEvs)
+		sess.loop.Seed(prevEvs)
 	}
 
 	batcher := ui.NewBatcher(eventBatchInterval, maxEventBatchSize, func(batch []agent.Event) {
@@ -356,45 +309,11 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 	})
 	batcher.Start()
 
-	loop.Sink = agent.Fanout{journal, feedSink{batcher: batcher}}
+	sess.loop.Sink = agent.Fanout{journal, feedSink{batcher: batcher}}
 
-	feed.SetRunner(loop)
-	feed.SetApprover(ap)
-
-	feed.SetCallbacks(&ui.FeedCallbacks{
-		OnUndo:    func(n int) string { return fileUndo(loop, reg, n) },
-		OnCompact: func() string { return chatOnCompact(loop) },
-		OnRewind: func(n int) (string, string) {
-			if loop == nil {
-				return "", "rewind not supported"
-			}
-			txt, err := loop.Rewind(n)
-			if err != nil {
-				return "", err.Error()
-			}
-			return txt, fmt.Sprintf("rewound %d turns · disk edits remain, /undo does not cover edits after branch cut", n)
-		},
-		OnCtx: func() string {
-			ms := agent.Squeeze(agent.Messages(agent.Live(loop.Hist())), agent.KeepFullRounds)
-			p := loop.Budget.Pressure(ms)
-			return fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
-		},
-		OnEdits: func() string {
-			p := editRecords(agent.Live(loop.Hist()))
-			if len(p) == 0 {
-				return "no reversible edits pending"
-			}
-			var b strings.Builder
-			for i, e := range p {
-				tool := "edit_file"
-				if e.Patch == "" {
-					tool = "write_file"
-				}
-				fmt.Fprintf(&b, "%d· %s %s\n", i+1, tool, e.Path)
-			}
-			return strings.TrimRight(b.String(), "\n")
-		},
-	})
+	feed.SetRunner(sess.loop)
+	feed.SetApprover(sess.ap)
+	feed.SetCallbacks(sess.callbacks())
 
 	if len(prevEvs) > 0 {
 		feed.BuildFromEvents(agent.Live(prevEvs))
@@ -409,7 +328,7 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 		progDone <- err
 	}()
 
-	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
+	if err := sess.loop.Start(fmt.Sprintf("%s · %s · %s",
 		build.BannerPrefix(), prov.Name(), filepath.Base(journalPath)), root.Dir()); err != nil {
 		batcher.Stop()
 		journal.Close()
@@ -417,7 +336,7 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 	}
 
 	if s := conflictLine(config.Conflicts()); s != "" {
-		loop.Note(s)
+		sess.loop.Note(s)
 	}
 
 	// The batcher must outlive the interactive program: it carries every live
@@ -426,7 +345,7 @@ func doChatWithFeed(dir string, cont bool, feedTouch bool) error {
 	// while the session runs and nothing races the End marker. (Stopping right
 	// after loop.Start here regressed exactly that: the feed showed nothing
 	// past the banner.)
-	return finishFeedSession(progDone, batcher, loop, journal, journalPath)
+	return finishFeedSession(progDone, batcher, sess.loop, journal, journalPath)
 }
 
 // finishFeedSession is the feed path's shutdown sequence, isolated so its
