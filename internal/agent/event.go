@@ -182,6 +182,13 @@ type ToolCall struct {
 	Exit                int    `json:"exit,omitempty"`
 	Signal              string `json:"signal,omitempty"`
 	MS                  int64  `json:"ms,omitempty"`
+	// TruncatedBytes is how many bytes of Output the persistence cap cut,
+	// recorded as data rather than only as prose inside Output. "The reader
+	// did not see all of this" is the most consequential fact about a tool
+	// result, so it must be queryable (jq) and renderable without parsing
+	// the payload. Zero means nothing was cut, which is also what every
+	// journal written before this field decodes to.
+	TruncatedBytes int `json:"truncated_bytes,omitempty"`
 }
 
 // Decision is fail-closed by construction: the zero value refuses.
@@ -221,6 +228,10 @@ func (d *Decision) UnmarshalText(b []byte) error {
 // ForStore returns the event as written to disk: identical, except that
 // oversized tool output is cut on a rune boundary and marked. Text deltas
 // are never touched, or replay stops being replay.
+//
+// The cut is marked twice on purpose: the human marker stays inside Output
+// so a replay reads the way the session read, and TruncatedBytes carries the
+// same fact as a number so tools and the UI never have to parse prose.
 func (e Event) ForStore() Event {
 	if e.Call == nil || len(e.Call.Output) <= MaxPersistedOutput {
 		return e
@@ -232,6 +243,7 @@ func (e Event) ForStore() Event {
 	}
 	cut := len(c.Output) - n
 	c.Output = c.Output[:n] + fmt.Sprintf("\n...[truncated %d bytes]", cut)
+	c.TruncatedBytes = cut
 	e.Call = &c
 	return e
 }
