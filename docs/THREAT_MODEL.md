@@ -62,6 +62,7 @@ filesystem sandbox.
 | Config v2 has no implicit environment credential fallback | GUARANTEED | credential sources must explicitly use `env` or a secure absolute `file` only |
 | The router's Retry-After wait budget is bounded, opt-in, and pre-commit only | GUARANTEED | `NABD_ROUTER_RETRY_AFTER_WAIT` is parsed into whole seconds in `[0, 120]` and defaults to 0 (disabled); the wait runs at most once per `Stream`, strictly before the commit point, through the injected clock and cancellable by the parent context. Evidence: `TestParseRetryAfterWait`, `TestWithRetryAfterWaitClamps`, `TestShouldWaitOut` |
 | The runtime status row never claims progress after a terminal failure | GUARANTEED | `RunError` and `Interrupted` retire the progress claims when the event is projected, instead of waiting for the runner goroutine to return; the send gate (`busy`) is left set so a failed run cannot be followed by a second concurrent run before `doneMsg`. Evidence: `TestRunErrorRetiresProgressStatus`, `TestRunErrorKeepsSendGate`, `TestInterruptedRetiresProgressStatus`, `TestDoneMsgClearsRunFailedStatus` |
+| Newly visible route statuses disclose no more than the existing ones | GUARANTEED | `waiting` and `blocked` notices go through the same `display.SanitizeForDisplay` policy with redaction enabled, are single-line, never include `StreamID`, and fall back to fixed placeholders for blank fields. `attempted` and `exhausted` remain hidden. Evidence: `TestFormatRouteNoticeWaitingIsVisible`, `TestFormatRouteNoticeWaitingRedactsSecrets`, `TestFormatRouteNoticeBlockedIsVisible`, `TestFormatRouteNoticeStillHidesStructuralStatuses` |
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
@@ -264,3 +265,23 @@ runner has actually returned, so a failed run can never be overlapped by a
 second concurrent run. Evidence: `TestRunErrorRetiresProgressStatus`,
 `TestRunErrorKeepsSendGate`, `TestInterruptedRetiresProgressStatus`,
 `TestDoneMsgClearsRunFailedStatus`.
+
+### Route-trace visibility
+
+The router documents six trace statuses. Two of them describe intervals in
+which nothing appears to happen: `waiting` (the bounded, opt-in Retry-After
+pause) and `blocked` (a route skipped while its breaker is cooling down).
+Hiding them is not a safety property; it is an observability gap that turns a
+deliberate pause into an apparent hang and pushes the user to kill the process
+or re-run, which costs another rate-limit budget.
+
+Both are now visible under the existing disclosure contract, not beside it:
+the text is produced only by `presentation.FormatRouteNotice`, sanitized by
+`display.SanitizeForDisplay` with redaction enabled, forced to a single line
+with no terminal control sequences, given fixed placeholders for blank fields,
+and never carries `StreamID`. `attempted` and `exhausted` stay hidden — the
+first is noise, the second is already reported as a run error. Evidence:
+`TestFormatRouteNoticeWaitingIsVisible`,
+`TestFormatRouteNoticeWaitingRedactsSecrets`,
+`TestFormatRouteNoticeBlockedIsVisible`,
+`TestFormatRouteNoticeStillHidesStructuralStatuses`.
