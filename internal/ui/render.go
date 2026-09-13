@@ -86,7 +86,10 @@ func RenderEvent(e agent.Event, width int) string {
 		return block("⚑", e.Text, width, warn)
 
 	case agent.RunError:
-		return block("✗", e.Err, width, bad)
+		// The failure carries three separate facts: what failed, why each
+		// route failed, and what to do next. presentation composes them
+		// (and sanitizes them); rendering only lays them out.
+		return block("✗", presentation.FormatRunError(e).String(), width, bad)
 
 	case agent.Interrupted:
 		s := e.Text
