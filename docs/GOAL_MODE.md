@@ -16,14 +16,17 @@ Goal mode turns one engineering objective into a bounded execution contract befo
 
 The contract preserves UTF-8 objectives, rejects unsupported control characters, and caps the objective at 8 KiB.
 
+`internal/goal.Run` validates and builds the contract, then calls the ordinary runner exactly once. It does not own tools, permissions, storage, or cancellation, so Goal Mode cannot create a privileged execution path.
+
 ## Integration plan
 
-1. Contract builder and deterministic tests.
-2. Add `/goal <objective>` to the shared slash-command parser.
-3. Dispatch the generated contract identically from Chat and Feed through the normal runner.
-4. Persist the generated contract through the existing `user_msg` journal path so replay, resume, compaction, and rewind require no event-schema migration.
-5. Add parity, permission-modal, busy-state, history, UTF-8, and input-limit tests.
-6. Add an optional active-goal status view only after the execution semantics are stable.
+1. [x] Contract builder and deterministic tests.
+2. [x] Shared runner adapter with validation and error-propagation tests.
+3. [ ] Add `/goal <objective>` to the shared slash-command parser.
+4. [ ] Dispatch the generated contract identically from Chat and Feed through the normal runner.
+5. [ ] Persist the generated contract through the existing `user_msg` journal path so replay, resume, compaction, and rewind require no event-schema migration.
+6. [ ] Add parity, permission-modal, busy-state, history, UTF-8, and input-limit tests.
+7. [ ] Add an optional active-goal status view only after the execution semantics are stable.
 
 ## Safety rules
 
