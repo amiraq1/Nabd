@@ -21,5 +21,5 @@ const (
 	// Clipboard status notices.
 	copySuccessArabic     = "تم نسخ البطاقة المحددة"
 	copyUnavailableArabic = "النسخ غير متاح"
-	copyBlockedArabic     = "تعذر النسخ: محتوى حساس"
+	copyBlockedArabic     = "تعذر النسخ: المحتوى كبير جدًا"
 )

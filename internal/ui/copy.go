@@ -14,19 +14,19 @@ import (
 var (
 	copySuccessNotice     = "copied selected card"
 	copyUnavailableNotice = "copy unavailable"
-	copyBlockedNotice     = "copy blocked: sensitive content"
+	copyTooLargeNotice    = "copy blocked: content too large"
 )
 
 // SetCopyNotices configures localized user-facing status messages for clipboard actions.
-func SetCopyNotices(success, unavailable, blocked string) {
+func SetCopyNotices(success, unavailable, tooLarge string) {
 	if success != "" {
 		copySuccessNotice = success
 	}
 	if unavailable != "" {
 		copyUnavailableNotice = unavailable
 	}
-	if blocked != "" {
-		copyBlockedNotice = blocked
+	if tooLarge != "" {
+		copyTooLargeNotice = tooLarge
 	}
 }
 
@@ -49,12 +49,7 @@ func (m *Feed) cardTextForCopy(idx int) string {
 	lines := m.lines[start:end]
 	clean := make([]string, len(lines))
 	for i, l := range lines {
-		stripped := ansi.Strip(l)
-		if strings.HasPrefix(stripped, "> ") || strings.HasPrefix(stripped, "  ") {
-			clean[i] = stripped[2:]
-		} else {
-			clean[i] = stripped
-		}
+		clean[i] = stripCardGutter(ansi.Strip(l))
 	}
 	return strings.Join(clean, "\n")
 }
@@ -89,7 +84,7 @@ func (m *Feed) copySelectedCard() (tea.Model, tea.Cmd) {
 
 	// 4. Size limit
 	if len(sanitized) > defaultMaxCopyBytes {
-		m.setStatus(copyBlockedNotice, rankResult)
+		m.setStatus(copyTooLargeNotice, rankResult)
 		return m, nil
 	}
 

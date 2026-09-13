@@ -82,11 +82,10 @@ func (m *Feed) updateSearchMatches() {
 
 	var matches []searchMatch
 	for lineIdx, line := range m.lines {
-		// Clean off gutter selection markers for clean text searching
-		clean := line
+		// Clean off only the exact gutter marker emitted by the feed.
+		clean := stripCardGutter(line)
 		offset := 0
-		if strings.HasPrefix(clean, "> ") || strings.HasPrefix(clean, "  ") {
-			clean = clean[2:]
+		if len(clean) != len(line) {
 			offset = 2
 		}
 
