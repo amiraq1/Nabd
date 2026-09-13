@@ -100,9 +100,20 @@ func ErrorCodeOf(err error) ErrorCode {
 // RunErrorEvent preserves a machine-readable error code while keeping legacy
 // journals valid. Presentation must use ErrorCode and treat an empty value as
 // unknown rather than guessing from the message text.
+//
+// When the error carries tool-call attribution, it is reported through the
+// event's existing Call field rather than a new one: the journal already
+// describes a tool call that way on ToolStart, ToolEnd, PermAsk, and PermReply,
+// so a reader and every existing decoder already know how to read it. Only the
+// identity is copied — no output, no arguments, no exit status — because the
+// failing call produced no result to report.
 func RunErrorEvent(err error) Event {
 	if err == nil {
 		err = errors.New("unknown run error")
 	}
-	return Event{Type: RunError, Err: err.Error(), ErrorCode: string(ErrorCodeOf(err)), JournalPath: JournalPathOf(err)}
+	e := Event{Type: RunError, Err: err.Error(), ErrorCode: string(ErrorCodeOf(err)), JournalPath: JournalPathOf(err)}
+	if id, name, ok := ToolCallOf(err); ok {
+		e.Call = &ToolCall{ID: id, Name: name}
+	}
+	return e
 }
