@@ -64,6 +64,7 @@ filesystem sandbox.
 | The runtime status row never claims progress after a terminal failure | GUARANTEED | `RunError` and `Interrupted` retire the progress claims when the event is projected, instead of waiting for the runner goroutine to return; the send gate (`busy`) is left set so a failed run cannot be followed by a second concurrent run before `doneMsg`. Evidence: `TestRunErrorRetiresProgressStatus`, `TestRunErrorKeepsSendGate`, `TestInterruptedRetiresProgressStatus`, `TestDoneMsgClearsRunFailedStatus` |
 | Newly visible route statuses disclose no more than the existing ones | GUARANTEED | `waiting` and `blocked` notices go through the same `display.SanitizeForDisplay` policy with redaction enabled, are single-line, never include `StreamID`, and fall back to fixed placeholders for blank fields. `attempted` and `exhausted` remain hidden. Evidence: `TestFormatRouteNoticeWaitingIsVisible`, `TestFormatRouteNoticeWaitingRedactsSecrets`, `TestFormatRouteNoticeBlockedIsVisible`, `TestFormatRouteNoticeStillHidesStructuralStatuses` |
 | Status-row runtime metadata reports only committed routes and discloses no new fields | GUARANTEED | `StatusProjector.Meta` reports a provider/model only from a `selected` route trace, never from `attempted`, `failed`, `waiting`, or `blocked`; elapsed time freezes at the terminal event; provider and model pass through the same sanitizer as route notices; `StreamID`, credentials, and file paths are never included. Evidence: `TestMetaTracksTurnTokensAndCommittedRoute`, `TestMetaElapsedFreezesAtTerminalEvent`, `TestRuntimeMetaSanitizesRouteFields`, `TestRuntimeStatusRowStaysOneRow` |
+| Rendered failure detail is redacted, bounded, and adds no new source of data | GUARANTEED | `FormatRunError` reads only fields already in the `run_error` event (`Err`, `ErrorCode`, `Code`), passes every line through `cleanField` (sanitizer with redaction enabled), emits single logical lines only, caps detail lines at `maxRunErrorDetails`, and discloses that the remainder stayed in the journal. Hints are fixed literals keyed by `ErrorCode`, never provider text. Evidence: `TestFormatRunErrorKeepsCodeAndRouteDetail`, `TestFormatRunErrorRedactsSecrets`, `TestFormatRunErrorCapsDetails`, `TestRenderRunErrorRedactsSecrets`, `TestRenderRunErrorRespectsWidth` |
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
@@ -317,3 +318,40 @@ that carries the safety signal — is never cut. Evidence:
 `TestRuntimeStatusRowCarriesMeta`,
 `TestRuntimeStatusRowDegradesInsteadOfTruncating`,
 `TestRuntimeStatusRowStaysOneRow`.
+
+### Failure-detail disclosure
+
+A terminal failure used to render as the raw `Err` string alone: the journaled
+`ErrorCode` was dropped, the per-route causes the router had already written
+into the error body were collapsed, and the reader was left with "all 2
+route(s) exhausted" and no next step. That is a safety problem as much as a
+usability one — a user who cannot tell an auth failure from a rate-limit
+failure retries blindly, spending budget or leaving a bad key in place.
+
+`presentation.FormatRunError` now composes the visible failure, and three
+properties bound it.
+
+**No new data source.** It reads only `Err`, `ErrorCode`, and `Code` from the
+event the loop already journaled. It never reads the transcript, the shadow
+store, tool arguments, or the environment, so nothing becomes visible that the
+journal did not already contain.
+
+**Provider text is redacted, hints are literals.** Error bodies are
+provider-controlled input and can echo a request header, so every line passes
+through `cleanField` — `display.SanitizeForDisplay` with redaction enabled — and
+is emitted as a single logical line with no terminal control sequences. The
+actionable hint is a fixed string selected by `ErrorCode`; provider text is
+never promoted into it. Codes with no user-side remedy (`canceled`, `unknown`)
+get no hint at all, and `unknown` is not printed, because a label that says
+nothing trains the reader to ignore the label.
+
+**Detail is bounded.** At most `maxRunErrorDetails` route lines reach the feed,
+followed by an explicit count of what stayed in the journal, so a long or
+hostile error body cannot push the rest of the conversation off the screen.
+The block also stays inside the terminal width at 20, 40, 66, and 80 columns.
+Evidence: `TestFormatRunErrorKeepsCodeAndRouteDetail`,
+`TestFormatRunErrorHidesUnknownCode`, `TestFormatRunErrorHintsPerCode`,
+`TestFormatRunErrorNeverRendersEmpty`, `TestFormatRunErrorRedactsSecrets`,
+`TestFormatRunErrorCapsDetails`, `TestRenderRunErrorShowsCodeAndHint`,
+`TestRenderRunErrorKeepsRouteCauses`, `TestRenderRunErrorRespectsWidth`,
+`TestRenderRunErrorRedactsSecrets`.
