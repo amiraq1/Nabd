@@ -687,6 +687,14 @@ func (m *Feed) pointerLine(lm layoutMetrics, y int) int {
 	return line
 }
 
+// restoreScroll pins the viewport back to a saved first-visible line after a
+// repaint. Every pointer gesture goes through it: content must never move
+// under the finger that touched it.
+func (m *Feed) restoreScroll(top int) {
+	m.scrollTop = top
+	m.clampScroll()
+}
+
 // handlePointerTap resolves a tap into a card and applies the deterministic
 // tap policy:
 //
@@ -710,19 +718,36 @@ func (m *Feed) handlePointerTap(lm layoutMetrics, y int) (tea.Model, tea.Cmd) {
 	if idx < 0 {
 		return m, nil
 	}
+	// A tap is an explicit browsing intent: it stops follow, exactly like the
+	// keyboard. selectItemInPlace does not touch follow, so without this the
+	// next refresh would re-anchor to the bottom and drag the picked card off
+	// screen.
+	m.follow = false
+	before := m.scrollTop
 	if !m.navigationMode {
 		m.navigationMode = true
 		m.composer.blur()
 		m.selectItemInPlace(idx)
+		// Entering navigation mode flips isSelected, so the marker must be
+		// repainted even when the index did not change (e.g. after Esc,
+		// which keeps selectedItem). selectItemInPlace skips the repaint
+		// when prev == idx, so refresh unconditionally here.
+		m.refresh()
+		m.restoreScroll(before)
 		return m, nil
 	}
 	if m.selectedItem == idx {
 		if m.toggleCard(idx) {
-			m.refreshPreservingSelection()
+			// The card grows downward; hold scrollTop so nothing above it
+			// moves. Pinning the card to the top (refreshPreservingSelection)
+			// would yank the whole feed up under the finger.
+			m.refresh()
+			m.restoreScroll(before)
 		}
 		return m, nil
 	}
 	m.selectItemInPlace(idx)
+	m.restoreScroll(before)
 	return m, nil
 }
 
