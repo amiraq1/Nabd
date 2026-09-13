@@ -2,6 +2,7 @@ package presentation
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -47,8 +48,14 @@ func (p *StatusProjector) Meta(now time.Time) RuntimeMeta {
 // terminal a truncated "turn 3 · 6.6k tok · 12s · gr…" is worse than an intact
 // "turn 3".
 //
-// Every field is passed through the display sanitizer with redaction enabled,
-// because Provider and Model originate from provider responses.
+// The returned list narrows monotonically. That is enforced by sorting rather
+// than by keeping the candidate table in careful order: the caller walks the
+// list once and stops at the first fit, so a candidate wider than one already
+// rejected would silently overflow the row.
+//
+// Every provider-supplied field passes through the display sanitizer with
+// redaction enabled, because Provider and Model originate from provider
+// responses.
 func RuntimeMetaVariants(m RuntimeMeta) []string {
 	turn := ""
 	if m.Turn > 0 {
@@ -69,13 +76,18 @@ func RuntimeMetaVariants(m RuntimeMeta) []string {
 		route = provider + "/" + model
 	}
 
+	// Ordered by how much the field is worth keeping when space runs out:
+	// the turn number is the last thing dropped, the full model name the
+	// first. Ties in width are broken by this declaration order.
 	candidates := [][]string{
 		{turn, tokens, elapsed, route},
 		{turn, tokens, elapsed, provider},
 		{turn, tokens, provider},
 		{turn, elapsed, provider},
-		{turn, provider},
+		{turn, tokens, elapsed},
 		{turn, tokens},
+		{turn, provider},
+		{turn, elapsed},
 		{turn},
 	}
 
@@ -89,6 +101,7 @@ func RuntimeMetaVariants(m RuntimeMeta) []string {
 		seen[joined] = true
 		out = append(out, joined)
 	}
+	sort.SliceStable(out, func(i, j int) bool { return len(out[i]) > len(out[j]) })
 	return out
 }
 
