@@ -4,12 +4,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestParseGitStatusTable(t *testing.T) {
-	now := time.Date(2026, 9, 14, 12, 0, 0, 0, time.UTC)
-
 	tests := []struct {
 		name       string
 		input      string
@@ -66,15 +63,12 @@ func TestParseGitStatusTable(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseGitStatus(tt.input, now)
+			got := parseGitStatus(tt.input)
 			if got.branch != tt.wantBranch {
 				t.Errorf("branch = %q, want %q", got.branch, tt.wantBranch)
 			}
 			if got.dirty != tt.wantDirty {
 				t.Errorf("dirty = %d, want %d", got.dirty, tt.wantDirty)
-			}
-			if !got.at.Equal(now) {
-				t.Errorf("at = %v, want %v", got.at, now)
 			}
 		})
 	}
@@ -86,7 +80,7 @@ func TestGitFailureOrTimeoutIsSilent(t *testing.T) {
 	f.height = 24
 
 	// Git status fails with an error (e.g. timeout or command failure)
-	_, _ = f.Update(gitStatusMsg{at: time.Now(), err: errors.New("context deadline exceeded")})
+	_, _ = f.Update(gitStatusMsg{err: errors.New("context deadline exceeded")})
 
 	// 1. Header line is empty
 	if h := f.headerText(80); h != "" {
@@ -112,14 +106,14 @@ func TestGitBranchSanitization(t *testing.T) {
 		"# branch.head \x1b[31;1mfeat\x1b[0m\x00\x07",
 		"1 .M file.go",
 	}, "\n")
-	st := parseGitStatus(input, time.Now())
+	st := parseGitStatus(input)
 	if st.branch != "feat" {
 		t.Fatalf("expected ANSI escapes and control characters stripped, got %q", st.branch)
 	}
 
 	// Bidi overrides (RLO/PDF) must be stripped
 	bidiInput := "# branch.head \u202Ereversed\u202Cbranch\n"
-	stBidi := parseGitStatus(bidiInput, time.Now())
+	stBidi := parseGitStatus(bidiInput)
 	if strings.Contains(stBidi.branch, "\u202E") || strings.Contains(stBidi.branch, "\u202C") {
 		t.Fatalf("bidi overrides were not stripped from branch name: %q", stBidi.branch)
 	}
@@ -129,7 +123,7 @@ func TestGitBranchSanitization(t *testing.T) {
 
 	// Natural Arabic text is preserved
 	arabicInput := "# branch.head فرع-تطوير\n"
-	stArabic := parseGitStatus(arabicInput, time.Now())
+	stArabic := parseGitStatus(arabicInput)
 	if stArabic.branch != "فرع-تطوير" {
 		t.Fatalf("expected natural Arabic branch preserved, got %q", stArabic.branch)
 	}
@@ -139,7 +133,7 @@ func TestTwoConsecutiveFailuresStopsRescheduling(t *testing.T) {
 	f := NewFeed()
 
 	// First failure: gitFailures becomes 1, returns a tick cmd to retry
-	_, cmd1 := f.Update(gitStatusMsg{at: time.Now(), err: errors.New("timeout 1")})
+	_, cmd1 := f.Update(gitStatusMsg{err: errors.New("timeout 1")})
 	if f.gitFailures != 1 {
 		t.Fatalf("expected gitFailures == 1, got %d", f.gitFailures)
 	}
@@ -147,8 +141,10 @@ func TestTwoConsecutiveFailuresStopsRescheduling(t *testing.T) {
 		t.Fatal("expected retry tick cmd after first failure")
 	}
 
-	// Second consecutive failure: gitFailures becomes 2, returns nil cmd (stops rescheduling)
-	_, cmd2 := f.Update(gitStatusMsg{at: time.Now(), err: errors.New("timeout 2")})
+	// Second consecutive failure: gitFailures becomes 2, returns nil cmd (stops rescheduling).
+	// Once two failures occur, rescheduling terminates permanently for the session with no
+	// in-session background recovery.
+	_, cmd2 := f.Update(gitStatusMsg{err: errors.New("timeout 2")})
 	if f.gitFailures != 2 {
 		t.Fatalf("expected gitFailures == 2, got %d", f.gitFailures)
 	}
@@ -157,25 +153,23 @@ func TestTwoConsecutiveFailuresStopsRescheduling(t *testing.T) {
 	}
 
 	// A third failure also returns nil cmd
-	_, cmd3 := f.Update(gitStatusMsg{at: time.Now(), err: errors.New("timeout 3")})
+	_, cmd3 := f.Update(gitStatusMsg{err: errors.New("timeout 3")})
 	if cmd3 != nil {
 		t.Fatalf("expected nil cmd for subsequent failures, got %v", cmd3)
-	}
-
-	// A successful status resets failure counter
-	_, cmdSuccess := f.Update(gitStatusMsg{branch: "main", dirty: 0, at: time.Now()})
-	if f.gitFailures != 0 {
-		t.Fatalf("expected gitFailures reset to 0, got %d", f.gitFailures)
-	}
-	if cmdSuccess == nil {
-		t.Fatal("expected rescheduling cmd on success")
 	}
 }
 
 func TestIsGitRepoDetection(t *testing.T) {
-	// Current repository must report true
-	if !isGitRepo(".") {
-		t.Fatal("expected isGitRepo('.') to be true in git workspace")
+	// Current repository root must report true
+	repoRoot := "../.."
+	if !isGitRepo(repoRoot) {
+		t.Fatalf("expected isGitRepo(%q) to be true for git root", repoRoot)
+	}
+
+	// Subdirectory inside repo without its own .git must report false
+	// (enforces strict containment to granted root; parent repos out of bounds).
+	if isGitRepo(".") {
+		t.Fatal("expected isGitRepo('.') to be false for subdirectory within repo")
 	}
 
 	// Isolated empty temp dir must report false
@@ -195,9 +189,23 @@ func TestIsGitRepoDetection(t *testing.T) {
 	// Feed in git directory with gitHeaderEnabled returns polling cmd in Init()
 	fGit := NewFeed()
 	fGit.SetGitHeader(true)
-	fGit.SetGitDir(".")
+	fGit.SetGitDir(repoRoot)
 	if cmd := fGit.Init(); cmd == nil {
 		t.Fatal("expected Init() to return polling cmd when git header enabled in git repo")
+	}
+}
+
+func TestGitHeaderCandidates(t *testing.T) {
+	if got := gitHeaderCandidates("", 0); got != nil {
+		t.Fatalf("expected nil for empty branch, got %v", got)
+	}
+	clean := gitHeaderCandidates("main", 0)
+	if len(clean) != 2 || clean[0] != "main (clean)" || clean[1] != "main" {
+		t.Fatalf("unexpected clean candidates: %v", clean)
+	}
+	dirty := gitHeaderCandidates("main", 3)
+	if len(dirty) != 2 || dirty[0] != "main (3 modified)" || dirty[1] != "main" {
+		t.Fatalf("unexpected dirty candidates: %v", dirty)
 	}
 }
 

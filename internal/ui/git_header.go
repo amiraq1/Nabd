@@ -15,58 +15,46 @@ import (
 type gitStatusMsg struct {
 	branch string
 	dirty  int
-	at     time.Time
 	err    error
 }
 
 const gitHeaderInterval = 1 * time.Second
 
-// isGitRepo reports whether dir (or any of its parent directories) contains a
-// .git directory or file (supporting both standard repos and worktrees/submodules).
+// The header must not describe files outside the granted root.
+// A parent repository is out of bounds even though git would answer.
 func isGitRepo(dir string) bool {
 	if dir == "" {
-		dir = "."
+		return false
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return false
 	}
-	curr := abs
-	for {
-		gitPath := filepath.Join(curr, ".git")
-		if _, err := os.Stat(gitPath); err == nil {
-			return true
-		}
-		parent := filepath.Dir(curr)
-		if parent == curr {
-			break
-		}
-		curr = parent
-	}
-	return false
+	_, err = os.Stat(filepath.Join(abs, ".git"))
+	return err == nil
 }
 
 // gitStatusCmd shells out off the render path. View must never call git.
-func gitStatusCmd(dir ...string) tea.Cmd {
+func gitStatusCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v2", "--branch")
-		if len(dir) > 0 && dir[0] != "" {
-			cmd.Dir = dir[0]
+		if dir != "" {
+			cmd.Dir = dir
 		}
 		out, err := cmd.Output()
 		if err != nil {
-			return gitStatusMsg{at: time.Now(), err: err} // silent: the header is a hint
+			return gitStatusMsg{err: err} // silent: the header is a hint
 		}
-		return parseGitStatus(string(out), time.Now())
+		return parseGitStatus(string(out))
 	}
 }
 
 // parseGitStatus parses porcelain v2 output into a gitStatusMsg.
 // It is pure and operates on text alone for deterministic table-driven testing.
-func parseGitStatus(out string, now time.Time) gitStatusMsg {
-	st := gitStatusMsg{at: now}
+func parseGitStatus(out string) gitStatusMsg {
+	var st gitStatusMsg
 	if out == "" {
 		return st
 	}
@@ -115,15 +103,16 @@ func (m *Feed) handleGitStatus(msg gitStatusMsg) (tea.Model, tea.Cmd) {
 			// Stop rescheduling permanently after two consecutive failures.
 			return m, nil
 		}
-		return m, tea.Tick(gitHeaderInterval, func(t time.Time) tea.Msg {
-			return gitStatusCmd(m.gitDir)()
+		dir := m.gitDir
+		return m, tea.Tick(gitHeaderInterval, func(time.Time) tea.Msg {
+			return gitStatusCmd(dir)()
 		})
 	}
 	m.gitFailures = 0
 	m.gitBranch = msg.branch
 	m.gitDirty = msg.dirty
-	m.gitStatusAt = msg.at
-	return m, tea.Tick(gitHeaderInterval, func(t time.Time) tea.Msg {
-		return gitStatusCmd(m.gitDir)()
+	dir := m.gitDir
+	return m, tea.Tick(gitHeaderInterval, func(time.Time) tea.Msg {
+		return gitStatusCmd(dir)()
 	})
 }

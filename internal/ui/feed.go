@@ -79,7 +79,6 @@ type Feed struct {
 	gitHeaderEnabled bool
 	gitBranch        string
 	gitDirty         int
-	gitStatusAt      time.Time
 	gitFailures      int
 	gitDir           string
 
@@ -255,7 +254,8 @@ func NewFeed() *Feed {
 // If git header reporting is enabled and an actual git repository exists, it initiates periodic git status polling.
 func (m *Feed) Init() tea.Cmd {
 	if m.gitHeaderEnabled && isGitRepo(m.gitDir) {
-		return gitStatusCmd(m.gitDir)
+		dir := m.gitDir
+		return gitStatusCmd(dir)
 	}
 	return nil
 }

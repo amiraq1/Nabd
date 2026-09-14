@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -263,38 +262,25 @@ func (m *Feed) headerText(w int) string {
 	if m.header != "" {
 		cleanBase = SanitizeForDisplay(m.header, DisplayPolicy{AllowNewline: false, Redact: false})
 	}
-	cleanBranch := ""
+	var gitCandidates []string
 	if m.gitHeaderEnabled && m.gitBranch != "" {
-		cleanBranch = SanitizeForDisplay(m.gitBranch, DisplayPolicy{AllowNewline: false, Redact: false})
+		cleanBranch := SanitizeForDisplay(m.gitBranch, DisplayPolicy{AllowNewline: false, Redact: false})
+		gitCandidates = gitHeaderCandidates(cleanBranch, m.gitDirty)
 	}
 
 	var candidates []string
-	if cleanBase != "" && cleanBranch != "" {
-		gitFull := cleanBranch + " (clean)"
-		if m.gitDirty > 0 {
-			gitFull = fmt.Sprintf("%s (%d modified)", cleanBranch, m.gitDirty)
-		}
+	if cleanBase != "" && len(gitCandidates) > 0 {
 		candidates = []string{
-			cleanBase + " · " + gitFull,
-			cleanBase + " · " + cleanBranch,
+			cleanBase + " · " + gitCandidates[0],
+			cleanBase + " · " + gitCandidates[1],
 			cleanBase,
-			gitFull,
-			cleanBranch,
+			gitCandidates[0],
+			gitCandidates[1],
 		}
 	} else if cleanBase != "" {
 		candidates = []string{cleanBase}
-	} else if cleanBranch != "" {
-		if m.gitDirty > 0 {
-			candidates = []string{
-				fmt.Sprintf("%s (%d modified)", cleanBranch, m.gitDirty),
-				cleanBranch,
-			}
-		} else {
-			candidates = []string{
-				fmt.Sprintf("%s (clean)", cleanBranch),
-				cleanBranch,
-			}
-		}
+	} else if len(gitCandidates) > 0 {
+		candidates = gitCandidates
 	}
 
 	if len(candidates) == 0 {
