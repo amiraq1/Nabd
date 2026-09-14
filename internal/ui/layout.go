@@ -64,6 +64,7 @@ func (m *Feed) computeLayout() layoutMetrics {
 	}
 
 	w := lm.TerminalWidth
+	const statusPrefix = "· "
 
 	// Header row.
 	if m.header != "" {
@@ -76,7 +77,7 @@ func (m *Feed) computeLayout() layoutMetrics {
 	// The phase text is sanitized first, then runtime metadata (turn, tokens,
 	// elapsed, committed route) is appended only if it fits in the remaining
 	// width. The metadata is already sanitized by presentation.
-	rtText := m.runtimeStatusText(w)
+	rtText := m.runtimeStatusText(w - ansi.StringWidth(statusPrefix))
 	if rtText != "" {
 		lm.RuntimeStatusRows = 1
 	}
@@ -196,7 +197,6 @@ func (m *Feed) computeLayout() layoutMetrics {
 	lm.ViewportRows = max(0, lm.TerminalHeight-chrome())
 	if lm.RuntimeStatusRows > 0 {
 		cleanRt := SanitizeForDisplay(rtText, DisplayPolicy{AllowNewline: false, Redact: true})
-		const statusPrefix = "· "
 		withMeta := m.statusLineWithMeta(cleanRt, w-ansi.StringWidth(statusPrefix))
 		// Position is appended last and only if it fits: it is orientation,
 		// not status, so it must never push out Generating/Permission text.

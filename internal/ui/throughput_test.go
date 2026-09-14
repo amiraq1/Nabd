@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"nabd/internal/agent"
 )
 
@@ -447,3 +448,87 @@ func TestThroughputSingleTokenDoesNotFabricateZeroRate(t *testing.T) {
 		t.Fatalf("single-token turn must report TTFT: got %q", got)
 	}
 }
+
+// TestThroughputStatusLineNeverTruncatesWithEllipsis proves that runtimeStatusLine
+// never ends with an ellipsis across the 6 documented widths (20, 39, 40, 79, 80, 120)
+// and intermediate widths during streaming, because statusPrefix ("· ", width 2)
+// is deducted from the width budget before evaluating throughput degradation candidates.
+func TestThroughputStatusLineNeverTruncatesWithEllipsis(t *testing.T) {
+	documentedWidths := []int{20, 39, 40, 79, 80, 120}
+
+	t.Run("live streaming estimate across documented widths", func(t *testing.T) {
+		for _, w := range documentedWidths {
+			m := NewFeed()
+			m.width = w
+			m.height = 24
+			m.running = true
+			m.busy = true
+			start := time.Now()
+			m.reqStartedAt = start
+			m.streamStartedAt = start
+			m.streamFirstDeltaAt = start.Add(1240 * time.Millisecond)
+			m.streamLastDeltaAt = start.Add(2240 * time.Millisecond)
+			m.streamedChars = 168
+
+			lm := m.computeLayout()
+			if strings.HasSuffix(lm.runtimeStatusLine, "…") {
+				t.Errorf("width %d: runtimeStatusLine ended with ellipsis: %q", w, lm.runtimeStatusLine)
+			}
+			if ansi.StringWidth(lm.runtimeStatusLine) > w {
+				t.Errorf("width %d: runtimeStatusLine width (%d) exceeds terminal width: %q",
+					w, ansi.StringWidth(lm.runtimeStatusLine), lm.runtimeStatusLine)
+			}
+		}
+	})
+
+	t.Run("measured final rate across documented widths", func(t *testing.T) {
+		for _, w := range documentedWidths {
+			m := NewFeed()
+			m.width = w
+			m.height = 24
+			m.running = true
+			m.busy = true
+			start := time.Now()
+			m.reqStartedAt = start
+			m.streamStartedAt = start
+			m.streamFirstDeltaAt = start.Add(1240 * time.Millisecond)
+			m.streamLastDeltaAt = start.Add(2240 * time.Millisecond)
+			m.turnCompletionTokens = 312
+
+			lm := m.computeLayout()
+			if strings.HasSuffix(lm.runtimeStatusLine, "…") {
+				t.Errorf("width %d: runtimeStatusLine ended with ellipsis: %q", w, lm.runtimeStatusLine)
+			}
+			if ansi.StringWidth(lm.runtimeStatusLine) > w {
+				t.Errorf("width %d: runtimeStatusLine width (%d) exceeds terminal width: %q",
+					w, ansi.StringWidth(lm.runtimeStatusLine), lm.runtimeStatusLine)
+			}
+		}
+	})
+
+	t.Run("all intermediate widths from 20 to 120", func(t *testing.T) {
+		for w := 20; w <= 120; w++ {
+			m := NewFeed()
+			m.width = w
+			m.height = 24
+			m.running = true
+			m.busy = true
+			start := time.Now()
+			m.reqStartedAt = start
+			m.streamStartedAt = start
+			m.streamFirstDeltaAt = start.Add(1240 * time.Millisecond)
+			m.streamLastDeltaAt = start.Add(2240 * time.Millisecond)
+			m.streamedChars = 168
+
+			lm := m.computeLayout()
+			if strings.HasSuffix(lm.runtimeStatusLine, "…") {
+				t.Errorf("width %d: live runtimeStatusLine ended with ellipsis: %q", w, lm.runtimeStatusLine)
+			}
+			if ansi.StringWidth(lm.runtimeStatusLine) > w {
+				t.Errorf("width %d: live runtimeStatusLine width (%d) exceeds terminal width: %q",
+					w, ansi.StringWidth(lm.runtimeStatusLine), lm.runtimeStatusLine)
+			}
+		}
+	})
+}
+
