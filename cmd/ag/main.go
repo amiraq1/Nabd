@@ -158,7 +158,7 @@ func main() {
 			die(fmt.Errorf("-feed-touch captures touch events as mouse input on Termux, " +
 				"which prevents the on-screen keyboard from opening. Keyboard navigation " +
 				"(Esc browse, Up/Down, Enter expand) works without it. " +
-				"Set NABD_FORCE_TOUCH=1 to override."))
+				"Set NABD_FORCE_TOUCH=1 to override"))
 		}
 		if err := doChatWithFeed(interactiveMode, *sessDir, *cont, *feedTouch); err != nil {
 			die(err)
