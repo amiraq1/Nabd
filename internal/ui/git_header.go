@@ -40,6 +40,10 @@ func gitStatusCmd(dir string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v2", "--branch")
+		// Explicit, filtered env. A nil Env makes the child inherit the full
+		// parent environment; we instead forward only what git needs so the
+		// header hint can never leak session credentials into a child process.
+		cmd.Env = gitChildEnv(os.Environ())
 		if dir != "" {
 			cmd.Dir = dir
 		}
@@ -49,6 +53,32 @@ func gitStatusCmd(dir string) tea.Cmd {
 		}
 		return parseGitStatus(string(out))
 	}
+}
+
+// gitChildEnv returns a minimal, filtered environment for the header's git
+// subprocess. It forwards only the variables required to locate and run git
+// (PATH) and present its output (TERM, locale), dropping everything else so
+// parent secrets are never inherited.
+func gitChildEnv(parent []string) []string {
+	allowed := []string{"PATH", "TERM", "LANG", "LC_ALL"}
+	keep := make(map[string]string, len(allowed))
+	for _, kv := range parent {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			continue
+		}
+		if strings.IndexByte(v, 0) >= 0 {
+			continue // NUL byte: reject, never forward
+		}
+		keep[k] = v
+	}
+	out := make([]string, 0, len(allowed))
+	for _, name := range allowed {
+		if v, ok := keep[name]; ok {
+			out = append(out, name+"="+v)
+		}
+	}
+	return out
 }
 
 // parseGitStatus parses porcelain v2 output into a gitStatusMsg.
