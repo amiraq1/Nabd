@@ -31,15 +31,15 @@ func TestRenderItemsCachedAllocationsNonRegression(t *testing.T) {
 // Measured basis for the budget:
 //   - f.View() on the liveStreamingFeed fixture (width 120) measured 148 allocs/op
 //     on arm64 (via BenchmarkRefreshLiveStreaming).
-//   - The CI benchmark step runs BenchmarkRefreshStreaming (a different path) and
-//     reported 1014 allocs/op on amd64 vs 1022 on arm64 — a ~1% cross-architecture
-//     delta. The same delta applied to f.View() puts the amd64 figure at ~148-150.
-//     (CI does not currently run BenchmarkRefreshLiveStreaming, so this is inferred
-//     from the sibling benchmark; add it to the benchmark step to report it directly.)
-//   - Budget 170 = +15% over 148. This is intentional headroom: tightening to
-//     148+8 = 156 would leave only ~5% margin, and an amd64 f.View() of 150 would
-//     then risk flapping. Keep 170 until BenchmarkRefreshLiveStreaming is gated in CI
-//     and the true amd64 f.View() number is known.
+//   - The amd64 figure for f.View() is NOT currently known: the CI benchmark step
+//     runs BenchmarkRefreshStreaming, not BenchmarkRefreshLiveStreaming, so the PR's
+//     "tighten to max(arm64, amd64) + 8" follow-up cannot be acted on yet. (This
+//     file lives under !race; BenchmarkRefreshLiveStreaming is added to ci.yml step 20
+//     so the amd64 number becomes known on the next run.)
+//   - Until that number is measured, the 170 ceiling (148 + 22, ~15% headroom) is the
+//     responsible choice: allocation counts are deterministic per code path, not a
+//     noise quantity that scales with architecture, so the safe move on unknown data
+//     is a loose bound rather than a tight one that may flap on amd64.
 //
 // Guarded by !race: the race detector inflates and perturbs per-run allocation
 // counts, so this fixed budget is only meaningful under the normal build.

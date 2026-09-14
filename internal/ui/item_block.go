@@ -127,6 +127,10 @@ func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsE
 	return boundRenderedLines(lines, maxRenderedFeedLines), shiftOffsets(offsets, trimmed)
 }
 
+// copyLines returns a fresh, independent slice of lines. The caller's slice is
+// frequently a sub-slice of a larger backing array (e.g. content already appended
+// to block.Lines, or a windowed view), so a shallow alias would let later mutation
+// of the cache entry corrupt the shared backing array. The copy severs that alias.
 func copyLines(lines []string) []string {
 	if lines == nil {
 		return nil
