@@ -63,9 +63,13 @@ func gitStatusCmd(dir string) tea.Cmd {
 //
 // HOME is intentionally omitted: the child git then runs with no user config,
 // so it can neither read ~/.gitconfig nor apply a global safe.directory. On a
-// single-user Termux environment this is harmless; on a multi-user host a
-// dubious-ownership rejection would surface here instead of being silently
-// configured away.
+// single-user Termux environment this is harmless. Note that only the global
+// (per-user) config is dropped; /etc/gitconfig (system) still applies, so a
+// dubious-ownership rejection surfaces only when the repo owner differs and no
+// system-level safe.directory exception exists.
+//
+// Output order follows the parent environment, not the allowlist, because the
+// switch appends each match in the order it appears in parent.
 //
 // The returned slice is always non-nil: exec.Cmd treats Env == nil as "inherit
 // the full parent environment", so an empty result must be a non-nil slice,

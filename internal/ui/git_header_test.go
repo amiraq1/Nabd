@@ -251,6 +251,7 @@ func TestGitChildEnvForwardsOnlyAllowlist(t *testing.T) {
 		"ANTHROPIC_API_KEY=sk-secret",
 		"NABD_SESSION_TOKEN=deadbeef",
 		"GIT_CONFIG_GLOBAL=/tmp/evil",
+		"LC_ALL=C.UTF-8",
 		"malformed-no-equals",
 		"=leading-equals",
 	}
@@ -260,6 +261,7 @@ func TestGitChildEnvForwardsOnlyAllowlist(t *testing.T) {
 		"PATH=/data/data/com.termux/files/usr/bin",
 		"TERM=xterm-256color",
 		"LANG=en_US.UTF-8",
+		"LC_ALL=C.UTF-8",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("gitChildEnv = %q, want %q", got, want)

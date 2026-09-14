@@ -36,7 +36,7 @@ func TestHeaderTextBaseOnly(t *testing.T) {
 func TestHeaderTextBranchOnly(t *testing.T) {
 	f := NewFeed()
 	f.SetGitHeader(true)
-	_, _ = f.Update(gitStatusMsg{branch: "main", dirty: 0})
+	f.gitBranch, f.gitDirty = "main", 0
 	if got := f.headerText(80); got != "main (clean)" {
 		t.Fatalf("expected branch-only header %q, got %q", "main (clean)", got)
 	}
