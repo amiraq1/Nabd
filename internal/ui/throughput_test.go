@@ -122,7 +122,7 @@ func TestThroughputWidthLadder(t *testing.T) {
 		m.streamStartedAt = start
 		m.streamFirstDeltaAt = start.Add(1240 * time.Millisecond) // TTFT = 1.24s
 		m.streamLastDeltaAt = start.Add(2240 * time.Millisecond)  // stream = 1.0s
-		m.streamedChars = 168                                    // 42.0 est tok / 1.0s => 42.0 tok/s
+		m.streamedChars = 168                                     // 42.0 est tok / 1.0s => 42.0 tok/s
 
 		want := map[int]string{
 			20:  "",
@@ -266,10 +266,10 @@ func TestThroughputBatchUsesEventTime(t *testing.T) {
 
 // TestThroughputMultiTurnIsolation verifies that when a run contains multiple
 // provider turns separated by tool execution:
-//   1. Turn 1 streams text and completes with its own EventProviderUsage.
-//   2. Turn 2 begins with TurnStart, resetting Turn 1's usage and delta timestamps.
-//   3. Turn 2 streaming does NOT display Turn 1's measured rate or token count.
-//   4. Turn 2 receives its own EventProviderUsage and shows Turn 2's measured rate.
+//  1. Turn 1 streams text and completes with its own EventProviderUsage.
+//  2. Turn 2 begins with TurnStart, resetting Turn 1's usage and delta timestamps.
+//  3. Turn 2 streaming does NOT display Turn 1's measured rate or token count.
+//  4. Turn 2 receives its own EventProviderUsage and shows Turn 2's measured rate.
 func TestThroughputMultiTurnIsolation(t *testing.T) {
 	m := NewFeed()
 	m.running = true
@@ -531,4 +531,3 @@ func TestThroughputStatusLineNeverTruncatesWithEllipsis(t *testing.T) {
 		}
 	})
 }
-

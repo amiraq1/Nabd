@@ -211,4 +211,3 @@ func TestViewAllocationsNonRegression(t *testing.T) {
 		t.Fatalf("View allocations regressed: got %.1f, want <= %d", allocs, budget)
 	}
 }
-

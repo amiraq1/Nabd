@@ -209,4 +209,3 @@ func BenchmarkRefreshLiveStreaming(b *testing.B) {
 		_ = f.View()
 	}
 }
-

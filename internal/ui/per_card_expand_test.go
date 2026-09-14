@@ -414,9 +414,9 @@ func TestFooterFitsEveryWidth(t *testing.T) {
 }
 
 // TestExplicitlyOpenedCardSurvivesToolEnd verifies the Phase 7 contract:
-//   1. Running tools are expanded by default (expandDefault).
-//   2. On ToolEnd, tools in expandDefault auto-collapse into compact single-line summaries.
-//   3. A tool explicitly opened by the user (expandOpened) stays expanded after ToolEnd.
+//  1. Running tools are expanded by default (expandDefault).
+//  2. On ToolEnd, tools in expandDefault auto-collapse into compact single-line summaries.
+//  3. A tool explicitly opened by the user (expandOpened) stays expanded after ToolEnd.
 func TestExplicitlyOpenedCardSurvivesToolEnd(t *testing.T) {
 	f := NewFeed()
 	f.width = 80
@@ -538,4 +538,3 @@ func TestCtrlOToggleDoesNotCollapseRunningTool(t *testing.T) {
 		t.Fatal("Ctrl+O should clear overrides and restore running tool expansion")
 	}
 }
-
