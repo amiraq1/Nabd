@@ -18,12 +18,16 @@ const runtimeThroughputInterval = 200 * time.Millisecond
 // or rankHint — the status line belongs to phase text and security prompts,
 // so throughput must never compete with them on the status stack.
 //
-// Output ladder (widest first, strict first fit):
+// Output ladder:
+// At widths above 20, choose the first candidate whose visual width fits;
+// otherwise return blank. Dropping completely is cleaner and more honest
+// than mid-token truncation (e.g. "42.1 to").
 //
-//	width >= 41: "TTFT 1.24s · 42.1 tok/s · 312 tok" (or "est ..." when live)
-//	width >= 27: "TTFT 1.24s · 42.1 tok/s" (or "est ..." when live)
-//	width >= 10: "42.1 tok/s" (or "est ..." when live)
-//	width <= 20: "" (blank is more honest than truncation like "42.1 to")
+// Candidates in order (widest first):
+//  1. "TTFT 1.24s · 42.1 tok/s · 312 tok" (or "est ..." when live)
+//  2. "TTFT 1.24s · 42.1 tok/s" (or "est ..." when live)
+//  3. "42.1 tok/s" (or "est ..." when live)
+//  4. "" at width <= 20
 //
 // Degradation drops total tokens first, then TTFT, then the rate entirely.
 // When idle (!m.running && !m.busy), returns "" so no stale numbers linger.
@@ -36,12 +40,19 @@ func (m *Feed) runtimeThroughputText(width int) string {
 	if width <= 20 {
 		return ""
 	}
-	// No delta arrived yet: TTFT is not yet determined.
-	if m.firstDeltaAt.IsZero() {
+	// No delta arrived in this turn: TTFT is not yet determined.
+	if m.streamFirstDeltaAt.IsZero() {
 		return ""
 	}
 
-	ttft := m.firstDeltaAt.Sub(m.reqStartedAt)
+	// Provider TTFT measures latency from the start of the current provider
+	// turn (TurnStart) to the first streaming chunk of this turn. If TurnStart
+	// was omitted (e.g. legacy/test callers), falls back to reqStartedAt.
+	origin := m.streamStartedAt
+	if origin.IsZero() {
+		origin = m.reqStartedAt
+	}
+	ttft := m.streamFirstDeltaAt.Sub(origin)
 	if ttft < 0 {
 		ttft = 0
 	}
@@ -52,25 +63,23 @@ func (m *Feed) runtimeThroughputText(width int) string {
 		tokStr  string
 	)
 
-	if !m.lastDeltaAt.IsZero() {
-		streamElapsed := m.lastDeltaAt.Sub(m.firstDeltaAt)
+	if !m.streamLastDeltaAt.IsZero() {
+		streamElapsed := m.streamLastDeltaAt.Sub(m.streamFirstDeltaAt)
 		if streamElapsed > 0 {
-			tokens := m.completionTokens()
-			if tokens > 0 {
-				// Final measured rate: uses provider-reported token count
-				// over the same stream interval (lastDeltaAt - firstDeltaAt),
-				// excluding the first token from numerator because it marks
-				// the start boundary.
-				if tokens > 1 {
-					rateTok := float64(tokens-1) / streamElapsed.Seconds()
+			if m.turnCompletionTokens > 0 {
+				// Measured final rate for the current provider turn:
+				// excludes the first token from numerator ((tokens - 1) / duration)
+				// because it defines the start boundary of the streaming window.
+				if m.turnCompletionTokens > 1 {
+					rateTok := float64(m.turnCompletionTokens-1) / streamElapsed.Seconds()
 					rateStr = fmt.Sprintf("%.1f tok/s", rateTok)
 				} else {
 					rateStr = "0.0 tok/s"
 				}
-				tokStr = fmt.Sprintf("%d tok", tokens)
+				tokStr = fmt.Sprintf("%d tok", m.turnCompletionTokens)
 			} else {
-				// Live estimate: streamedChars / 4 over stream interval.
-				// Visual distinction: prefix 'est ' because '~' is not in AllowedUISymbols.
+				// Live heuristic estimate for current stream: streamedChars / 4.
+				// Visual distinction: prefix 'est ' because '~' is outside AllowedUISymbols.
 				if m.cachedLiveRate != "" && m.cachedLiveTok != "" {
 					rateStr = m.cachedLiveRate
 					tokStr = m.cachedLiveTok
@@ -103,15 +112,6 @@ func (m *Feed) runtimeThroughputText(width int) string {
 		}
 	}
 	return ""
-}
-
-// completionTokens returns the completion tokens reported by the provider
-// through the status projector, or 0 if not yet available.
-func (m *Feed) completionTokens() int {
-	if m.statusProj == nil {
-		return 0
-	}
-	return m.statusProj.Status().Usage.CompletionTokens
 }
 
 // formatDuration formats a duration as a human-friendly seconds string (e.g. 1.24s).

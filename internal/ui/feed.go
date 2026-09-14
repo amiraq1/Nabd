@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"time"
+	"unicode/utf8"
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
@@ -100,19 +101,22 @@ type Feed struct {
 	runningTool string
 	cancel      context.CancelFunc
 
-	// Throughput tracking (reset on every send).
-	// reqStartedAt: wall-clock when the run began (trySend).
-	// firstDeltaAt: wall-clock of the first TextDelta (for TTFT).
-	// lastDeltaAt:  wall-clock of the most recent TextDelta.
-	// streamedChars:  rune count of the accumulated TextDelta stream. Fields
-	// zero-value (time.Time / 0) correctly means "no run seen yet".
-	reqStartedAt     time.Time
-	firstDeltaAt     time.Time
-	lastDeltaAt      time.Time
-	streamedChars    int
-	lastThroughputAt time.Time
-	cachedLiveRate   string
-	cachedLiveTok    string
+	// Throughput tracking.
+	// reqStartedAt: wall-clock when the overall user request began (trySend).
+	// streamStartedAt: timestamp of TurnStart for the current provider turn.
+	// streamFirstDeltaAt: timestamp of the first TextDelta in this turn (for TTFT).
+	// streamLastDeltaAt:  timestamp of the most recent TextDelta in this turn.
+	// streamedChars: rune count of accumulated TextDeltas in this turn.
+	// turnCompletionTokens: provider-reported completion tokens for this turn.
+	reqStartedAt         time.Time
+	streamStartedAt      time.Time
+	streamFirstDeltaAt   time.Time
+	streamLastDeltaAt    time.Time
+	streamedChars        int
+	turnCompletionTokens int
+	lastThroughputAt     time.Time
+	cachedLiveRate       string
+	cachedLiveTok        string
 
 	// Runner is how a send reaches the agent loop. Set by the CLI.
 	runner Runner
@@ -250,9 +254,11 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.runningTool = ""
 		m.cancel = nil
-		m.firstDeltaAt = time.Time{}
-		m.lastDeltaAt = time.Time{}
+		m.streamStartedAt = time.Time{}
+		m.streamFirstDeltaAt = time.Time{}
+		m.streamLastDeltaAt = time.Time{}
 		m.streamedChars = 0
+		m.turnCompletionTokens = 0
 		m.lastThroughputAt = time.Time{}
 		m.cachedLiveRate = ""
 		m.cachedLiveTok = ""
@@ -332,6 +338,12 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 func (m *Feed) markRunFailed() {
 	m.running = false
 	m.runningTool = ""
+	m.streamFirstDeltaAt = time.Time{}
+	m.streamLastDeltaAt = time.Time{}
+	m.streamedChars = 0
+	m.turnCompletionTokens = 0
+	m.cachedLiveRate = ""
+	m.cachedLiveTok = ""
 	m.setStatus(runFailedStatus, rankRunLifecycle)
 }
 
@@ -342,7 +354,25 @@ func (m *Feed) markRunFailed() {
 // trySend/doneMsg instead. The one exception is a terminal failure, which
 // retires the progress claims through markRunFailed.
 func (m *Feed) trackState(e agent.Event) {
+	t := e.Time
+	if t.IsZero() {
+		t = time.Now()
+	}
+
 	switch e.Type {
+	case agent.RunStart:
+		m.reqStartedAt = t
+	case agent.TurnStart:
+		// Reset per-turn stream state so separate provider turns in a multi-turn
+		// run do not mix durations, characters, or previous turn usage.
+		m.streamStartedAt = t
+		m.streamFirstDeltaAt = time.Time{}
+		m.streamLastDeltaAt = time.Time{}
+		m.streamedChars = 0
+		m.turnCompletionTokens = 0
+		m.lastThroughputAt = time.Time{}
+		m.cachedLiveRate = ""
+		m.cachedLiveTok = ""
 	case agent.RunError:
 		m.errorSeenSinceSend = true
 		m.markRunFailed()
@@ -355,17 +385,21 @@ func (m *Feed) trackState(e agent.Event) {
 	case agent.ToolEnd:
 		m.runningTool = ""
 	case agent.TextDelta:
-		// Track streaming throughput for the status line. This is the only
-		// place deltas are counted; runtimeThroughputText formats the result.
-		now := time.Now()
-		if m.firstDeltaAt.IsZero() {
-			m.firstDeltaAt = now
+		// Track streaming throughput for the current turn.
+		// Uses event timestamp e.Time rather than batch arrival time to avoid
+		// artificial tok/s inflation from microsecond batch processing loops.
+		if m.streamFirstDeltaAt.IsZero() {
+			m.streamFirstDeltaAt = t
 		}
-		m.lastDeltaAt = now
-		m.streamedChars += len([]rune(e.Text))
-		if m.lastThroughputAt.IsZero() || now.Sub(m.lastThroughputAt) >= 200*time.Millisecond {
-			m.lastThroughputAt = now
+		m.streamLastDeltaAt = t
+		m.streamedChars += utf8.RuneCountInString(e.Text)
+		if m.lastThroughputAt.IsZero() || t.Sub(m.lastThroughputAt) >= runtimeThroughputInterval {
+			m.lastThroughputAt = t
 			m.updateLiveThroughput()
+		}
+	case agent.EventProviderUsage:
+		if e.Usage != nil {
+			m.turnCompletionTokens = e.Usage.CompletionTokens
 		}
 	case agent.PermAsk:
 		m.runningTool = ""
@@ -476,10 +510,10 @@ func (m *Feed) ProgramOptions() []tea.ProgramOption {
 }
 
 func (m *Feed) updateLiveThroughput() {
-	if m.firstDeltaAt.IsZero() || m.lastDeltaAt.IsZero() {
+	if m.streamFirstDeltaAt.IsZero() || m.streamLastDeltaAt.IsZero() {
 		return
 	}
-	elapsed := m.lastDeltaAt.Sub(m.firstDeltaAt)
+	elapsed := m.streamLastDeltaAt.Sub(m.streamFirstDeltaAt)
 	if elapsed <= 0 {
 		return
 	}

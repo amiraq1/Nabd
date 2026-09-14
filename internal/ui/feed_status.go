@@ -54,7 +54,7 @@ func (m *Feed) phaseText() string {
 		}
 	}
 	if m.running {
-		if !m.firstDeltaAt.IsZero() {
+		if !m.streamFirstDeltaAt.IsZero() {
 			return ""
 		}
 		return "Generating…"

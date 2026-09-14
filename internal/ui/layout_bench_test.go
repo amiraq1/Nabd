@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"nabd/internal/agent"
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -95,5 +97,52 @@ func BenchmarkViewFullScreen(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_ = f.View()
+	}
+}
+
+func BenchmarkViewFullScreenWithLiveThroughput(b *testing.B) {
+	f := NewFeed()
+	f.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	for i := 0; i < 40; i++ {
+		f.lines = append(f.lines, fmt.Sprintf("viewport line %d: content here for benchmarking", i))
+	}
+	f.running = true
+	f.busy = true
+	start := time.Now()
+	f.reqStartedAt = start.Add(-2 * time.Second)
+	f.streamStartedAt = start.Add(-1500 * time.Millisecond)
+	f.streamFirstDeltaAt = start.Add(-1000 * time.Millisecond)
+	f.streamLastDeltaAt = start.Add(-100 * time.Millisecond)
+	f.streamedChars = 500
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = f.View()
+	}
+}
+
+func BenchmarkThroughputBatchedDeltas(b *testing.B) {
+	f := NewFeed()
+	f.running = true
+	f.busy = true
+	t0 := time.Now()
+	f.reqStartedAt = t0
+	f.streamStartedAt = t0
+	const batchSize = 10
+	events := make([]agent.Event, batchSize)
+	for i := 0; i < batchSize; i++ {
+		events[i] = agent.Event{
+			Seq:  i + 1,
+			Type: agent.TextDelta,
+			Text: "chunk ",
+			Time: t0.Add(time.Duration(i*20) * time.Millisecond),
+		}
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, e := range events {
+			f.trackState(e)
+		}
 	}
 }

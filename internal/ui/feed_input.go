@@ -360,9 +360,11 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 	m.busy = true
 	m.errorSeenSinceSend = false
 	m.reqStartedAt = time.Now()
-	m.firstDeltaAt = time.Time{}
-	m.lastDeltaAt = time.Time{}
+	m.streamStartedAt = time.Time{}
+	m.streamFirstDeltaAt = time.Time{}
+	m.streamLastDeltaAt = time.Time{}
 	m.streamedChars = 0
+	m.turnCompletionTokens = 0
 	m.lastThroughputAt = time.Time{}
 	m.cachedLiveRate = ""
 	m.cachedLiveTok = ""
