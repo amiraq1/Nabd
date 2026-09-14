@@ -14,9 +14,24 @@ const (
 	expandCollapsed
 )
 
+// isToolRunning reports whether the item with id is an active running tool.
+func (m *Feed) isToolRunning(id string) bool {
+	if m.proj == nil {
+		return false
+	}
+	for _, it := range m.proj.Items() {
+		if it.ID == id && it.Type == presentation.ItemTool && it.Tool != nil {
+			return it.Tool.Status == presentation.ToolRunning
+		}
+	}
+	return false
+}
+
 // effectiveExpanded reports whether the item with the given ID should be
 // rendered in expanded form. An explicit per-card override takes precedence;
-// if absent or expandDefault, it follows the global toolsExpanded default.
+// if absent or expandDefault, it follows the global toolsExpanded default,
+// except for currently running tools which are expanded by default and
+// auto-collapse upon ToolEnd.
 func (m *Feed) effectiveExpanded(id string) bool {
 	if v, ok := m.overrides[id]; ok {
 		switch v {
@@ -25,10 +40,13 @@ func (m *Feed) effectiveExpanded(id string) bool {
 		case expandCollapsed:
 			return false
 		case expandDefault:
-			return m.toolsExpanded
+			// fall through to default lifecycle
 		}
 	}
-	return m.toolsExpanded
+	if m.toolsExpanded {
+		return true
+	}
+	return m.isToolRunning(id)
 }
 
 // cardExpansion returns the expansion state for item id.
@@ -36,7 +54,7 @@ func (m *Feed) cardExpansion(id string) expandState {
 	if v, ok := m.overrides[id]; ok && v != expandDefault {
 		return v
 	}
-	if m.toolsExpanded {
+	if m.toolsExpanded || m.isToolRunning(id) {
 		return expandOpened
 	}
 	return expandDefault

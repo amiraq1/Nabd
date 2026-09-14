@@ -129,6 +129,8 @@ func TestRegressionUnseenProxyItemUpdate(t *testing.T) {
 			{Seq: 2, Type: agent.UserMsg, Text: "bottom message"},
 		}
 		_, _ = f.Update(agentEventBatchMsg{Events: initBatch})
+		f.overrides = map[string]expandState{"tool_c1": expandCollapsed}
+		f.refresh()
 
 		if modal {
 			f.modalVisible = true

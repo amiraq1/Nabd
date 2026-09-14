@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -411,3 +412,75 @@ func TestFooterFitsEveryWidth(t *testing.T) {
 		}
 	}
 }
+
+// TestExplicitlyOpenedCardSurvivesToolEnd verifies the Phase 7 contract:
+//   1. Running tools are expanded by default (expandDefault).
+//   2. On ToolEnd, tools in expandDefault auto-collapse into compact single-line summaries.
+//   3. A tool explicitly opened by the user (expandOpened) stays expanded after ToolEnd.
+func TestExplicitlyOpenedCardSurvivesToolEnd(t *testing.T) {
+	f := NewFeed()
+	f.width = 80
+	f.height = 24
+
+	// Start two tools: c1 and c2
+	f.Update(agentEventBatchMsg{Events: []agent.Event{
+		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"make build"`)}},
+		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c2", Name: "read_file", Args: json.RawMessage(`"main.go"`)}},
+	}})
+
+	// 1. Both running tools are expanded by default
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be expanded by default while running")
+	}
+	if !f.effectiveExpanded("tool_c2") {
+		t.Fatal("tool_c2 should be expanded by default while running")
+	}
+
+	// 2. User explicitly opens c1 via navigation and toggleCard
+	f.enterNavigation()
+	f.selectItem(0)
+	// First toggle collapses it (to expandCollapsed)
+	f.toggleCard(0)
+	if f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be collapsed after first toggle")
+	}
+	// Second toggle explicitly opens it (to expandOpened)
+	f.toggleCard(0)
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be expanded after second toggle")
+	}
+	if f.overrides["tool_c1"] != expandOpened {
+		t.Fatalf("tool_c1 override want expandOpened, got %v", f.overrides["tool_c1"])
+	}
+
+	// Tool c2 is left untouched: overrides["tool_c2"] is absent / expandDefault
+	if f.overrides["tool_c2"] != expandDefault {
+		t.Fatalf("tool_c2 override should be default, got %v", f.overrides["tool_c2"])
+	}
+
+	// 3. ToolEnd arrives for both tools with output
+	f.Update(agentEventBatchMsg{Events: []agent.Event{
+		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash", Output: "build success\nartifacts created", OK: true, MS: 120}},
+		{Seq: 4, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c2", Name: "read_file", Output: "package main\nfunc main() {}\n", OK: true, MS: 45}},
+	}})
+
+	// 4. The decisive test:
+	// c1 was explicitly opened by user -> MUST STAY OPEN after ToolEnd
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 was explicitly opened by user but auto-collapsed after ToolEnd")
+	}
+	// c2 was untouched -> MUST AUTO-COLLAPSE after ToolEnd
+	if f.effectiveExpanded("tool_c2") {
+		t.Fatal("tool_c2 had no explicit override but remained open after ToolEnd")
+	}
+
+	// 5. Verify visual output: c1 contains its output lines, c2 does not
+	rendered := strings.Join(f.lines, "\n")
+	if !strings.Contains(rendered, "build success") {
+		t.Errorf("expected explicitly opened tool_c1 output in rendered lines, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "package main") {
+		t.Errorf("auto-collapsed tool_c2 output should not appear in rendered lines, got:\n%s", rendered)
+	}
+}
+

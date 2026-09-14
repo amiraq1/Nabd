@@ -329,23 +329,23 @@ func TestCollapsibleTool_StreamingUpdatesNoDuplicates(t *testing.T) {
 	f := NewFeed()
 	f.width = 60
 
-	// ToolStart
+	// ToolStart: running tool is expanded by default (summary + running indicator)
 	f.Update(agentEventBatchMsg{Events: []agent.Event{
 		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"make"`)}},
 	}})
-	if len(f.lines) != 1 {
-		t.Fatalf("expected 1 line for running tool, got %d: %v", len(f.lines), f.lines)
+	if len(f.lines) != 2 {
+		t.Fatalf("expected 2 lines for running tool (expanded by default), got %d: %v", len(f.lines), f.lines)
 	}
 	if !strings.Contains(ansi.Strip(f.lines[0]), "~") {
 		t.Errorf("expected running symbol ~ in line: %q", f.lines[0])
 	}
 
-	// ToolEnd
+	// ToolEnd: completed tool auto-collapses to single-line summary
 	f.Update(agentEventBatchMsg{Events: []agent.Event{
 		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash", Output: "build complete", OK: true, MS: 50}},
 	}})
 	if len(f.lines) != 1 {
-		t.Fatalf("expected still exactly 1 line for completed tool, got %d: %v", len(f.lines), f.lines)
+		t.Fatalf("expected still exactly 1 line for completed tool (auto-collapsed), got %d: %v", len(f.lines), f.lines)
 	}
 	if !strings.Contains(ansi.Strip(f.lines[0]), "✓") || !strings.Contains(ansi.Strip(f.lines[0]), "50ms") {
 		t.Errorf("expected done symbol and duration in line: %q", f.lines[0])
