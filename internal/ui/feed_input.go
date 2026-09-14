@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"strings"
+	"time"
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
@@ -358,6 +359,13 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 	m.running = true
 	m.busy = true
 	m.errorSeenSinceSend = false
+	m.reqStartedAt = time.Now()
+	m.firstDeltaAt = time.Time{}
+	m.lastDeltaAt = time.Time{}
+	m.streamedChars = 0
+	m.lastThroughputAt = time.Time{}
+	m.cachedLiveRate = ""
+	m.cachedLiveTok = ""
 	m.clearStatus()
 	return m, m.startRun(text)
 }

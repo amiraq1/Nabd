@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
@@ -98,6 +99,20 @@ type Feed struct {
 	busy        bool // true while a run is in flight (running or awaiting permission)
 	runningTool string
 	cancel      context.CancelFunc
+
+	// Throughput tracking (reset on every send).
+	// reqStartedAt: wall-clock when the run began (trySend).
+	// firstDeltaAt: wall-clock of the first TextDelta (for TTFT).
+	// lastDeltaAt:  wall-clock of the most recent TextDelta.
+	// streamedChars:  rune count of the accumulated TextDelta stream. Fields
+	// zero-value (time.Time / 0) correctly means "no run seen yet".
+	reqStartedAt     time.Time
+	firstDeltaAt     time.Time
+	lastDeltaAt      time.Time
+	streamedChars    int
+	lastThroughputAt time.Time
+	cachedLiveRate   string
+	cachedLiveTok    string
 
 	// Runner is how a send reaches the agent loop. Set by the CLI.
 	runner Runner
@@ -235,6 +250,12 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.runningTool = ""
 		m.cancel = nil
+		m.firstDeltaAt = time.Time{}
+		m.lastDeltaAt = time.Time{}
+		m.streamedChars = 0
+		m.lastThroughputAt = time.Time{}
+		m.cachedLiveRate = ""
+		m.cachedLiveTok = ""
 		// The transient row ("Generating…", "canceling…") is over. A
 		// failure is not transient: it enters the feed as a permanent,
 		// scrollable line unless the loop already journaled a RunError.
@@ -333,6 +354,19 @@ func (m *Feed) trackState(e agent.Event) {
 		}
 	case agent.ToolEnd:
 		m.runningTool = ""
+	case agent.TextDelta:
+		// Track streaming throughput for the status line. This is the only
+		// place deltas are counted; runtimeThroughputText formats the result.
+		now := time.Now()
+		if m.firstDeltaAt.IsZero() {
+			m.firstDeltaAt = now
+		}
+		m.lastDeltaAt = now
+		m.streamedChars += len([]rune(e.Text))
+		if m.lastThroughputAt.IsZero() || now.Sub(m.lastThroughputAt) >= 200*time.Millisecond {
+			m.lastThroughputAt = now
+			m.updateLiveThroughput()
+		}
 	case agent.PermAsk:
 		m.runningTool = ""
 		if !m.modalVisible && !m.decisionPending {
@@ -439,6 +473,20 @@ func (m *Feed) ProgramOptions() []tea.ProgramOption {
 		opts = append(opts, tea.WithInput(NewSGRNormalizer(in)))
 	}
 	return opts
+}
+
+func (m *Feed) updateLiveThroughput() {
+	if m.firstDeltaAt.IsZero() || m.lastDeltaAt.IsZero() {
+		return
+	}
+	elapsed := m.lastDeltaAt.Sub(m.firstDeltaAt)
+	if elapsed <= 0 {
+		return
+	}
+	estTok := float64(m.streamedChars) / 4.0
+	rateTok := estTok / elapsed.Seconds()
+	m.cachedLiveRate = fmt.Sprintf("est %.1f tok/s", rateTok)
+	m.cachedLiveTok = fmt.Sprintf("est %d tok", int(estTok))
 }
 
 // BuildFromEvents initializes the feed from a complete event list (replay

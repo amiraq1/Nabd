@@ -76,7 +76,7 @@ func (m *Feed) computeLayout() layoutMetrics {
 	// The phase text is sanitized first, then runtime metadata (turn, tokens,
 	// elapsed, committed route) is appended only if it fits in the remaining
 	// width. The metadata is already sanitized by presentation.
-	rtText := m.runtimeStatusText()
+	rtText := m.runtimeStatusText(w)
 	if rtText != "" {
 		lm.RuntimeStatusRows = 1
 	}
@@ -212,7 +212,7 @@ func (m *Feed) computeLayout() layoutMetrics {
 
 // runtimeStatusText returns the current runtime status string (one line, no newlines).
 // This drives the Runtime Status row (above top separator). Empty when idle and no error.
-func (m *Feed) runtimeStatusText() string {
+func (m *Feed) runtimeStatusText(width ...int) string {
 	if m.decisionPending {
 		return "Waiting for permission…"
 	}
@@ -227,6 +227,16 @@ func (m *Feed) runtimeStatusText() string {
 	}
 	if m.status != "" {
 		return m.status
+	}
+	w := m.width
+	if len(width) > 0 && width[0] > 0 {
+		w = width[0]
+	}
+	// Throughput is evaluated directly, never via m.status or rankHint —
+	// the status line belongs to phase/progress text, and throughput
+	// would compete for the same row if it went through setStatus.
+	if tp := m.runtimeThroughputText(w); tp != "" {
+		return tp
 	}
 	if m.statusProj != nil {
 		s := m.statusProj.Status()
