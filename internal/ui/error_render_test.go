@@ -3,8 +3,10 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/provider"
 )
 
 const renderExhaustedErr = "all 2 route(s) exhausted (mixed failures); shortest retry-after: 20s\n" +
@@ -72,5 +74,36 @@ func TestRenderRunErrorRedactsSecrets(t *testing.T) {
 	}, 66)
 	if strings.Contains(out, "sk-ant-api03-") {
 		t.Fatalf("secret leaked into the failure row: %q", out)
+	}
+}
+
+// TestRenderRunErrorShowsWaitAtNarrowWidth is the regression for the route
+// exhaustion error: the actionable number (how long to wait) must survive even
+// at phone widths, where the older path hid it inside the free-text message that
+// gets dropped from Details. RenderEvent routes RunError through
+// presentation.FormatRunError, which now carries the retry-after as a structured
+// field rendered on its own line regardless of width.
+func TestRenderRunErrorShowsWaitAtNarrowWidth(t *testing.T) {
+	ree := &provider.RouterExhaustedError{
+		Attempts:   []provider.ProviderError{{Provider: "groq", Model: "m", Body: "x"}},
+		RetryAfter: 20 * time.Second,
+	}
+	ev := agent.RunErrorEvent(ree)
+	for _, width := range []int{24, 40, 66, 120} {
+		out := RenderEvent(ev, width)
+		// The wait line renders on its own line; at narrow widths it may wrap,
+		// so check the two marker words independently rather than the joined
+		// string.
+		if !strings.Contains(out, "wait") {
+			t.Errorf("width %d: 'wait' line missing from output: %q", width, out)
+		}
+		if !strings.Contains(out, "retry-after") {
+			t.Errorf("width %d: 'retry-after' number missing from output: %q", width, out)
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if got := lineWidth(line); got > width {
+				t.Fatalf("width %d: line %q is %d cells wide", width, line, got)
+			}
+		}
 	}
 }

@@ -112,6 +112,15 @@ func RunErrorEvent(err error) Event {
 		err = errors.New("unknown run error")
 	}
 	e := Event{Type: RunError, Err: err.Error(), ErrorCode: string(ErrorCodeOf(err)), JournalPath: JournalPathOf(err)}
+	// Preserve the router's structured retry-after as a first-class field rather
+	// than burying it inside the free-text error string (which is truncated at
+	// several display layers). If the run-level error is a RouterExhaustedError,
+	// its shortest positive retry-after is the one piece of information the user
+	// actually needs to act on, so it must survive to the ErrorCard.
+	var ree *provider.RouterExhaustedError
+	if errors.As(err, &ree) && ree.RetryAfter > 0 {
+		e.RetryAfter = ree.RetryAfter.Seconds()
+	}
 	if id, name, ok := ToolCallOf(err); ok {
 		e.Call = &ToolCall{ID: id, Name: name}
 	}
