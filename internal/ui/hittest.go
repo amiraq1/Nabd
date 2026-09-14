@@ -13,9 +13,7 @@ package ui
 // result stays non-decreasing, so itemAt's binary search remains valid.
 func shiftOffsets(offsets []int, trimmed int) []int {
 	if trimmed <= 0 || len(offsets) == 0 {
-		out := make([]int, len(offsets))
-		copy(out, offsets)
-		return out
+		return offsets
 	}
 	out := make([]int, len(offsets))
 	for i, o := range offsets {

@@ -1,9 +1,11 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"nabd/internal/agent"
 	"nabd/internal/presentation"
 
 	"github.com/charmbracelet/x/ansi"
@@ -142,3 +144,34 @@ func TestRenderNoticeMultiLine(t *testing.T) {
 		t.Fatalf("continuation line content missing: %q", got[1])
 	}
 }
+
+// TestRenderItemsCachedAllocationsNonRegression ensures that warm cached renders
+// do not regress in memory allocations (e.g. from slice copying or un-sized buffers).
+// 20 items in feed with 1 running tool must not exceed 26 allocs/op.
+func TestRenderItemsCachedAllocationsNonRegression(t *testing.T) {
+	f := NewFeed()
+	f.width = 80
+	for i := 1; i <= 19; i++ {
+		_ = f.proj.Apply(agent.Event{
+			Seq:  i,
+			Type: agent.UserMsg,
+			Text: fmt.Sprintf("message %d", i),
+		})
+	}
+	_ = f.proj.Apply(agent.Event{
+		Seq:  20,
+		Type: agent.ToolStart,
+		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+	})
+	items := f.proj.Items()
+	// Warm cache
+	_, _ = renderItemsCached(f, items, 80, false)
+
+	allocs := testing.AllocsPerRun(100, func() {
+		_, _ = renderItemsCached(f, items, 80, false)
+	})
+	if allocs > 26 {
+		t.Fatalf("renderItemsCached allocations regressed: got %.1f, want <= 26", allocs)
+	}
+}
+

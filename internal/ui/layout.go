@@ -258,6 +258,9 @@ func (m *Feed) runtimeStatusText(width ...int) string {
 // headerText returns the rendered header line adapted to the available width.
 // Uses firstFit with net budget w, selecting from widest to narrowest variants.
 func (m *Feed) headerText(w int) string {
+	if m.header == "" && (!m.gitHeaderEnabled || m.gitBranch == "") {
+		return ""
+	}
 	cleanBase := ""
 	if m.header != "" {
 		cleanBase = SanitizeForDisplay(m.header, DisplayPolicy{AllowNewline: false, Redact: false})
