@@ -3,8 +3,6 @@ package ui
 import (
 	"fmt"
 	"time"
-
-	"github.com/charmbracelet/x/ansi"
 )
 
 // runtimeThroughputInterval is the minimum wall-clock gap between
@@ -88,7 +86,8 @@ func (m *Feed) runtimeThroughputText(width int) string {
 		}
 	}
 
-	// Candidate ladder: widest first, strict first fit.
+	// Candidate ladder: drops tokens first, then TTFT, prioritizing rate retention.
+	// Later entries with tokStr are only reached in single-token turns where rateStr == "".
 	var candidates []string
 	if rateStr != "" && tokStr != "" {
 		candidates = append(candidates, fmt.Sprintf("TTFT %s · %s · %s", ttftStr, rateStr, tokStr))
@@ -105,10 +104,8 @@ func (m *Feed) runtimeThroughputText(width int) string {
 		candidates = append(candidates, tokStr)
 	}
 
-	for _, c := range candidates {
-		if ansi.StringWidth(c) <= width {
-			return c
-		}
+	if fit, ok := firstFit(candidates, width, nil); ok {
+		return fit
 	}
 	return ""
 }
@@ -116,6 +113,9 @@ func (m *Feed) runtimeThroughputText(width int) string {
 // formatLiveEstimate computes and formats the live heuristic throughput from
 // accumulated character count and streaming duration (chars / 4).
 // Uses the 'est ' prefix because '~' is outside AllowedUISymbols.
+// Note: cachedLiveRate is throttled to 200ms pulses whereas streamLastDeltaAt
+// updates on every delta batch; combining a slightly older rate with current TTFT
+// has a sub-500ms jitter that is visually imperceptible to users.
 func formatLiveEstimate(chars int, d time.Duration) (rate, tok string) {
 	if chars <= 0 || d <= 0 {
 		return "", ""

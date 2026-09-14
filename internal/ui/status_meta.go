@@ -2,8 +2,6 @@ package ui
 
 import (
 	"time"
-
-	"github.com/charmbracelet/x/ansi"
 )
 
 // statusLineWithMeta appends runtime metadata (turn · tokens · elapsed ·
@@ -21,11 +19,11 @@ func (m *Feed) statusLineWithMeta(base string, avail int) string {
 		return base
 	}
 	meta := m.statusProj.Meta(time.Now())
-	for _, variant := range runtimeMetaVariants(meta) {
-		candidate := base + " · " + variant
-		if ansi.StringWidth(candidate) <= avail {
-			return candidate
-		}
+	variants := runtimeMetaVariants(meta)
+	if fit, ok := firstFit(variants, avail, func(v string) string {
+		return base + " · " + v
+	}); ok {
+		return fit
 	}
 	return base
 }

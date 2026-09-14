@@ -334,10 +334,8 @@ func (m *Feed) footerText(width int) string {
 		}
 	}
 
-	for _, candidate := range candidates {
-		if ansi.StringWidth(candidate) <= width {
-			return candidate
-		}
+	if fit, ok := firstFit(candidates, width, nil); ok {
+		return fit
 	}
 	// Last resort: hard truncate smallest candidate.
 	smallest := candidates[len(candidates)-1]
