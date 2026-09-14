@@ -292,3 +292,122 @@ func TestEnterOnNonExpandableCardExplainsItself(t *testing.T) {
 		t.Fatal("Enter on a non-expandable card gave no feedback")
 	}
 }
+
+// TestFooterTableRunning pins the exact footer text at every documented
+// width while a run is in flight. A table — not a substring check —
+// catches regressions like "send" disappearing at width 40 or "cancel"
+// being replaced by "quit".
+func TestFooterTableRunning(t *testing.T) {
+	want := map[int]string{
+		20:  "Enter · ^C cancel",
+		39:  "Enter send · Esc browse · ^C cancel",
+		40:  "Enter send · Esc browse · ^C cancel",
+		79:  "Enter send · Ctrl+J new · Ctrl+O details · Esc browse · PgUp/PgDn · ^C cancel",
+		80:  "Enter send · Ctrl+J new · Ctrl+O details · Esc browse · PgUp/PgDn · ^C cancel",
+		120: "Enter send · Ctrl+J newline · Ctrl+O details · Esc browse · PgUp/PgDn scroll · Ctrl+C cancel",
+	}
+	for _, w := range []int{20, 39, 40, 79, 80, 120} {
+		m := feedWithTools(t, 3, w)
+		if got := m.footerText(w); got != want[w] {
+			t.Errorf("width=%d:\n  got:  %q\n  want: %q", w, got, want[w])
+		}
+	}
+}
+
+// TestFooterTableIdle pins the exact footer text when no run is active.
+// Must say "quit" (not "cancel") and show Ctrl+D exit at wide widths.
+func TestFooterTableIdle(t *testing.T) {
+	want := map[int]string{
+		20:  "Enter send · ^C quit",
+		39:  "Enter send · Esc browse · ^C quit",
+		40:  "Enter send · Esc browse · ^C quit",
+		79:  "Enter send · Ctrl+J new · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
+		80:  "Enter send · Ctrl+J new · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
+		120: "Enter send · Ctrl+J newline · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+	}
+	for _, w := range []int{20, 39, 40, 79, 80, 120} {
+		m := NewFeed()
+		m.width = w
+		m.height = 10
+		if got := m.footerText(w); got != want[w] {
+			t.Errorf("width=%d:\n  got:  %q\n  want: %q", w, got, want[w])
+		}
+	}
+}
+
+// TestFooterQuitCancelDistinction verifies that the footer tells the user
+// which Ctrl+C consequence applies: quit when idle, cancel when running.
+func TestFooterQuitCancelDistinction(t *testing.T) {
+	for _, w := range []int{40, 79, 80, 120} {
+		m := feedWithTools(t, 3, w)
+		foot := m.footerText(w)
+		// Ctrl+C is always announced — either as "^C" or "Ctrl+C".
+		if !strings.Contains(foot, "^C") && !strings.Contains(foot, "Ctrl+C") {
+			t.Errorf("width=%d: no Ctrl+C announced: %q", w, foot)
+		}
+		// Running state must say "cancel", never "quit".
+		if strings.Contains(foot, " quit") {
+			t.Errorf("width=%d: running footer says 'quit' not 'cancel': %q", w, foot)
+		}
+		if !strings.Contains(foot, "cancel") {
+			t.Errorf("width=%d: running footer missing 'cancel': %q", w, foot)
+		}
+	}
+}
+
+// TestEscEntersBrowseWithDraft verifies the unconditional Esc promise: a
+// composer with text enters browse mode and the draft survives the round
+// trip. This is the test that makes the footer's "Esc browse" honest.
+func TestEscEntersBrowseWithDraft(t *testing.T) {
+	m := feedWithTools(t, 3, 80)
+	m.composer.focus()
+	m.composer.setValue("draft text that must survive")
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if !m.navigationMode {
+		t.Fatal("Esc with draft did not enter navigation mode")
+	}
+	if m.composer.focused() {
+		t.Fatal("composer still focused after Esc")
+	}
+	if m.composer.value() != "draft text that must survive" {
+		t.Fatalf("draft lost after Esc: %q", m.composer.value())
+	}
+
+	// Esc again returns to the composer with the draft intact.
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.navigationMode {
+		t.Fatal("second Esc did not leave navigation mode")
+	}
+	if !m.composer.focused() {
+		t.Fatal("composer not refocused after second Esc")
+	}
+	if m.composer.value() != "draft text that must survive" {
+		t.Fatalf("draft lost after round trip: %q", m.composer.value())
+	}
+}
+
+func TestNavigationFooterNamesTheWayBack(t *testing.T) {
+	for _, width := range []int{40, 79, 80, 120} {
+		m := feedWithTools(t, 3, width)
+		m.enterNavigation()
+		if foot := m.footerText(width); !strings.Contains(foot, "Esc") {
+			t.Fatalf("width=%d: no exit announced: %q", width, foot)
+		}
+	}
+}
+
+func TestFooterFitsEveryWidth(t *testing.T) {
+	for _, width := range []int{20, 39, 40, 79, 80, 120} {
+		for _, nav := range []bool{false, true} {
+			m := feedWithTools(t, 3, width)
+			if nav {
+				m.enterNavigation()
+			}
+			if foot := m.footerText(width); lineWidth(foot) > width {
+				t.Fatalf("width=%d nav=%v: footer is %d wide: %q",
+					width, nav, lineWidth(foot), foot)
+			}
+		}
+	}
+}

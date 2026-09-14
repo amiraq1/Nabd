@@ -268,10 +268,10 @@ func (m *Feed) footerText(width int) string {
 		// never sends. Advertising "Enter send" here would print a false
 		// instruction, so navigation owns its own candidate ladder.
 		candidates = []string{
-			"Up/Down select · Enter expand · n error · p perm · Esc leave · Ctrl+C quit",
-			"Up/Down select · Enter expand · n/p jump · Esc leave · ^C quit",
-			"Up/Dn select · Enter expand · Esc leave · ^C quit",
-			"Enter expand · Esc leave · ^C",
+			"Up/Down select · Enter expand · n error · p perm · Esc compose · ^C quit",
+			"Up/Down select · Enter expand · n/p jump · Esc compose · ^C quit",
+			"Up/Dn select · Enter expand · Esc compose · ^C quit",
+			"Enter expand · Esc compose · ^C",
 			"Enter expand · Esc",
 			"Esc",
 		}
@@ -287,35 +287,38 @@ func (m *Feed) footerText(width int) string {
 		if m.running || m.busy {
 			if hasTools {
 				candidates = []string{
-					"Enter send · Ctrl+J newline · " + hintFull + " · PgUp/PgDn scroll · Ctrl+C cancel",
-					"Enter send · Ctrl+J new · " + hintFull + " · PgUp/PgDn · ^C cancel",
-					"Enter send · Ctrl+J new · " + hintMid + " · PgUp/PgDn · ^C cancel",
-					"Enter send · " + hintMid + " · ^C cancel",
-					"Enter · ^C",
+					"Enter send · Ctrl+J newline · " + hintFull + " · Esc browse · PgUp/PgDn scroll · Ctrl+C cancel",
+					"Enter send · Ctrl+J new · " + hintFull + " · Esc browse · PgUp/PgDn · ^C cancel",
+					"Enter send · " + hintMid + " · Esc browse · ^C cancel",
+					"Enter send · Esc browse · ^C cancel",
+					"Enter send · ^C cancel",
+					"Enter · ^C cancel",
 				}
 			} else {
 				candidates = []string{
-					"Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C cancel",
-					"Enter send · Ctrl+J new · PgUp/PgDn · ^C cancel",
+					"Enter send · Ctrl+J newline · Esc browse · PgUp/PgDn scroll · Ctrl+C cancel",
+					"Enter send · Ctrl+J new · Esc browse · PgUp/PgDn · ^C cancel",
+					"Enter send · Esc browse · ^C cancel",
 					"Enter send · ^C cancel",
-					"Enter · ^C",
+					"Enter · ^C cancel",
 				}
 			}
 		} else {
 			if hasTools {
 				candidates = []string{
-					"Enter send · Ctrl+J newline · " + hintFull + " · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
-					"Enter send · Ctrl+J new · " + hintFull + " · PgUp/PgDn · ^C quit · ^D exit",
-					"Enter send · Ctrl+J new · " + hintMid + " · PgUp/PgDn · ^C quit",
-					"Enter send · " + hintMid + " · ^C quit",
-					"Enter · ^C",
+					"Enter send · Ctrl+J newline · " + hintFull + " · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+					"Enter send · Ctrl+J new · " + hintFull + " · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
+					"Enter send · Ctrl+J new · " + hintFull + " · Esc browse · PgUp/PgDn · ^C quit",
+					"Enter send · " + hintMid + " · Esc browse · ^C quit",
+					"Enter send · Esc browse · ^C quit",
+					"Enter send · ^C quit",
 				}
 			} else {
 				candidates = []string{
-					"Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
-					"Enter send · Ctrl+J new · PgUp/PgDn · ^C quit",
+					"Enter send · Ctrl+J newline · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+					"Enter send · Ctrl+J new · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
+					"Enter send · Esc browse · ^C quit",
 					"Enter send · ^C quit",
-					"Enter · ^C",
 				}
 			}
 		}
@@ -351,12 +354,18 @@ func (m *Feed) View() string {
 
 	// 2. Viewport (feed lines). The viewport block always emits exactly
 	// ViewportRows rows: the visible feed lines plus blank padding INSIDE
-	// the viewport. This keeps visualHeight(View()) == terminalHeight so
-	// the inline renderer anchors the composer/footer chrome to the bottom
-	// row of the grid, and all otherwise unused vertical space belongs to
-	// the viewport above the composer — never as blank rows below the
-	// footer.
+	// the viewport. When the feed is shorter than the viewport and the
+	// view is anchored at the bottom (following), the padding goes BEFORE
+	// the content so short conversations sit at the bottom of the screen
+	// instead of floating at the top with dead space below. This keeps
+	// visualHeight(View()) == terminalHeight so the inline renderer
+	// anchors the composer/footer chrome to the bottom row of the grid.
 	if lm.ViewportRows > 0 {
+		topPad := m.viewportTopPadding(lm)
+		for i := 0; i < topPad; i++ {
+			b.WriteByte('\n')
+		}
+
 		emitted := 0
 		if len(m.lines) > 0 {
 			start := m.scrollTop
@@ -379,7 +388,7 @@ func (m *Feed) View() string {
 				emitted++
 			}
 		}
-		for i := emitted; i < lm.ViewportRows; i++ {
+		for i := topPad + emitted; i < lm.ViewportRows; i++ {
 			b.WriteByte('\n')
 		}
 	}

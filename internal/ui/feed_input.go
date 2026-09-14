@@ -254,7 +254,11 @@ func (m *Feed) answerModal(d agent.Decision) (tea.Model, tea.Cmd) {
 
 // composerKey routes keys while the composer is focused.
 func (m *Feed) composerKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if k.Type == tea.KeyEsc && m.composer.isEmpty() {
+	if k.Type == tea.KeyEsc {
+		// Esc enters browse mode unconditionally: enterNavigation only
+		// blurs the composer, so any draft stays in the buffer and Esc
+		// from navigation mode brings it back. The footer advertises
+		// "Esc browse" at every width, so the key must work at every width.
 		m.enterNavigation()
 		return m, nil
 	}
@@ -674,13 +678,20 @@ func (m *Feed) viewportKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // pointerLine translates a screen row into a line index within m.lines,
-// or returns -1 if y falls outside the visible feed rows.
+// or returns -1 if y falls outside the visible feed rows. It accounts
+// for viewportTopPadding: when the feed is shorter than the viewport
+// and following, blank rows precede the content, so a tap in that space
+// is out of bounds (the pointer origin starts past the padding).
 func (m *Feed) pointerLine(lm layoutMetrics, y int) int {
 	top := lm.viewportTop()
 	if y < top || y >= top+lm.ViewportRows {
 		return -1
 	}
-	line := m.scrollTop + (y - top)
+	topPad := m.viewportTopPadding(lm)
+	if y < top+topPad {
+		return -1
+	}
+	line := m.scrollTop + (y - top - topPad)
 	if line < 0 || line >= len(m.lines) {
 		return -1
 	}

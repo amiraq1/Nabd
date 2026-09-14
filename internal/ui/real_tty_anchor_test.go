@@ -63,18 +63,25 @@ func TestRealTTYStartupTypingAndBottomAnchor(t *testing.T) {
 		t.Fatalf("placeholder still visible after typing:\n%s", snap.PlainText())
 	}
 
-	// Footer anchored: find the footer from the BOTTOM using markers that
-	// never occur in the composer placeholder ("Enter" in the placeholder
-	// would otherwise false-match; see H10).
+	// Footer anchored: View writes the footer as the final line with no
+	// trailing newline, so the last non-empty row IS the footer. Compare it
+	// structurally against the model's own footerText(snap.Width) — any
+	// future text change breaks both sides identically instead of letting
+	// the test silently match the wrong row.
 	footerRow := -1
 	for i := len(rows) - 1; i >= 0; i-- {
-		if strings.Contains(rows[i], "Ctrl+J newline") || strings.Contains(rows[i], "Ctrl+D exit") {
+		if rows[i] != "" {
 			footerRow = i
 			break
 		}
 	}
 	if footerRow == -1 {
-		t.Fatalf("footer not found in grid:\n%s", snap.PlainText())
+		t.Fatalf("no non-empty rows in grid:\n%s", snap.PlainText())
+	}
+	expected := strings.TrimSpace(sess.Feed.footerText(snap.Width))
+	if rows[footerRow] != expected {
+		t.Fatalf("footer mismatch:\n  grid:  %q\n  model: %q\nScreen:\n%s",
+			rows[footerRow], expected, snap.PlainText())
 	}
 	if footerRow != snap.Height-1 {
 		t.Fatalf("footer not bottom-anchored: footerRow=%d, terminalHeight=%d\nScreen:\n%s",
