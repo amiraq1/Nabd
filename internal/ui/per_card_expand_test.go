@@ -454,8 +454,8 @@ func TestExplicitlyOpenedCardSurvivesToolEnd(t *testing.T) {
 	}
 
 	// Tool c2 is left untouched: overrides["tool_c2"] is absent / expandDefault
-	if f.overrides["tool_c2"] != expandDefault {
-		t.Fatalf("tool_c2 override should be default, got %v", f.overrides["tool_c2"])
+	if _, ok := f.overrides["tool_c2"]; ok {
+		t.Fatalf("tool_c2 should not have any recorded override, got %v", f.overrides["tool_c2"])
 	}
 
 	// 3. ToolEnd arrives for both tools with output
@@ -481,6 +481,61 @@ func TestExplicitlyOpenedCardSurvivesToolEnd(t *testing.T) {
 	}
 	if strings.Contains(rendered, "package main") {
 		t.Errorf("auto-collapsed tool_c2 output should not appear in rendered lines, got:\n%s", rendered)
+	}
+}
+
+// TestCtrlOToggleDoesNotCollapseRunningTool verifies that live execution lifecycle
+// precedence governs running tools over global Ctrl+O (toggleTools).
+// A running tool remains expanded by default even when toolsExpanded is toggled off,
+// unless the user explicitly collapses that specific card.
+func TestCtrlOToggleDoesNotCollapseRunningTool(t *testing.T) {
+	f := NewFeed()
+	f.width = 80
+	f.height = 24
+
+	// Start a running tool
+	f.Update(agentEventBatchMsg{Events: []agent.Event{
+		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"sleep 10"`)}},
+	}})
+
+	// 1. Tool starts expanded by default while running
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be expanded by default while running")
+	}
+
+	// 2. Global Ctrl+O toggles toolsExpanded to true, then false
+	f.toggleTools() // toolsExpanded is now true
+	if !f.toolsExpanded {
+		t.Fatal("expected toolsExpanded to be true after first toggle")
+	}
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be expanded when toolsExpanded is true")
+	}
+
+	f.toggleTools() // toolsExpanded is now false again
+	if f.toolsExpanded {
+		t.Fatal("expected toolsExpanded to be false after second toggle")
+	}
+	// Lifecycle precedence: running tool MUST remain expanded despite toolsExpanded == false
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("running tool_c1 should remain expanded by lifecycle precedence when toolsExpanded is false")
+	}
+
+	// 3. Explicit card collapse overrides lifecycle: user toggles the card in navigation mode
+	f.enterNavigation()
+	f.selectItem(0)
+	f.toggleCard(0) // Explicitly collapses the card to expandCollapsed
+	if f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be collapsed after explicit user toggle")
+	}
+	if f.overrides["tool_c1"] != expandCollapsed {
+		t.Fatalf("expected expandCollapsed override for tool_c1, got %v", f.overrides["tool_c1"])
+	}
+
+	// 4. Ctrl+O clears overrides and restores default lifecycle
+	f.toggleTools()
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("Ctrl+O should clear overrides and restore running tool expansion")
 	}
 }
 

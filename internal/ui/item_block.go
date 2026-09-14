@@ -59,8 +59,11 @@ func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsE
 	for i, it := range items {
 		isMsg := it.Type == presentation.ItemUserMsg || it.Type == presentation.ItemAssistant
 		block := ItemUIBlock{Item: it}
-		isExpanded := m.effectiveExpanded(it.ID)
-		expandVal := m.cardExpansion(it.ID)
+		isExpanded := m.expansionOf(it)
+		expandVal := expandCollapsed
+		if isExpanded {
+			expandVal = expandOpened
+		}
 		isSelected := m.navigationMode && i == m.selectedItem
 		fp := it.Fingerprint()
 		cached := m.lineCache[it.ID]

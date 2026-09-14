@@ -149,3 +149,32 @@ func BenchmarkThroughputBatchedDeltas(b *testing.B) {
 		}
 	}
 }
+
+// BenchmarkRefreshWithRunningTool measures the cached refresh cost with 20 items
+// and 1 active running tool, exercising the per-card expansion predicate.
+func BenchmarkRefreshWithRunningTool(b *testing.B) {
+	f := NewFeed()
+	f.width = 80
+	for i := 1; i <= 19; i++ {
+		_ = f.proj.Apply(agent.Event{
+			Seq:  i,
+			Type: agent.UserMsg,
+			Text: fmt.Sprintf("message %d", i),
+		})
+	}
+	_ = f.proj.Apply(agent.Event{
+		Seq:  20,
+		Type: agent.ToolStart,
+		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+	})
+	items := f.proj.Items()
+	// Warm the cache
+	_, _ = renderItemsCached(f, items, 80, false)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = renderItemsCached(f, items, 80, false)
+	}
+}
+

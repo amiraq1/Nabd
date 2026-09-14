@@ -49,9 +49,14 @@ func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.viewportKey(k)
 }
 
-// toggleTools toggles between compact and expanded tool output.
+// toggleTools toggles between compact and expanded tool output globally.
 // Follow mode keeps view anchored to the bottom.
 // Browsing history preserves the visible content anchor.
+//
+// Lifecycle precedence: a running tool card remains expanded by default even
+// when global toolsExpanded is toggled off, because its live execution
+// lifecycle governs its visibility until it finishes. A user wishing to collapse
+// a running tool specifically can toggle the card directly in navigation mode.
 func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	items := mergeNotices(m.proj.Items(), m.notices)
 	if len(items) > maxVisibleFeedItems {

@@ -14,50 +14,55 @@ const (
 	expandCollapsed
 )
 
-// isToolRunning reports whether the item with id is an active running tool.
-func (m *Feed) isToolRunning(id string) bool {
-	if m.proj == nil {
+// toolIsRunning is a pure predicate on the item already in hand.
+func toolIsRunning(it presentation.FeedItem) bool {
+	return it.Type == presentation.ItemTool && it.Tool != nil &&
+		it.Tool.Status == presentation.ToolRunning
+}
+
+// expansionOf reports whether the item should be rendered in expanded form.
+// An explicit per-card override takes precedence; if absent or expandDefault,
+// it follows global toolsExpanded or the live lifecycle default (running tools
+// are expanded by default until ToolEnd).
+//
+// Lifecycle precedence: a running tool card remains expanded by default even
+// when global toolsExpanded is false (e.g. after Ctrl+O), because its live
+// execution lifecycle governs its visibility until it finishes. A user wishing
+// to collapse a running tool specifically can toggle the card directly, which
+// records an explicit expandCollapsed override.
+func (m *Feed) expansionOf(it presentation.FeedItem) bool {
+	switch m.overrides[it.ID] {
+	case expandOpened:
+		return true
+	case expandCollapsed:
 		return false
 	}
-	for _, it := range m.proj.Items() {
-		if it.ID == id && it.Type == presentation.ItemTool && it.Tool != nil {
-			return it.Tool.Status == presentation.ToolRunning
-		}
-	}
-	return false
+	return m.toolsExpanded || toolIsRunning(it)
 }
 
 // effectiveExpanded reports whether the item with the given ID should be
-// rendered in expanded form. An explicit per-card override takes precedence;
-// if absent or expandDefault, it follows the global toolsExpanded default,
-// except for currently running tools which are expanded by default and
-// auto-collapse upon ToolEnd.
+// rendered in expanded form. It is a convenience wrapper for callers that
+// only hold an item ID (such as navigation, tests, and pointer handlers).
+// In hot render loops (renderItemsCached), expansionOf(it) is used directly
+// to avoid looking up the item in m.proj.
 func (m *Feed) effectiveExpanded(id string) bool {
-	if v, ok := m.overrides[id]; ok {
-		switch v {
-		case expandOpened:
-			return true
-		case expandCollapsed:
-			return false
-		case expandDefault:
-			// fall through to default lifecycle
-		}
+	switch m.overrides[id] {
+	case expandOpened:
+		return true
+	case expandCollapsed:
+		return false
 	}
 	if m.toolsExpanded {
 		return true
 	}
-	return m.isToolRunning(id)
-}
-
-// cardExpansion returns the expansion state for item id.
-func (m *Feed) cardExpansion(id string) expandState {
-	if v, ok := m.overrides[id]; ok && v != expandDefault {
-		return v
+	if m.proj != nil {
+		for _, it := range m.proj.Items() {
+			if it.ID == id {
+				return toolIsRunning(it)
+			}
+		}
 	}
-	if m.toolsExpanded || m.isToolRunning(id) {
-		return expandOpened
-	}
-	return expandDefault
+	return false
 }
 
 // toggleCard toggles the expansion state of the item at idx.
