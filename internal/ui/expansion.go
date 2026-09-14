@@ -2,14 +2,44 @@ package ui
 
 import "nabd/internal/presentation"
 
+// expandState represents the tri-state per-card expansion state.
+// expandDefault: card follows its automatic lifecycle (or global toolsExpanded).
+// expandOpened: card was explicitly expanded by user action.
+// expandCollapsed: card was explicitly collapsed by user action.
+type expandState int
+
+const (
+	expandDefault expandState = iota
+	expandOpened
+	expandCollapsed
+)
+
 // effectiveExpanded reports whether the item with the given ID should be
 // rendered in expanded form. An explicit per-card override takes precedence;
-// if absent, it follows the global toolsExpanded default.
+// if absent or expandDefault, it follows the global toolsExpanded default.
 func (m *Feed) effectiveExpanded(id string) bool {
 	if v, ok := m.overrides[id]; ok {
-		return v
+		switch v {
+		case expandOpened:
+			return true
+		case expandCollapsed:
+			return false
+		case expandDefault:
+			return m.toolsExpanded
+		}
 	}
 	return m.toolsExpanded
+}
+
+// cardExpansion returns the expansion state for item id.
+func (m *Feed) cardExpansion(id string) expandState {
+	if v, ok := m.overrides[id]; ok && v != expandDefault {
+		return v
+	}
+	if m.toolsExpanded {
+		return expandOpened
+	}
+	return expandDefault
 }
 
 // toggleCard toggles the expansion state of the item at idx.
@@ -24,9 +54,13 @@ func (m *Feed) toggleCard(idx int) bool {
 		return false
 	}
 	if m.overrides == nil {
-		m.overrides = make(map[string]bool, 4)
+		m.overrides = make(map[string]expandState, 4)
 	}
-	m.overrides[it.ID] = !m.effectiveExpanded(it.ID)
+	if m.effectiveExpanded(it.ID) {
+		m.overrides[it.ID] = expandCollapsed
+	} else {
+		m.overrides[it.ID] = expandOpened
+	}
 	return true
 }
 

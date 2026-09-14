@@ -186,7 +186,7 @@ func TestNonToolCardIsNotExpandable(t *testing.T) {
 
 func TestOverridesPrunedWithTrimmedItems(t *testing.T) {
 	m := feedWithTools(t, 3, 60)
-	m.overrides = map[string]bool{"ghost-id": true}
+	m.overrides = map[string]expandState{"ghost-id": expandOpened}
 	m.refresh()
 	if _, ok := m.overrides["ghost-id"]; ok {
 		t.Fatal("override for a vanished card was not pruned")

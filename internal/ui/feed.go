@@ -44,9 +44,9 @@ type Feed struct {
 	follow        bool
 	unseen        int
 	toolsExpanded bool
-	// overrides holds per-card expansion that deviates from toolsExpanded.
-	// Absent means "follow the global default"; Ctrl+O clears it.
-	overrides      map[string]bool
+	// overrides holds per-card expansion state (expandDefault, expandOpened, expandCollapsed).
+	// Absent or expandDefault means "follow the default"; Ctrl+O clears it.
+	overrides      map[string]expandState
 	selectedItem   int
 	navigationMode bool
 
@@ -163,7 +163,7 @@ type Feed struct {
 // cacheEntry holds rendered lines for one feed item at a specific expansion state.
 type cacheEntry struct {
 	fp       uint64
-	expanded bool
+	expanded expandState
 	selected bool // part of the key, not an invalidator: see refresh()
 	lines    []string
 }
