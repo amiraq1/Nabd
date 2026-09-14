@@ -55,12 +55,16 @@ func TestViewportTopMatchesRenderedRowOrder(t *testing.T) {
 	}
 	rows := strings.Split(m.View(), "\n")
 	top := lm.viewportTop()
-	if top >= len(rows) {
-		t.Fatalf("viewportTop %d outside the rendered view (%d rows)", top, len(rows))
+	// When following with short content, viewportTopPadding places blank
+	// rows before the feed lines. The first feed line is at top+padding,
+	// not at top itself.
+	topPad := m.viewportTopPadding(lm)
+	if top+topPad >= len(rows) {
+		t.Fatalf("viewportTop+padding %d outside the rendered view (%d rows)", top+topPad, len(rows))
 	}
 	want := m.lines[m.scrollTop]
-	if got := rows[top]; got != want {
-		t.Fatalf("row %d is %q, but scrollTop line is %q", top, got, want)
+	if got := rows[top+topPad]; got != want {
+		t.Fatalf("row %d is %q, but scrollTop line is %q", top+topPad, got, want)
 	}
 }
 
@@ -258,6 +262,46 @@ func TestTapBelowLastLineIsIgnored(t *testing.T) {
 
 	if m.selectedItem != beforeSelected || m.navigationMode != beforeNav {
 		t.Fatalf("tap on blank viewport padding changed state: selected=%d nav=%v", m.selectedItem, m.navigationMode)
+	}
+}
+
+// TestShortContentPadsToBottom verifies that when the feed is shorter than
+// the viewport AND following, blank rows are emitted BEFORE the content —
+// not after. This is the structural property that eliminates the dead space
+// between the last reply and the composer on small screens.
+func TestShortContentPadsToBottom(t *testing.T) {
+	m := feedWithTools(t, 1, 60)
+	m.height = 24
+	m.follow = true
+	m.scrollTop = m.bottomStart(m.computeLayout().ViewportRows)
+	m.refresh()
+
+	lm := m.computeLayout()
+	top := lm.viewportTop()
+	topPad := m.viewportTopPadding(lm)
+
+	rows := strings.Split(m.View(), "\n")
+	// The first topPad rows inside the viewport must be blank.
+	for i := top; i < top+topPad; i++ {
+		if rows[i] != "" {
+			t.Fatalf("row %d should be blank padding, got %q", i, rows[i])
+		}
+	}
+	// The first feed line must appear at top+topPad, not at top.
+	if top+topPad >= len(rows) {
+		t.Fatalf("viewport top+padding %d exceeds view rows", top+topPad)
+	}
+	if rows[top+topPad] == "" {
+		t.Fatalf("expected feed content at row %d, got blank", top+topPad)
+	}
+	if rows[top+topPad] != m.lines[0] {
+		t.Fatalf("row %d = %q, want first feed line %q",
+			top+topPad, rows[top+topPad], m.lines[0])
+	}
+	// No blank rows between the last feed line and the bottom separator.
+	lastContent := top + topPad + len(m.lines) - 1
+	if lastContent >= len(rows) {
+		t.Fatalf("last content row %d exceeds view rows", lastContent)
 	}
 }
 

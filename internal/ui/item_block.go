@@ -59,19 +59,32 @@ func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsE
 	for i, it := range items {
 		isMsg := it.Type == presentation.ItemUserMsg || it.Type == presentation.ItemAssistant
 		block := ItemUIBlock{Item: it}
-		isExpanded := m.effectiveExpanded(it.ID)
+		isExpanded := m.expansionOf(it)
+		expandVal := expandCollapsed
+		if isExpanded && it.Type == presentation.ItemTool {
+			expandVal = expandOpened
+		}
 		isSelected := m.navigationMode && i == m.selectedItem
 		fp := it.Fingerprint()
 		cached := m.lineCache[it.ID]
 		canUseCache := it.ID != "" && idCount[it.ID] == 1 &&
-			cached.fp == fp && cached.expanded == isExpanded &&
+			cached.fp == fp && cached.expanded == expandVal &&
 			cached.selected == isSelected
-		if hasLines && (isMsg || prevIsMsg) {
-			block.Lines = append(block.Lines, "")
-		}
+		needsSep := hasLines && (isMsg || prevIsMsg)
 		if canUseCache {
-			block.Lines = append(block.Lines, copyLines(cached.lines)...)
+			n := len(cached.lines)
+			if needsSep {
+				n++
+			}
+			block.Lines = make([]string, 0, n)
+			if needsSep {
+				block.Lines = append(block.Lines, "")
+			}
+			block.Lines = append(block.Lines, cached.lines...)
 		} else {
+			if needsSep {
+				block.Lines = append(block.Lines, "")
+			}
 			contentWidth := width - selectionPrefixWidth
 			if contentWidth < 1 {
 				contentWidth = 1
@@ -94,7 +107,7 @@ func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsE
 			if it.ID != "" && idCount[it.ID] == 1 {
 				m.lineCache[it.ID] = cacheEntry{
 					fp:       fp,
-					expanded: isExpanded,
+					expanded: expandVal,
 					selected: isSelected,
 					lines:    copyLines(content),
 				}
@@ -124,7 +137,11 @@ func copyLines(lines []string) []string {
 }
 
 func flattenBlocks(blocks []ItemUIBlock) ([]string, []int) {
-	var lines []string
+	totalLines := 0
+	for _, block := range blocks {
+		totalLines += len(block.Lines)
+	}
+	lines := make([]string, 0, totalLines)
 	offsets := make([]int, len(blocks))
 	for i, block := range blocks {
 		offsets[i] = len(lines)

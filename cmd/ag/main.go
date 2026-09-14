@@ -154,6 +154,12 @@ func main() {
 		return
 	}
 	if *useFeed {
+		if provided["feed-touch"] && !touchAllowed(os.Getenv("TERMUX_VERSION"), os.Getenv("NABD_FORCE_TOUCH")) {
+			die(fmt.Errorf("-feed-touch captures touch events as mouse input on Termux, " +
+				"which prevents the on-screen keyboard from opening. Keyboard navigation " +
+				"(Esc browse, Up/Down, Enter expand) works without it. " +
+				"Set NABD_FORCE_TOUCH=1 to override"))
+		}
 		if err := doChatWithFeed(interactiveMode, *sessDir, *cont, *feedTouch); err != nil {
 			die(err)
 		}
@@ -255,6 +261,13 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 	return errors.Join(endErr, closeErr)
 }
 
+func touchAllowed(termuxVersion, force string) bool {
+	if termuxVersion != "" && force == "" {
+		return false
+	}
+	return true
+}
+
 func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error {
 	ui.SetLimitNotice(limitNoticeArabic)
 	ui.SetCopyNotices(copySuccessArabic, copyUnavailableArabic, copyBlockedArabic)
@@ -300,6 +313,8 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 
 	feed := ui.NewFeed()
 	feed.SetTouch(feedTouch)
+	feed.SetGitHeader(true)
+	feed.SetGitDir(root.Dir())
 
 	if cont {
 		sess.loop.Seed(prevEvs)

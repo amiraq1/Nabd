@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -186,7 +187,7 @@ func TestNonToolCardIsNotExpandable(t *testing.T) {
 
 func TestOverridesPrunedWithTrimmedItems(t *testing.T) {
 	m := feedWithTools(t, 3, 60)
-	m.overrides = map[string]bool{"ghost-id": true}
+	m.overrides = map[string]expandState{"ghost-id": expandOpened}
 	m.refresh()
 	if _, ok := m.overrides["ghost-id"]; ok {
 		t.Fatal("override for a vanished card was not pruned")
@@ -290,5 +291,250 @@ func TestEnterOnNonExpandableCardExplainsItself(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if m.status == "" {
 		t.Fatal("Enter on a non-expandable card gave no feedback")
+	}
+}
+
+// TestFooterTableRunning pins the exact footer text at every documented
+// width while a run is in flight. A table — not a substring check —
+// catches regressions like "send" disappearing at width 40 or "cancel"
+// being replaced by "quit".
+func TestFooterTableRunning(t *testing.T) {
+	want := map[int]string{
+		20:  "Enter · ^C cancel",
+		39:  "Enter send · Esc browse · ^C cancel",
+		40:  "Enter send · Esc browse · ^C cancel",
+		79:  "Enter send · Ctrl+J new · Ctrl+O details · Esc browse · PgUp/PgDn · ^C cancel",
+		80:  "Enter send · Ctrl+J new · Ctrl+O details · Esc browse · PgUp/PgDn · ^C cancel",
+		120: "Enter send · Ctrl+J newline · Ctrl+O details · Esc browse · PgUp/PgDn scroll · Ctrl+C cancel",
+	}
+	for _, w := range []int{20, 39, 40, 79, 80, 120} {
+		m := feedWithTools(t, 3, w)
+		if got := m.footerText(w); got != want[w] {
+			t.Errorf("width=%d:\n  got:  %q\n  want: %q", w, got, want[w])
+		}
+	}
+}
+
+// TestFooterTableIdle pins the exact footer text when no run is active.
+// Must say "quit" (not "cancel") and show Ctrl+D exit at wide widths.
+func TestFooterTableIdle(t *testing.T) {
+	want := map[int]string{
+		20:  "Enter send · ^C quit",
+		39:  "Enter send · Esc browse · ^C quit",
+		40:  "Enter send · Esc browse · ^C quit",
+		79:  "Enter send · Ctrl+J new · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
+		80:  "Enter send · Ctrl+J new · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
+		120: "Enter send · Ctrl+J newline · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+	}
+	for _, w := range []int{20, 39, 40, 79, 80, 120} {
+		m := NewFeed()
+		m.width = w
+		m.height = 10
+		if got := m.footerText(w); got != want[w] {
+			t.Errorf("width=%d:\n  got:  %q\n  want: %q", w, got, want[w])
+		}
+	}
+}
+
+// TestFooterQuitCancelDistinction verifies that the footer tells the user
+// which Ctrl+C consequence applies: quit when idle, cancel when running.
+func TestFooterQuitCancelDistinction(t *testing.T) {
+	for _, w := range []int{40, 79, 80, 120} {
+		m := feedWithTools(t, 3, w)
+		foot := m.footerText(w)
+		// Ctrl+C is always announced — either as "^C" or "Ctrl+C".
+		if !strings.Contains(foot, "^C") && !strings.Contains(foot, "Ctrl+C") {
+			t.Errorf("width=%d: no Ctrl+C announced: %q", w, foot)
+		}
+		// Running state must say "cancel", never "quit".
+		if strings.Contains(foot, " quit") {
+			t.Errorf("width=%d: running footer says 'quit' not 'cancel': %q", w, foot)
+		}
+		if !strings.Contains(foot, "cancel") {
+			t.Errorf("width=%d: running footer missing 'cancel': %q", w, foot)
+		}
+	}
+}
+
+// TestEscEntersBrowseWithDraft verifies the unconditional Esc promise: a
+// composer with text enters browse mode and the draft survives the round
+// trip. This is the test that makes the footer's "Esc browse" honest.
+func TestEscEntersBrowseWithDraft(t *testing.T) {
+	m := feedWithTools(t, 3, 80)
+	m.composer.focus()
+	m.composer.setValue("draft text that must survive")
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+
+	if !m.navigationMode {
+		t.Fatal("Esc with draft did not enter navigation mode")
+	}
+	if m.composer.focused() {
+		t.Fatal("composer still focused after Esc")
+	}
+	if m.composer.value() != "draft text that must survive" {
+		t.Fatalf("draft lost after Esc: %q", m.composer.value())
+	}
+
+	// Esc again returns to the composer with the draft intact.
+	m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if m.navigationMode {
+		t.Fatal("second Esc did not leave navigation mode")
+	}
+	if !m.composer.focused() {
+		t.Fatal("composer not refocused after second Esc")
+	}
+	if m.composer.value() != "draft text that must survive" {
+		t.Fatalf("draft lost after round trip: %q", m.composer.value())
+	}
+}
+
+func TestNavigationFooterNamesTheWayBack(t *testing.T) {
+	for _, width := range []int{40, 79, 80, 120} {
+		m := feedWithTools(t, 3, width)
+		m.enterNavigation()
+		if foot := m.footerText(width); !strings.Contains(foot, "Esc") {
+			t.Fatalf("width=%d: no exit announced: %q", width, foot)
+		}
+	}
+}
+
+func TestFooterFitsEveryWidth(t *testing.T) {
+	for _, width := range []int{20, 39, 40, 79, 80, 120} {
+		for _, nav := range []bool{false, true} {
+			m := feedWithTools(t, 3, width)
+			if nav {
+				m.enterNavigation()
+			}
+			if foot := m.footerText(width); lineWidth(foot) > width {
+				t.Fatalf("width=%d nav=%v: footer is %d wide: %q",
+					width, nav, lineWidth(foot), foot)
+			}
+		}
+	}
+}
+
+// TestExplicitlyOpenedCardSurvivesToolEnd verifies the Phase 7 contract:
+//  1. Running tools are expanded by default (expandDefault).
+//  2. On ToolEnd, tools in expandDefault auto-collapse into compact single-line summaries.
+//  3. A tool explicitly opened by the user (expandOpened) stays expanded after ToolEnd.
+func TestExplicitlyOpenedCardSurvivesToolEnd(t *testing.T) {
+	f := NewFeed()
+	f.width = 80
+	f.height = 24
+
+	// Start two tools: c1 and c2
+	f.Update(agentEventBatchMsg{Events: []agent.Event{
+		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"make build"`)}},
+		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c2", Name: "read_file", Args: json.RawMessage(`"main.go"`)}},
+	}})
+
+	// 1. Both running tools are expanded by default
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be expanded by default while running")
+	}
+	if !f.effectiveExpanded("tool_c2") {
+		t.Fatal("tool_c2 should be expanded by default while running")
+	}
+
+	// 2. User explicitly opens c1 via navigation and toggleCard
+	f.enterNavigation()
+	f.selectItem(0)
+	// First toggle collapses it (to expandCollapsed)
+	f.toggleCard(0)
+	if f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be collapsed after first toggle")
+	}
+	// Second toggle explicitly opens it (to expandOpened)
+	f.toggleCard(0)
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be expanded after second toggle")
+	}
+	if f.overrides["tool_c1"] != expandOpened {
+		t.Fatalf("tool_c1 override want expandOpened, got %v", f.overrides["tool_c1"])
+	}
+
+	// Tool c2 is left untouched: overrides["tool_c2"] is absent / expandDefault
+	if _, ok := f.overrides["tool_c2"]; ok {
+		t.Fatalf("tool_c2 should not have any recorded override, got %v", f.overrides["tool_c2"])
+	}
+
+	// 3. ToolEnd arrives for both tools with output
+	f.Update(agentEventBatchMsg{Events: []agent.Event{
+		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash", Output: "build success\nartifacts created", OK: true, MS: 120}},
+		{Seq: 4, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c2", Name: "read_file", Output: "package main\nfunc main() {}\n", OK: true, MS: 45}},
+	}})
+
+	// 4. The decisive test:
+	// c1 was explicitly opened by user -> MUST STAY OPEN after ToolEnd
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 was explicitly opened by user but auto-collapsed after ToolEnd")
+	}
+	// c2 was untouched -> MUST AUTO-COLLAPSE after ToolEnd
+	if f.effectiveExpanded("tool_c2") {
+		t.Fatal("tool_c2 had no explicit override but remained open after ToolEnd")
+	}
+
+	// 5. Verify visual output: c1 contains its output lines, c2 does not
+	rendered := strings.Join(f.lines, "\n")
+	if !strings.Contains(rendered, "build success") {
+		t.Errorf("expected explicitly opened tool_c1 output in rendered lines, got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "package main") {
+		t.Errorf("auto-collapsed tool_c2 output should not appear in rendered lines, got:\n%s", rendered)
+	}
+}
+
+// TestCtrlOToggleDoesNotCollapseRunningTool verifies that live execution lifecycle
+// precedence governs running tools over global Ctrl+O (toggleTools).
+// A running tool remains expanded by default even when toolsExpanded is toggled off,
+// unless the user explicitly collapses that specific card.
+func TestCtrlOToggleDoesNotCollapseRunningTool(t *testing.T) {
+	f := NewFeed()
+	f.width = 80
+	f.height = 24
+
+	// Start a running tool
+	f.Update(agentEventBatchMsg{Events: []agent.Event{
+		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"sleep 10"`)}},
+	}})
+
+	// 1. Tool starts expanded by default while running
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be expanded by default while running")
+	}
+
+	// 2. Global Ctrl+O toggles toolsExpanded to true, then false
+	f.toggleTools() // toolsExpanded is now true
+	if !f.toolsExpanded {
+		t.Fatal("expected toolsExpanded to be true after first toggle")
+	}
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be expanded when toolsExpanded is true")
+	}
+
+	f.toggleTools() // toolsExpanded is now false again
+	if f.toolsExpanded {
+		t.Fatal("expected toolsExpanded to be false after second toggle")
+	}
+	// Lifecycle precedence: running tool MUST remain expanded despite toolsExpanded == false
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("running tool_c1 should remain expanded by lifecycle precedence when toolsExpanded is false")
+	}
+
+	// 3. Explicit card collapse overrides lifecycle: user toggles the card in navigation mode
+	f.enterNavigation()
+	f.selectItem(0)
+	f.toggleCard(0) // Explicitly collapses the card to expandCollapsed
+	if f.effectiveExpanded("tool_c1") {
+		t.Fatal("tool_c1 should be collapsed after explicit user toggle")
+	}
+	if f.overrides["tool_c1"] != expandCollapsed {
+		t.Fatalf("expected expandCollapsed override for tool_c1, got %v", f.overrides["tool_c1"])
+	}
+
+	// 4. Ctrl+O clears overrides and restores default lifecycle
+	f.toggleTools()
+	if !f.effectiveExpanded("tool_c1") {
+		t.Fatal("Ctrl+O should clear overrides and restore running tool expansion")
 	}
 }

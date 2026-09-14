@@ -11,11 +11,12 @@ package ui
 // longer separately addressable in the viewport, which is exactly what the
 // retention cap means; the journal remains the full source of truth. The
 // result stays non-decreasing, so itemAt's binary search remains valid.
+//
+// When trimmed <= 0, offsets is returned unmodified to avoid allocation;
+// the slice is owned by the caller and neither caller nor callee mutates it in-place.
 func shiftOffsets(offsets []int, trimmed int) []int {
 	if trimmed <= 0 || len(offsets) == 0 {
-		out := make([]int, len(offsets))
-		copy(out, offsets)
-		return out
+		return offsets
 	}
 	out := make([]int, len(offsets))
 	for i, o := range offsets {

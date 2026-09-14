@@ -3,6 +3,7 @@ package ui
 import (
 	"context"
 	"strings"
+	"time"
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
@@ -51,9 +52,14 @@ func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m.viewportKey(k)
 }
 
-// toggleTools toggles between compact and expanded tool output.
+// toggleTools toggles between compact and expanded tool output globally.
 // Follow mode keeps view anchored to the bottom.
 // Browsing history preserves the visible content anchor.
+//
+// Reset semantics: toggling toolsExpanded acts as a global reset that clears
+// all per-card overrides (m.overrides = nil), including any explicit manual
+// collapse of a running tool.
+// For live execution lifecycle precedence, see expansionOf in expansion.go.
 func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	items := mergeNotices(m.proj.Items(), m.notices)
 	if len(items) > maxVisibleFeedItems {
@@ -260,7 +266,11 @@ func (m *Feed) answerModal(d agent.Decision) (tea.Model, tea.Cmd) {
 
 // composerKey routes keys while the composer is focused.
 func (m *Feed) composerKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if k.Type == tea.KeyEsc && m.composer.isEmpty() {
+	if k.Type == tea.KeyEsc {
+		// Esc enters browse mode unconditionally: enterNavigation only
+		// blurs the composer, so any draft stays in the buffer and Esc
+		// from navigation mode brings it back. The footer advertises
+		// "Esc browse" at every width, so the key must work at every width.
 		m.enterNavigation()
 		return m, nil
 	}
@@ -360,6 +370,15 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 	m.running = true
 	m.busy = true
 	m.errorSeenSinceSend = false
+	m.reqStartedAt = time.Now()
+	m.streamStartedAt = time.Time{}
+	m.streamFirstDeltaAt = time.Time{}
+	m.streamLastDeltaAt = time.Time{}
+	m.streamedChars = 0
+	m.turnCompletionTokens = 0
+	m.lastThroughputAt = time.Time{}
+	m.cachedLiveRate = ""
+	m.cachedLiveTok = ""
 	m.clearStatus()
 	return m, m.startRun(text)
 }
@@ -680,17 +699,32 @@ func (m *Feed) viewportKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // pointerLine translates a screen row into a line index within m.lines,
-// or returns -1 if y falls outside the visible feed rows.
+// or returns -1 if y falls outside the visible feed rows. It accounts
+// for viewportTopPadding: when the feed is shorter than the viewport
+// and following, blank rows precede the content, so a tap in that space
+// is out of bounds (the pointer origin starts past the padding).
 func (m *Feed) pointerLine(lm layoutMetrics, y int) int {
 	top := lm.viewportTop()
 	if y < top || y >= top+lm.ViewportRows {
 		return -1
 	}
-	line := m.scrollTop + (y - top)
+	topPad := m.viewportTopPadding(lm)
+	if y < top+topPad {
+		return -1
+	}
+	line := m.scrollTop + (y - top - topPad)
 	if line < 0 || line >= len(m.lines) {
 		return -1
 	}
 	return line
+}
+
+// restoreScroll pins the viewport back to a saved first-visible line after a
+// repaint. Every pointer gesture goes through it: content must never move
+// under the finger that touched it.
+func (m *Feed) restoreScroll(top int) {
+	m.scrollTop = top
+	m.clampScroll()
 }
 
 // handlePointerTap resolves a tap into a card and applies the deterministic
@@ -716,19 +750,36 @@ func (m *Feed) handlePointerTap(lm layoutMetrics, y int) (tea.Model, tea.Cmd) {
 	if idx < 0 {
 		return m, nil
 	}
+	// A tap is an explicit browsing intent: it stops follow, exactly like the
+	// keyboard. selectItemInPlace does not touch follow, so without this the
+	// next refresh would re-anchor to the bottom and drag the picked card off
+	// screen.
+	m.follow = false
+	before := m.scrollTop
 	if !m.navigationMode {
 		m.navigationMode = true
 		m.composer.blur()
 		m.selectItemInPlace(idx)
+		// Entering navigation mode flips isSelected, so the marker must be
+		// repainted even when the index did not change (e.g. after Esc,
+		// which keeps selectedItem). selectItemInPlace skips the repaint
+		// when prev == idx, so refresh unconditionally here.
+		m.refresh()
+		m.restoreScroll(before)
 		return m, nil
 	}
 	if m.selectedItem == idx {
 		if m.toggleCard(idx) {
-			m.refreshPreservingSelection()
+			// The card grows downward; hold scrollTop so nothing above it
+			// moves. Pinning the card to the top (refreshPreservingSelection)
+			// would yank the whole feed up under the finger.
+			m.refresh()
+			m.restoreScroll(before)
 		}
 		return m, nil
 	}
 	m.selectItemInPlace(idx)
+	m.restoreScroll(before)
 	return m, nil
 }
 

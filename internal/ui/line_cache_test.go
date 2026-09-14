@@ -104,6 +104,35 @@ func TestCacheInvalidatesOnExpansionChange(t *testing.T) {
 	}
 }
 
+// TestToggleToolsOnlyInvalidatesToolCards verifies that toggling global
+// toolsExpanded (Ctrl+O) only invalidates expandable tool cards, while
+// non-tool items (UserMsg, Assistant, Notice) hit the cache without redraw.
+func TestToggleToolsOnlyInvalidatesToolCards(t *testing.T) {
+	f := NewFeed()
+	f.width = 80
+	f.height = 24
+
+	f.applyBatch([]agent.Event{
+		{Seq: 1, Type: agent.UserMsg, Text: "first question"},
+		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
+		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: "output line", OK: true}},
+		{Seq: 4, Type: agent.TextDelta, Text: "assistant answer"},
+		{Seq: 5, Type: agent.TurnEnd},
+	})
+
+	f.refresh()
+	countBefore := f.renderCount
+
+	// Toggle toolsExpanded globally via toggleTools
+	f.toggleTools()
+
+	redraws := f.renderCount - countBefore
+	// Exactly 1 item should redraw: the tool card "tool_t1"
+	if redraws != 1 {
+		t.Fatalf("expected exactly 1 redraw (tool card only), got %d", redraws)
+	}
+}
+
 // TestCacheInvalidatesOnVisibleFieldChange verifies that changing a visible
 // field invalidates the affected item.
 func TestCacheInvalidatesOnVisibleFieldChange(t *testing.T) {

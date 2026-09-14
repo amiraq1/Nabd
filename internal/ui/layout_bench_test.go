@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"nabd/internal/agent"
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -91,6 +93,116 @@ func BenchmarkViewFullScreen(b *testing.B) {
 	for i := 0; i < 40; i++ {
 		f.lines = append(f.lines, fmt.Sprintf("viewport line %d: content here for benchmarking", i))
 	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = f.View()
+	}
+}
+
+func BenchmarkViewFullScreenWithLiveThroughput(b *testing.B) {
+	f := NewFeed()
+	f.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	for i := 0; i < 40; i++ {
+		f.lines = append(f.lines, fmt.Sprintf("viewport line %d: content here for benchmarking", i))
+	}
+	f.running = true
+	f.busy = true
+	start := time.Now()
+	f.reqStartedAt = start.Add(-2 * time.Second)
+	f.streamStartedAt = start.Add(-1500 * time.Millisecond)
+	f.streamFirstDeltaAt = start.Add(-1000 * time.Millisecond)
+	f.streamLastDeltaAt = start.Add(-100 * time.Millisecond)
+	f.streamedChars = 500
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = f.View()
+	}
+}
+
+func BenchmarkThroughputBatchedDeltas(b *testing.B) {
+	t0 := time.Now()
+	const batchSize = 10
+	events := make([]agent.Event, batchSize)
+	for i := 0; i < batchSize; i++ {
+		events[i] = agent.Event{
+			Seq:  i + 1,
+			Type: agent.TextDelta,
+			Text: "streaming chunk with prose ",
+			Time: t0.Add(time.Duration(i*25) * time.Millisecond),
+		}
+	}
+	f := &Feed{running: true, busy: true}
+	f.trackState(agent.Event{Type: agent.TurnStart, Time: t0})
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		// Reset per-turn state each iteration to exercise the 200ms throttle boundary
+		f.streamFirstDeltaAt = time.Time{}
+		f.streamLastDeltaAt = time.Time{}
+		f.streamedChars = 0
+		f.lastThroughputAt = time.Time{}
+		for _, e := range events {
+			f.trackState(e)
+		}
+	}
+}
+
+// BenchmarkRefreshWithRunningTool measures the cached refresh cost with 20 items
+// and 1 active running tool, exercising the per-card expansion predicate.
+func BenchmarkRefreshWithRunningTool(b *testing.B) {
+	f := NewFeed()
+	f.width = 80
+	for i := 1; i <= 19; i++ {
+		_ = f.proj.Apply(agent.Event{
+			Seq:  i,
+			Type: agent.UserMsg,
+			Text: fmt.Sprintf("message %d", i),
+		})
+	}
+	_ = f.proj.Apply(agent.Event{
+		Seq:  20,
+		Type: agent.ToolStart,
+		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+	})
+	items := f.proj.Items()
+	// Warm the cache
+	_, _ = renderItemsCached(f, items, 80, false)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = renderItemsCached(f, items, 80, false)
+	}
+}
+
+// BenchmarkRefreshLiveStreaming measures View rendering with 20 items and
+// active live streaming, exercising the runtime throughput ladder in computeLayout.
+func BenchmarkRefreshLiveStreaming(b *testing.B) {
+	f := NewFeed()
+	f.width, f.height = 80, 24
+	f.running, f.busy = true, true
+	start := time.Now()
+	f.reqStartedAt, f.streamStartedAt = start, start
+	f.streamFirstDeltaAt = start.Add(1240 * time.Millisecond)
+	f.streamLastDeltaAt = start.Add(2240 * time.Millisecond)
+	f.streamedChars = 180
+	for i := 1; i <= 19; i++ {
+		_ = f.proj.Apply(agent.Event{
+			Seq:  i,
+			Type: agent.UserMsg,
+			Text: fmt.Sprintf("message %d", i),
+		})
+	}
+	_ = f.proj.Apply(agent.Event{
+		Seq:  20,
+		Type: agent.ToolStart,
+		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+	})
+	f.refresh()
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

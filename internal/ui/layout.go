@@ -64,19 +64,19 @@ func (m *Feed) computeLayout() layoutMetrics {
 	}
 
 	w := lm.TerminalWidth
+	const statusPrefix = "· "
 
 	// Header row.
-	if m.header != "" {
+	if h := m.headerText(w); h != "" {
 		lm.HeaderRows = 1
-		cleanHeader := SanitizeForDisplay(m.header, DisplayPolicy{AllowNewline: false, Redact: false})
-		lm.headerLine = truncateToWidth(cleanHeader, w, "…")
+		lm.headerLine = h
 	}
 
 	// Runtime status (above top separator) — 1 row or 0.
 	// The phase text is sanitized first, then runtime metadata (turn, tokens,
 	// elapsed, committed route) is appended only if it fits in the remaining
 	// width. The metadata is already sanitized by presentation.
-	rtText := m.runtimeStatusText()
+	rtText := m.runtimeStatusText(w - ansi.StringWidth(statusPrefix))
 	if rtText != "" {
 		lm.RuntimeStatusRows = 1
 	}
@@ -196,7 +196,6 @@ func (m *Feed) computeLayout() layoutMetrics {
 	lm.ViewportRows = max(0, lm.TerminalHeight-chrome())
 	if lm.RuntimeStatusRows > 0 {
 		cleanRt := SanitizeForDisplay(rtText, DisplayPolicy{AllowNewline: false, Redact: true})
-		const statusPrefix = "· "
 		withMeta := m.statusLineWithMeta(cleanRt, w-ansi.StringWidth(statusPrefix))
 		// Position is appended last and only if it fits: it is orientation,
 		// not status, so it must never push out Generating/Permission text.
@@ -212,7 +211,7 @@ func (m *Feed) computeLayout() layoutMetrics {
 
 // runtimeStatusText returns the current runtime status string (one line, no newlines).
 // This drives the Runtime Status row (above top separator). Empty when idle and no error.
-func (m *Feed) runtimeStatusText() string {
+func (m *Feed) runtimeStatusText(width ...int) string {
 	if m.decisionPending {
 		return "Waiting for permission…"
 	}
@@ -228,6 +227,16 @@ func (m *Feed) runtimeStatusText() string {
 	if m.status != "" {
 		return m.status
 	}
+	w := m.width
+	if len(width) > 0 && width[0] > 0 {
+		w = width[0]
+	}
+	// Throughput is evaluated directly, never via m.status or rankHint —
+	// the status line belongs to phase/progress text, and throughput
+	// would compete for the same row if it went through setStatus.
+	if tp := m.runtimeThroughputText(w); tp != "" {
+		return tp
+	}
 	if m.statusProj != nil {
 		s := m.statusProj.Status()
 		switch s.Phase {
@@ -242,6 +251,49 @@ func (m *Feed) runtimeStatusText() string {
 	}
 	if m.navigationMode {
 		return "browsing"
+	}
+	return ""
+}
+
+// headerText returns the rendered header line adapted to the available width.
+// Uses firstFit with net budget w, selecting from widest to narrowest variants.
+func (m *Feed) headerText(w int) string {
+	if m.header == "" && (!m.gitHeaderEnabled || m.gitBranch == "") {
+		return ""
+	}
+	cleanBase := ""
+	if m.header != "" {
+		cleanBase = SanitizeForDisplay(m.header, DisplayPolicy{AllowNewline: false, Redact: false})
+	}
+	var gitCandidates []string
+	if m.gitHeaderEnabled && m.gitBranch != "" {
+		cleanBranch := SanitizeForDisplay(m.gitBranch, DisplayPolicy{AllowNewline: false, Redact: false})
+		gitCandidates = gitHeaderCandidates(cleanBranch, m.gitDirty)
+	}
+
+	var candidates []string
+	if cleanBase != "" && len(gitCandidates) > 0 {
+		candidates = []string{
+			cleanBase + " · " + gitCandidates[0],
+			cleanBase + " · " + gitCandidates[1],
+			cleanBase,
+			gitCandidates[0],
+			gitCandidates[1],
+		}
+	} else if cleanBase != "" {
+		candidates = []string{cleanBase}
+	} else if len(gitCandidates) > 0 {
+		candidates = gitCandidates
+	}
+
+	if len(candidates) == 0 {
+		return ""
+	}
+	if fit, ok := firstFit(candidates, w, nil); ok {
+		return fit
+	}
+	if cleanBase != "" {
+		return truncateToWidth(cleanBase, w, "…")
 	}
 	return ""
 }
@@ -268,10 +320,10 @@ func (m *Feed) footerText(width int) string {
 		// never sends. Advertising "Enter send" here would print a false
 		// instruction, so navigation owns its own candidate ladder.
 		candidates = []string{
-			"Up/Down select · Enter expand · n error · p perm · Esc leave · Ctrl+C quit",
-			"Up/Down select · Enter expand · n/p jump · Esc leave · ^C quit",
-			"Up/Dn select · Enter expand · Esc leave · ^C quit",
-			"Enter expand · Esc leave · ^C",
+			"Up/Down select · Enter expand · n error · p perm · Esc compose · ^C quit",
+			"Up/Down select · Enter expand · n/p jump · Esc compose · ^C quit",
+			"Up/Dn select · Enter expand · Esc compose · ^C quit",
+			"Enter expand · Esc compose · ^C",
 			"Enter expand · Esc",
 			"Esc",
 		}
@@ -287,44 +339,45 @@ func (m *Feed) footerText(width int) string {
 		if m.running || m.busy {
 			if hasTools {
 				candidates = []string{
-					"Enter send · Ctrl+J newline · " + hintFull + " · PgUp/PgDn scroll · Ctrl+C cancel",
-					"Enter send · Ctrl+J new · " + hintFull + " · PgUp/PgDn · ^C cancel",
-					"Enter send · Ctrl+J new · " + hintMid + " · PgUp/PgDn · ^C cancel",
-					"Enter send · " + hintMid + " · ^C cancel",
-					"Enter · ^C",
+					"Enter send · Ctrl+J newline · " + hintFull + " · Esc browse · PgUp/PgDn scroll · Ctrl+C cancel",
+					"Enter send · Ctrl+J new · " + hintFull + " · Esc browse · PgUp/PgDn · ^C cancel",
+					"Enter send · " + hintMid + " · Esc browse · ^C cancel",
+					"Enter send · Esc browse · ^C cancel",
+					"Enter send · ^C cancel",
+					"Enter · ^C cancel",
 				}
 			} else {
 				candidates = []string{
-					"Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C cancel",
-					"Enter send · Ctrl+J new · PgUp/PgDn · ^C cancel",
+					"Enter send · Ctrl+J newline · Esc browse · PgUp/PgDn scroll · Ctrl+C cancel",
+					"Enter send · Ctrl+J new · Esc browse · PgUp/PgDn · ^C cancel",
+					"Enter send · Esc browse · ^C cancel",
 					"Enter send · ^C cancel",
-					"Enter · ^C",
+					"Enter · ^C cancel",
 				}
 			}
 		} else {
 			if hasTools {
 				candidates = []string{
-					"Enter send · Ctrl+J newline · " + hintFull + " · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
-					"Enter send · Ctrl+J new · " + hintFull + " · PgUp/PgDn · ^C quit · ^D exit",
-					"Enter send · Ctrl+J new · " + hintMid + " · PgUp/PgDn · ^C quit",
-					"Enter send · " + hintMid + " · ^C quit",
-					"Enter · ^C",
+					"Enter send · Ctrl+J newline · " + hintFull + " · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+					"Enter send · Ctrl+J new · " + hintFull + " · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
+					"Enter send · Ctrl+J new · " + hintFull + " · Esc browse · PgUp/PgDn · ^C quit",
+					"Enter send · " + hintMid + " · Esc browse · ^C quit",
+					"Enter send · Esc browse · ^C quit",
+					"Enter send · ^C quit",
 				}
 			} else {
 				candidates = []string{
-					"Enter send · Ctrl+J newline · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
-					"Enter send · Ctrl+J new · PgUp/PgDn · ^C quit",
+					"Enter send · Ctrl+J newline · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+					"Enter send · Ctrl+J new · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
+					"Enter send · Esc browse · ^C quit",
 					"Enter send · ^C quit",
-					"Enter · ^C",
 				}
 			}
 		}
 	}
 
-	for _, candidate := range candidates {
-		if ansi.StringWidth(candidate) <= width {
-			return candidate
-		}
+	if fit, ok := firstFit(candidates, width, nil); ok {
+		return fit
 	}
 	// Last resort: hard truncate smallest candidate.
 	smallest := candidates[len(candidates)-1]
@@ -351,12 +404,18 @@ func (m *Feed) View() string {
 
 	// 2. Viewport (feed lines). The viewport block always emits exactly
 	// ViewportRows rows: the visible feed lines plus blank padding INSIDE
-	// the viewport. This keeps visualHeight(View()) == terminalHeight so
-	// the inline renderer anchors the composer/footer chrome to the bottom
-	// row of the grid, and all otherwise unused vertical space belongs to
-	// the viewport above the composer — never as blank rows below the
-	// footer.
+	// the viewport. When the feed is shorter than the viewport and the
+	// view is anchored at the bottom (following), the padding goes BEFORE
+	// the content so short conversations sit at the bottom of the screen
+	// instead of floating at the top with dead space below. This keeps
+	// visualHeight(View()) == terminalHeight so the inline renderer
+	// anchors the composer/footer chrome to the bottom row of the grid.
 	if lm.ViewportRows > 0 {
+		topPad := m.viewportTopPadding(lm)
+		for i := 0; i < topPad; i++ {
+			b.WriteByte('\n')
+		}
+
 		emitted := 0
 		if len(m.lines) > 0 {
 			start := m.scrollTop
@@ -379,7 +438,7 @@ func (m *Feed) View() string {
 				emitted++
 			}
 		}
-		for i := emitted; i < lm.ViewportRows; i++ {
+		for i := topPad + emitted; i < lm.ViewportRows; i++ {
 			b.WriteByte('\n')
 		}
 	}

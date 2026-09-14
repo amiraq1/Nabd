@@ -1,9 +1,12 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
+	"nabd/internal/agent"
 	"nabd/internal/presentation"
 
 	"github.com/charmbracelet/x/ansi"
@@ -141,4 +144,38 @@ func TestRenderNoticeMultiLine(t *testing.T) {
 	if !strings.Contains(got[1], "2· write_file b.go") {
 		t.Fatalf("continuation line content missing: %q", got[1])
 	}
+}
+
+// liveStreamingFeed builds a feed with 20 items (19 user messages + 1 running tool)
+// and streaming timestamps initialized.
+// Time markers are frozen relative to start to prevent wall-clock duration changes
+// (e.g. "9s" -> "12s") mid-run, which makes both the
+// rendered content and the allocation count depend on wall-clock duration.
+// A guard must not be able to fail because the machine was slow.
+func liveStreamingFeed(t testing.TB) *Feed {
+	t.Helper()
+	f := NewFeed()
+	f.width, f.height = 120, 24
+	f.running, f.busy = true, true
+
+	start := time.Now()
+	f.reqStartedAt, f.streamStartedAt = start, start
+	f.streamFirstDeltaAt = start.Add(1240 * time.Millisecond)
+	f.streamLastDeltaAt = start.Add(2240 * time.Millisecond)
+	f.streamedChars = 180
+
+	for i := 1; i <= 19; i++ {
+		_ = f.proj.Apply(agent.Event{
+			Seq:  i,
+			Type: agent.UserMsg,
+			Text: fmt.Sprintf("message %d", i),
+		})
+	}
+	_ = f.proj.Apply(agent.Event{
+		Seq:  20,
+		Type: agent.ToolStart,
+		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+	})
+	f.refresh()
+	return f
 }

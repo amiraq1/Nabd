@@ -117,18 +117,18 @@ func TestRegressionUnseenProxyItemUpdate(t *testing.T) {
 		f.width = 60
 		f.height = 12
 
-		// ToolStart (running) renders 2 lines:
-		// Line 0: "⚙ bash"
-		// Line 1: "  ···"
-		// UserMsg renders:
-		// Line 2: "" (boundary separator)
-		// Line 3: "You"
-		// Line 4: "bottom message"
+		// Under Phase 7, active tools expand by default while running and
+		// auto-collapse upon ToolEnd. To preserve line count invariance across
+		// in-place updates (1 tool line before and after, 4 total lines:
+		// Line 0: "⚙ bash", Line 1: "" separator, Line 2: "You", Line 3: "bottom message"),
+		// tool_c1 is pinned to expandCollapsed.
 		initBatch := []agent.Event{
 			{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
 			{Seq: 2, Type: agent.UserMsg, Text: "bottom message"},
 		}
 		_, _ = f.Update(agentEventBatchMsg{Events: initBatch})
+		f.overrides = map[string]expandState{"tool_c1": expandCollapsed}
+		f.refresh()
 
 		if modal {
 			f.modalVisible = true
@@ -147,8 +147,8 @@ func TestRegressionUnseenProxyItemUpdate(t *testing.T) {
 		beforeLast := beforeLines[beforeLen-1]
 
 		// ToolEnd arrives with Duration > 0 (e.g. 50ms) and no output:
-		// Tool card updates in-place from "⚙ bash" / "  ···" to "✓ bash" / "  50ms".
-		// Total lines remain exactly 5, and the last line remains "bottom message".
+		// Tool card updates in-place from "⚙ bash" to "✓ bash · 50ms".
+		// Total lines remain exactly 4, and the last line remains "bottom message".
 		updateBatch := []agent.Event{
 			{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash", OK: true, MS: 50}},
 		}
