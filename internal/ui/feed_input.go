@@ -53,10 +53,10 @@ func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // Follow mode keeps view anchored to the bottom.
 // Browsing history preserves the visible content anchor.
 //
-// Lifecycle precedence: a running tool card remains expanded by default even
-// when global toolsExpanded is toggled off, because its live execution
-// lifecycle governs its visibility until it finishes. A user wishing to collapse
-// a running tool specifically can toggle the card directly in navigation mode.
+// Reset semantics: toggling toolsExpanded acts as a global reset that clears
+// all per-card overrides (m.overrides = nil), including any explicit manual
+// collapse of a running tool.
+// For live execution lifecycle precedence, see expansionOf in expansion.go.
 func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	items := mergeNotices(m.proj.Items(), m.notices)
 	if len(items) > maxVisibleFeedItems {

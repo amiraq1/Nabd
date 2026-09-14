@@ -61,7 +61,7 @@ func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsE
 		block := ItemUIBlock{Item: it}
 		isExpanded := m.expansionOf(it)
 		expandVal := expandCollapsed
-		if isExpanded {
+		if isExpanded && it.Type == presentation.ItemTool {
 			expandVal = expandOpened
 		}
 		isSelected := m.navigationMode && i == m.selectedItem
