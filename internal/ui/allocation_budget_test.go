@@ -27,7 +27,15 @@ func TestRenderItemsCachedAllocationsNonRegression(t *testing.T) {
 
 // TestViewAllocationsNonRegression ensures that View rendering on a live streaming feed
 // does not regress in total allocations across layout, chrome, and cached items.
-// View measured exactly 148.0 allocs/op; budget set to 156 (measured + 8) to keep guard tight.
+//
+// Measured basis for the budget:
+//   - f.View() on the liveStreamingFeed fixture (width 120) measured 148 allocs/op
+//     on arm64 (via BenchmarkRefreshLiveStreaming).
+//   - BenchmarkRefreshLiveStreaming now runs in CI (step 20) and reported 148
+//     allocs/op on amd64 as well — allocation counts are deterministic per code
+//     path, so the figure is architecture-independent, not a noise quantity.
+//   - Budget 156 = 148 + 8. The +8 headroom still catches a real regression
+//     (e.g. a handful of extra allocations) without flapping on either arch.
 //
 // Guarded by !race: the race detector inflates and perturbs per-run allocation
 // counts, so this fixed budget is only meaningful under the normal build.

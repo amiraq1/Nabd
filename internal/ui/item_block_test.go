@@ -148,17 +148,20 @@ func TestRenderNoticeMultiLine(t *testing.T) {
 
 // liveStreamingFeed builds a feed with 20 items (19 user messages + 1 running tool)
 // and streaming timestamps initialized.
-// Time markers are frozen relative to start to prevent wall-clock duration changes
-// (e.g. "9s" -> "12s") mid-run, which makes both the
-// rendered content and the allocation count depend on wall-clock duration.
-// A guard must not be able to fail because the machine was slow.
+// Time markers are anchored in the past so every delta is already elapsed on
+// every render, regardless of when the package starts running. A live
+// time.Now() would put the first ~2.24s of deltas in the future (then flip to
+// the past), making both the rendered content and the allocation count vary
+// with wall-clock timing. A guard must not be able to fail because the machine
+// was slow.
 func liveStreamingFeed(t testing.TB) *Feed {
 	t.Helper()
 	f := NewFeed()
 	f.width, f.height = 120, 24
 	f.running, f.busy = true, true
 
-	start := time.Now()
+	// Anchor in the past so both deltas are already elapsed on every render.
+	start := time.Now().Add(-10 * time.Second)
 	f.reqStartedAt, f.streamStartedAt = start, start
 	f.streamFirstDeltaAt = start.Add(1240 * time.Millisecond)
 	f.streamLastDeltaAt = start.Add(2240 * time.Millisecond)
