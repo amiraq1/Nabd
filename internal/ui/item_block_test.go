@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
@@ -145,12 +146,24 @@ func TestRenderNoticeMultiLine(t *testing.T) {
 	}
 }
 
-// TestRenderItemsCachedAllocationsNonRegression ensures that warm cached renders
-// do not regress in memory allocations (e.g. from slice copying or un-sized buffers).
-// 20 items in feed with 1 running tool must not exceed 26 allocs/op.
-func TestRenderItemsCachedAllocationsNonRegression(t *testing.T) {
+// liveStreamingFeed builds a feed with 20 items (19 user messages + 1 running tool)
+// and streaming timestamps initialized.
+// Time markers are frozen relative to start to prevent wall-clock duration changes
+// (e.g. "9s" -> "12s") mid-run, which makes both the
+// rendered content and the allocation count depend on wall-clock duration.
+// A guard must not be able to fail because the machine was slow.
+func liveStreamingFeed(t testing.TB) *Feed {
+	t.Helper()
 	f := NewFeed()
-	f.width = 80
+	f.width, f.height = 120, 24
+	f.running, f.busy = true, true
+
+	start := time.Now()
+	f.reqStartedAt, f.streamStartedAt = start, start
+	f.streamFirstDeltaAt = start.Add(1240 * time.Millisecond)
+	f.streamLastDeltaAt = start.Add(2240 * time.Millisecond)
+	f.streamedChars = 180
+
 	for i := 1; i <= 19; i++ {
 		_ = f.proj.Apply(agent.Event{
 			Seq:  i,
@@ -163,15 +176,39 @@ func TestRenderItemsCachedAllocationsNonRegression(t *testing.T) {
 		Type: agent.ToolStart,
 		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
 	})
-	items := f.proj.Items()
-	// Warm cache
-	_, _ = renderItemsCached(f, items, 80, false)
+	f.refresh()
+	return f
+}
 
-	allocs := testing.AllocsPerRun(100, func() {
-		_, _ = renderItemsCached(f, items, 80, false)
+// TestRenderItemsCachedAllocationsNonRegression locks the allocation ceiling on cached renders
+// to prevent the 51 -> 26 win from quietly eroding.
+func TestRenderItemsCachedAllocationsNonRegression(t *testing.T) {
+	f := liveStreamingFeed(t)
+	items := f.proj.Items()
+	_ = f.View() // warm every cache before measuring
+
+	const budget = 26
+	allocs := testing.AllocsPerRun(50, func() {
+		_, _ = renderItemsCached(f, items, f.width, false)
 	})
-	if allocs > 26 {
-		t.Fatalf("renderItemsCached allocations regressed: got %.1f, want <= 26", allocs)
+	if allocs > budget {
+		t.Fatalf("renderItemsCached allocations regressed: got %.1f, want <= %d", allocs, budget)
+	}
+}
+
+// TestViewAllocationsNonRegression ensures that View rendering on a live streaming feed
+// does not regress in total allocations across layout, chrome, and cached items.
+// View measured exactly 148.0 allocs/op; budget set to 156 (measured + 8) to keep guard tight.
+func TestViewAllocationsNonRegression(t *testing.T) {
+	f := liveStreamingFeed(t)
+	_ = f.View() // warm every cache before measuring
+
+	const budget = 156
+	allocs := testing.AllocsPerRun(50, func() {
+		_ = f.View()
+	})
+	if allocs > budget {
+		t.Fatalf("View allocations regressed: got %.1f, want <= %d", allocs, budget)
 	}
 }
 
