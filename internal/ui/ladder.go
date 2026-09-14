@@ -22,6 +22,11 @@ import "github.com/charmbracelet/x/ansi"
 // runtimeThroughputText blanks out (an optional number is better dropped
 // than mangled). modal.go's ladder is a vertical row-count ladder, not a
 // width ladder, and is deliberately out of scope.
+//
+// Note on format func: statusLineWithMeta passes a formatting closure to format
+// variants lazily. Callers with literal string candidates (footerText and
+// runtimeThroughputText) intentionally pass nil, as their candidates are already
+// constructed strings.
 func firstFit(variants []string, budget int, format func(string) string) (string, bool) {
 	if budget <= 0 {
 		return "", false
