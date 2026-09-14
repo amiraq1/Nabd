@@ -58,24 +58,40 @@ func gitStatusCmd(dir string) tea.Cmd {
 // gitChildEnv returns a minimal, filtered environment for the header's git
 // subprocess. It forwards only the variables required to locate and run git
 // (PATH) and present its output (TERM, locale), dropping everything else so
-// parent secrets are never inherited.
+// parent secrets (API keys, session tokens, git config overrides) are never
+// inherited by the child.
+//
+// HOME is intentionally omitted: the child git then runs with no user config,
+// so it can neither read ~/.gitconfig nor apply a global safe.directory. On a
+// single-user Termux environment this is harmless; on a multi-user host a
+// dubious-ownership rejection would surface here instead of being silently
+// configured away.
+//
+// The returned slice is always non-nil: exec.Cmd treats Env == nil as "inherit
+// the full parent environment", so an empty result must be a non-nil slice,
+// never nil.
 func gitChildEnv(parent []string) []string {
-	allowed := []string{"PATH", "TERM", "LANG", "LC_ALL"}
-	keep := make(map[string]string, len(allowed))
+	const (
+		path  = "PATH"
+		term  = "TERM"
+		lang  = "LANG"
+		lcAll = "LC_ALL"
+	)
+	out := make([]string, 0, 4)
 	for _, kv := range parent {
 		k, v, ok := strings.Cut(kv, "=")
 		if !ok || k == "" {
 			continue
 		}
+		// Defense in depth: os.Environ() cannot return NUL bytes (its entries
+		// are themselves NUL-terminated), but reject any just in case the input
+		// ever changes shape upstream.
 		if strings.IndexByte(v, 0) >= 0 {
-			continue // NUL byte: reject, never forward
+			continue
 		}
-		keep[k] = v
-	}
-	out := make([]string, 0, len(allowed))
-	for _, name := range allowed {
-		if v, ok := keep[name]; ok {
-			out = append(out, name+"="+v)
+		switch k {
+		case path, term, lang, lcAll:
+			out = append(out, k+"="+v)
 		}
 	}
 	return out

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -239,5 +240,32 @@ func TestGitHeaderDegradationLadder(t *testing.T) {
 	combined := f.headerText(80)
 	if !strings.Contains(combined, "nabd · feature/ui-p8-responsive-chrome (3 modified)") {
 		t.Fatalf("combined header want base + git status, got %q", combined)
+	}
+}
+
+func TestGitChildEnvForwardsOnlyAllowlist(t *testing.T) {
+	parent := []string{
+		"PATH=/data/data/com.termux/files/usr/bin",
+		"TERM=xterm-256color",
+		"LANG=en_US.UTF-8",
+		"ANTHROPIC_API_KEY=sk-secret",
+		"NABD_SESSION_TOKEN=deadbeef",
+		"GIT_CONFIG_GLOBAL=/tmp/evil",
+		"malformed-no-equals",
+		"=leading-equals",
+	}
+	got := gitChildEnv(parent)
+
+	want := []string{
+		"PATH=/data/data/com.termux/files/usr/bin",
+		"TERM=xterm-256color",
+		"LANG=en_US.UTF-8",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("gitChildEnv = %q, want %q", got, want)
+	}
+	// An empty env must never be nil-equivalent to "inherit everything".
+	if gitChildEnv(nil) == nil {
+		t.Fatal("gitChildEnv(nil) must return a non-nil empty slice")
 	}
 }
