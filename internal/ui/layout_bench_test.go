@@ -122,25 +122,28 @@ func BenchmarkViewFullScreenWithLiveThroughput(b *testing.B) {
 }
 
 func BenchmarkThroughputBatchedDeltas(b *testing.B) {
-	f := NewFeed()
-	f.running = true
-	f.busy = true
 	t0 := time.Now()
-	f.reqStartedAt = t0
-	f.streamStartedAt = t0
 	const batchSize = 10
 	events := make([]agent.Event, batchSize)
 	for i := 0; i < batchSize; i++ {
 		events[i] = agent.Event{
 			Seq:  i + 1,
 			Type: agent.TextDelta,
-			Text: "chunk ",
-			Time: t0.Add(time.Duration(i*20) * time.Millisecond),
+			Text: "streaming chunk with prose ",
+			Time: t0.Add(time.Duration(i*25) * time.Millisecond),
 		}
 	}
+	f := &Feed{running: true, busy: true}
+	f.trackState(agent.Event{Type: agent.TurnStart, Time: t0})
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		// Reset per-turn state each iteration to exercise the 200ms throttle boundary
+		f.streamFirstDeltaAt = time.Time{}
+		f.streamLastDeltaAt = time.Time{}
+		f.streamedChars = 0
+		f.lastThroughputAt = time.Time{}
 		for _, e := range events {
 			f.trackState(e)
 		}

@@ -514,13 +514,7 @@ func (m *Feed) updateLiveThroughput() {
 		return
 	}
 	elapsed := m.streamLastDeltaAt.Sub(m.streamFirstDeltaAt)
-	if elapsed <= 0 {
-		return
-	}
-	estTok := float64(m.streamedChars) / 4.0
-	rateTok := estTok / elapsed.Seconds()
-	m.cachedLiveRate = fmt.Sprintf("est %.1f tok/s", rateTok)
-	m.cachedLiveTok = fmt.Sprintf("est %d tok", int(estTok))
+	m.cachedLiveRate, m.cachedLiveTok = formatLiveEstimate(m.streamedChars, elapsed)
 }
 
 // BuildFromEvents initializes the feed from a complete event list (replay

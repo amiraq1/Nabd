@@ -420,3 +420,30 @@ func TestThroughputEventTimeZeroFallback(t *testing.T) {
 		t.Fatalf("expected TTFT text with zero-time event fallback, got: %q", got)
 	}
 }
+
+// TestThroughputSingleTokenDoesNotFabricateZeroRate verifies that when a turn
+// produces exactly 1 completion token, the rate is mathematically undefined
+// (after excluding the start token) and is omitted entirely rather than
+// fabricating a false "0.0 tok/s" (which misleadingly signals a stalled model).
+func TestThroughputSingleTokenDoesNotFabricateZeroRate(t *testing.T) {
+	m := NewFeed()
+	m.running = true
+	m.busy = true
+	start := time.Now()
+	m.reqStartedAt = start
+	m.streamStartedAt = start
+	m.streamFirstDeltaAt = start.Add(1 * time.Second)
+	m.streamLastDeltaAt = start.Add(2 * time.Second)
+	m.turnCompletionTokens = 1
+
+	got := m.runtimeThroughputText(80)
+	if strings.Contains(got, "tok/s") {
+		t.Fatalf("single-token turn must not report tok/s (fabricated zero rate): got %q", got)
+	}
+	if !strings.Contains(got, "1 tok") {
+		t.Fatalf("single-token turn must report token count: got %q", got)
+	}
+	if !strings.Contains(got, "TTFT 1.00s") {
+		t.Fatalf("single-token turn must report TTFT: got %q", got)
+	}
+}

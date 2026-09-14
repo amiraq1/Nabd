@@ -73,21 +73,16 @@ func (m *Feed) runtimeThroughputText(width int) string {
 				if m.turnCompletionTokens > 1 {
 					rateTok := float64(m.turnCompletionTokens-1) / streamElapsed.Seconds()
 					rateStr = fmt.Sprintf("%.1f tok/s", rateTok)
-				} else {
-					rateStr = "0.0 tok/s"
 				}
+				// Single token: rate is mathematically undefined — do not fabricate 0.0 tok/s.
 				tokStr = fmt.Sprintf("%d tok", m.turnCompletionTokens)
 			} else {
 				// Live heuristic estimate for current stream: streamedChars / 4.
-				// Visual distinction: prefix 'est ' because '~' is outside AllowedUISymbols.
 				if m.cachedLiveRate != "" && m.cachedLiveTok != "" {
 					rateStr = m.cachedLiveRate
 					tokStr = m.cachedLiveTok
-				} else if m.streamedChars > 0 {
-					estTok := float64(m.streamedChars) / 4.0
-					rateTok := estTok / streamElapsed.Seconds()
-					rateStr = fmt.Sprintf("est %.1f tok/s", rateTok)
-					tokStr = fmt.Sprintf("est %d tok", int(estTok))
+				} else {
+					rateStr, tokStr = formatLiveEstimate(m.streamedChars, streamElapsed)
 				}
 			}
 		}
@@ -102,8 +97,12 @@ func (m *Feed) runtimeThroughputText(width int) string {
 		candidates = append(candidates, fmt.Sprintf("TTFT %s · %s", ttftStr, rateStr))
 		candidates = append(candidates, rateStr)
 	}
-	if rateStr == "" && tokStr == "" {
-		candidates = append(candidates, fmt.Sprintf("TTFT %s", ttftStr))
+	if tokStr != "" {
+		candidates = append(candidates, fmt.Sprintf("TTFT %s · %s", ttftStr, tokStr))
+	}
+	candidates = append(candidates, fmt.Sprintf("TTFT %s", ttftStr))
+	if tokStr != "" {
+		candidates = append(candidates, tokStr)
 	}
 
 	for _, c := range candidates {
@@ -112,6 +111,20 @@ func (m *Feed) runtimeThroughputText(width int) string {
 		}
 	}
 	return ""
+}
+
+// formatLiveEstimate computes and formats the live heuristic throughput from
+// accumulated character count and streaming duration (chars / 4).
+// Uses the 'est ' prefix because '~' is outside AllowedUISymbols.
+func formatLiveEstimate(chars int, d time.Duration) (rate, tok string) {
+	if chars <= 0 || d <= 0 {
+		return "", ""
+	}
+	estTok := float64(chars) / 4.0
+	rateTok := estTok / d.Seconds()
+	rate = fmt.Sprintf("est %.1f tok/s", rateTok)
+	tok = fmt.Sprintf("est %d tok", int(estTok))
+	return rate, tok
 }
 
 // formatDuration formats a duration as a human-friendly seconds string (e.g. 1.24s).
