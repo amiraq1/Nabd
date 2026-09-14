@@ -270,6 +270,7 @@ func touchAllowed(termuxVersion, force string) bool {
 
 func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error {
 	ui.SetLimitNotice(limitNoticeArabic)
+	ui.SetCopyNotices(copySuccessArabic, copyUnavailableArabic, copyBlockedArabic)
 
 	prov, err := pickProvider()
 	if err != nil {

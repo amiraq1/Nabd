@@ -74,7 +74,11 @@ filesystem sandbox.
 | Opt-in redaction of new journal events | REDUCED | `NABD_REDACT_JOURNAL=1` removes recognized credential patterns (Anthropic, OpenRouter, Groq, NVIDIA, GitHub, GitLab, Slack, `Bearer`/`authorization`) before `Event.ForStore()` and output truncation, via copy-on-write that leaves the live in-memory event untouched. Unrecognized sensitive content, structural fields (paths, tool names, call IDs, hashes, blob addresses, error codes), and the shadow store are unchanged. `--json` applies the same policy so it cannot diverge |
 | Redacted export leaves the source intact | GUARANTEED | `--export --redact` decodes and re-encodes to stdout; the source is opened read-only and never written. Raw `--export` copies source bytes verbatim. Evidence: `TestExportLeavesSourceUntouched`, `TestExportRawIsByteIdentical` |
 | Pointer input can select and expand cards, but never answers permissions or executes tools | GUARANTEED | Evidence: `TestPointerNeverAnswersPermission`, `TestPointerNeverExecutesATool` |
+ ui/p8-responsive-chrome
 | Git status header inspects only the granted root and never traverses to a parent repository | GUARANTEED | `isGitRepo` checks `.git` strictly at the root; parent repos are out of bounds. Evidence: `TestIsGitRepoDetection` |
+
+| OSC 52 clipboard copy operates on projected cards only, after credential redaction and display sanitization | GUARANTEED | Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand` |
+ master
 | Bash filesystem reach after approval | OUT OF SCOPE | approved shell commands run with the current user's filesystem authority |
 | Network/resource exhaustion from approved bash | OUT OF SCOPE | no namespace, cgroup, or Landlock boundary |
 
@@ -467,6 +471,7 @@ headless `deny`), so adopting plan mode is opt-in and cannot silently
 change current behaviour. Evidence: `TestModeTable`,
 `TestModePlanOverridesGrants`, `TestModePlanAllowsReads`.
 
+ ui/p8-responsive-chrome
 ### Git status header containment
 
 The interactive feed displays git branch and status information in the header.
@@ -478,3 +483,36 @@ the granted root directly (`filepath.Join(abs, ".git")`) without upward
 traversal, treating a parent repository as out-of-bounds even though `git` itself
 would answer. Evidence: `TestIsGitRepoDetection`.
 
+
+### Goal mode
+
+`internal/goal` builds a bounded, model-facing execution contract from one
+objective. It does **not** create a privileged execution path: `goal.Run`
+delegates to `agent.Loop.Run`, so every tool call still passes through the
+existing permission gate (`internal/agent/gate.go`). The objective and the
+generated contract are model-facing input, not trusted repository
+instructions.
+
+**What Goal Mode does not grant:** shell, write, network, secret, or
+production access. It cannot bypass the permission gate, YOLO override, or
+plan-mode deny branch. A generated contract is handled like any other user
+message — journaled, subject to compaction, and replayable.
+
+**Input bounds (integrity, not sandbox):** objectives are capped at 8 KiB
+and must be valid UTF-8 without control characters (except `\n`, `\t`).
+These limits reject pathological input; they are not a sandbox and do not
+replace tool-level permission checks.
+
+Evidence: `internal/goal/contract_test.go` (UTF-8, limits, determinism),
+`internal/goal/runner_test.go` (nil-runner, single-dispatch, error
+propagation), `var _ Runner = (*agent.Loop)(nil)` compile-time assertion
+in `internal/goal/runner.go`.
+
+### OSC 52 clipboard boundaries
+
+OSC 52 copy operates only on projected card content after recognized
+credential redaction and display sanitization. Raw journal bytes and raw
+error bodies are not clipboard sources. Unrecognized sensitive text
+remains a residual risk.
+Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand`.
+ master
