@@ -75,6 +75,14 @@ type Feed struct {
 	// Header info.
 	header string
 
+	// Git status header tracking.
+	gitHeaderEnabled bool
+	gitBranch        string
+	gitDirty         int
+	gitStatusAt      time.Time
+	gitFailures      int
+	gitDir           string
+
 	// Callbacks wired by the CLI.
 	callbacks SessionCallbacks
 
@@ -186,6 +194,12 @@ type SessionCallbacks struct {
 // SetHeader sets the header line shown above the viewport.
 func (m *Feed) SetHeader(h string) { m.header = h }
 
+// SetGitHeader enables or disables periodic background git status header reporting.
+func (m *Feed) SetGitHeader(enabled bool) { m.gitHeaderEnabled = enabled }
+
+// SetGitDir sets the directory to inspect for git status.
+func (m *Feed) SetGitDir(dir string) { m.gitDir = dir }
+
 // SetCallbacks wires the command hooks.
 func (m *Feed) SetCallbacks(cb *SessionCallbacks) {
 	if cb != nil {
@@ -238,13 +252,19 @@ func NewFeed() *Feed {
 }
 
 // Init implements tea.Model. The composer owns focus by default.
+// If git header reporting is enabled and an actual git repository exists, it initiates periodic git status polling.
 func (m *Feed) Init() tea.Cmd {
+	if m.gitHeaderEnabled && isGitRepo(m.gitDir) {
+		return gitStatusCmd(m.gitDir)
+	}
 	return nil
 }
 
 // Update processes messages.
 func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case gitStatusMsg:
+		return m.handleGitStatus(msg)
 	case tea.WindowSizeMsg:
 		return m.onResize(msg)
 	case agentEventBatchMsg:

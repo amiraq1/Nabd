@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
@@ -67,10 +68,9 @@ func (m *Feed) computeLayout() layoutMetrics {
 	const statusPrefix = "· "
 
 	// Header row.
-	if m.header != "" {
+	if h := m.headerText(w); h != "" {
 		lm.HeaderRows = 1
-		cleanHeader := SanitizeForDisplay(m.header, DisplayPolicy{AllowNewline: false, Redact: false})
-		lm.headerLine = truncateToWidth(cleanHeader, w, "…")
+		lm.headerLine = h
 	}
 
 	// Runtime status (above top separator) — 1 row or 0.
@@ -252,6 +252,59 @@ func (m *Feed) runtimeStatusText(width ...int) string {
 	}
 	if m.navigationMode {
 		return "browsing"
+	}
+	return ""
+}
+
+// headerText returns the rendered header line adapted to the available width.
+// Uses firstFit with net budget w, selecting from widest to narrowest variants.
+func (m *Feed) headerText(w int) string {
+	cleanBase := ""
+	if m.header != "" {
+		cleanBase = SanitizeForDisplay(m.header, DisplayPolicy{AllowNewline: false, Redact: false})
+	}
+	cleanBranch := ""
+	if m.gitHeaderEnabled && m.gitBranch != "" {
+		cleanBranch = SanitizeForDisplay(m.gitBranch, DisplayPolicy{AllowNewline: false, Redact: false})
+	}
+
+	var candidates []string
+	if cleanBase != "" && cleanBranch != "" {
+		gitFull := cleanBranch + " (clean)"
+		if m.gitDirty > 0 {
+			gitFull = fmt.Sprintf("%s (%d modified)", cleanBranch, m.gitDirty)
+		}
+		candidates = []string{
+			cleanBase + " · " + gitFull,
+			cleanBase + " · " + cleanBranch,
+			cleanBase,
+			gitFull,
+			cleanBranch,
+		}
+	} else if cleanBase != "" {
+		candidates = []string{cleanBase}
+	} else if cleanBranch != "" {
+		if m.gitDirty > 0 {
+			candidates = []string{
+				fmt.Sprintf("%s (%d modified)", cleanBranch, m.gitDirty),
+				cleanBranch,
+			}
+		} else {
+			candidates = []string{
+				fmt.Sprintf("%s (clean)", cleanBranch),
+				cleanBranch,
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		return ""
+	}
+	if fit, ok := firstFit(candidates, w, nil); ok {
+		return fit
+	}
+	if cleanBase != "" {
+		return truncateToWidth(cleanBase, w, "…")
 	}
 	return ""
 }
