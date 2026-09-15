@@ -50,7 +50,9 @@ var shortListV0 = exclusions{
 
 // Approved limits. The scan stops at the first one that trips.
 const (
-	limitEntries    = 10000
+	// limitEntries must stay above limitCandidates: every candidate is also an
+	// entry, so equal limits make the candidate limit unreachable in production.
+	limitEntries    = 50000
 	limitCandidates = 10000
 	limitTimeout    = 2 * time.Second // safety valve; calibrated by TestMeasure*
 )
@@ -366,6 +368,19 @@ func TestScanStopsAtCandidateLimit(t *testing.T) {
 	}
 }
 
+// TestCandidateLimitIsReachableUnderProductionLimits is the structural guard for the
+// two counters. The test above exercises the candidate path with a small maxCandidates;
+// this one keeps the shipped constants from making that path unreachable: entries
+// counts every directory, symlink and file, while candidates counts only regular
+// files, so candidates <= entries always holds and the candidate limit can only trip
+// when limitEntries is strictly larger.
+func TestCandidateLimitIsReachableUnderProductionLimits(t *testing.T) {
+	if limitCandidates >= limitEntries {
+		t.Fatalf("limitCandidates (%d) >= limitEntries (%d): every candidate is also an entry, so the candidate limit can never trip",
+			limitCandidates, limitEntries)
+	}
+}
+
 func TestScanStopsAtTimeout(t *testing.T) {
 	root := buildTree(t, 20, 20)
 	// A clock that advances one second per reading: no sleep, no flakiness.
@@ -454,8 +469,8 @@ func TestMeasureRepoRoot(t *testing.T) {
 }
 
 // TestMeasureEntryLimit measures the run that trips the entry limit first: a tree
-// whose entries are mostly directories or refused entries, so 10,000 entries are
-// inspected before 2,000 candidates accumulate.
+// whose entries are mostly directories or refused entries, so 50,000 entries are
+// inspected while far fewer candidates accumulate.
 func TestMeasureEntryLimit(t *testing.T) {
 	root, err := tools.NewRoot(repoRootFromEnv(t))
 	if err != nil {
@@ -473,7 +488,7 @@ func TestMeasureEntryLimit(t *testing.T) {
 // for it: dirs x files regular files, no subdirectories of interest, so almost
 // every entry is a candidate and the candidate limit trips before the entry limit.
 func TestMeasureCandidateLimitWideTree(t *testing.T) {
-	const dirs, files = 300, 10 // 3,000 candidates in 3,300 entries
+	const dirs, files = 1200, 10 // 12,000 candidates in 13,200 entries
 
 	base := t.TempDir()
 	for d := 0; d < dirs; d++ {
@@ -496,17 +511,21 @@ func TestMeasureCandidateLimitWideTree(t *testing.T) {
 
 	for round := 0; round < measureRounds(); round++ {
 		s := scan(root, scanConfig{maxEntries: limitEntries, maxCandidates: limitCandidates, timeout: measureCutoff(), excluded: shortListV0})
+		if s.stop != stopCandidates {
+			t.Fatalf("round %d: stop = %q, want %q (candidates=%d entries=%d)",
+				round+1, s.stop, stopCandidates, s.candidates, s.entries)
+		}
 		reportOne(fmt.Sprintf("round %d", round+1), s, scanConfig{})
 	}
 }
 
 // TestMeasureEntryLimitDirHeavy measures the run that trips the entry limit first.
-// The trees measured above are file-dense, so the candidate limit stops them at
-// ~2,300-2,900 entries and the entry limit is never reached; a directory-heavy tree
-// (many nested directories, one file per directory) is what makes 10,000 entries
-// bind, and it is the shape a monorepo has.
+// The trees measured above are file-dense, so the candidate limit stops them well
+// before the entry limit; a directory-heavy tree (many nested directories, one file
+// per directory) is what makes 50,000 entries bind, and it is the shape a monorepo
+// has. The candidate count stays at one per parent, well under the candidate limit.
 func TestMeasureEntryLimitDirHeavy(t *testing.T) {
-	const parents, subsPerParent = 1000, 9
+	const parents, subsPerParent = 5000, 9
 
 	base := t.TempDir()
 	for p := 0; p < parents; p++ {
