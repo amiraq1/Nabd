@@ -184,6 +184,43 @@ func TestBashChildEnvAllowsWhitelisted(t *testing.T) {
 
 // TestBashChildEnvDeterministicOrdering proves the child environment is
 // emitted in deterministic sorted order across two identical runs.
+func TestBashChildTempDirIsIsolatedAndRemoved(t *testing.T) {
+	callerTemp := t.TempDir()
+	t.Setenv("TMPDIR", callerTemp)
+	t.Setenv("TMP", callerTemp)
+	t.Setenv("TEMP", callerTemp)
+
+	r, _ := newReg(t)
+	raw, _ := json.Marshal(map[string]any{
+		"cmd": `printf '%s\n' "$TMPDIR" "$TMP" "$TEMP"`,
+	})
+	o, err := r.RunDetailed(context.Background(), "bash", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !o.OK {
+		t.Fatalf("bash failed: %s", o.Text)
+	}
+
+	lines := strings.Split(strings.TrimSpace(o.Text), "\n")
+	if len(lines) < 4 {
+		t.Fatalf("missing temporary-directory values: %q", o.Text)
+	}
+	got := lines[len(lines)-3:]
+	if got[0] == callerTemp || got[1] == callerTemp || got[2] == callerTemp {
+		t.Fatalf("caller temporary directory leaked: %q", got)
+	}
+	if got[0] != got[1] || got[1] != got[2] {
+		t.Fatalf("temporary variables disagree: %q", got)
+	}
+	if !strings.HasPrefix(filepath.Base(got[0]), "nabd-tmp-") {
+		t.Fatalf("unexpected temporary directory: %q", got[0])
+	}
+	if _, err := os.Stat(got[0]); !os.IsNotExist(err) {
+		t.Fatalf("temporary directory survived command: stat error=%v", err)
+	}
+}
+
 func TestBashChildEnvDeterministicOrdering(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin:/bin")
 	t.Setenv("TERM", "xterm")

@@ -93,6 +93,11 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		defer os.RemoveAll(home)
 		env = append(env, "HOME="+home)
 	}
+	tmp, terr := newTempDir()
+	if terr == nil {
+		defer os.RemoveAll(tmp)
+		env = append(env, "TMPDIR="+tmp, "TMP="+tmp, "TEMP="+tmp)
+	}
 
 	cmd := exec.Command("sh", "-c", a.Cmd)
 	cmd.Dir = b.root.Dir()
@@ -206,9 +211,6 @@ var childEnvAllowlist = map[string]bool{
 	"LC_MONETARY": true,
 	"LC_NUMERIC":  true,
 	"LC_TIME":     true,
-	"TMPDIR":      true, // temp dir for tools that honor it
-	"TMP":         true,
-	"TEMP":        true,
 }
 
 // childEnv builds the environment for a spawned child from the explicit
@@ -280,8 +282,8 @@ func sanitizePath(p string) string {
 // child runs without HOME rather than with the caller's real HOME (whose
 // startup files, ssh keys, and credential stores must never reach the
 // shell).
-func newTempHome() (string, error) {
-	dir, err := os.MkdirTemp("", "nabd-home-*")
+func newPrivateTempDir(pattern string) (string, error) {
+	dir, err := os.MkdirTemp("", pattern)
 	if err != nil {
 		return "", err
 	}
@@ -290,6 +292,17 @@ func newTempHome() (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+func newTempHome() (string, error) {
+	return newPrivateTempDir("nabd-home-*")
+}
+
+// newTempDir creates one private temporary directory per bash invocation.
+// TMPDIR, TMP, and TEMP all point to it; caller-provided values are not
+// inherited. The caller removes it when the command finishes.
+func newTempDir() (string, error) {
+	return newPrivateTempDir("nabd-tmp-*")
 }
 
 // headTail keeps the opening and the ending. The middle of a long build log
