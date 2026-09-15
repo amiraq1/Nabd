@@ -18,6 +18,7 @@ func TestPermModalRowsMatchLineCount(t *testing.T) {
 	cases := []struct {
 		name            string
 		args            string
+		dropped         []string
 		selected        int
 		decisionPending bool
 	}{
@@ -30,12 +31,16 @@ func TestPermModalRowsMatchLineCount(t *testing.T) {
 		{name: "empty object args counts as no args", args: "{}", selected: 2},
 		{name: "decision pending with args", args: `{"path":"main.go"}`, selected: 2, decisionPending: true},
 		{name: "decision pending without args", args: "", selected: 0, decisionPending: true},
+		{name: "with dropped args and args", args: `{"path":"main.go"}`, dropped: []string{"bogus"}, selected: 0},
+		{name: "with dropped args, no args", args: "", dropped: []string{"bogus", "other"}, selected: 1},
+		{name: "decision pending with dropped args and args", args: `{"path":"main.go"}`, dropped: []string{"bogus"}, selected: 2, decisionPending: true},
+		{name: "decision pending with dropped args, no args", args: "", dropped: []string{"bogus"}, selected: 0, decisionPending: true},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newPermissionModal()
-			call := &agent.ToolCall{ID: "call_1", Name: "write_file"}
+			call := &agent.ToolCall{ID: "call_1", Name: "write_file", DroppedArgs: tc.dropped}
 			if tc.args != "" {
 				call.Args = json.RawMessage(tc.args)
 			}
@@ -102,5 +107,20 @@ func TestPermModalClosedTakesNoRows(t *testing.T) {
 	}
 	if got := m.view(40); got != "" {
 		t.Fatalf("reopened-then-closed modal rendered %q, want empty", got)
+	}
+}
+
+// TestPermModalDroppedArgsAddsRow verifies that DroppedArgs adds exactly one row
+// to the full lineCount and only when DroppedArgs is non-empty.
+func TestPermModalDroppedArgsAddsRow(t *testing.T) {
+	mWithout := newPermissionModal()
+	mWithout.open(&agent.ToolCall{ID: "c1", Name: "write_file", Args: json.RawMessage(`{"path":"main.go"}`)})
+
+	mWith := newPermissionModal()
+	mWith.open(&agent.ToolCall{ID: "c2", Name: "write_file", Args: json.RawMessage(`{"path":"main.go"}`), DroppedArgs: []string{"bogus"}})
+
+	if mWith.lineCount() != mWithout.lineCount()+1 {
+		t.Fatalf("expected DroppedArgs to add exactly 1 row to lineCount: without=%d, with=%d",
+			mWithout.lineCount(), mWith.lineCount())
 	}
 }
