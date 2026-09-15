@@ -91,6 +91,19 @@ type Feed struct {
 	// Slash command completion menu.
 	menu *slashMenu
 
+	// @ path completion popup, and the index it completes against.
+	//
+	// pickerIndex is cached because pathindex.Scan is bounded I/O: it must
+	// run once per session, not once per keystroke. pickerScanned records
+	// that the attempt happened (a failed scan must not be retried on every
+	// character), and pickerErr keeps the reason so the user is told instead
+	// of shown an empty file list.
+	picker        *pathPicker
+	pickerRoot    string
+	pickerIndex   pathIndex
+	pickerScanned bool
+	pickerErr     string
+
 	// Permission modal state, driven by the event stream (PermAsk opens
 	// it, PermReply/Interrupted close it).
 	modalVisible      bool
@@ -253,6 +266,7 @@ func NewFeed() *Feed {
 		history:      newUserHistory(),
 		permModal:    newPermissionModal(),
 		menu:         newSlashMenu(),
+		picker:       newPathPicker(),
 	}
 }
 
@@ -439,6 +453,10 @@ func (m *Feed) trackState(e agent.Event) {
 		if m.composer.focused() {
 			m.composer.blur()
 		}
+		// A popup must never sit under a permission decision: the modal
+		// owns the keyboard, and a visible highlighted row would look
+		// answerable while every key goes to the modal.
+		m.picker.close()
 	case agent.PermReply, agent.Interrupted:
 		if e.Type == agent.Interrupted {
 			m.errorSeenSinceSend = true
