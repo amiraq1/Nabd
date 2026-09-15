@@ -31,6 +31,7 @@ type layoutMetrics struct {
 	UnseenRows        int // 0 or 1
 	ModalRows         int // 0 or N (PermissionModal)
 	MenuRows          int // 0 or N (SlashMenu)
+	PickerRows        int // 0 or N (@ path picker)
 
 	// Derived:
 	ViewportRows int // max(0, TerminalHeight - sum(chrome))
@@ -129,12 +130,19 @@ func (m *Feed) computeLayout() layoutMetrics {
 		lm.MenuRows = m.menu.lineCount()
 	}
 
+	// @ picker rows (above composer, same slot as the menu — only one of
+	// the two can be visible, see shouldOpenPathPicker).
+	if m.pickerVisible() {
+		lm.PickerRows = m.picker.lineCount()
+	}
+
 	chrome := func() int {
 		return lm.HeaderRows +
 			lm.RuntimeStatusRows +
 			lm.TopSepRows +
 			lm.ModalRows +
 			lm.MenuRows +
+			lm.PickerRows +
 			lm.UnseenRows +
 			lm.ComposerRows +
 			lm.BottomSepRows +
@@ -153,8 +161,9 @@ func (m *Feed) computeLayout() layoutMetrics {
 	// 5. drop unseen indicator
 	// 6. drop header
 	// 7. compress modal internally (its own documented degradation ladder)
-	// 8. drop runtime status row  — last, it carries Generating/Permission state
-	// 9. remaining rows go to the viewport (may be 0)
+	// 8. compress or drop the composer popups (slash menu, @ picker)
+	// 9. drop runtime status row  — last, it carries Generating/Permission state
+	// 10. remaining rows go to the viewport (may be 0)
 
 	if chrome() > lm.TerminalHeight && lm.BottomSepRows > 0 {
 		lm.BottomSepRows = 0
@@ -168,7 +177,7 @@ func (m *Feed) computeLayout() layoutMetrics {
 	if chrome() > lm.TerminalHeight && lm.HeaderRows > 0 {
 		lm.HeaderRows = 0
 	}
-	if chrome() > lm.TerminalHeight && (lm.ModalRows > 0 || lm.MenuRows > 0) {
+	if chrome() > lm.TerminalHeight && (lm.ModalRows > 0 || lm.MenuRows > 0 || lm.PickerRows > 0) {
 		if lm.ModalRows > 0 {
 			other := chrome() - lm.ModalRows
 			avail := lm.TerminalHeight - other
@@ -186,6 +195,19 @@ func (m *Feed) computeLayout() layoutMetrics {
 				lm.MenuRows = 0
 			} else {
 				lm.MenuRows = m.menu.lineCount(avail)
+			}
+		}
+		if lm.PickerRows > 0 && chrome() > lm.TerminalHeight {
+			other := chrome() - lm.PickerRows
+			avail := lm.TerminalHeight - other
+			if avail < menuMinRows {
+				// Same rule as the slash menu, and for the same reason: the
+				// picker promises exactly lineCount(avail) rows in view(),
+				// so a budget below its floor must drop it outright rather
+				// than let the block overflow the frame.
+				lm.PickerRows = 0
+			} else {
+				lm.PickerRows = m.picker.lineCount(avail)
 			}
 		}
 	}
@@ -315,6 +337,17 @@ func (m *Feed) footerText(width int) string {
 				"y/a/n",
 			}
 		}
+	} else if m.pickerVisible() {
+		// While the popup owns Tab and Enter, the footer must say so: the
+		// default ladder advertises "Enter send", which is false here.
+		candidates = []string{
+			"Tab/Enter insert path · Up/Down select · Esc close · ^C clear",
+			"Tab insert · Up/Down select · Esc close · ^C clear",
+			"Tab insert · Up/Dn select · Esc close",
+			"Tab insert · Esc close",
+			"Tab · Esc",
+			"Esc",
+		}
 	} else if m.navigationMode {
 		// Navigation mode rebinds Enter: it expands the selected card and
 		// never sends. Advertising "Enter send" here would print a false
@@ -358,8 +391,8 @@ func (m *Feed) footerText(width int) string {
 		} else {
 			if hasTools {
 				candidates = []string{
-					"Enter send · Ctrl+J newline · " + hintFull + " · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
-					"Enter send · Ctrl+J new · " + hintFull + " · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
+					"Enter send · Ctrl+J newline · @ files · " + hintFull + " · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+					"Enter send · Ctrl+J new · @ files · " + hintFull + " · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
 					"Enter send · Ctrl+J new · " + hintFull + " · Esc browse · PgUp/PgDn · ^C quit",
 					"Enter send · " + hintMid + " · Esc browse · ^C quit",
 					"Enter send · Esc browse · ^C quit",
@@ -367,7 +400,8 @@ func (m *Feed) footerText(width int) string {
 				}
 			} else {
 				candidates = []string{
-					"Enter send · Ctrl+J newline · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+					"Enter send · Ctrl+J newline · @ files · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+					"Enter send · Ctrl+J new · @ files · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
 					"Enter send · Ctrl+J new · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
 					"Enter send · Esc browse · ^C quit",
 					"Enter send · ^C quit",
@@ -468,13 +502,20 @@ func (m *Feed) View() string {
 		b.WriteByte('\n')
 	}
 
-	// 7. Top separator.
+	// 7. @ path picker (directly above composer; never simultaneous with
+	// the slash menu).
+	if lm.PickerRows > 0 {
+		b.WriteString(m.picker.view(w, lm.PickerRows))
+		b.WriteByte('\n')
+	}
+
+	// 8. Top separator.
 	if lm.TopSepRows > 0 {
 		b.WriteString(dim.Render(lm.topSep))
 		b.WriteByte('\n')
 	}
 
-	// 8. Composer slot.
+	// 9. Composer slot.
 	if m.modalVisible || m.decisionPending {
 		b.WriteString(dim.Render(lm.pausedLine))
 	} else {
@@ -482,13 +523,13 @@ func (m *Feed) View() string {
 	}
 	b.WriteByte('\n')
 
-	// 9. Bottom separator.
+	// 10. Bottom separator.
 	if lm.BottomSepRows > 0 {
 		b.WriteString(dim.Render(lm.bottomSep))
 		b.WriteByte('\n')
 	}
 
-	// 10. Footer.
+	// 11. Footer.
 	b.WriteString(dim.Render(lm.footerLine))
 
 	output := b.String()
