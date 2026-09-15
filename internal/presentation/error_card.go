@@ -19,6 +19,12 @@ type ErrorCard struct {
 	RetryScope   RetryScope
 	JournalPath  string
 	ToolExecuted bool
+	// WaitSeconds is the router's shortest positive retry-after, in seconds
+	// (0 = none reported). It is the one number the reader acts on, so the card
+	// states it on its own line at every width instead of leaving it inside
+	// Message, which the width ladder hides below 40 columns and truncates
+	// above that.
+	WaitSeconds float64
 }
 
 // ErrorCardFromEvent is a pure mapping from persisted facts. Empty legacy
@@ -28,7 +34,9 @@ func ErrorCardFromEvent(e agent.Event) *ErrorCard {
 	if code == "" {
 		code = agent.ErrUnknown
 	}
-	return NewErrorCard(code, e.Err, e.JournalPath)
+	card := NewErrorCard(code, e.Err, e.JournalPath)
+	card.WaitSeconds = e.RetryAfter
+	return card
 }
 
 func ErrorCardFromError(err error) *ErrorCard {

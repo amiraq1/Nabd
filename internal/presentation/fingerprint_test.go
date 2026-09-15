@@ -135,6 +135,24 @@ func TestFingerprintPermSensitivity(t *testing.T) {
 	}
 }
 
+// TestFingerprintErrorWaitSensitivity verifies the wait the card now renders is
+// part of its identity: two otherwise identical cards must not hash the same
+// when one of them states a retry-after.
+func TestFingerprintErrorWaitSensitivity(t *testing.T) {
+	base := FeedItem{
+		Type:  ItemError,
+		Error: &ErrorCard{Code: agent.ErrProviderTemporary, Message: "exhausted"},
+	}
+	changed := base
+	cardCopy := *base.Error
+	cardCopy.WaitSeconds = 20
+	changed.Error = &cardCopy
+
+	if changed.Fingerprint() == base.Fingerprint() {
+		t.Fatal("changing Error.WaitSeconds did not change fingerprint")
+	}
+}
+
 // TestFingerprintInvisibleFields verifies that invisible fields (Seq, ID) do NOT
 // change the fingerprint.
 func TestFingerprintInvisibleFields(t *testing.T) {

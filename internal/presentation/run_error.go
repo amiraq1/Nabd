@@ -69,11 +69,11 @@ func FormatRunError(e agent.Event) RunErrorView {
 		v.Headline += fmt.Sprintf(" · http %d", e.Code)
 	}
 	// The router's structured retry-after is the one number the user acts on
-	// (how long to wait). It is carried as a first-class field on the event,
-	// not parsed out of the free-text message, so it survives every display
-	// layer — including the narrow widths where the message's embedded
-	// "shortest retry-after: Ns" is dropped from Details. Kept separate from
-	// Details/Hint so the ladder can discard prose but never the number.
+	// (how long to wait). It is carried as a first-class field on the event, not
+	// parsed back out of the free-text message, so every surface can state it:
+	// this view renders it on its own line, and the feed card renders it even at
+	// widths where it hides its details line. Kept separate from Details/Hint so
+	// the layout can discard prose but never the number.
 	v.WaitSeconds = e.RetryAfter
 	v.Hint = runErrorHint(code)
 	return v

@@ -113,10 +113,12 @@ func RunErrorEvent(err error) Event {
 	}
 	e := Event{Type: RunError, Err: err.Error(), ErrorCode: string(ErrorCodeOf(err)), JournalPath: JournalPathOf(err)}
 	// Preserve the router's structured retry-after as a first-class field rather
-	// than burying it inside the free-text error string (which is truncated at
-	// several display layers). If the run-level error is a RouterExhaustedError,
-	// its shortest positive retry-after is the one piece of information the user
-	// actually needs to act on, so it must survive to the ErrorCard.
+	// than leaving it inside the free-text error string. The error card hides its
+	// details line below 40 columns and truncates it to the terminal width above
+	// that, so a number that lives only in the message disappears exactly where
+	// it is needed. If the run-level error is a RouterExhaustedError, its shortest
+	// positive retry-after is the one piece of information the user acts on, so
+	// it travels to the card as a field.
 	var ree *provider.RouterExhaustedError
 	if errors.As(err, &ree) && ree.RetryAfter > 0 {
 		e.RetryAfter = ree.RetryAfter.Seconds()

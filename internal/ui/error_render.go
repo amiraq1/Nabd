@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 
 	"nabd/internal/presentation"
@@ -24,6 +25,11 @@ func renderErrorCard(card *presentation.ErrorCard, width int) []string {
 	}
 	out := []string{bad.Render(line(mark, card.Title)), dim.Render(line("  code: ", string(card.Code)))}
 	mode := widthMode(width)
+	// The wait is the one number the reader acts on, so it is rendered at every
+	// width — the width ladder may drop prose (Message) but never this.
+	if card.WaitSeconds > 0 {
+		out = append(out, warn.Render(line("  wait: ", fmt.Sprintf("%.0fs", card.WaitSeconds))))
+	}
 	// Persist paths are safety-critical at every width. Other diagnostic
 	// details are progressively disclosed from compact mode upward.
 	if card.JournalPath != "" {
