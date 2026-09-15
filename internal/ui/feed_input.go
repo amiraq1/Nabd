@@ -38,6 +38,13 @@ func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.menu.visible {
 		return m.menuKey(k)
 	}
+	// The @ picker sits directly below the slash menu: both are transient
+	// composer popups, and only one can ever be open (shouldOpenPathPicker
+	// refuses while the menu is visible), so the order only fixes a tie that
+	// cannot occur rather than hiding one popup behind the other.
+	if m.pickerVisible() {
+		return m.pickerKey(k)
+	}
 	if m.navigationMode {
 		if model, cmd, handled := m.navigationKey(k); handled {
 			return model, cmd
@@ -142,6 +149,10 @@ func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
 		m.composer.clear()
 		m.history.resetBrowsing()
 		m.menu.close()
+		// The text the popup was completing is gone, so the popup must go
+		// with it rather than keep offering paths for a token that no
+		// longer exists.
+		m.picker.close()
 		m.clearStatus()
 		return m, nil
 	}
@@ -162,6 +173,7 @@ func (m *Feed) onCtrlD() (tea.Model, tea.Cmd) {
 	if !m.composer.isEmpty() {
 		cmd := m.composer.deleteForward()
 		m.syncSlashMenu()
+		m.syncPathPicker()
 		return m, cmd
 	}
 	if m.safeToQuit() {
@@ -336,6 +348,10 @@ func isToggleToolsKey(k tea.KeyMsg) bool {
 //     the message to history, and start the run.
 func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 	m.menu.close()
+	// Defensive: while the popup is visible Enter completes and never
+	// reaches here (see pickerKey), but a send from any other path must
+	// not leave a popup floating over a cleared composer.
+	m.picker.close()
 	text := m.composer.value()
 	if strings.TrimSpace(text) == "" {
 		return m, nil
@@ -490,6 +506,7 @@ func (m *Feed) insertNewline() (tea.Model, tea.Cmd) {
 	// only matches on the plain key.
 	cmd := m.composer.update(tea.KeyMsg{Type: tea.KeyEnter})
 	m.syncSlashMenu()
+	m.syncPathPicker()
 	return m, cmd
 }
 
@@ -572,6 +589,7 @@ func (m *Feed) composerEdit(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.composer.growToContent(maxComposerHeight)
 	}
 	m.syncSlashMenu()
+	m.syncPathPicker()
 	return m, cmd
 }
 
