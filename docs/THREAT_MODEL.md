@@ -47,7 +47,8 @@ filesystem sandbox.
 | ReadOnly tools allow without a prompt; Mutating and Executing tools ask | GUARANTEED | `TestReadIsFreeWritesAsk` |
 | `bash` cannot receive a session-wide grant | GUARANTEED | `TestSessionGrantAppliesToWritesOnly`, `TestRawDecisionForBash` |
 | Denied `bash` starts no subprocess | GUARANTEED | `TestBashDeniedRunsNoSubprocess` |
-| Bash child environment is an allowlist, strips unsafe PATH entries, and uses an isolated HOME | GUARANTEED | `TestBashChildEnvAllowlistIntegration`, `TestBashChildEnvPathStripping`, `TestBashChildEnvHomePolicy` |
+| Bash child environment is an allowlist that strips unsafe PATH entries, uses an isolated HOME, and points TMPDIR/TMP/TEMP at one private per-invocation directory | GUARANTEED | `childEnv` starts from an empty environment and copies only its allowlist. The temp-directory variables are no longer inherited: each invocation gets its own `nabd-tmp-*` directory, created 0700, never shared across invocations, and removed when the command finishes; if it cannot be created the child gets no temp variable at all rather than the caller's value. Evidence: `TestBashChildEnvAllowlistIntegration`, `TestBashChildEnvPathStripping`, `TestBashChildEnvHomePolicy`, `TestBashChildTempDirIsIsolatedAndRemoved` |
+| Bash arguments are decoded strictly before any subprocess starts | GUARANTEED | `bashTool.RunDetailed` uses the same `decodeStrict` decoder as `write_file` — duplicate keys rejected by tokenizing the raw object, unknown fields by `DisallowUnknownFields` — instead of `json.Unmarshal`, which keeps the last duplicate key and silently drops unknown ones. A malformed call fails as `invalid args` and runs nothing. Evidence: `TestBashRejectsNonStrictArgs` |
 | Git header subprocess inherits no parent environment: only PATH/TERM/LANG/LC_ALL are forwarded, secrets and `GIT_CONFIG_GLOBAL` are dropped, and Env is never nil | GUARANTEED | `TestGitChildEnvForwardsOnlyAllowlist` |
 | Opened config must be regular, user-owned on Unix, and have no group/other permission bits | GUARANTEED | `internal/config` ParseFile and secure-open tests |
 | Config v1 and Config v2 default files coexistence on disk is fatal at startup | GUARANTEED | `TestV2CoexistenceOnDiskIsFatal` |
@@ -512,6 +513,34 @@ the granted root directly (`filepath.Join(abs, ".git")`) without upward
 traversal, treating a parent repository as out-of-bounds even though `git` itself
 would answer. Evidence: `TestIsGitRepoDetection`.
 
+### Bash child environment and argument validation
+
+`bash` children inherit nothing by default: `childEnv` starts from an empty
+environment and copies only its allowlist, so the caller's `HOME`, credentials,
+and proxy variables never reach an approved command. This revision tightens two
+more properties of that boundary.
+
+**Temporary directories are private to the invocation.** `TMPDIR`, `TMP`, and
+`TEMP` were on the allowlist, so a caller-supplied value was inherited and every
+invocation in the session shared it. They are no longer inherited: each
+invocation gets its own `nabd-tmp-*` directory, created by `MkdirTemp` and
+tightened to 0700, and all three variables point at it until the command
+finishes and the directory is removed. If the directory cannot be created, the
+child receives no temporary-directory variable at all and tooling falls back to
+its own default — never to the caller's value. This bounds what one approved
+command can read from, or leave behind in, a directory shared with the rest of
+the session; it does not bound the filesystem, which `bash` still reaches with
+the current user's authority and without `Root.Resolve` containment.
+
+**Arguments are decoded strictly before anything runs.** `bash` arguments are
+decoded with `decodeStrict` — the decoder `write_file` already used — instead of
+`json.Unmarshal`, which keeps the last value of a duplicate key and ignores
+unknown keys. A duplicated argument key or an unrecognised field now fails as
+`invalid args` and starts no subprocess, so the JSON as written and the arguments
+as executed cannot differ. Decoding is validation only: it grants no authority,
+and `bash` remains the one tool that cannot receive a session-wide grant.
+Evidence: `TestBashRejectsNonStrictArgs`,
+`TestBashChildTempDirIsIsolatedAndRemoved`.
 
 ### Goal mode
 

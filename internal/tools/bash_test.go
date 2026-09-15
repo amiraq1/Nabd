@@ -11,6 +11,42 @@ import (
 	"time"
 )
 
+func TestBashRejectsNonStrictArgs(t *testing.T) {
+	r, _ := newReg(t)
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "unknown field",
+			raw:  `{"cmd":"true","bogus":1}`,
+			want: "unknown field",
+		},
+		{
+			name: "duplicate key",
+			raw:  `{"cmd":"true","cmd":"false"}`,
+			want: "duplicate key",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := r.RunDetailed(
+				context.Background(),
+				"bash",
+				json.RawMessage(tt.raw),
+			)
+			if err == nil {
+				t.Fatalf("RunDetailed accepted %s", tt.name)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error %q does not contain %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestBashTimeoutKillsGrandchildren(t *testing.T) {
 	r, _ := newReg(t)
 	raw, _ := json.Marshal(map[string]any{
