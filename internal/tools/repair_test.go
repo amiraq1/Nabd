@@ -58,6 +58,7 @@ func TestRepairRules(t *testing.T) {
 		raw       json.RawMessage
 		wantTool  string
 		wantField string // a key that must be present in the corrected payload
+		wantGone  string // a key that must be absent from the corrected payload
 		wantRule  string // "" means no fix at all
 	}{
 		// Rule: tool-name alias.
@@ -82,6 +83,13 @@ func TestRepairRules(t *testing.T) {
 		{name: "declared field untouched", tool: "read_file", raw: args(t, map[string]any{"path": "a.go"}), wantTool: "read_file", wantField: "path"},
 		{name: "conflicting spellings are refused", tool: "read_file", raw: args(t, map[string]any{"path": "a.go", "filename": "b.go"}), wantTool: "read_file", wantField: "path"},
 		{name: "alias for an undeclared field is refused", tool: "read_file", raw: args(t, map[string]any{"body": "x"}), wantTool: "read_file"},
+
+		// Rule: undeclared argument key. Plain Repair never removes one — for a
+		// mutating tool that key is the evidence of intent — so the removal is
+		// exercised through the dispatch boundary in
+		// TestRepairDropsUndeclaredKeysOnlyWhereSafe.
+		{name: "timeout is translated, not dropped", tool: "bash", raw: args(t, map[string]any{"cmd": "true", "timeout": 30}), wantTool: "bash", wantField: "timeout_s", wantGone: "timeout", wantRule: RuleFieldAlias},
+		{name: "declared keys are not dropped", tool: "bash", raw: args(t, map[string]any{"cmd": "true", "timeout_s": 30}), wantTool: "bash", wantField: "timeout_s"},
 
 		// Rule: integer sent as text.
 		{name: "offset as text", tool: "read_file", raw: args(t, map[string]any{"path": "a.go", "offset": "2"}), wantTool: "read_file", wantField: "offset", wantRule: RuleIntegerText},
@@ -124,6 +132,15 @@ func TestRepairRules(t *testing.T) {
 				}
 				if _, ok := obj[tc.wantField]; !ok {
 					t.Fatalf("corrected payload lacks field %q: %s", tc.wantField, gotRaw)
+				}
+			}
+			if tc.wantGone != "" {
+				var obj map[string]any
+				if err := json.Unmarshal(gotRaw, &obj); err != nil {
+					t.Fatalf("corrected payload is not an object: %s", gotRaw)
+				}
+				if _, ok := obj[tc.wantGone]; ok {
+					t.Fatalf("corrected payload still carries %q: %s", tc.wantGone, gotRaw)
 				}
 			}
 		})
@@ -277,6 +294,42 @@ func TestRepairPathResolutionIsUntouched(t *testing.T) {
 		Name: "read_file", Input: args(t, map[string]any{"filename": "../escape.go"}),
 	}); err == nil {
 		t.Fatalf("a traversal path resolved after repair; Root.Resolve must remain the only authority in %s", dir)
+	}
+}
+
+// TestRepairDropsUndeclaredKeysOnlyWhereSafe pins the scope of the drop rule,
+// which turns on whether a stray key can change the action that runs. For bash
+// the whole action is the cmd string the prompt shows, so another key is inert:
+// it is removed and reported, and the call runs instead of costing a round. For
+// write_file, old/new/all are live fields of edit_file — dropping one would turn
+// a local edit into a whole-file replacement, a different action — so the call is
+// left exactly as written and the strict decoder rejects it
+// (TestWriteValidationRejectsCrossToolFields owns the end-to-end half of that).
+func TestRepairDropsUndeclaredKeysOnlyWhereSafe(t *testing.T) {
+	reg, _ := fixtureReg(t)
+
+	executing, fixes := reg.RepairCallWithFixes(provider.ToolCall{
+		Name:  "bash",
+		Input: args(t, map[string]any{"cmd": "true", "bogus": 1}),
+	})
+	if got := DroppedKeys(fixes); len(got) != 1 || got[0] != "bogus" {
+		t.Fatalf("dropped keys = %v, want [bogus] (fixes %+v)", got, fixes)
+	}
+	var obj map[string]any
+	if err := json.Unmarshal(executing.Input, &obj); err != nil {
+		t.Fatalf("repaired payload is not an object: %s", executing.Input)
+	}
+	if _, ok := obj["bogus"]; ok {
+		t.Fatalf("undeclared key survived repair: %s", executing.Input)
+	}
+
+	raw := args(t, map[string]any{"path": "a.txt", "content": "x", "old": "original"})
+	mutating, fixes := reg.RepairCallWithFixes(provider.ToolCall{Name: "write_file", Input: raw})
+	if got := DroppedKeys(fixes); len(got) != 0 {
+		t.Fatalf("a mutating call dropped %v; the other tool's fields are evidence, not noise", got)
+	}
+	if string(mutating.Input) != string(raw) {
+		t.Fatalf("a mutating call was rewritten:\n got=%s\nwant=%s", mutating.Input, raw)
 	}
 }
 

@@ -26,9 +26,12 @@ func (g bashGate) Check(tool string) (agent.Verdict, string) {
 func (g bashGate) Record(tool string, d agent.Decision)                   {}
 func (g bashGate) Effective(tool string, d agent.Decision) agent.Decision { return d }
 
-// bashProvider asks for one bash tool call.
+// bashProvider asks for one bash tool call. When raw is set it is sent
+// verbatim, so a test can hand the loop a malformed call as the model wrote it;
+// otherwise the input is {"cmd": cmd}.
 type bashProvider struct {
 	cmd   string
+	raw   json.RawMessage
 	calls int
 }
 
@@ -38,7 +41,10 @@ func (p *bashProvider) Stream(ctx context.Context, req provider.Request) (<-chan
 	ch := make(chan provider.Chunk, 2)
 	p.calls++
 	if p.calls == 1 {
-		raw, _ := json.Marshal(map[string]any{"cmd": p.cmd})
+		raw := p.raw
+		if raw == nil {
+			raw, _ = json.Marshal(map[string]any{"cmd": p.cmd})
+		}
 		ch <- provider.Chunk{Kind: provider.ChunkToolCall, Call: &provider.ToolCall{
 			ID: "call_bash", Name: "bash", Input: raw,
 		}}
@@ -55,6 +61,14 @@ func (p *bashProvider) Stream(ctx context.Context, req provider.Request) (<-chan
 // plus the temp dir.
 func runBash(t *testing.T, verdict agent.Verdict, cmd string) ([]agent.Event, string) {
 	t.Helper()
+	return runBashCall(t, verdict, &bashProvider{cmd: cmd})
+}
+
+// runBashCall is runBash with the provider supplied, so a test can hand the loop
+// the call exactly as the model wrote it (unknown fields, duplicate keys, an
+// aliased field) instead of a well-formed {"cmd": ...}.
+func runBashCall(t *testing.T, verdict agent.Verdict, provider *bashProvider) ([]agent.Event, string) {
+	t.Helper()
 	dir := t.TempDir()
 	root, err := NewRoot(dir)
 	if err != nil {
@@ -67,7 +81,7 @@ func runBash(t *testing.T, verdict agent.Verdict, cmd string) ([]agent.Event, st
 	reg := NewRegistry(root, sh)
 
 	l := &agent.Loop{
-		Provider: &bashProvider{cmd: cmd},
+		Provider: provider,
 		Tools:    bashLoopTools{reg},
 		Budget:   agent.NewBudget(),
 		Gate:     bashGate{verdict: map[string]agent.Verdict{"bash": verdict}},
@@ -143,6 +157,18 @@ type bashLoopTools struct{ reg *Registry }
 func (b bashLoopTools) Specs() []provider.ToolSpec { return b.reg.Specs() }
 func (b bashLoopTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
 	return b.reg.Run(ctx, c)
+}
+
+// RepairCall makes the wrapper satisfy agent.Repairing, as the production
+// wiring does (cmd/ag passes tools.Registry itself). Without it the loop skips
+// repair entirely, so a loop-level test built on this scaffold would silently
+// measure the un-repaired path.
+func (b bashLoopTools) RepairCall(c provider.ToolCall) provider.ToolCall {
+	return b.reg.RepairCall(c)
+}
+
+func (b bashLoopTools) RepairCallWithDrops(c provider.ToolCall) (provider.ToolCall, []string) {
+	return b.reg.RepairCallWithDrops(c)
 }
 func (b bashLoopTools) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
 	return b.reg.RunDetailed(ctx, name, raw)
