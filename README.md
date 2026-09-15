@@ -12,6 +12,7 @@ The installable binary is `nabd`; the package path remains `./cmd/ag`.
 
 | Release | Status |
 |---|---|
+| `v1.5.0` | Published with binaries and `checksums.txt` |
 | `v1.4.0` | Published with binaries and `checksums.txt` |
 | `v1.3.0` | Published with binaries and `checksums.txt` |
 
