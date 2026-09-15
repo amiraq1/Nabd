@@ -7,11 +7,7 @@ import (
 )
 
 func (m *Feed) navigationItems() []presentation.FeedItem {
-	items := mergeNotices(m.proj.Items(), m.notices)
-	if len(items) > maxVisibleFeedItems {
-		items = items[len(items)-maxVisibleFeedItems:]
-	}
-	return items
+	return visibleFeedItems(mergeNotices(m.proj.Items(), m.notices))
 }
 
 // selectItemInPlace updates the selected card index and repaints the feed

@@ -124,12 +124,7 @@ func (m *Feed) clampScroll() {
 // The detection uses a deterministic fingerprint of the rendered lines, so
 // callers no longer need to clone and compare the slice themselves.
 func (m *Feed) refresh() bool {
-	items := mergeNotices(m.proj.Items(), m.notices)
-	// DOCUMENTED DECISION: Vertical trimming at maxVisibleFeedItems shifts the
-	// anchor under from-top index convention when buffer exceeds the cap.
-	if len(items) > maxVisibleFeedItems {
-		items = items[len(items)-maxVisibleFeedItems:]
-	}
+	items := visibleFeedItems(mergeNotices(m.proj.Items(), m.notices))
 
 	// Invalidate entire cache on width change.
 	if m.width != m.cacheWidth {
