@@ -172,6 +172,12 @@ type ToolCall struct {
 	ID   string          `json:"id"`
 	Name string          `json:"name"`
 	Args json.RawMessage `json:"args,omitempty"`
+	// DroppedArgs names the argument keys the repair layer removed before this
+	// call ran, because the tool's schema does not declare them. The loss is
+	// data: a reader can see that the executed arguments are not what the model
+	// wrote, and which keys went missing, without parsing prose. Empty when
+	// nothing was dropped.
+	DroppedArgs []string `json:"dropped_args,omitempty"`
 	// SessionGrantKnown distinguishes live permission requests from legacy
 	// journal entries. When known, the UI must derive the AllowSession option
 	// from SessionGrantAllowed rather than from the tool name.

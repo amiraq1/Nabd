@@ -200,7 +200,7 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 		Offset int    `json:"offset"`
 		Limit  int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &a); err != nil {
+	if err := decodeStrict(raw, &a); err != nil {
 		return "", readMeta{}, false, fmt.Errorf("invalid args: %w", err)
 	}
 

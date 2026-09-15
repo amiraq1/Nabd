@@ -52,6 +52,12 @@ const (
 	RuleFieldAlias   = "field-alias"
 	RuleIntegerText  = "integer-as-string"
 	RuleMarkdownPath = "markdown-link-path"
+	// RuleDropUnknown removes an argument key the tool does not declare, where
+	// that key is inert: it cannot change the action that runs, so keeping it
+	// only buys a rejected call — the strict decoder refuses undeclared fields,
+	// and the round is spent. Where the key could be live the call stays rejected
+	// instead. The drop is recorded, so the loss stays visible.
+	RuleDropUnknown = "unknown-field-dropped"
 )
 
 // readOnlyTools is the only set a name may be inferred to. Inference exists
@@ -107,6 +113,11 @@ var fieldAliases = map[string]string{
 	"bash":      "cmd",
 	"shell_cmd": "cmd",
 
+	// A timeout is translated rather than dropped: dropping it would run the
+	// command under a deadline the model did not ask for, which is worse than
+	// refusing the call. Only a tool that declares timeout_s is affected.
+	"timeout": "timeout_s",
+
 	"regex":  "pattern",
 	"query":  "pattern",
 	"search": "pattern",
@@ -130,7 +141,22 @@ var markdownLinkRE = regexp.MustCompile(`^\[[^\]]*\]\(([^)]+)\)$`)
 // It returns the corrected name and arguments plus the fixes it applied. When
 // nothing is wrong, or when correcting would need more than maxFixes changes,
 // the inputs are returned unchanged with no fixes.
+//
+// It never removes an argument key the tool does not declare by default. For a
+// mutating tool such a key may be a live field of the other tool — dropping `old`
+// from a write_file call turns a local edit into a whole-file replacement — and
+// NBD-010 requires that call be rejected rather than silently narrowed. The
+// dispatch boundary opts into removal only where the key is inert: where it
+// cannot change the action that runs. See the dropUnknown parameter of repair.
 func Repair(name string, raw json.RawMessage, known []provider.ToolSpec) (string, json.RawMessage, []Fix) {
+	return repair(name, raw, known, nil)
+}
+
+// repair is Repair plus the undeclared-key policy: when dropUnknown reports true
+// for the tool the call resolves to, keys its schema does not declare are removed
+// and reported as fixes, so a stray key costs no round. When it reports false the
+// payload is left exactly as written and the strict decoder rejects it.
+func repair(name string, raw json.RawMessage, known []provider.ToolSpec, dropUnknown func(tool string) bool) (string, json.RawMessage, []Fix) {
 	spec, declared := specByName(known, name)
 
 	// Rule: tool-name alias. Only an explicit map entry, only a declared
@@ -153,7 +179,7 @@ func Repair(name string, raw json.RawMessage, known []provider.ToolSpec) (string
 		return name, raw, nil
 	}
 
-	args, argFixes := repairArgs(raw, spec)
+	args, argFixes := repairArgs(raw, spec, dropUnknown != nil && dropUnknown(fixedName))
 
 	fixes := append(append([]Fix{}, nameFixes...), argFixes...)
 	if len(fixes) == 0 {
@@ -166,9 +192,22 @@ func Repair(name string, raw json.RawMessage, known []provider.ToolSpec) (string
 	return fixedName, args, fixes
 }
 
+// DroppedKeys returns the argument keys the fixes removed as undeclared. It is
+// how the agent loop learns what a call lost, so the loss can travel as data on
+// the tool_start event instead of only as a notice.
+func DroppedKeys(fixes []Fix) []string {
+	var out []string
+	for _, f := range fixes {
+		if f.Rule == RuleDropUnknown {
+			out = append(out, f.Field)
+		}
+	}
+	return out
+}
+
 // repairArgs removes wrappers around the payload and then corrects fields
-// against the schema.
-func repairArgs(raw json.RawMessage, spec provider.ToolSpec) (json.RawMessage, []Fix) {
+// against the schema. dropUnknown allows undeclared keys to be removed.
+func repairArgs(raw json.RawMessage, spec provider.ToolSpec, dropUnknown bool) (json.RawMessage, []Fix) {
 	var fixes []Fix
 	payload := raw
 
@@ -197,7 +236,7 @@ func repairArgs(raw json.RawMessage, spec provider.ToolSpec) (json.RawMessage, [
 		return raw, nil
 	}
 
-	fieldFixes, changed := repairFields(obj, spec)
+	fieldFixes, changed := repairFields(obj, spec, dropUnknown)
 	if !changed {
 		if len(fixes) == 0 {
 			return raw, nil
@@ -214,8 +253,9 @@ func repairArgs(raw json.RawMessage, spec provider.ToolSpec) (json.RawMessage, [
 }
 
 // repairFields applies the schema-driven field corrections and reports whether
-// the object changed.
-func repairFields(obj map[string]any, spec provider.ToolSpec) ([]Fix, bool) {
+// the object changed. dropUnknown allows argument keys the schema does not
+// declare to be removed; when it is false they are left for the strict decoder.
+func repairFields(obj map[string]any, spec provider.ToolSpec, dropUnknown bool) ([]Fix, bool) {
 	sch := parseSchema(spec.Schema)
 	if len(sch.Properties) == 0 {
 		return nil, false
@@ -284,6 +324,26 @@ func repairFields(obj map[string]any, spec provider.ToolSpec) ([]Fix, bool) {
 				}
 			}
 		}
+	}
+
+	// Undeclared keys are removed only where the dispatch boundary allows it.
+	// Renames have already run, so a key reachable through an alias is declared
+	// by now; whatever is still undeclared is a field this tool does not have,
+	// and a call carrying it cannot run. The drop is reported as a fix, so what
+	// the call lost is visible rather than silent.
+	var undeclared []string
+	if dropUnknown {
+		for key := range obj {
+			if _, declaredField := sch.Properties[key]; !declaredField {
+				undeclared = append(undeclared, key)
+			}
+		}
+	}
+	sort.Strings(undeclared)
+	for _, key := range undeclared {
+		fixes = append(fixes, Fix{Field: key, Was: shortValue(obj[key]), Rule: RuleDropUnknown})
+		delete(obj, key)
+		changed = true
 	}
 
 	// The scan above walks a map, so the fixes are ordered last for

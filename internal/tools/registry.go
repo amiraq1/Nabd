@@ -206,7 +206,7 @@ func (r *Registry) repairCall(c provider.ToolCall) (provider.ToolCall, []Fix) {
 	if r.repairOff {
 		return c, nil
 	}
-	name, args, fixes := Repair(c.Name, c.Input, r.Specs())
+	name, args, fixes := repair(c.Name, c.Input, r.Specs(), r.mayDropUnknownKeys)
 	for _, f := range fixes {
 		if r.OnRepair != nil {
 			r.OnRepair(f)
@@ -228,6 +228,30 @@ func (r *Registry) RepairCall(c provider.ToolCall) provider.ToolCall {
 // themselves (tests, and anything that wants to report them).
 func (r *Registry) RepairCallWithFixes(c provider.ToolCall) (provider.ToolCall, []Fix) {
 	return r.repairCall(c)
+}
+
+// mayDropUnknownKeys reports whether an undeclared argument key may be removed
+// for this tool. A key may be removed only where it is inert: where it cannot
+// change the action the user approves. For bash the whole action is the `cmd`
+// string the prompt displays, and for the ReadOnly tools an undeclared key cannot
+// change what is read — neither can turn a stray key into a different action.
+// write_file and edit_file are the other case: they share `old`, `new`, `all` and
+// `content` as live fields, so an undeclared key there is how a model says it
+// meant the other tool, and dropping it would replace a rejection with a
+// different write (NBD-010). That pair is exactly the Mutating class, which is
+// why the class answers the question today; a tool whose undeclared keys could be
+// live outside that class needs this revisited, not widened by class.
+func (r *Registry) mayDropUnknownKeys(tool string) bool {
+	class, ok := r.Class(tool)
+	return ok && class != perm.Mutating
+}
+
+// RepairCallWithDrops is RepairCall for the agent loop: it also returns the
+// argument keys the layer removed as undeclared, so the loop can state the loss
+// on the ToolStart event as data rather than only as a notice.
+func (r *Registry) RepairCallWithDrops(c provider.ToolCall) (provider.ToolCall, []string) {
+	fixed, fixes := r.repairCall(c)
+	return fixed, DroppedKeys(fixes)
 }
 
 // spec is sugar so each tool declares its schema in one line.

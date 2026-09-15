@@ -142,6 +142,11 @@ func (m *PermissionModal) hasArgs() bool {
 		string(m.call.Args) != "{}" && string(m.call.Args) != `""`
 }
 
+// hasDroppedArgs reports whether the pending call carries dropped argument keys worth showing.
+func (m *PermissionModal) hasDroppedArgs() bool {
+	return m.call != nil && len(m.call.DroppedArgs) > 0
+}
+
 // safeArgs formats arguments for display without splitting runes or leaking secrets.
 // Enforces: Sanitize -> Redact -> Truncate.
 func safeArgs(args string, maxRunes int) string {
@@ -170,9 +175,9 @@ func safeArgs(args string, maxRunes int) string {
 type permModalLevel int
 
 const (
-	// permLevelFull: top, tool, [args], [blank], choices, [blank], hint, bottom.
+	// permLevelFull: top, tool, [args], [dropped], [blank], choices, [blank], hint, bottom.
 	permLevelFull permModalLevel = iota
-	// permLevelCompact: top, tool, [args], selected choice, hint, bottom.
+	// permLevelCompact: top, tool, [args], [dropped], selected choice, hint, bottom.
 	permLevelCompact
 	// permLevelToolRow: top, tool, selected choice, bottom (hint in the border).
 	permLevelToolRow
@@ -189,10 +194,11 @@ const (
 // shape. So the rows computeLayout reserves are the rows View emits by
 // construction, not by two ladders happening to agree.
 type permModalShape struct {
-	level         permModalLevel
-	rows          int
-	includeArgs   bool
-	includeBlanks bool
+	level          permModalLevel
+	rows           int
+	includeArgs    bool
+	includeDropped bool
+	includeBlanks  bool
 }
 
 // shape resolves the rendering shape for the available height. When maxRows is
@@ -206,14 +212,18 @@ func (m *PermissionModal) shape(maxRows ...int) permModalShape {
 	}
 
 	hasArgs := m.hasArgs()
+	hasDropped := m.hasDroppedArgs()
 	choiceRows := len(m.choices())
 	if m.decisionPending {
 		// A pending decision collapses the three choices into one status row.
 		choiceRows = 1
 	}
-	// top + tool + 2 blanks + choices + hint + bottom, plus the args row.
+	// top + tool + 2 blanks + choices + hint + bottom, plus optional rows.
 	full := 6 + choiceRows
 	if hasArgs {
+		full++
+	}
+	if hasDropped {
 		full++
 	}
 
@@ -223,29 +233,41 @@ func (m *PermissionModal) shape(maxRows ...int) permModalShape {
 	}
 	if limit <= 0 || limit >= full {
 		return permModalShape{
-			level:         permLevelFull,
-			rows:          full,
-			includeArgs:   hasArgs,
-			includeBlanks: true,
+			level:          permLevelFull,
+			rows:           full,
+			includeArgs:    hasArgs,
+			includeDropped: hasDropped,
+			includeBlanks:  true,
 		}
 	}
 
 	// The degradation ladder, as the set of heights that can be filled exactly:
 	// 1. drop the blank rows
 	// 2. drop the args row
-	// 3. show only the selected choice
-	// 4. drop the tool row (tool name moves into the title)
+	// 3. drop the dropped row
+	// 4. show only the selected choice
+	// 5. drop the tool row (tool name moves into the title)
 	candidates := []permModalShape{
-		{level: permLevelFull, rows: full - 2, includeArgs: hasArgs},
+		{level: permLevelFull, rows: full - 2, includeArgs: hasArgs, includeDropped: hasDropped},
 	}
-	if hasArgs {
+	if hasArgs && hasDropped {
 		candidates = append(candidates,
-			permModalShape{level: permLevelFull, rows: full - 3},
-			permModalShape{level: permLevelCompact, rows: 6, includeArgs: true},
+			permModalShape{level: permLevelFull, rows: full - 3, includeArgs: false, includeDropped: true},
+			permModalShape{level: permLevelCompact, rows: 7, includeArgs: true, includeDropped: true},
+			permModalShape{level: permLevelCompact, rows: 6, includeArgs: false, includeDropped: true},
+		)
+	} else if hasArgs {
+		candidates = append(candidates,
+			permModalShape{level: permLevelFull, rows: full - 3, includeArgs: false, includeDropped: false},
+			permModalShape{level: permLevelCompact, rows: 6, includeArgs: true, includeDropped: false},
+		)
+	} else if hasDropped {
+		candidates = append(candidates,
+			permModalShape{level: permLevelCompact, rows: 6, includeArgs: false, includeDropped: true},
 		)
 	}
 	candidates = append(candidates,
-		permModalShape{level: permLevelCompact, rows: 5},
+		permModalShape{level: permLevelCompact, rows: 5, includeArgs: false, includeDropped: false},
 		permModalShape{level: permLevelToolRow, rows: 4},
 	)
 
@@ -356,6 +378,10 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 		return formatRow(fmt.Sprintf("Args: %s", safeArgs(string(m.call.Args), cardW-14)))
 	}
 
+	droppedRow := func() string {
+		return formatRow(fmt.Sprintf("dropped: %s", strings.Join(m.call.DroppedArgs, ", ")))
+	}
+
 	switch sh.level {
 	case permLevelMinimum:
 		// 3 rows: title carries the tool name, one choice, hint in the border.
@@ -390,13 +416,16 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 		}, "\n")
 
 	case permLevelCompact:
-		// 5 or 6 rows: title, tool, [args], one choice, hint row, border.
+		// 5, 6, or 7 rows: title, tool, [args], [dropped], one choice, hint row, border.
 		lines := []string{
 			standardTitle(),
 			formatRow(fmt.Sprintf("Tool: %s (not executed yet) · %s", tool, m.scopeText())),
 		}
 		if sh.includeArgs {
 			lines = append(lines, argsRow())
+		}
+		if sh.includeDropped {
+			lines = append(lines, droppedRow())
 		}
 		sel := selectedChoice()
 		mark := "[*]"
@@ -413,13 +442,16 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 		return strings.Join(lines, "\n")
 	}
 
-	// permLevelFull: title, tool, [args], [blank], choices, [blank], hint, border.
+	// permLevelFull: title, tool, [args], [dropped], [blank], choices, [blank], hint, border.
 	lines := []string{
 		standardTitle(),
 		formatRow(fmt.Sprintf("Tool: %s (not executed yet) · %s", tool, m.scopeText())),
 	}
 	if sh.includeArgs {
 		lines = append(lines, argsRow())
+	}
+	if sh.includeDropped {
+		lines = append(lines, droppedRow())
 	}
 	if sh.includeBlanks {
 		lines = append(lines, formatRow(""))
