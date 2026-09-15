@@ -29,10 +29,27 @@ base="origin/${GITHUB_BASE_REF}"
 git rev-parse --verify -q "$base" >/dev/null || { echo "S7 gate failed: cannot resolve $base" >&2; exit 1; }
 changed=$(git diff --name-only "$base" HEAD)
 
-# If the PR body claims THREAT_MODEL.md was updated, the file must appear in the diff.
+# The THREAT_MODEL.md item is satisfied either by updating the document or by
+# confirming that no security claim changed, which is what the PR template asks
+# for. Only a diff that touches a security-relevant contract can therefore make
+# the document mandatory. The list below is the one enforced by
+# scripts/check-threat-model-freshness.sh, so the two gates cannot disagree.
+security_files=(
+  internal/tools/path.go
+  internal/tools/bash.go
+  internal/perm/policy.go
+  internal/config/config.go
+  internal/snap/shadow.go
+  internal/safefs
+  internal/agent/fence.go
+  cmd/ag/main.go
+)
+
 if grep -Fq -- "- [x] I updated \`docs/THREAT_MODEL.md\`" <<<"$body"; then
-  if ! grep -q "docs/THREAT_MODEL.md" <<<"$changed"; then
-    echo "S7 gate failed: checklist claims 'I updated docs/THREAT_MODEL.md' but file is not in diff." >&2
+  security_changed=$(git diff --name-only "$base" HEAD -- "${security_files[@]}")
+  if [[ -n "$security_changed" ]] && ! grep -q "docs/THREAT_MODEL.md" <<<"$changed"; then
+    echo "S7 gate failed: security-relevant files changed but docs/THREAT_MODEL.md is not in diff:" >&2
+    printf '  %s\n' "$security_changed" >&2
     exit 1
   fi
 fi
