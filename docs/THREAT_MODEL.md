@@ -63,6 +63,7 @@ filesystem sandbox.
 | Rendered failure detail is redacted, bounded, and adds no new source of data | GUARANTEED | `FormatRunError` reads only fields already in the `run_error` event (`Err`, `ErrorCode`, `Code`), passes every line through `cleanField` (sanitizer with redaction enabled), emits single logical lines only, caps detail lines at `maxRunErrorDetails`, and discloses that the remainder stayed in the journal. Hints are fixed literals keyed by `ErrorCode`, never provider text. Evidence: `TestFormatRunErrorKeepsCodeAndRouteDetail`, `TestFormatRunErrorRedactsSecrets`, `TestFormatRunErrorCapsDetails`, `TestRenderRunErrorRedactsSecrets`, `TestRenderRunErrorRespectsWidth` |
 | The router's retry-after reaches the feed as a field and is stated at every width, on both surfaces | GUARANTEED | `agent.RunErrorEvent` lifts the shortest positive `RouterExhaustedError.RetryAfter` onto the pre-existing `Event.RetryAfter` field; `presentation.ErrorCardFromEvent` carries it to `ErrorCard.WaitSeconds` and `FormatRunError` to `RunErrorView.WaitSeconds`. The feed card renders it on its own line before the actionable lines — so the width ladder, which hides the card's `Message` below 40 columns and truncates it above that, can drop prose but never this number — and only a positive value is lifted, so no card claims a wait the router never reported. Evidence: `TestFeedErrorCardShowsWaitAtEveryWidth`, `TestFeedErrorCardStatesNoWaitWhenNoneReported`, `TestErrorCardCarriesWaitSeconds`, `TestRenderRunErrorShowsWaitAtNarrowWidth` |
 | Tool-output truncation is recorded as data and disclosed on the row that reports the result | GUARANTEED | `Event.ForStore()` records the number of discarded bytes in `ToolCall.TruncatedBytes` alongside the existing in-output marker; the field is additive (`omitempty`, legacy journals decode to `0`), the live in-memory event is never mutated, and the renderer states the loss on the `tool_end` row within the terminal width. Evidence: `TestForStoreRecordsTruncatedBytes`, `TestForStoreLeavesSmallOutputAlone`, `TestForStoreDoesNotMutateLiveEvent`, `TestTruncatedBytesIsAdditive`, `TestToolEndStatesTheLoss`, `TestToolEndSaysNothingWhenNothingWasCut`, `TestTruncatedToolRowRespectsWidth` |
+| Feed item retention is bounded and disclosed without mutating journal history | GUARANTEED | When the merged projected feed exceeds `maxVisibleFeedItems`, `visibleFeedItems` inserts one synthetic notice that states the exact number of older items omitted from the in-memory feed and identifies the session journal as the full-history source. The notice occupies one slot, the newest items remain visible, and neither projector items nor journal events are modified. Evidence: `TestVisibleItemCapStatesHiddenHistory`, `TestLineCacheNeverExceedsVisibleItemCap` |
 | Plan mode is strict read-only and cannot be overridden by a session grant or YOLO | GUARANTEED | `perm.Policy` carries a `Mode`; when it is `ModePlan`, `Check` returns `Deny` for every `Mutating`/`Executing` tool and short-circuits before the YOLO and standing-grant branches, so neither a per-session "allow for this session" nor `SetYOLO(true)` can write a byte or run a command. Reads (`ReadOnly`) still pass, so a plan-mode run can inspect the tree but never change it. The mode is applied to both the interactive gate (`gate{pol}` in `doChat`/`doChatWithFeed`) and the headless gate, so the same rule holds with and without a TTY. Evidence: `TestModeTable`, `TestModePlanOverridesGrants`, `TestModePlanAllowsReads` |
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
@@ -396,6 +397,27 @@ is rounded for display only. Evidence:
 `TestFeedErrorCardShowsWaitAtEveryWidth`,
 `TestFeedErrorCardStatesNoWaitWhenNoneReported`, `TestErrorCardCarriesWaitSeconds`,
 `TestRenderRunErrorShowsWaitAtNarrowWidth`.
+
+### Feed-retention disclosure
+
+The interactive feed retains at most `maxVisibleFeedItems` rendered items so a
+long session cannot grow its navigation, line cache, and repaint work without
+bound. Previously, the three consumers of that policy sliced the merged item
+list independently and silently: once the cap was crossed, older cards vanished
+from the feed with no user-visible explanation even though their events remained
+in the append-only session journal.
+
+`visibleFeedItems` is now the single retention boundary used by rendering,
+navigation, and expansion refreshes. When the cap is crossed, one retained slot
+becomes a synthetic notice that states the exact number of older items omitted
+and identifies the session journal as the complete history source. The remaining
+slots hold the newest projected items. The helper allocates a new slice and does
+not modify projector output, UI notices, journal events, or model context.
+
+The disclosure is UI-only and adds no content source: its count is derived from
+slice lengths and its text is fixed. Evidence:
+`TestVisibleItemCapStatesHiddenHistory`,
+`TestLineCacheNeverExceedsVisibleItemCap`.
 
 ### Output-truncation disclosure
 
