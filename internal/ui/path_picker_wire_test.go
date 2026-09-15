@@ -118,33 +118,44 @@ func TestSendClosesThePicker(t *testing.T) {
 	}
 }
 
-func TestPickerRowsAreAccountedForAndDroppedBelowTheFloor(t *testing.T) {
+// TestPickerRowsAreAccountedForAtEveryHeight is the frame contract: whatever
+// the layout reserves, view() must emit exactly that many rows, and the
+// composed frame must never exceed the terminal. The popup is transient
+// chrome, so below the shared popup floor (menuMinRows) it is dropped rather
+// than compressed into rows view() cannot honour.
+func TestPickerRowsAreAccountedForAtEveryHeight(t *testing.T) {
 	m := pickerFeed(t)
 	m.composer.setValue("@")
 	m.syncPathPicker()
 	if !m.pickerVisible() {
 		t.Fatal("a bare @ must open the popup")
 	}
-
-	lm := m.computeLayout()
-	if lm.PickerRows <= 0 {
-		t.Fatal("PickerRows must be counted, or the frame overflows")
-	}
-	if rows := strings.Count(m.picker.view(lm.TerminalWidth, lm.PickerRows), "\n") + 1; rows != lm.PickerRows {
-		t.Fatalf("the popup emitted %d rows but the layout reserved %d", rows, lm.PickerRows)
-	}
-	if got := strings.Count(m.View(), "\n") + 1; got > m.height {
-		t.Fatalf("View emitted %d rows for a %d-row terminal", got, m.height)
+	if m.computeLayout().PickerRows <= 0 {
+		t.Fatal("PickerRows must be counted at a normal height, or the frame overflows")
 	}
 
-	// A terminal too short for the popup drops it rather than compressing it
-	// into rows view() cannot honour.
-	m.height = 5
+	for _, h := range []int{3, 4, 5, 6, 8, 12, 24, 40} {
+		m.height = h
+		lm := m.computeLayout()
+		if lm.PickerRows > 0 {
+			if lm.PickerRows < menuMinRows {
+				t.Fatalf("height %d: PickerRows = %d, below the popup floor %d", h, lm.PickerRows, menuMinRows)
+			}
+			rows := strings.Count(m.picker.view(lm.TerminalWidth, lm.PickerRows), "\n") + 1
+			if rows != lm.PickerRows {
+				t.Fatalf("height %d: the popup emitted %d rows but the layout reserved %d", h, rows, lm.PickerRows)
+			}
+		}
+		if got := strings.Count(m.View(), "\n") + 1; got > h {
+			t.Fatalf("height %d: View emitted %d rows", h, got)
+		}
+	}
+
+	// At three rows the composer and footer alone leave less than the floor,
+	// so the popup must be dropped outright.
+	m.height = 3
 	if rows := m.computeLayout().PickerRows; rows != 0 {
-		t.Fatalf("PickerRows = %d on a 5-row terminal, want it dropped", rows)
-	}
-	if got := strings.Count(m.View(), "\n") + 1; got > m.height {
-		t.Fatalf("View emitted %d rows for a %d-row terminal", got, m.height)
+		t.Fatalf("PickerRows = %d on a 3-row terminal, want it dropped", rows)
 	}
 }
 
