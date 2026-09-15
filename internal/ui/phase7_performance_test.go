@@ -43,6 +43,37 @@ func TestLineCacheNeverExceedsVisibleItemCap(t *testing.T) {
 	}
 }
 
+func TestVisibleItemCapStatesHiddenHistory(t *testing.T) {
+	f := NewFeed()
+	events := make([]agent.Event, 0, maxVisibleFeedItems+100)
+	for i := 0; i < maxVisibleFeedItems+100; i++ {
+		events = append(events, agent.Event{
+			Seq:  i + 1,
+			Type: agent.UserMsg,
+			Text: fmt.Sprintf("retention item %d", i),
+		})
+	}
+
+	f.BuildFromEvents(events)
+	rendered := strings.Join(f.lines, "\n")
+	if !strings.Contains(rendered, "101 older items hidden") {
+		t.Fatalf("visible item cap reported the wrong hidden count or no notice:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "session journal") {
+		t.Fatalf("retention notice did not identify the full-history source:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "retention item 100\n") {
+		t.Fatalf("first hidden item remained visible:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "retention item 101") ||
+		!strings.Contains(rendered, "retention item 599") {
+		t.Fatalf("retained range is incomplete:\n%s", rendered)
+	}
+	if got := len(f.navigationItems()); got != maxVisibleFeedItems {
+		t.Fatalf("navigation items=%d, want cap %d", got, maxVisibleFeedItems)
+	}
+}
+
 func BenchmarkResizeAndStreamingRefresh(b *testing.B) {
 	f := NewFeed()
 	f.BuildFromEvents([]agent.Event{{Seq: 1, Type: agent.TextDelta, Text: strings.Repeat("stream ", 200)}})
