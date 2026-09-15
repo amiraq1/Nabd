@@ -61,10 +61,7 @@ func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // collapse of a running tool.
 // For live execution lifecycle precedence, see expansionOf in expansion.go.
 func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
-	items := mergeNotices(m.proj.Items(), m.notices)
-	if len(items) > maxVisibleFeedItems {
-		items = items[len(items)-maxVisibleFeedItems:]
-	}
+	items := visibleFeedItems(mergeNotices(m.proj.Items(), m.notices))
 
 	if m.follow {
 		m.toolsExpanded = !m.toolsExpanded
