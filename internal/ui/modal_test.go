@@ -490,3 +490,65 @@ func TestModalTermuxSnapshotDimensions(t *testing.T) {
 		})
 	}
 }
+
+// TestModalDroppedArgsDisclosed proves the three cases:
+// 1. Presence of DroppedArgs produces the "dropped: ..." line at width 120.
+// 2. At narrow width 24, the line is present and truncated (not deleted), retaining "dropped: ".
+// 3. Absence of DroppedArgs produces no dropped line and no blank line.
+func TestModalDroppedArgsDisclosed(t *testing.T) {
+	t.Run("present at width 120", func(t *testing.T) {
+		m := newPermissionModal()
+		m.open(&agent.ToolCall{
+			ID:          "c1",
+			Name:        "bash",
+			Args:        json.RawMessage(`{"cmd":"ls"}`),
+			DroppedArgs: []string{"bogus", "other"},
+		})
+		view := m.view(120)
+		if !strings.Contains(view, "dropped: bogus, other") {
+			t.Fatalf("modal at width 120 missing dropped args line, got:\n%s", view)
+		}
+	})
+
+	t.Run("present and truncated at width 24", func(t *testing.T) {
+		m := newPermissionModal()
+		m.open(&agent.ToolCall{
+			ID:          "c2",
+			Name:        "bash",
+			Args:        json.RawMessage(`{"cmd":"ls"}`),
+			DroppedArgs: []string{"bogus_long_argument_key", "another_extra_key"},
+		})
+		view := m.view(24)
+		if !strings.Contains(view, "dropped: ") {
+			t.Fatalf("modal at width 24 missing 'dropped: ' prefix, got:\n%s", view)
+		}
+		if !strings.Contains(view, "…") {
+			t.Fatalf("modal at width 24 should truncate long keys with '…', got:\n%s", view)
+		}
+		found := false
+		for _, l := range strings.Split(view, "\n") {
+			if strings.Contains(l, "dropped:") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("dropped row was deleted at width 24:\n%s", view)
+		}
+	})
+
+	t.Run("absent produces no dropped row", func(t *testing.T) {
+		m := newPermissionModal()
+		m.open(&agent.ToolCall{
+			ID:   "c3",
+			Name: "bash",
+			Args: json.RawMessage(`{"cmd":"ls"}`),
+		})
+		for _, w := range []int{24, 120} {
+			view := m.view(w)
+			if strings.Contains(view, "dropped") {
+				t.Fatalf("modal at width %d must not produce dropped row when DroppedArgs is empty, got:\n%s", w, view)
+			}
+		}
+	})
+}
