@@ -55,7 +55,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		Cmd string `json:"cmd"`
 		T   int    `json:"timeout_s"`
 	}
-	if err := json.Unmarshal(raw, &a); err != nil {
+	if err := decodeStrict(raw, &a); err != nil {
 		return agent.Outcome{}, fmt.Errorf("invalid args: %w", err)
 	}
 	if strings.TrimSpace(a.Cmd) == "" {
