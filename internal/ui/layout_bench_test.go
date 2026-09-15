@@ -181,27 +181,12 @@ func BenchmarkRefreshWithRunningTool(b *testing.B) {
 // BenchmarkRefreshLiveStreaming measures View rendering with 20 items and
 // active live streaming, exercising the runtime throughput ladder in computeLayout.
 func BenchmarkRefreshLiveStreaming(b *testing.B) {
-	f := NewFeed()
-	f.width, f.height = 80, 24
-	f.running, f.busy = true, true
-	start := time.Now()
-	f.reqStartedAt, f.streamStartedAt = start, start
-	f.streamFirstDeltaAt = start.Add(1240 * time.Millisecond)
-	f.streamLastDeltaAt = start.Add(2240 * time.Millisecond)
-	f.streamedChars = 180
-	for i := 1; i <= 19; i++ {
-		_ = f.proj.Apply(agent.Event{
-			Seq:  i,
-			Type: agent.UserMsg,
-			Text: fmt.Sprintf("message %d", i),
-		})
-	}
-	_ = f.proj.Apply(agent.Event{
-		Seq:  20,
-		Type: agent.ToolStart,
-		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
-	})
-	f.refresh()
+	// Use the same fixture as TestViewAllocationsNonRegression so the benchmark
+	// and the guard measure one identical code path (width 120, clock anchored
+	// 10s in the past). Building a divergent fixture here would re-introduce the
+	// width-80 / live-clock mismatch that made the earlier 148 number
+	// incomparable to the guard.
+	f := liveStreamingFeed(b)
 
 	b.ReportAllocs()
 	b.ResetTimer()

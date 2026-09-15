@@ -1,6 +1,6 @@
 # Threat model — v9
 
-Last reviewed: 2026-09-13
+Last reviewed: 2026-09-15
 
 This is the only place nabd states security claims. README points here.
 
