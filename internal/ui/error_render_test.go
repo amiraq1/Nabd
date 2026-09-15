@@ -1,10 +1,14 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/presentation"
+	"nabd/internal/provider"
 )
 
 const renderExhaustedErr = "all 2 route(s) exhausted (mixed failures); shortest retry-after: 20s\n" +
@@ -72,5 +76,80 @@ func TestRenderRunErrorRedactsSecrets(t *testing.T) {
 	}, 66)
 	if strings.Contains(out, "sk-ant-api03-") {
 		t.Fatalf("secret leaked into the failure row: %q", out)
+	}
+}
+
+// exhaustedEvent is the route-exhaustion failure as the loop journals it: the
+// wait is inside the free-text message and, thanks to RunErrorEvent, also on the
+// event as RetryAfter.
+func exhaustedEvent() agent.Event {
+	return agent.RunErrorEvent(&provider.RouterExhaustedError{
+		Attempts: []provider.ProviderError{
+			{Provider: "groq", Model: "m", Body: "rate limit reached"},
+			{Provider: "nvidia", Model: "k", Body: "prestream timeout"},
+		},
+		RetryAfter: 20 * time.Second,
+	})
+}
+
+// TestFeedErrorCardShowsWaitAtEveryWidth is the regression for the failure the
+// report described: the feed card hides its details line below 40 columns and
+// truncates it to the terminal width above that, so the wait the router reported
+// — the one number the reader acts on — was unreadable on a phone terminal at
+// every width except a wide one. The card now states it on its own line, and the
+// width ladder may drop prose but never this.
+func TestFeedErrorCardShowsWaitAtEveryWidth(t *testing.T) {
+	items, err := presentation.NewProjector().Build([]agent.Event{exhaustedEvent()})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("projection failed: items=%#v err=%v", items, err)
+	}
+	for _, width := range []int{20, 24, 39, 40, 66, 80, 120} {
+		lines := renderError(items[0], width)
+		out := strings.Join(lines, "\n")
+		if !strings.Contains(out, "wait: 20s") {
+			t.Errorf("width %d: wait line missing from the feed card: %q", width, out)
+		}
+		for _, line := range lines {
+			if got := lineWidth(line); got > width {
+				t.Fatalf("width %d: line %q is %d cells wide", width, line, got)
+			}
+		}
+	}
+}
+
+// TestFeedErrorCardStatesNoWaitWhenNoneReported keeps 0 meaning "the router
+// reported none" rather than "wait zero seconds".
+func TestFeedErrorCardStatesNoWaitWhenNoneReported(t *testing.T) {
+	ev := agent.RunErrorEvent(errors.New("auth failed: check the key"))
+	items, err := presentation.NewProjector().Build([]agent.Event{ev})
+	if err != nil || len(items) != 1 {
+		t.Fatalf("projection failed: items=%#v err=%v", items, err)
+	}
+	if out := strings.Join(renderError(items[0], 66), "\n"); strings.Contains(out, "wait:") {
+		t.Fatalf("card stated a wait that the router never reported: %q", out)
+	}
+}
+
+// TestRenderRunErrorShowsWaitAtNarrowWidth covers the chat/scrollback surface:
+// RunError goes through presentation.FormatRunError, which states the wait on
+// its own line so it is not buried mid-sentence in the failure text.
+func TestRenderRunErrorShowsWaitAtNarrowWidth(t *testing.T) {
+	ev := exhaustedEvent()
+	for _, width := range []int{24, 40, 66, 120} {
+		out := RenderEvent(ev, width)
+		// The wait line renders on its own line; at narrow widths it may wrap,
+		// so check the two marker words independently rather than the joined
+		// string.
+		if !strings.Contains(out, "wait") {
+			t.Errorf("width %d: 'wait' line missing from output: %q", width, out)
+		}
+		if !strings.Contains(out, "retry-after") {
+			t.Errorf("width %d: 'retry-after' number missing from output: %q", width, out)
+		}
+		for _, line := range strings.Split(out, "\n") {
+			if got := lineWidth(line); got > width {
+				t.Fatalf("width %d: line %q is %d cells wide", width, line, got)
+			}
+		}
 	}
 }

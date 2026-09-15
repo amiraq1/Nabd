@@ -60,6 +60,7 @@ filesystem sandbox.
 | Newly visible route statuses disclose no more than the existing ones | GUARANTEED | `waiting` and `blocked` notices go through the same `display.SanitizeForDisplay` policy with redaction enabled, are single-line, never include `StreamID`, and fall back to fixed placeholders for blank fields. `attempted` and `exhausted` remain hidden. Evidence: `TestFormatRouteNoticeWaitingIsVisible`, `TestFormatRouteNoticeWaitingRedactsSecrets`, `TestFormatRouteNoticeBlockedIsVisible`, `TestFormatRouteNoticeStillHidesStructuralStatuses` |
 | Status-row runtime metadata reports only committed routes and discloses no new fields | GUARANTEED | `StatusProjector.Meta` reports a provider/model only from a `selected` route trace, never from `attempted`, `failed`, `waiting`, or `blocked`; elapsed time freezes at the terminal event; provider and model pass through the same sanitizer as route notices; `StreamID`, credentials, and file paths are never included. Evidence: `TestMetaTracksTurnTokensAndCommittedRoute`, `TestMetaElapsedFreezesAtTerminalEvent`, `TestRuntimeMetaSanitizesRouteFields`, `TestRuntimeStatusRowStaysOneRow` |
 | Rendered failure detail is redacted, bounded, and adds no new source of data | GUARANTEED | `FormatRunError` reads only fields already in the `run_error` event (`Err`, `ErrorCode`, `Code`), passes every line through `cleanField` (sanitizer with redaction enabled), emits single logical lines only, caps detail lines at `maxRunErrorDetails`, and discloses that the remainder stayed in the journal. Hints are fixed literals keyed by `ErrorCode`, never provider text. Evidence: `TestFormatRunErrorKeepsCodeAndRouteDetail`, `TestFormatRunErrorRedactsSecrets`, `TestFormatRunErrorCapsDetails`, `TestRenderRunErrorRedactsSecrets`, `TestRenderRunErrorRespectsWidth` |
+| The router's retry-after reaches the feed as a field and is stated at every width, on both surfaces | GUARANTEED | `agent.RunErrorEvent` lifts the shortest positive `RouterExhaustedError.RetryAfter` onto the pre-existing `Event.RetryAfter` field; `presentation.ErrorCardFromEvent` carries it to `ErrorCard.WaitSeconds` and `FormatRunError` to `RunErrorView.WaitSeconds`. The feed card renders it on its own line before the actionable lines — so the width ladder, which hides the card's `Message` below 40 columns and truncates it above that, can drop prose but never this number — and only a positive value is lifted, so no card claims a wait the router never reported. Evidence: `TestFeedErrorCardShowsWaitAtEveryWidth`, `TestFeedErrorCardStatesNoWaitWhenNoneReported`, `TestErrorCardCarriesWaitSeconds`, `TestRenderRunErrorShowsWaitAtNarrowWidth` |
 | Tool-output truncation is recorded as data and disclosed on the row that reports the result | GUARANTEED | `Event.ForStore()` records the number of discarded bytes in `ToolCall.TruncatedBytes` alongside the existing in-output marker; the field is additive (`omitempty`, legacy journals decode to `0`), the live in-memory event is never mutated, and the renderer states the loss on the `tool_end` row within the terminal width. Evidence: `TestForStoreRecordsTruncatedBytes`, `TestForStoreLeavesSmallOutputAlone`, `TestForStoreDoesNotMutateLiveEvent`, `TestTruncatedBytesIsAdditive`, `TestToolEndStatesTheLoss`, `TestToolEndSaysNothingWhenNothingWasCut`, `TestTruncatedToolRowRespectsWidth` |
 | Plan mode is strict read-only and cannot be overridden by a session grant or YOLO | GUARANTEED | `perm.Policy` carries a `Mode`; when it is `ModePlan`, `Check` returns `Deny` for every `Mutating`/`Executing` tool and short-circuits before the YOLO and standing-grant branches, so neither a per-session "allow for this session" nor `SetYOLO(true)` can write a byte or run a command. Reads (`ReadOnly`) still pass, so a plan-mode run can inspect the tree but never change it. The mode is applied to both the interactive gate (`gate{pol}` in `doChat`/`doChatWithFeed`) and the headless gate, so the same rule holds with and without a TTY. Evidence: `TestModeTable`, `TestModePlanOverridesGrants`, `TestModePlanAllowsReads` |
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
@@ -75,11 +76,8 @@ filesystem sandbox.
 | Opt-in redaction of new journal events | REDUCED | `NABD_REDACT_JOURNAL=1` removes recognized credential patterns (Anthropic, OpenRouter, Groq, NVIDIA, GitHub, GitLab, Slack, `Bearer`/`authorization`) before `Event.ForStore()` and output truncation, via copy-on-write that leaves the live in-memory event untouched. Unrecognized sensitive content, structural fields (paths, tool names, call IDs, hashes, blob addresses, error codes), and the shadow store are unchanged. `--json` applies the same policy so it cannot diverge |
 | Redacted export leaves the source intact | GUARANTEED | `--export --redact` decodes and re-encodes to stdout; the source is opened read-only and never written. Raw `--export` copies source bytes verbatim. Evidence: `TestExportLeavesSourceUntouched`, `TestExportRawIsByteIdentical` |
 | Pointer input can select and expand cards, but never answers permissions or executes tools | GUARANTEED | Evidence: `TestPointerNeverAnswersPermission`, `TestPointerNeverExecutesATool` |
- ui/p8-responsive-chrome
 | Git status header inspects only the granted root and never traverses to a parent repository | GUARANTEED | `isGitRepo` checks `.git` strictly at the root; parent repos are out of bounds. Evidence: `TestIsGitRepoDetection` |
-
 | OSC 52 clipboard copy operates on projected cards only, after credential redaction and display sanitization | GUARANTEED | Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand` |
- master
 | Bash filesystem reach after approval | OUT OF SCOPE | approved shell commands run with the current user's filesystem authority |
 | Network/resource exhaustion from approved bash | OUT OF SCOPE | no namespace, cgroup, or Landlock boundary |
 
@@ -367,6 +365,37 @@ Evidence: `TestFormatRunErrorKeepsCodeAndRouteDetail`,
 `TestRenderRunErrorKeepsRouteCauses`, `TestRenderRunErrorRespectsWidth`,
 `TestRenderRunErrorRedactsSecrets`.
 
+### Route-exhaustion wait disclosure
+
+The route-exhaustion failure (`all N route(s) exhausted; shortest retry-after:
+20s`) carried the one number the reader acts on inside free text, and both
+surfaces then lost it. The feed card hides its `details` line below 40 columns
+and truncates it to the terminal width above that, so at 39 columns the wait was
+not on screen at all and at 66 it read `shortest retr…`. The reader saw what
+failed and never how long to wait — the difference between waiting out a rate
+limit and abandoning a working key.
+
+The number now travels as a field. `agent.RunErrorEvent` lifts the router's
+shortest positive retry-after onto `Event.RetryAfter` — the field the
+rate-limit event already uses for the provider's declared wait — and both
+presentation surfaces read it from there. Two properties hold.
+
+**Mapped from typed values, never parsed.** The wait is recovered with
+`errors.As` on `*provider.RouterExhaustedError`, not by matching the phrase the
+router formatted, and only a positive value is lifted. A run that reported no
+retry-after states no wait, so `0` keeps its meaning of "none reported" instead
+of becoming "wait zero seconds".
+
+**Stated at every width.** `renderErrorCard` emits `wait: Ns` on its own
+unconditional line in every width mode, above the actionable lines; the fixed
+label plus the rounded number fits the 20-column floor the width contracts use,
+so it is not truncated. `RunErrorView.Lines()` states it on its own line for the
+chat scrollback, so the number is not buried mid-sentence there either. The value
+is rounded for display only. Evidence:
+`TestFeedErrorCardShowsWaitAtEveryWidth`,
+`TestFeedErrorCardStatesNoWaitWhenNoneReported`, `TestErrorCardCarriesWaitSeconds`,
+`TestRenderRunErrorShowsWaitAtNarrowWidth`.
+
 ### Output-truncation disclosure
 
 Tool output persisted to the journal is capped at `MaxPersistedOutput`. Until
@@ -472,7 +501,6 @@ headless `deny`), so adopting plan mode is opt-in and cannot silently
 change current behaviour. Evidence: `TestModeTable`,
 `TestModePlanOverridesGrants`, `TestModePlanAllowsReads`.
 
- ui/p8-responsive-chrome
 ### Git status header containment
 
 The interactive feed displays git branch and status information in the header.
@@ -516,4 +544,3 @@ credential redaction and display sanitization. Raw journal bytes and raw
 error bodies are not clipboard sources. Unrecognized sensitive text
 remains a residual risk.
 Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand`.
- master

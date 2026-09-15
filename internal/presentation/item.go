@@ -13,6 +13,7 @@ package presentation
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 
 	"nabd/internal/agent"
@@ -132,6 +133,7 @@ func (it FeedItem) Fingerprint() uint64 {
 		hashString(&h, string(it.Error.RetryScope))
 		hashString(&h, it.Error.JournalPath)
 		hashBool(&h, it.Error.ToolExecuted)
+		hashFloat64(&h, it.Error.WaitSeconds)
 	}
 	if it.Perm != nil {
 		hashString(&h, it.Perm.Name)
@@ -153,6 +155,10 @@ func hashString(h *uint64, s string) {
 }
 func hashInt64(h *uint64, v int64) { *h ^= uint64(v); *h *= 1099511628211 }
 func hashInt(h *uint64, v int)     { *h ^= uint64(v); *h *= 1099511628211 }
+func hashFloat64(h *uint64, v float64) {
+	*h ^= math.Float64bits(v)
+	*h *= 1099511628211
+}
 func hashBool(h *uint64, v bool) {
 	if v {
 		*h ^= 1

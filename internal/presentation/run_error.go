@@ -17,12 +17,14 @@ const maxRunErrorDetails = 6
 //
 // It separates the three things a reader needs and which used to be merged
 // into one opaque line: what failed (Headline), why each route failed
-// (Details, written by the router into the error body), and what to do next
-// (Hint, derived from the journaled ErrorCode).
+// (Details, written by the router into the error body), what to do next
+// (Hint, derived from the journaled ErrorCode), and — when a router reports
+// it — how long to wait before retrying (WaitSeconds).
 type RunErrorView struct {
-	Headline string
-	Details  []string
-	Hint     string
+	Headline    string
+	Details     []string
+	Hint        string
+	WaitSeconds float64
 }
 
 // FormatRunError builds the visible failure from a RunError event.
@@ -66,6 +68,13 @@ func FormatRunError(e agent.Event) RunErrorView {
 	if e.Code > 0 {
 		v.Headline += fmt.Sprintf(" · http %d", e.Code)
 	}
+	// The router's structured retry-after is the one number the user acts on
+	// (how long to wait). It is carried as a first-class field on the event, not
+	// parsed back out of the free-text message, so every surface can state it:
+	// this view renders it on its own line, and the feed card renders it even at
+	// widths where it hides its details line. Kept separate from Details/Hint so
+	// the layout can discard prose but never the number.
+	v.WaitSeconds = e.RetryAfter
 	v.Hint = runErrorHint(code)
 	return v
 }
@@ -87,11 +96,14 @@ func runErrorHint(code ErrorCode) string {
 }
 
 // Lines returns the failure as ordered display lines: headline, route
-// details, then the hint.
+// details, the wait line (when a retry-after is known), then the hint.
 func (v RunErrorView) Lines() []string {
-	out := make([]string, 0, len(v.Details)+2)
+	out := make([]string, 0, len(v.Details)+3)
 	out = append(out, v.Headline)
 	out = append(out, v.Details...)
+	if v.WaitSeconds > 0 {
+		out = append(out, fmt.Sprintf("wait %.0fs (shortest route retry-after)", v.WaitSeconds))
+	}
 	if v.Hint != "" {
 		out = append(out, v.Hint)
 	}
