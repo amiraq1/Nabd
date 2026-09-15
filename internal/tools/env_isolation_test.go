@@ -182,8 +182,10 @@ func TestBashChildEnvAllowsWhitelisted(t *testing.T) {
 	}
 }
 
-// TestBashChildEnvDeterministicOrdering proves the child environment is
-// emitted in deterministic sorted order across two identical runs.
+// TestBashChildTempDirIsIsolatedAndRemoved proves one bash invocation cannot
+// see, or leave anything in, the caller's temporary directory: TMPDIR, TMP and
+// TEMP point at the single private directory created for that invocation, and
+// that directory is gone once the command finishes.
 func TestBashChildTempDirIsIsolatedAndRemoved(t *testing.T) {
 	callerTemp := t.TempDir()
 	t.Setenv("TMPDIR", callerTemp)
@@ -221,6 +223,8 @@ func TestBashChildTempDirIsIsolatedAndRemoved(t *testing.T) {
 	}
 }
 
+// TestBashChildEnvDeterministicOrdering proves the child environment is
+// emitted in deterministic sorted order across two identical runs.
 func TestBashChildEnvDeterministicOrdering(t *testing.T) {
 	t.Setenv("PATH", "/usr/bin:/bin")
 	t.Setenv("TERM", "xterm")

@@ -24,8 +24,15 @@ type Sink interface {
 // The loop asks before it classifies, so the gate, the permission prompt and
 // every journal event name the call that will actually run rather than the one
 // the model wrote. A layer that does not implement it is left alone.
+//
+// The second method is the same correction plus the argument keys the layer
+// removed because the tool does not declare them. Making the drops part of the
+// interface rather than a separate optional hook means a repairing layer cannot
+// correct a call and stay silent about what it removed: what runs, what is
+// classified, what is journaled and what was lost are then one story.
 type Repairing interface {
 	RepairCall(provider.ToolCall) provider.ToolCall
+	RepairCallWithDrops(provider.ToolCall) (provider.ToolCall, []string)
 }
 
 // Tools is the loop's view of the tool registry: it advertises the specs the
@@ -675,12 +682,15 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		// Repair before anything else observes the call: the ToolStart event,
 		// the existence check, the gate and the permission prompt must all name
 		// the call that will run. The tool layer announces each fix through its
-		// own sink, so a repair is in the journal before execution.
+		// own sink, so a repair is in the journal before execution. Keys the
+		// layer dropped ride on the event as data, so the executed arguments
+		// being shorter than the model's is stated rather than implied.
+		var dropped []string
 		if rp, ok := l.Tools.(Repairing); ok {
-			c = rp.RepairCall(c)
+			c, dropped = rp.RepairCallWithDrops(c)
 		}
 
-		ac := ToolCall{ID: c.ID, Name: c.Name, Args: c.Input}
+		ac := ToolCall{ID: c.ID, Name: c.Name, Args: c.Input, DroppedArgs: dropped}
 
 		if err := l.emit(Event{Type: ToolStart, Call: &ac}); err != nil {
 			return false, WrapToolCallError(ac, err)

@@ -11,8 +11,15 @@ import (
 	"time"
 )
 
+// TestBashRejectsNonStrictArgs pins the argument boundary itself, with repair
+// disabled: that is the net behind RepairCall, and it is what any path that does
+// not pass through repair still gets — a direct tool call, or the NBD-420
+// measurement harness. A call carrying an undeclared key or a duplicate key is
+// rejected before any subprocess starts, so the guarantee never rests on the
+// repair layer having recognised the call.
 func TestBashRejectsNonStrictArgs(t *testing.T) {
 	r, _ := newReg(t)
+	r.repairOff = true
 	tests := []struct {
 		name string
 		raw  string
