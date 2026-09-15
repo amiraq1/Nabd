@@ -322,9 +322,9 @@ func TestFooterTableIdle(t *testing.T) {
 		20:  "Enter send · ^C quit",
 		39:  "Enter send · Esc browse · ^C quit",
 		40:  "Enter send · Esc browse · ^C quit",
-		79:  "Enter send · Ctrl+J new · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
-		80:  "Enter send · Ctrl+J new · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
-		120: "Enter send · Ctrl+J newline · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
+		79:  "Enter send · Ctrl+J new · @ files · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
+		80:  "Enter send · Ctrl+J new · @ files · Esc browse · PgUp/PgDn · ^C quit · ^D exit",
+		120: "Enter send · Ctrl+J newline · @ files · Esc browse · PgUp/PgDn scroll · Ctrl+C quit · Ctrl+D exit",
 	}
 	for _, w := range []int{20, 39, 40, 79, 80, 120} {
 		m := NewFeed()
