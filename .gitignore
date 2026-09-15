@@ -1,6 +1,7 @@
 # Build output
 /ag
 /nabd
+/bin/
 
 # Temporary files
 *.tmp
