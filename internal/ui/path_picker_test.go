@@ -39,6 +39,10 @@ func TestFindAtTokenRecognisesOnlyWordOpeningAt(t *testing.T) {
 	}
 }
 
+// TestMatchPathsPrefersFileNamePrefix pins the ranking, best first:
+// file-name prefix (docs/scanning.md, internal/pathindex/scan.go), then
+// file-name contains (internal/ui/rescan_helper.go), then a match anywhere
+// else in the path (internal/scanner/other.go).
 func TestMatchPathsPrefersFileNamePrefix(t *testing.T) {
 	paths := []string{
 		"docs/scanning.md",
@@ -48,10 +52,10 @@ func TestMatchPathsPrefersFileNamePrefix(t *testing.T) {
 	}
 	got := matchPaths(paths, "scan", 10)
 	want := []string{
-		"docs/scanning.md",           // name prefix
-		"internal/pathindex/scan.go", // name prefix
-		"internal/ui/rescan_helper.go", // name contains
-		"internal/scanner/other.go",    // only the directory contains it
+		"docs/scanning.md",
+		"internal/pathindex/scan.go",
+		"internal/ui/rescan_helper.go",
+		"internal/scanner/other.go",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("matchPaths = %v, want %v", got, want)
