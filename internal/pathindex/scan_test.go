@@ -246,3 +246,278 @@ func TestScanCompletesUnderEveryLimit(t *testing.T) {
 		t.Fatalf("Rejected = %d, want 0", idx.Rejected)
 	}
 }
+
+func TestScanGitignoreExcludesMatchingFiles(t *testing.T) {
+	base := t.TempDir()
+	gitignore := []byte("ignored.txt\n*.log\nsecrets.env\n")
+	if err := os.WriteFile(filepath.Join(base, ".gitignore"), gitignore, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"keep.txt", "ignored.txt", "app.log", "secrets.env"} {
+		if err := os.WriteFile(filepath.Join(base, f), []byte("content\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx := Scan(newRootAt(t, base), Config{})
+	if !idx.Complete() {
+		t.Fatalf("Stop = %q, want complete scan", idx.Stop)
+	}
+	// .gitignore itself and keep.txt remain; ignored.txt, app.log, secrets.env are excluded.
+	want := []string{".gitignore", "keep.txt"}
+	if len(idx.Paths) != len(want) {
+		t.Fatalf("Paths = %v, want %v", idx.Paths, want)
+	}
+	for i := range want {
+		if idx.Paths[i] != want[i] {
+			t.Fatalf("Paths[%d] = %q, want %q", i, idx.Paths[i], want[i])
+		}
+	}
+}
+
+func TestScanGitignorePrunesDirectories(t *testing.T) {
+	base := t.TempDir()
+	gitignore := []byte("custom_build/\nignored_dir\n")
+	if err := os.WriteFile(filepath.Join(base, ".gitignore"), gitignore, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"src", "custom_build", "ignored_dir"} {
+		if err := os.MkdirAll(filepath.Join(base, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(base, dir, "file.go"), []byte("package x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx := Scan(newRootAt(t, base), Config{})
+	want := []string{".gitignore", "src/file.go"}
+	if len(idx.Paths) != len(want) {
+		t.Fatalf("Paths = %v, want %v", idx.Paths, want)
+	}
+	for i := range want {
+		if idx.Paths[i] != want[i] {
+			t.Fatalf("Paths[%d] = %q, want %q", i, idx.Paths[i], want[i])
+		}
+	}
+	// Pruning prevents entering the 2 ignored directories: visited dirs should be base + src = 2.
+	if idx.DirsVisited != 2 {
+		t.Fatalf("DirsVisited = %d, want 2 (root and src)", idx.DirsVisited)
+	}
+}
+
+func TestScanGitignoreAbsenceCausesNoRegression(t *testing.T) {
+	idx := Scan(writeTree(t, 2, 2), Config{})
+	if !idx.Complete() {
+		t.Fatalf("Stop = %q, want complete scan", idx.Stop)
+	}
+	want := []string{"d00/f00.go", "d00/f01.go", "d01/f00.go", "d01/f01.go"}
+	if len(idx.Paths) != len(want) {
+		t.Fatalf("Paths = %v, want %v", idx.Paths, want)
+	}
+}
+
+func TestScanGitignorePatternVarieties(t *testing.T) {
+	base := t.TempDir()
+	gitignore := []byte(`
+# Comment line should be ignored
+
+# Directory only
+temp_dir/
+# Root anchored
+/root_only.txt
+# Path containing slash
+pkg/sub/ignore_me.txt
+# Simple wildcard
+*.bak
+`)
+	if err := os.WriteFile(filepath.Join(base, ".gitignore"), gitignore, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(base, "temp_dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "temp_dir", "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A regular file named temp_dir must NOT be ignored because temp_dir/ has a trailing slash
+	if err := os.MkdirAll(filepath.Join(base, "other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "other", "temp_dir"), []byte("not a dir\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(base, "root_only.txt"), []byte("root\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "other", "root_only.txt"), []byte("nested\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(base, "pkg", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "pkg", "sub", "ignore_me.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "pkg", "sub", "keep_me.txt"), []byte("y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(base, "backup.bak"), []byte("bak\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := Scan(newRootAt(t, base), Config{})
+	want := []string{
+		".gitignore",
+		"other/root_only.txt",
+		"other/temp_dir",
+		"pkg/sub/keep_me.txt",
+	}
+	if len(idx.Paths) != len(want) {
+		t.Fatalf("Paths = %v, want %v", idx.Paths, want)
+	}
+	for i := range want {
+		if idx.Paths[i] != want[i] {
+			t.Fatalf("Paths[%d] = %q, want %q", i, idx.Paths[i], want[i])
+		}
+	}
+}
+
+func TestScanGitignoreSymlinkRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks needs privileges on windows")
+	}
+	base := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "fake_gitignore")
+	if err := os.WriteFile(outside, []byte("real.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(base, ".gitignore")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "real.txt"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symlinked .gitignore must be refused and ignored, so real.txt is NOT excluded
+	idx := Scan(newRootAt(t, base), Config{})
+	if len(idx.Paths) != 1 || idx.Paths[0] != "real.txt" {
+		t.Fatalf("Paths = %v, want [real.txt]", idx.Paths)
+	}
+}
+
+// The performance claim in scan.go is a margin, so the untagged guard for it has
+// to be a failing condition and not a log line. A fixed floor alone cannot do
+// that job: on a slow or busy runner the whole 10,000-candidate walk may not fit
+// in DefaultTimeout/20 either way, and a failure there would be measuring the
+// host instead of the matcher. Both halves are therefore enforced together:
+//
+//   - The scan with a .gitignore costs at most gitignoreOverheadCeiling times
+//     the scan of the identical tree without one. That half is machine
+//     independent, and it is the one that fails when pattern matching starts to
+//     scale with the tree.
+//   - The 20x margin scan.go claims, required whenever the no-.gitignore
+//     baseline clears baselineMeasurableMargin. Below that the absolute number
+//     would not be about the matcher, so the requirement is skipped rather than
+//     waived: the ratio above still bounds the matcher's cost on that host.
+//
+// Both walls measure time, so both apply to the plain build: see
+// race_enabled_test.go for why the race detector's run takes the functional
+// assertions only.
+const (
+	// gitignoreOverheadCeiling bounds the cost of matching relative to the same
+	// walk without a .gitignore. Twelve consecutive interleaved runs on
+	// android/arm64 measured 1.01x-1.71x here, so the ceiling leaves room for a
+	// shared runner's scheduler while still failing a matcher that stops being
+	// bounded by the walk it filters.
+	gitignoreOverheadCeiling = 2.5
+	// gitignoreMarginRequirement is the margin scan.go claims: 10,000 candidates
+	// must reach the candidate limit in at most DefaultTimeout/20.
+	gitignoreMarginRequirement = 20.0
+	// baselineMeasurableMargin is derived, not chosen: a baseline must clear the
+	// requirement times the ceiling before the absolute number can say anything
+	// about the matcher. Below it the baseline either hiccuped or the host is
+	// slow, and the requirement is skipped rather than waived -- the ceiling
+	// above still bounds the matcher's cost on that run.
+	baselineMeasurableMargin = gitignoreMarginRequirement * gitignoreOverheadCeiling
+)
+
+// interleavedScans alternates a scan of the tree without a .gitignore with a
+// scan of the identical tree that has one, and returns the fastest elapsed time
+// of each. Alternating matters more than repeating: a slow phase on a shared
+// machine lands in both sides instead of inflating their ratio, and the minimum
+// then discards that interference instead of measuring the host.
+func interleavedScans(plain, ignored *tools.Root, rounds int) (Index, Index) {
+	var bare, matched Index
+	for i := 0; i < rounds; i++ {
+		a := Scan(plain, Config{})
+		b := Scan(ignored, Config{})
+		if i == 0 || a.Elapsed < bare.Elapsed {
+			bare = a
+		}
+		if i == 0 || b.Elapsed < matched.Elapsed {
+			matched = b
+		}
+	}
+	return bare, matched
+}
+
+func TestGitignoreMaintainsPerformanceMarginOnWideTree(t *testing.T) {
+	const dirs, filesPerDir = 600, 20 // 12,000 candidates
+	const rounds = 5
+
+	// Two identical trees, one of them carrying a .gitignore at its root, so each
+	// round walks the same work twice and the matcher is the only difference
+	// between the two measurements.
+	plain := writeTree(t, dirs, filesPerDir)
+	ignored := writeTree(t, dirs, filesPerDir)
+	// The patterns below are deliberately absent from the generated tree:
+	// directories are d00..d599 and files are f00..f19.go, so nothing here matches
+	// and the measurement is the cost of matching every candidate against every
+	// pattern with no pruning to hide it. Pruning has its own assertion in
+	// TestScanGitignorePrunesDirectories.
+	gitignore := []byte("# Standard exclusion suite\nbuild/\n*.tmp\n*.log\nvendor/\nd999/\nf99.go\ndocs/*.md\n")
+	if err := os.WriteFile(filepath.Join(ignored.Dir(), ".gitignore"), gitignore, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	baseline, idx := interleavedScans(plain, ignored, rounds)
+
+	if idx.Stop == StopTimeout {
+		t.Fatalf("the %v cap stopped the walk after %v at %d candidates: .gitignore matching caused timeout to bind",
+			DefaultTimeout, idx.Elapsed.Round(time.Millisecond), idx.Candidates)
+	}
+	if idx.Stop != StopCandidates {
+		t.Fatalf("Stop = %q, want %q: this tree must stop on the candidate limit", idx.Stop, StopCandidates)
+	}
+	baselineMargin := float64(DefaultTimeout) / float64(baseline.Elapsed)
+	margin := float64(DefaultTimeout) / float64(idx.Elapsed)
+	ratio := float64(idx.Elapsed) / float64(baseline.Elapsed)
+	t.Logf("%d candidates: %v without .gitignore (%.1fx), %v with it (%.1fx), overhead ratio %.2fx, against the %v cap",
+		idx.Candidates, baseline.Elapsed.Round(time.Millisecond), baselineMargin,
+		idx.Elapsed.Round(time.Millisecond), margin, ratio, DefaultTimeout)
+
+	if raceEnabled {
+		t.Skip("timing walls apply to the plain build only: ci.yml runs this package without -race and then with it, and the detector's overhead is not proportional between the walk and the matcher")
+	}
+
+	if baseline.Elapsed > 0 {
+		ceiling := time.Duration(float64(baseline.Elapsed) * gitignoreOverheadCeiling)
+		if idx.Elapsed > ceiling {
+			t.Fatalf(".gitignore matching took %v against a %v baseline, above the %.1fx ceiling: the matcher's cost is no longer bounded by the cost of the walk",
+				idx.Elapsed.Round(time.Millisecond), baseline.Elapsed.Round(time.Millisecond), gitignoreOverheadCeiling)
+		}
+	}
+	if baselineMargin >= baselineMeasurableMargin && margin < gitignoreMarginRequirement {
+		t.Fatalf("the baseline clears %.0fx on this host, so the margin is measurable, but the .gitignore scan kept only %.1fx of the %v cap: below the %.0fx scan.go claims",
+			baselineMargin, margin, DefaultTimeout, gitignoreMarginRequirement)
+	}
+	if idx.Elapsed >= DefaultTimeout/2 {
+		t.Fatalf("reaching %d candidates took %v, at or above half the %v cap: performance margin is gone",
+			idx.Candidates, idx.Elapsed.Round(time.Millisecond), DefaultTimeout)
+	}
+}
