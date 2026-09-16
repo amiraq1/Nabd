@@ -1,6 +1,6 @@
-# Threat model — v9
+# Threat model — v10
 
-Last reviewed: 2026-09-16
+Last reviewed: 2026-09-17
 
 This is the only place nabd states security claims. README points here.
 
@@ -97,6 +97,7 @@ filesystem sandbox.
 | Provider credentials are enrolled only through a hidden prompt and never accepted on the command line | GUARANTEED | `nabd connect <provider>` takes exactly one provider identifier; a key-looking token or any second argument is refused with `ErrKeyAsArgument` before any read. The key is read with echo disabled (`term.ReadPassword`, which fails on a non-terminal stdin) and written with `registry.WriteAuthFile` at mode 0600 after the owner check. The confirmation line never contains the key. Evidence: `TestConnectWritesAuthFileWithTightPermissions`, `TestConnectRefusesKeyAsArgument` |
 | The models probe reads the endpoint's own catalog and classifies failures with the existing provider codes | GUARANTEED | `nabd models <provider>` sends `GET <baseURL>/models` with the key in a header (never a query parameter or path), parses only `data[].id`, and maps a non-200 through `provider.ClassifyHTTPStatus` while a transport failure is `temporary`, so a network failure surfaces as the same `provider_temporary`/`provider_auth` vocabulary the runtime uses. Evidence: `TestModelsCommandParsesCatalogResponse` |
 | The provider listing discloses sources, not secrets | GUARANTEED | `nabd provider` reports each provider's definition source (`builtin`/`providers.json`), key source (`auth.json`/`env`/`none`), and dialect, and names `~/.ag/auth.json` for a missing key; it prints no key value. Evidence: `TestProviderCommandReportsMissingKeys` |
+| Any endpoint declared in `providers.json` is accepted, including plaintext and non-public hosts | REDUCED | Withdrawn in v10: the five `base_url` admission conditions this document used to list were never implemented, and the registry accepts arbitrary endpoints, so stating them described a guard that did not exist. Residual: whoever can write `~/.ag/providers.json` can point every prompt, file excerpt, and tool result at an endpoint they control, receive the API key in the `authorization` header, and inject `tool_calls` into the response stream — over plaintext if they choose. Remaining controls: mode 0600 and an owner check on both registry files, exactly two fixed dialects (`openai`/`anthropic`) with no package loaded at request time, and credential redaction in logs and display. Evidence: `TestCustomEndpointIsAcceptedByDesign` |
 | Bash filesystem reach after approval | OUT OF SCOPE | approved shell commands run with the current user's filesystem authority |
 | Network/resource exhaustion from approved bash | OUT OF SCOPE | no namespace, cgroup, or Landlock boundary |
 
@@ -191,30 +192,48 @@ and deadlines remain authoritative. It can therefore never interleave with
 already-delivered output and cannot extend the worst-case latency beyond one
 additional route cycle plus that single wait.
 
-## Future base_url admission conditions
+## Custom endpoints are accepted by design
 
-Minimal strict Config v2 rejects `base_url` unconditionally. If custom endpoints are admitted in future versions to support private or enterprise inference gateways, the implementation MUST satisfy all five security admission conditions before admittance:
+`~/.ag/providers.json` accepts any `options.baseURL`: `https` or `http`, public
+host, loopback, RFC 1918, link-local, or a `.internal`/`.local` suffix. This
+section previously listed five admission conditions that a future custom-endpoint
+implementation was required to satisfy — HTTPS only, globally routable hosts only,
+no embedded credentials, no query or fragment, and cross-host redirect
+containment. **All five are withdrawn as of v10.** None of them was ever
+implemented, and the provider registry already accepts arbitrary endpoints, so
+keeping them here claimed a guard the binary does not have.
 
-1. **HTTPS mandatory**:
-   The endpoint URL scheme must be strictly `https://`. Plaintext `http://` or any other URI schemes are rejected. Unencrypted network transmission of provider API credentials is forbidden.
+The decision behind the withdrawal is one door: adding a provider or a model is a
+JSON edit, with no code change, no rebuild, and no dialect plugin. That is what
+makes a local runtime at `http://127.0.0.1:11434/v1` and a private enterprise
+gateway usable at all, and a rule that rejects plaintext loopback would reject the
+most common legitimate case first.
 
-2. **Host and IP admission restrictions**:
-   The host must resolve to a globally routable public address. The system must explicitly reject:
-   - RFC 1918 private IPv4 subnets (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`).
-   - Loopback addresses: IPv4 `127.0.0.0/8` and IPv6 `::1/128`.
-   - Link-local addresses: IPv4 `169.254.0.0/16` (specifically defending against cloud metadata endpoints such as `169.254.169.254`) and IPv6 `fe80::/10`.
-   - IPv6 Unique Local Addresses (`fc00::/7`).
-   - Local network and mDNS suffixes: `.local`, `.internal`, `.lan`, `.home.arpa`, or unqualified single-label hostnames.
-   - Any address that re-resolves (DNS rebinding) to non-public space at connection dial time.
+What is given up, stated plainly:
 
-3. **No embedded credentials**:
-   The URL must not include userinfo components (`user:password@host`). Embedded credentials in URLs risk leakage in log messages, metrics, and proxy logs.
+- A hostile or mistaken `providers.json` redirects every prompt, file excerpt, and
+  tool result to an endpoint of its choosing.
+- That endpoint receives the provider key in the `authorization` header on every
+  request, in cleartext if the URL is `http`.
+- That endpoint controls the response stream, so it can emit `tool_calls` the
+  model never proposed; those calls still pass the permission gate, which is the
+  boundary that remains.
+- A host that resolves into private or link-local space (including a cloud
+  metadata address) is reachable, so the binary can be used as an SSRF pivot by
+  whoever writes that file.
 
-4. **No query parameters or fragments**:
-   The URL must contain only scheme, host, optional non-privileged port, and an optional clean path prefix. Query parameters (`?`) and fragment identifiers (`#`) are rejected.
+What still holds: both registry files must be regular, owned by the current user,
+and mode 0600, verified from the opened descriptor; only two dialects exist and
+neither is loaded from a package at request time; keys are never written into a
+`bash` child environment and pass through `internal/redact` before any log or
+display; and every tool call the endpoint induces is still classified and
+prompted by the permission layer.
 
-5. **Cross-host redirect containment at HTTP runtime**:
-   Redirect containment cannot rely solely on upfront URL parse validation. The HTTP client's `CheckRedirect` policy function must terminate the request if any HTTP redirect points to a host different from the original validated endpoint host, preventing redirect-based credential leakage or SSRF pivot.
+Minimal strict config v2 continues to reject `base_url`, and that asymmetry is
+deliberate: config v2 is the locked-down schema for an operator who wants no
+custom endpoint at all, while the registry is the open door for one who does.
+Evidence: `TestCustomEndpointIsAcceptedByDesign`,
+`TestV2CredentialFileAndClosedEndpointPolicy`.
 
 ## Journal, shadow, and history concurrency
 
