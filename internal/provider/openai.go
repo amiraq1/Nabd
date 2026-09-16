@@ -14,8 +14,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"nabd/internal/config"
 )
 
 // OpenAICompat speaks the OpenAI chat-completions dialect, which NVIDIA
@@ -76,12 +74,6 @@ func parseTPMCounts(s string) (limit, requested int) {
 
 const nvidiaBase = "https://integrate.api.nvidia.com/v1"
 
-// nvidiaDefaultModel is a catalog entry verified live on 2026-09-03 and
-// known to call tools. Defaults on NIM rot (Friction 1: the previous one
-// answered 410); when this one goes, the 404/410 branch below tells the
-// user how to pick another instead of guessing for them.
-const nvidiaDefaultModel = "moonshotai/kimi-k2.6"
-
 // defaultBaseURLs maps the router-recognized provider names to their canonical
 // base URLs.
 var defaultBaseURLs = map[string]string{
@@ -117,50 +109,6 @@ func NewOpenAIDialect(name, baseURL, model, key string, readCap int) (*OpenAICom
 		retryPolicy:  RetrySingleAttempt,
 		readCapBytes: readCap,
 	}, nil
-}
-
-// NewNVIDIA reads NVIDIA_API_KEY. Pick a model that actually supports
-// tool calling -- most NIM models do not, and one that does not will
-// happily describe the tool it would have called instead of calling it.
-func NewNVIDIA() (*OpenAICompat, error) {
-	k := config.Get("NVIDIA_API_KEY")
-	if k == "" {
-		return nil, errors.New("NVIDIA_API_KEY is not set (env or ~/.ag/config)")
-	}
-	m := config.GetOr("NABD_MODEL", nvidiaDefaultModel)
-	base := config.GetOr("NABD_BASE_URL", nvidiaBase)
-	p, err := NewOpenAIDialect("nvidia", base, m, k, DefaultReadCapBytes)
-	if err != nil {
-		return nil, err
-	}
-	p.retryPolicy = RetryStandalone
-	return p, nil
-}
-
-func NewOpenRouter() (*OpenAICompat, error) {
-	k := config.Get("OPENROUTER_API_KEY")
-	if k == "" {
-		return nil, errors.New("OPENROUTER_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
-	}
-	p, err := NewOpenAIDialect("openrouter", config.GetOr("NABD_BASE_URL", "https://openrouter.ai/api/v1"), config.GetOr("NABD_MODEL", "anthropic/claude-3.5-haiku"), k, DefaultReadCapBytes)
-	if err != nil {
-		return nil, err
-	}
-	p.retryPolicy = RetryStandalone
-	return p, nil
-}
-
-func NewGroq() (*OpenAICompat, error) {
-	k := config.Get("GROQ_API_KEY")
-	if k == "" {
-		return nil, errors.New("GROQ_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
-	}
-	p, err := NewOpenAIDialect("groq", "https://api.groq.com/openai/v1", config.GetOr("NABD_MODEL", "qwen-2.5-32b"), k, GroqReadCapBytes)
-	if err != nil {
-		return nil, err
-	}
-	p.retryPolicy = RetryStandalone
-	return p, nil
 }
 
 // NewOpenAICompatForRoute creates an OpenAICompat provider for router use.

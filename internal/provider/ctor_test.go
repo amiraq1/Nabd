@@ -1,31 +1,55 @@
 package provider
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
 
-// Every constructor must carry its key into the client. NewOpenRouter once
-// lost `Key: k` in a merge and every request answered 401; this pins it.
+	"nabd/internal/registry"
+)
+
+// Every provider built from the registry must carry its key into the client.
+// A constructor once lost `Key: k` in a merge and every request answered 401;
+// this pins the same contract for the registry-driven builders that replaced
+// the per-provider constructors.
 func TestConstructorsCarryKey(t *testing.T) {
-	t.Setenv("NABD_CONFIG", t.TempDir()+"/none")
-	t.Setenv("OPENROUTER_API_KEY", "or-k")
-	t.Setenv("NVIDIA_API_KEY", "nv-k")
-	t.Setenv("GROQ_API_KEY", "gq-k")
-	t.Setenv("ANTHROPIC_API_KEY", "an-k")
+	dir := t.TempDir()
+	env := map[string]string{
+		"ANTHROPIC_API_KEY":  "an-k",
+		"GROQ_API_KEY":       "gq-k",
+		"OPENROUTER_API_KEY": "or-k",
+		"NVIDIA_API_KEY":     "nv-k",
+	}
+	reg, err := registry.LoadFromFiles(
+		filepath.Join(dir, "providers.json"),
+		filepath.Join(dir, "auth.json"),
+		func(k string) string { return env[k] },
+	)
+	if err != nil {
+		t.Fatalf("LoadFromFiles: %v", err)
+	}
 
-	or, err := NewOpenRouter()
-	if err != nil || or.Key != "or-k" {
-		t.Errorf("openrouter: key=%q err=%v", or.Key, err)
-	}
-	nv, err := NewNVIDIA()
-	if err != nil || nv.Key != "nv-k" {
-		t.Errorf("nvidia: key=%q err=%v", nv.Key, err)
-	}
-	gq, err := NewGroq()
-	if err != nil || gq.Key != "gq-k" {
-		t.Errorf("groq: key=%q err=%v", gq.Key, err)
-	}
-	an, err := NewAnthropic()
-	if err != nil || an.Key != "an-k" {
-		t.Errorf("anthropic: key=%q err=%v", an.Key, err)
+	for _, tc := range []struct{ id, want string }{
+		{"anthropic", "an-k"},
+		{"groq", "gq-k"},
+		{"openrouter", "or-k"},
+		{"nvidia", "nv-k"},
+	} {
+		p, err := BuildStandaloneProviderWithRegistry(reg, tc.id, "", "")
+		if err != nil {
+			t.Fatalf("%s: %v", tc.id, err)
+		}
+		var got string
+		switch v := p.(type) {
+		case *Anthropic:
+			got = v.Key
+		case *OpenAICompat:
+			got = v.Key
+		default:
+			t.Fatalf("%s: unexpected provider type %T", tc.id, p)
+		}
+		if got != tc.want {
+			t.Errorf("%s: key = %q, want %q", tc.id, got, tc.want)
+		}
 	}
 }
 
