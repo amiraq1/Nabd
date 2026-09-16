@@ -46,9 +46,14 @@ var (
 	_ ReadCapper = (*Router)(nil)
 )
 
-// ReadCapBytes reports the cap for Anthropic's Messages API, which does not
-// meter tokens per minute on the plans nabd targets.
-func (a *Anthropic) ReadCapBytes() int { return DefaultReadCapBytes }
+// ReadCapBytes reports the cap fixed by the constructor that built this
+// provider. A provider with no declared ceiling reports the package default.
+func (a *Anthropic) ReadCapBytes() int {
+	if a.readCapBytes > 0 {
+		return a.readCapBytes
+	}
+	return DefaultReadCapBytes
+}
 
 // ReadCapBytes reports this provider's cap. The value is fixed by the
 // constructor that built it, so nothing is parsed here.

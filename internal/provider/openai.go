@@ -23,11 +23,12 @@ import (
 // against the same Provider interface is what proves the interface was
 // worth having: the loop and the journal are untouched.
 type OpenAICompat struct {
-	Key         string
-	Model       string
-	BaseURL     string
-	Client      *http.Client
-	retryPolicy RetryPolicy // unexported; set by constructor
+	providerName string
+	Key          string
+	Model        string
+	BaseURL      string
+	Client       *http.Client
+	retryPolicy  RetryPolicy // unexported; set by constructor
 	// readCapBytes is the read ceiling this endpoint can accept, fixed by the
 	// constructor. Zero means "not declared"; ReadCapBytes then reports the
 	// package default. See readcap.go.
@@ -81,6 +82,43 @@ const nvidiaBase = "https://integrate.api.nvidia.com/v1"
 // user how to pick another instead of guessing for them.
 const nvidiaDefaultModel = "moonshotai/kimi-k2.6"
 
+// defaultBaseURLs maps the router-recognized provider names to their canonical
+// base URLs.
+var defaultBaseURLs = map[string]string{
+	"groq":       "https://api.groq.com/openai/v1",
+	"openrouter": "https://openrouter.ai/api/v1",
+	"nvidia":     nvidiaBase,
+}
+
+// NewOpenAIDialect constructs an OpenAI-compatible provider taking explicit parameters.
+func NewOpenAIDialect(name, baseURL, model, key string, readCap int) (*OpenAICompat, error) {
+	if key == "" {
+		return nil, fmt.Errorf("%s: API key is required", name)
+	}
+	if model == "" {
+		return nil, fmt.Errorf("%s: model must be specified explicitly", name)
+	}
+	if baseURL == "" {
+		if def, ok := defaultBaseURLs[name]; ok {
+			baseURL = def
+		} else {
+			return nil, fmt.Errorf("%s: baseURL is required", name)
+		}
+	}
+	if readCap <= 0 {
+		readCap = readCapForRouteName(name)
+	}
+	return &OpenAICompat{
+		providerName: name,
+		Key:          key,
+		Model:        model,
+		BaseURL:      baseURL,
+		Client:       &http.Client{},
+		retryPolicy:  RetrySingleAttempt,
+		readCapBytes: readCap,
+	}, nil
+}
+
 // NewNVIDIA reads NVIDIA_API_KEY. Pick a model that actually supports
 // tool calling -- most NIM models do not, and one that does not will
 // happily describe the tool it would have called instead of calling it.
@@ -91,12 +129,12 @@ func NewNVIDIA() (*OpenAICompat, error) {
 	}
 	m := config.GetOr("NABD_MODEL", nvidiaDefaultModel)
 	base := config.GetOr("NABD_BASE_URL", nvidiaBase)
-	return &OpenAICompat{
-		Key: k, Model: m, BaseURL: base,
-		Client:       &http.Client{},
-		retryPolicy:  RetryStandalone,
-		readCapBytes: DefaultReadCapBytes,
-	}, nil
+	p, err := NewOpenAIDialect("nvidia", base, m, k, DefaultReadCapBytes)
+	if err != nil {
+		return nil, err
+	}
+	p.retryPolicy = RetryStandalone
+	return p, nil
 }
 
 func NewOpenRouter() (*OpenAICompat, error) {
@@ -104,14 +142,12 @@ func NewOpenRouter() (*OpenAICompat, error) {
 	if k == "" {
 		return nil, errors.New("OPENROUTER_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
 	}
-	return &OpenAICompat{
-		Key:          k,
-		Model:        config.GetOr("NABD_MODEL", "anthropic/claude-3.5-haiku"),
-		BaseURL:      config.GetOr("NABD_BASE_URL", "https://openrouter.ai/api/v1"),
-		Client:       &http.Client{},
-		retryPolicy:  RetryStandalone,
-		readCapBytes: DefaultReadCapBytes,
-	}, nil
+	p, err := NewOpenAIDialect("openrouter", config.GetOr("NABD_BASE_URL", "https://openrouter.ai/api/v1"), config.GetOr("NABD_MODEL", "anthropic/claude-3.5-haiku"), k, DefaultReadCapBytes)
+	if err != nil {
+		return nil, err
+	}
+	p.retryPolicy = RetryStandalone
+	return p, nil
 }
 
 func NewGroq() (*OpenAICompat, error) {
@@ -119,53 +155,23 @@ func NewGroq() (*OpenAICompat, error) {
 	if k == "" {
 		return nil, errors.New("GROQ_API_KEY غير مضبوط (في البيئة أو ~/.ag/config)")
 	}
-	return &OpenAICompat{
-		Key:          k,
-		Model:        config.GetOr("NABD_MODEL", "qwen-2.5-32b"),
-		BaseURL:      "https://api.groq.com/openai/v1",
-		Client:       &http.Client{},
-		retryPolicy:  RetryStandalone,
-		readCapBytes: GroqReadCapBytes,
-	}, nil
-}
-
-// defaultBaseURLs maps the router-recognized provider names to their canonical
-// base URLs. Used by NewOpenAICompatForRoute to set a sensible default.
-var defaultBaseURLs = map[string]string{
-	"groq":       "https://api.groq.com/openai/v1",
-	"openrouter": "https://openrouter.ai/api/v1",
-	"nvidia":     nvidiaBase,
+	p, err := NewOpenAIDialect("groq", "https://api.groq.com/openai/v1", config.GetOr("NABD_MODEL", "qwen-2.5-32b"), k, GroqReadCapBytes)
+	if err != nil {
+		return nil, err
+	}
+	p.retryPolicy = RetryStandalone
+	return p, nil
 }
 
 // NewOpenAICompatForRoute creates an OpenAICompat provider for router use.
-// All parameters are passed explicitly — no config globals are read (F14, X12).
-// providerName is one of: groq, openrouter, nvidia.
-// baseURL may be empty; defaultBaseURLs[providerName] is used in that case.
 func NewOpenAICompatForRoute(providerName, model, key, baseURL string) (*OpenAICompat, error) {
-	if key == "" {
-		return nil, fmt.Errorf("%s route: API key is required (not set)", providerName)
-	}
-	if model == "" {
-		return nil, fmt.Errorf("%s route: model must be specified explicitly", providerName)
-	}
-	if baseURL == "" {
-		var ok bool
-		baseURL, ok = defaultBaseURLs[providerName]
-		if !ok {
-			return nil, fmt.Errorf("%s route: unknown provider; cannot determine base URL", providerName)
-		}
-	}
-	return &OpenAICompat{
-		Key:          key,
-		Model:        model,
-		BaseURL:      baseURL,
-		Client:       &http.Client{},
-		retryPolicy:  RetrySingleAttempt,
-		readCapBytes: readCapForRouteName(providerName),
-	}, nil
+	return NewOpenAIDialect(providerName, baseURL, model, key, 0)
 }
 
 func (c *OpenAICompat) Label() string {
+	if c.providerName != "" {
+		return c.providerName
+	}
 	if u, err := url.Parse(c.BaseURL); err == nil {
 		return strings.TrimPrefix(u.Hostname(), "api.")
 	}

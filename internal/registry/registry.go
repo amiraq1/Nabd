@@ -95,6 +95,11 @@ func (p Provider) ResolveModelID(modelKey string) string {
 // Registry holds the loaded providers and models.
 type Registry struct {
 	providers map[string]Provider
+	// ProvidersPath and AuthPath are the resolved files the registry was loaded
+	// from. They are reported by errors and by /provider so the user is told
+	// where a missing provider or key belongs instead of having to guess.
+	ProvidersPath string
+	AuthPath      string
 }
 
 // DefaultPaths returns the standard user paths for providers.json and auth.json.
@@ -185,7 +190,7 @@ func LoadFromFiles(providersPath, authPath string, envLookup func(string) string
 		providers[id] = prov
 	}
 
-	return &Registry{providers: providers}, nil
+	return &Registry{providers: providers, ProvidersPath: providersPath, AuthPath: authPath}, nil
 }
 
 func toProvider(id string, cfg ProviderConfig, source string) Provider {

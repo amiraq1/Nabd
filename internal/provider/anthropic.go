@@ -27,10 +27,38 @@ const (
 )
 
 type Anthropic struct {
-	Key         string
-	Model       string
-	Client      *http.Client
-	retryPolicy RetryPolicy // unexported; set by constructor
+	name         string
+	BaseURL      string
+	Key          string
+	Model        string
+	Client       *http.Client
+	retryPolicy  RetryPolicy // unexported; set by constructor
+	readCapBytes int
+}
+
+// NewAnthropicDialect creates an Anthropic provider with explicit parameters.
+func NewAnthropicDialect(name, baseURL, model, key string, readCap int) (*Anthropic, error) {
+	if key == "" {
+		return nil, fmt.Errorf("%s: API key is required", name)
+	}
+	if model == "" {
+		return nil, fmt.Errorf("%s: model must be specified explicitly", name)
+	}
+	if baseURL == "" {
+		baseURL = apiURL
+	}
+	if readCap <= 0 {
+		readCap = DefaultReadCapBytes
+	}
+	return &Anthropic{
+		name:         name,
+		BaseURL:      baseURL,
+		Key:          key,
+		Model:        model,
+		Client:       &http.Client{},
+		retryPolicy:  RetrySingleAttempt,
+		readCapBytes: readCap,
+	}, nil
 }
 
 // NewAnthropic reads the key from ~/.ag/config, then the environment. The key is never
@@ -41,32 +69,25 @@ func NewAnthropic() (*Anthropic, error) {
 		return nil, errors.New("ANTHROPIC_API_KEY is not set (env or ~/.ag/config)")
 	}
 	m := config.GetOr("NABD_MODEL", defaultModel)
-	// No overall client timeout: a long turn is not a hung turn. The
-	// deadline belongs to ctx, which ctrl+c cancels.
-	return &Anthropic{Key: k, Model: m, Client: &http.Client{},
-		retryPolicy: RetryStandalone}, nil
+	p, err := NewAnthropicDialect("anthropic", apiURL, m, k, DefaultReadCapBytes)
+	if err != nil {
+		return nil, err
+	}
+	p.retryPolicy = RetryStandalone
+	return p, nil
 }
 
 // NewAnthropicForRoute creates an Anthropic provider for use by the router.
-// It accepts all parameters explicitly and never reads globals (F14, X12).
-// retryPolicy MUST be RetrySingleAttempt for router use; the router owns
-// all retry and fallback decisions (H2).
 func NewAnthropicForRoute(model, key string) (*Anthropic, error) {
-	if key == "" {
-		return nil, errors.New("ANTHROPIC_API_KEY: key is required for route construction (not set)")
-	}
-	if model == "" {
-		return nil, errors.New("anthropic route: model must be specified explicitly")
-	}
-	return &Anthropic{
-		Key:         key,
-		Model:       model,
-		Client:      &http.Client{},
-		retryPolicy: RetrySingleAttempt,
-	}, nil
+	return NewAnthropicDialect("anthropic", apiURL, model, key, DefaultReadCapBytes)
 }
 
-func (a *Anthropic) Name() string { return "anthropic/" + a.Model }
+func (a *Anthropic) Name() string {
+	if a.name != "" {
+		return a.name + "/" + a.Model
+	}
+	return "anthropic/" + a.Model
+}
 
 func (a *Anthropic) Stream(ctx context.Context, req Request) (<-chan Chunk, error) {
 	body, err := a.encode(req)
@@ -160,7 +181,13 @@ func (a *Anthropic) run(ctx context.Context, body []byte, out chan<- Chunk) {
 // attempt performs one request. sent reports whether any chunk was
 // forwarded, which is what makes the failure unrecoverable.
 func (a *Anthropic) attempt(ctx context.Context, body []byte, out chan<- Chunk, sent *atomic.Bool) (retryAfter time.Duration, err error) {
-	hr, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(body))
+	endpoint := a.BaseURL
+	if endpoint == "" {
+		endpoint = apiURL
+	} else if !strings.HasSuffix(endpoint, "/messages") {
+		endpoint = strings.TrimRight(endpoint, "/") + "/messages"
+	}
+	hr, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}

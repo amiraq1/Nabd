@@ -5,7 +5,7 @@
 //
 //	routes  = entry ("," entry)*
 //	entry   = provider ":" model
-//	provider = 1..32 bytes, trimmed, lowercased, allow-listed
+//	provider = 1..32 bytes, trimmed, lowercased, matching [a-z0-9-_]
 //	model    = 1..256 bytes, trimmed, case-preserved, may contain ':'
 //
 // The comma is the only field separator and cannot be escaped in v1.2.0.
@@ -22,7 +22,7 @@ import (
 
 // Route is an executable route containing an initialized SingleAttempt provider client (Section E).
 type Route struct {
-	Provider string        // normalized, lowercase, allow-listed
+	Provider string        // normalized to lowercase; matches [a-z0-9-_]
 	Model    string        // case-preserved, may contain ':'
 	Client   SingleAttempt // constructed with explicit model, no globals
 }
@@ -36,24 +36,13 @@ type SingleAttempt interface {
 // RouteEntry is a parsed, validated (provider, model) pair from NABD_ROUTES.
 // It holds no key material and is safe to log after redaction.
 type RouteEntry struct {
-	// Provider is normalized (lowercase, allow-listed).
+	// Provider is normalized to lowercase and matches [a-z0-9-_]. It is not
+	// checked against a catalog here: whether it is configured is decided at
+	// route-construction time by the registry.
 	Provider string
 	// Model is case-preserved; may contain ':' (e.g. "some-model:free").
 	Model string
 }
-
-// AllowedProviders is the closed set of provider identifiers supported in v1.2.0.
-// Any value not in this set is rejected at startup with a clear error.
-var AllowedProviders = []string{"anthropic", "groq", "openrouter", "nvidia"}
-
-// allowedProviderSet is the map form for O(1) lookup.
-var allowedProviderSet = func() map[string]struct{} {
-	m := make(map[string]struct{}, len(AllowedProviders))
-	for _, p := range AllowedProviders {
-		m[p] = struct{}{}
-	}
-	return m
-}()
 
 const (
 	maxRoutes        = 16
@@ -83,7 +72,9 @@ func (e ParseRouteErrors) Unwrap() []error { return []error(e) }
 //   - 1..16 entries (F4).
 //   - No trailing comma; no empty entry (F6).
 //   - Each entry must have exactly one ':' separator (split at first ':') (F6).
-//   - Provider: non-empty, ≤32 bytes, lowercased, in AllowedProviders (F6).
+//   - Provider: non-empty, ≤32 bytes, lowercased, matching [a-z0-9-_] (F6).
+//     The catalog is not consulted here; a provider that is not configured is
+//     reported at route construction with the file to add it in.
 //   - Model: non-empty, ≤256 bytes, case-preserved (F6).
 //   - No ASCII control chars, CR, LF, NUL, or invalid UTF-8 (F7).
 //   - No exact duplicate (provider+model) pairs after normalization (F5).
@@ -180,10 +171,13 @@ func parseRouteEntry(raw string, i int) (RouteEntry, error) {
 			i, len(model), maxModelBytes)
 	}
 
-	if _, ok := allowedProviderSet[prov]; !ok {
-		return RouteEntry{}, fmt.Errorf(
-			"NABD_ROUTES[%d]: unknown provider %q; supported: %s",
-			i, prov, strings.Join(AllowedProviders, ", "))
+	for idx := 0; idx < len(prov); idx++ {
+		c := prov[idx]
+		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_') {
+			return RouteEntry{}, fmt.Errorf(
+				"NABD_ROUTES[%d]: invalid character %q in provider name %q; must match [a-z0-9-_]",
+				i, c, prov)
+		}
 	}
 
 	return RouteEntry{Provider: prov, Model: model}, nil
