@@ -54,10 +54,41 @@ if grep -Fq -- "- [x] I updated \`docs/THREAT_MODEL.md\`" <<<"$body"; then
   fi
 fi
 
+# The regression-test item, like the THREAT_MODEL item, is satisfied either by a
+# test or by explaining why no test is applicable — the PR template says so. A
+# diff that cannot change behaviour is that explanation: every changed file is
+# Markdown, lives under docs/, or is a .go file whose added and removed lines are
+# all comments or blank. One executable Go line, one script, workflow, or
+# fixture, and a test is required exactly as before.
+behaviour_free_diff() {
+  local file hunk line content
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    case "$file" in
+    *.md | docs/*) continue ;;
+    *.go)
+      hunk=$(git diff -U0 "$base" HEAD -- "$file" | grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' || true)
+      while IFS= read -r line; do
+        [[ -n "$line" ]] || continue
+        content=${line:1}
+        content=${content#"${content%%[![:space:]]*}"}
+        [[ -z "$content" || $content == //* ]] || return 1
+      done <<<"$hunk"
+      ;;
+    *) return 1 ;;
+    esac
+  done <<<"$changed"
+  return 0
+}
+
 # If the PR body claims a regression test was added/updated, a *_test.go file must be in the diff.
 if grep -Fq -- "- [x] I added or updated a regression test" <<<"$body"; then
   if ! grep -Eq "_test\.go$" <<<"$changed"; then
-    echo "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff." >&2
-    exit 1
+    if behaviour_free_diff; then
+      echo "Regression-test cross-check skipped: the diff changes only comments and documentation."
+    else
+      echo "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff." >&2
+      exit 1
+    fi
   fi
 fi
