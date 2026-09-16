@@ -84,6 +84,8 @@ func runModelsCommand(args []string, out, errOut io.Writer, client *http.Client)
 	for _, m := range ids {
 		fmt.Fprintln(out, m)
 	}
+	// The list is the endpoint's catalog, not a verdict on the credential.
+	fmt.Fprintln(errOut, providercmd.CatalogIsNotACredentialCheck)
 	return 0
 }
 

@@ -618,21 +618,21 @@ func die(err error) {
 	os.Exit(1)
 }
 
+// pickProvider selects the interactive provider. NABD_PROVIDER is a free
+// registry identifier: "router" selects the router, and every other value is
+// resolved through the registry, so a provider a user adds to providers.json is
+// selectable without a code change. An identifier the registry does not know is
+// an error naming the file — never a silent fall-through to the
+// credential-detection order below, which now runs only when nothing was named.
 func pickProvider() (provider.Provider, error) {
 	if err := config.Load(); err != nil {
 		return nil, err
 	}
-	switch config.Get("NABD_PROVIDER") {
-	case "router":
-		return pickRouterProvider()
-	case "nvidia":
-		return provider.BuildStandaloneProvider("nvidia")
-	case "anthropic":
-		return provider.BuildStandaloneProvider("anthropic")
-	case "openrouter":
-		return provider.BuildStandaloneProvider("openrouter")
-	case "groq":
-		return provider.BuildStandaloneProvider("groq")
+	if id := strings.ToLower(strings.TrimSpace(config.Get("NABD_PROVIDER"))); id != "" {
+		if id == "router" {
+			return pickRouterProvider()
+		}
+		return provider.BuildStandaloneProvider(id)
 	}
 
 	if config.Has("GROQ_API_KEY") {

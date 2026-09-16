@@ -18,6 +18,13 @@ import (
 // cannot make the command read without limit.
 const maxCatalogBytes = 1 << 20
 
+// CatalogIsNotACredentialCheck is printed after a successful listing. A 200
+// from /models proves the catalog is readable, not that the key is valid: some
+// endpoints answer it without authenticating at all, so a bogus key still gets
+// 200. The first inference request is the real check.
+const CatalogIsNotACredentialCheck = "note: a successful /models listing does not prove the API key is valid — " +
+	"some endpoints answer it without authenticating. The first inference request is the real check."
+
 // ModelCatalog is the shared shape of an OpenAI- or Anthropic-style /models
 // response: a data array of objects carrying an id.
 type ModelCatalog struct {
