@@ -122,20 +122,24 @@ func TestParseRoutesRejectsEmptyEntry(t *testing.T) {
 	}
 }
 
-// ─── TestParseRoutesRejectsUnknownProvider ───────────────────────────────────
+// ─── TestParseRoutesDefersProviderCatalogCheck ───────────────────────────────
 
-func TestParseRoutesRejectsUnknownProvider(t *testing.T) {
-	_, err := ParseRoutes("unknownprovider:some-model")
-	if err == nil {
-		t.Fatal("expected error for unknown provider, got nil")
+// ParseRoutes validates the provider's shape, not its existence. A name that
+// matches [a-z0-9-_] parses even when it is not in any catalog; whether it is
+// configured is decided later by the registry, so the error can name the file
+// to add it in. A name outside the character set is still rejected here.
+func TestParseRoutesDefersProviderCatalogCheck(t *testing.T) {
+	routes, err := ParseRoutes("unknownprovider:some-model")
+	if err != nil {
+		t.Fatalf("an unlisted but well-formed provider must parse; got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "unknown provider") {
-		t.Errorf("error should mention unknown provider, got: %v", err)
+	if len(routes) != 1 || routes[0].Provider != "unknownprovider" {
+		t.Fatalf("unexpected routes: %+v", routes)
 	}
-	// Must list supported providers
-	for _, p := range AllowedProviders {
-		if !strings.Contains(err.Error(), p) {
-			t.Errorf("error should list supported provider %q, got: %v", p, err)
+
+	for _, bad := range []string{"Bad Provider:model", "up!per:model", "dot.ted:model", "café:model"} {
+		if _, err := ParseRoutes(bad); err == nil {
+			t.Errorf("ParseRoutes(%q) must reject a provider outside [a-z0-9-_]", bad)
 		}
 	}
 }
@@ -202,8 +206,8 @@ func TestParseRoutesRejectsInvalidUTF8(t *testing.T) {
 
 func TestParseRoutesRejectsOverlongProvider(t *testing.T) {
 	longProv := strings.Repeat("a", maxProviderBytes+1)
-	// Use a known allowed provider prefix then pad — but provider won't match allowed list.
-	// The overlong check fires before the allow-list check.
+	// The length check fires before the character-set check, so any overlong
+	// name is rejected as "too long" regardless of its characters.
 	_, err := ParseRoutes(longProv + ":some-model")
 	if err == nil {
 		t.Fatal("expected error for overlong provider, got nil")
@@ -378,29 +382,6 @@ func TestParseRouteErrorsUnwrapsToIndividualErrors(t *testing.T) {
 	}
 	if len(pre) == 0 {
 		t.Fatal("ParseRouteErrors must contain at least one inner error")
-	}
-}
-
-// ─── allow-list completeness ──────────────────────────────────────────────────
-
-func TestAllowedProvidersMatchAllowedSet(t *testing.T) {
-	// Every entry in AllowedProviders must be in allowedProviderSet and vice versa.
-	for _, p := range AllowedProviders {
-		if _, ok := allowedProviderSet[p]; !ok {
-			t.Errorf("AllowedProviders contains %q but allowedProviderSet does not", p)
-		}
-	}
-	for p := range allowedProviderSet {
-		found := false
-		for _, a := range AllowedProviders {
-			if a == p {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("allowedProviderSet contains %q but AllowedProviders does not", p)
-		}
 	}
 }
 
