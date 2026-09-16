@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -213,6 +214,18 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 		return "", readMeta{}, false, err
 	}
 	defer f.Close()
+
+	// The path rule runs before any byte is read, and after the descriptor is
+	// open because that descriptor — not a second path lookup — is what proves
+	// which file this is. It is deliberately NOT a second containment check:
+	// acceptance for this refusal is that a directly named path is refused for
+	// being ignored, not for being outside the root, and the message says which.
+	rel := filepath.ToSlash(t.root.Rel(p))
+	if t.reg != nil {
+		if refused, why := t.reg.pathRefused(rel); refused {
+			return "", readMeta{}, false, fmt.Errorf("read refused: %s", why)
+		}
+	}
 
 	fi, err := f.Stat()
 	if err != nil {

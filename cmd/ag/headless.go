@@ -203,6 +203,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 	}
 	reg := tools.NewRegistry(root, sh)
 	pol := perm.New(reg)
+	wirePathRule(root, reg, pol)
 	pol.SetMode(cfg.mode)
 
 	var sinks agent.Fanout

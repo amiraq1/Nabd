@@ -246,6 +246,14 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 	if err != nil {
 		return "", false, err
 	}
+	// An excluded path must be refused before any byte is read: edit_file
+	// cannot operate without inspecting the old content, which violates the
+	// non-disclosure boundary of .gitignore.
+	if w.reg != nil {
+		if refused, why := w.reg.pathEditRefused(rel); refused {
+			return "", false, fmt.Errorf("edit refused: %s", why)
+		}
+	}
 	// T3: the size check and the read share one descriptor, so the file that
 	// was measured is provably the file that was read.
 	src, err := readSourceFromRoot(w.root, rel, abs, maxEditBytes)

@@ -21,7 +21,10 @@ const (
 	maxGrepBytes = 2 * 1024 * 1024 // per file
 )
 
-type grepFiles struct{ root *Root }
+type grepFiles struct {
+	root *Root
+	reg  *Registry
+}
 
 var _ Classified = grepFiles{}
 
@@ -84,6 +87,10 @@ func (t grepFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 
 	var b strings.Builder
 	hits, files, truncated := 0, 0, false
+	// excluded counts files the path rule refused, so the summary can say the
+	// search did not cover them. Silently returning "no match" for a file that
+	// holds the match is the kind of half-truth this project treats as a bug.
+	excluded := 0
 
 	scan := func(p string) error {
 		rel, abs, err := writePathFromRoot(t.root, p)
@@ -93,6 +100,15 @@ func (t grepFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 		rel = filepath.ToSlash(rel)
 		if segs != nil && !matchSegs(segs, strings.Split(rel, "/")) {
 			return nil
+		}
+		// A search is a read. grep is ReadOnly, so without this the ignore rule
+		// that read_file honours would be one `grep pattern .` away from being
+		// irrelevant: the content would leave in a match line instead of a read.
+		if t.reg != nil {
+			if refused, _ := t.reg.pathRefused(rel); refused {
+				excluded++
+				return nil
+			}
 		}
 		// T4: WalkDir reports a symlink as a plain entry, so opening by path
 		// here would follow it and print an outside file's content under an
@@ -168,14 +184,25 @@ func (t grepFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	}
 
 	if hits == 0 {
-		return fmt.Sprintf("no match · %s", a.Pattern), true, nil
+		return fmt.Sprintf("no match · %s%s", a.Pattern, excludedSuffix(excluded)), true, nil
 	}
 	fmt.Fprintf(&b, "— %d matches in %d files", hits, files)
 	if truncated {
 		b.WriteString(" · truncated")
 	}
+	b.WriteString(excludedSuffix(excluded))
 	b.WriteString("\n")
 	return b.String(), true, nil
+}
+
+// excludedSuffix discloses files the path rule kept out of a search, or nothing
+// when it kept none out. A run that silently searched less than it was asked to
+// is indistinguishable from a run that found nothing.
+func excludedSuffix(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" · %d files excluded by the session .gitignore", n)
 }
 
 // limitedReader caps a single file without capping the walk.
