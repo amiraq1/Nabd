@@ -87,6 +87,7 @@ filesystem sandbox.
 | Release artifacts are signed | GUARANTEED | `.goreleaser.yaml` signs every binary artifact with `cosign sign-blob` and stores the certificate; the build is pinned to a known Go toolchain. Evidence: `TestReleasePipelineContracts` |
 | Security gate scripts are mechanically checked | GUARANTEED | `scripts/check-pr-security-checklist.sh` enforces Phase 1 of the PR template; `scripts/check-threat-model-tests.sh` verifies every backtick-quoted test citation in this document resolves to a real `Test*` function. Evidence: `TestPRChecklistGateScopesThreatModelClaim`, `TestPRChecklistGateSecurityPathsAreRealBoundaries` |
 | Pathindex is a security surface in the default UI | GUARANTEED | The `@` picker is reachable by default through `Feed.SetPickerRoot`; its traversal, exclusion, limits, and partial-index disclosure are documented and tested. Evidence: `TestDefaultTimeoutDoesNotBindBeforeTheCandidateLimit`, `TestPickerExplicitSessionRootOverridesGitDir`, `TestScanRefusesSymlinkedEntries` |
+| Semantic loop detection bounds repeating identical tool executions | GUARANTEED | Tool calls are fingerprinted by `(tool, hash(input), hash(output-error))` across turns in a run; identical calls trigger a conversational notice at 3 repeats and a hard cut with `ErrToolLoop` at 5 repeats, preventing token and turn exhaustion from looping models. Evidence: `TestToolLoopNoticeAtThreeRepeats`, `TestToolLoopHardCutAtFiveRepeats`, `TestToolLoopCanonicalJSONKeyOrdering`, `TestToolLoopResetAcrossRuns` |
 | Bash filesystem reach after approval | OUT OF SCOPE | approved shell commands run with the current user's filesystem authority |
 | Network/resource exhaustion from approved bash | OUT OF SCOPE | no namespace, cgroup, or Landlock boundary |
 
@@ -705,3 +706,20 @@ When the tool-call repair layer drops inert undeclared arguments from a call, th
 **Vertical degradation preserves safety floor.** Under constrained vertical terminal heights, `permModalShape` gracefully reduces reserved rows by dropping blank lines first, followed by the args row, and then the dropped row, descending to the fail-closed minimum 3-row floor without crashing or misaligning modal layout. When `DroppedArgs` is empty, no dropped row is allocated or rendered.
 
 Evidence: `TestModalDroppedArgsDisclosed`, `TestPermModalRowsMatchLineCount`.
+
+### Semantic loop detection and tool repetition limits
+
+The agent loop turn ceiling (`max-turns = 40`) is a numerical guard, not a semantic circuit breaker. A confused model that repeatedly invokes the same tool with identical arguments and receives identical errors or outputs would otherwise consume all 40 turns, exhausting API token budgets and delaying operator feedback.
+
+**Tool execution fingerprinting.** Every tool invocation is fingerprinted by a 3-tuple `(tool, hash(input), hash(output-error))` recorded after execution:
+1. `tool`: Exact tool name.
+2. `hash(input)`: SHA-256 digest of canonicalized JSON arguments (lexicographically sorted keys via Go `json.Marshal`), falling back to raw byte hashing for non-JSON payloads.
+3. `hash(output-error)`: SHA-256 digest of execution outcome, capturing both `OK` boolean status and output/error text.
+
+**Run-scoped tracking.** Fingerprints are maintained in in-memory turn state scoped to the active `Loop.Run` invocation and reset at the beginning of each user prompt. Operations across different user interactions are not conflated.
+
+**Dual-threshold enforcement:**
+1. **Notice at 3 repeats:** Upon recording 3 identical fingerprints, the loop emits a `Notice` event into the journal (`«notice» loop detected...`). In accordance with the wire protocol in `messages.go`, this is translated into a `provider.Message{Role: provider.User}` in the next turn's history, alerting the model to alter its arguments or strategy.
+2. **Hard cut at 5 repeats:** Upon recording 5 identical fingerprints, the loop aborts immediately without further tool execution or provider queries. It emits an explicit `Notice` event and a `RunError` event with `ErrorCode: "loop_detected"`, returning `ErrToolLoop` to the caller.
+
+Evidence: `TestToolLoopNoticeAtThreeRepeats`, `TestToolLoopHardCutAtFiveRepeats`, `TestToolLoopCanonicalJSONKeyOrdering`, `TestToolLoopResetAcrossRuns`.

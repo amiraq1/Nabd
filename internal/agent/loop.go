@@ -88,6 +88,7 @@ type Loop struct {
 	providerRetryAfter time.Duration // provider-declared wait for the most recent 429
 	rateLimitTotalWait time.Duration // cumulative wait spent on 429s this Run
 	rateLimitAttempts  int           // turns that ended in 429 since last success
+	loopDetector       *loopDetector // tracks tool call fingerprints for active Run()
 }
 
 func (l *Loop) clockNow() time.Time {
@@ -259,13 +260,14 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		return err
 	}
 
-	// Reset rate-limit counters so each Run() gets its own budget.
+	// Reset rate-limit counters and loop detector so each Run() gets its own state.
 	l.mu.Lock()
 	l.rateLimitHits = 0
 	l.lastRateLimitTime = time.Time{}
 	l.providerRetryAfter = 0
 	l.rateLimitTotalWait = 0
 	l.rateLimitAttempts = 0
+	l.loopDetector = newLoopDetector()
 	l.mu.Unlock()
 
 	// The default turn ceiling.
@@ -664,6 +666,33 @@ func (l *Loop) knownTool(name string) bool {
 	return false
 }
 
+// checkLoop updates the repetition count for the given tool call outcome.
+// It emits a conversational Notice event at LoopNoticeThreshold (3) and
+// returns ErrToolLoop at LoopAbortThreshold (5).
+func (l *Loop) checkLoop(tool string, input []byte, ok bool, output string) error {
+	l.mu.Lock()
+	if l.loopDetector == nil {
+		l.loopDetector = newLoopDetector()
+	}
+	fp := computeFingerprint(tool, input, ok, output)
+	count := l.loopDetector.record(fp)
+	l.mu.Unlock()
+
+	if count == LoopNoticeThreshold {
+		_ = l.emit(Event{
+			Type: Notice,
+			Text: fmt.Sprintf("loop detected: tool %q called %d times with identical arguments and outcome; please try a different approach", tool, count),
+		})
+	} else if count >= LoopAbortThreshold {
+		_ = l.emit(Event{
+			Type: Notice,
+			Text: fmt.Sprintf("tool loop detected: %s repeated %d times with identical input and output · aborting", tool, count),
+		})
+		return ErrToolLoop
+	}
+	return nil
+}
+
 // runCalls executes the batch in order. Order matters: the model asked
 // for read-then-write for a reason, and parallelism would gain a phone
 // nothing but a race.
@@ -716,6 +745,9 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 			}
 			ac.OK, ac.Output = false, msg
 			l.emit(Event{Type: ToolEnd, Call: &ac})
+			if err := l.checkLoop(c.Name, c.Input, false, msg); err != nil {
+				return false, err
+			}
 			continue
 		}
 
@@ -742,6 +774,9 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		}
 		if eerr := l.emit(Event{Type: ToolEnd, Call: &done}); eerr != nil {
 			return false, WrapToolCallError(done, eerr)
+		}
+		if err := l.checkLoop(c.Name, c.Input, done.OK, done.Output); err != nil {
+			return false, err
 		}
 
 		// A mutation leaves a persisted fingerprint behind. The loop is the
