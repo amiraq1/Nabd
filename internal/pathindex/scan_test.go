@@ -410,16 +410,78 @@ func TestScanGitignoreSymlinkRefused(t *testing.T) {
 	}
 }
 
+// The performance claim in scan.go is a margin, so the untagged guard for it has
+// to be a failing condition and not a log line. A fixed floor alone cannot do
+// that job: on a slow or busy runner the whole 10,000-candidate walk may not fit
+// in DefaultTimeout/20 either way, and a failure there would be measuring the
+// host instead of the matcher. Both halves are therefore enforced together:
+//
+//   - The scan with a .gitignore costs at most gitignoreOverheadCeiling times
+//     the scan of the identical tree without one. That half is machine
+//     independent, and it is the one that fails when pattern matching starts to
+//     scale with the tree.
+//   - The 20x margin scan.go claims, required whenever the no-.gitignore
+//     baseline clears baselineMeasurableMargin. Below that the absolute number
+//     would not be about the matcher, so the requirement is skipped rather than
+//     waived: the ratio above still bounds the matcher's cost on that host.
+const (
+	// gitignoreOverheadCeiling bounds the cost of matching relative to the same
+	// walk without a .gitignore. Twelve consecutive interleaved runs on
+	// android/arm64 measured 1.01x-1.71x here, so the ceiling leaves room for a
+	// shared runner's scheduler while still failing a matcher that stops being
+	// bounded by the walk it filters.
+	gitignoreOverheadCeiling = 2.5
+	// gitignoreMarginRequirement is the margin scan.go claims: 10,000 candidates
+	// must reach the candidate limit in at most DefaultTimeout/20.
+	gitignoreMarginRequirement = 20.0
+	// baselineMeasurableMargin is derived, not chosen: a baseline must clear the
+	// requirement times the ceiling before the absolute number can say anything
+	// about the matcher. Below it the baseline either hiccuped or the host is
+	// slow, and the requirement is skipped rather than waived -- the ceiling
+	// above still bounds the matcher's cost on that run.
+	baselineMeasurableMargin = gitignoreMarginRequirement * gitignoreOverheadCeiling
+)
+
+// interleavedScans alternates a scan of the tree without a .gitignore with a
+// scan of the identical tree that has one, and returns the fastest elapsed time
+// of each. Alternating matters more than repeating: a slow phase on a shared
+// machine lands in both sides instead of inflating their ratio, and the minimum
+// then discards that interference instead of measuring the host.
+func interleavedScans(plain, ignored *tools.Root, rounds int) (Index, Index) {
+	var bare, matched Index
+	for i := 0; i < rounds; i++ {
+		a := Scan(plain, Config{})
+		b := Scan(ignored, Config{})
+		if i == 0 || a.Elapsed < bare.Elapsed {
+			bare = a
+		}
+		if i == 0 || b.Elapsed < matched.Elapsed {
+			matched = b
+		}
+	}
+	return bare, matched
+}
+
 func TestGitignoreMaintainsPerformanceMarginOnWideTree(t *testing.T) {
 	const dirs, filesPerDir = 600, 20 // 12,000 candidates
-	root := writeTree(t, dirs, filesPerDir)
+	const rounds = 5
 
+	// Two identical trees, one of them carrying a .gitignore at its root, so each
+	// round walks the same work twice and the matcher is the only difference
+	// between the two measurements.
+	plain := writeTree(t, dirs, filesPerDir)
+	ignored := writeTree(t, dirs, filesPerDir)
+	// The patterns below are deliberately absent from the generated tree:
+	// directories are d00..d599 and files are f00..f19.go, so nothing here matches
+	// and the measurement is the cost of matching every candidate against every
+	// pattern with no pruning to hide it. Pruning has its own assertion in
+	// TestScanGitignorePrunesDirectories.
 	gitignore := []byte("# Standard exclusion suite\nbuild/\n*.tmp\n*.log\nvendor/\nd999/\nf99.go\ndocs/*.md\n")
-	if err := os.WriteFile(filepath.Join(root.Dir(), ".gitignore"), gitignore, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(ignored.Dir(), ".gitignore"), gitignore, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	idx := Scan(root, Config{})
+	baseline, idx := interleavedScans(plain, ignored, rounds)
 
 	if idx.Stop == StopTimeout {
 		t.Fatalf("the %v cap stopped the walk after %v at %d candidates: .gitignore matching caused timeout to bind",
@@ -428,9 +490,24 @@ func TestGitignoreMaintainsPerformanceMarginOnWideTree(t *testing.T) {
 	if idx.Stop != StopCandidates {
 		t.Fatalf("Stop = %q, want %q: this tree must stop on the candidate limit", idx.Stop, StopCandidates)
 	}
+	baselineMargin := float64(DefaultTimeout) / float64(baseline.Elapsed)
 	margin := float64(DefaultTimeout) / float64(idx.Elapsed)
-	t.Logf("%d candidates with .gitignore in %v against %v cap (%.1fx margin)",
-		idx.Candidates, idx.Elapsed.Round(time.Millisecond), DefaultTimeout, margin)
+	ratio := float64(idx.Elapsed) / float64(baseline.Elapsed)
+	t.Logf("%d candidates: %v without .gitignore (%.1fx), %v with it (%.1fx), overhead ratio %.2fx, against the %v cap",
+		idx.Candidates, baseline.Elapsed.Round(time.Millisecond), baselineMargin,
+		idx.Elapsed.Round(time.Millisecond), margin, ratio, DefaultTimeout)
+
+	if baseline.Elapsed > 0 {
+		ceiling := time.Duration(float64(baseline.Elapsed) * gitignoreOverheadCeiling)
+		if idx.Elapsed > ceiling {
+			t.Fatalf(".gitignore matching took %v against a %v baseline, above the %.1fx ceiling: the matcher's cost is no longer bounded by the cost of the walk",
+				idx.Elapsed.Round(time.Millisecond), baseline.Elapsed.Round(time.Millisecond), gitignoreOverheadCeiling)
+		}
+	}
+	if baselineMargin >= baselineMeasurableMargin && margin < gitignoreMarginRequirement {
+		t.Fatalf("the baseline clears %.0fx on this host, so the margin is measurable, but the .gitignore scan kept only %.1fx of the %v cap: below the %.0fx scan.go claims",
+			baselineMargin, margin, DefaultTimeout, gitignoreMarginRequirement)
+	}
 	if idx.Elapsed >= DefaultTimeout/2 {
 		t.Fatalf("reaching %d candidates took %v, at or above half the %v cap: performance margin is gone",
 			idx.Candidates, idx.Elapsed.Round(time.Millisecond), DefaultTimeout)

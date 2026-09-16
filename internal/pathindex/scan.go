@@ -27,8 +27,13 @@
 // DefaultTimeout measurement (android/arm64, Go 1.27.1, warm cache):
 // 10,000 candidates in 35ms on a 600x20 synthetic tree (12,000 candidates),
 // 57x margin below the 2s cap. With session root .gitignore pattern matching,
-// performance margin remains >= 20x (~45-52x warm cache). Guarded by the
-// untagged TestDefaultTimeoutDoesNotBindBeforeTheCandidateLimit and
+// twelve consecutive interleaved runs measured 26-43ms, a 46-75x margin; the
+// narrower band once recorded here was therefore not a floor. The invariant is
+// enforced rather than assumed: the scan with a .gitignore must stay within
+// 2.5x of the identical tree without one, and must keep the >= 20x margin
+// whenever the baseline clears 50x, the point past which the number is about
+// the matcher and not about the host. Guarded by the untagged
+// TestDefaultTimeoutDoesNotBindBeforeTheCandidateLimit and
 // TestGitignoreMaintainsPerformanceMarginOnWideTree in scan_test.go.
 package pathindex
 
