@@ -246,3 +246,193 @@ func TestScanCompletesUnderEveryLimit(t *testing.T) {
 		t.Fatalf("Rejected = %d, want 0", idx.Rejected)
 	}
 }
+
+func TestScanGitignoreExcludesMatchingFiles(t *testing.T) {
+	base := t.TempDir()
+	gitignore := []byte("ignored.txt\n*.log\nsecrets.env\n")
+	if err := os.WriteFile(filepath.Join(base, ".gitignore"), gitignore, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"keep.txt", "ignored.txt", "app.log", "secrets.env"} {
+		if err := os.WriteFile(filepath.Join(base, f), []byte("content\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx := Scan(newRootAt(t, base), Config{})
+	if !idx.Complete() {
+		t.Fatalf("Stop = %q, want complete scan", idx.Stop)
+	}
+	// .gitignore itself and keep.txt remain; ignored.txt, app.log, secrets.env are excluded.
+	want := []string{".gitignore", "keep.txt"}
+	if len(idx.Paths) != len(want) {
+		t.Fatalf("Paths = %v, want %v", idx.Paths, want)
+	}
+	for i := range want {
+		if idx.Paths[i] != want[i] {
+			t.Fatalf("Paths[%d] = %q, want %q", i, idx.Paths[i], want[i])
+		}
+	}
+}
+
+func TestScanGitignorePrunesDirectories(t *testing.T) {
+	base := t.TempDir()
+	gitignore := []byte("custom_build/\nignored_dir\n")
+	if err := os.WriteFile(filepath.Join(base, ".gitignore"), gitignore, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{"src", "custom_build", "ignored_dir"} {
+		if err := os.MkdirAll(filepath.Join(base, dir), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(base, dir, "file.go"), []byte("package x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	idx := Scan(newRootAt(t, base), Config{})
+	want := []string{".gitignore", "src/file.go"}
+	if len(idx.Paths) != len(want) {
+		t.Fatalf("Paths = %v, want %v", idx.Paths, want)
+	}
+	for i := range want {
+		if idx.Paths[i] != want[i] {
+			t.Fatalf("Paths[%d] = %q, want %q", i, idx.Paths[i], want[i])
+		}
+	}
+	// Pruning prevents entering the 2 ignored directories: visited dirs should be base + src = 2.
+	if idx.DirsVisited != 2 {
+		t.Fatalf("DirsVisited = %d, want 2 (root and src)", idx.DirsVisited)
+	}
+}
+
+func TestScanGitignoreAbsenceCausesNoRegression(t *testing.T) {
+	idx := Scan(writeTree(t, 2, 2), Config{})
+	if !idx.Complete() {
+		t.Fatalf("Stop = %q, want complete scan", idx.Stop)
+	}
+	want := []string{"d00/f00.go", "d00/f01.go", "d01/f00.go", "d01/f01.go"}
+	if len(idx.Paths) != len(want) {
+		t.Fatalf("Paths = %v, want %v", idx.Paths, want)
+	}
+}
+
+func TestScanGitignorePatternVarieties(t *testing.T) {
+	base := t.TempDir()
+	gitignore := []byte(`
+# Comment line should be ignored
+
+# Directory only
+temp_dir/
+# Root anchored
+/root_only.txt
+# Path containing slash
+pkg/sub/ignore_me.txt
+# Simple wildcard
+*.bak
+`)
+	if err := os.WriteFile(filepath.Join(base, ".gitignore"), gitignore, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(base, "temp_dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "temp_dir", "a.txt"), []byte("a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// A regular file named temp_dir must NOT be ignored because temp_dir/ has a trailing slash
+	if err := os.MkdirAll(filepath.Join(base, "other"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "other", "temp_dir"), []byte("not a dir\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(base, "root_only.txt"), []byte("root\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "other", "root_only.txt"), []byte("nested\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Join(base, "pkg", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "pkg", "sub", "ignore_me.txt"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "pkg", "sub", "keep_me.txt"), []byte("y\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(base, "backup.bak"), []byte("bak\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := Scan(newRootAt(t, base), Config{})
+	want := []string{
+		".gitignore",
+		"other/root_only.txt",
+		"other/temp_dir",
+		"pkg/sub/keep_me.txt",
+	}
+	if len(idx.Paths) != len(want) {
+		t.Fatalf("Paths = %v, want %v", idx.Paths, want)
+	}
+	for i := range want {
+		if idx.Paths[i] != want[i] {
+			t.Fatalf("Paths[%d] = %q, want %q", i, idx.Paths[i], want[i])
+		}
+	}
+}
+
+func TestScanGitignoreSymlinkRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks needs privileges on windows")
+	}
+	base := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "fake_gitignore")
+	if err := os.WriteFile(outside, []byte("real.txt\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(base, ".gitignore")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "real.txt"), []byte("package x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Symlinked .gitignore must be refused and ignored, so real.txt is NOT excluded
+	idx := Scan(newRootAt(t, base), Config{})
+	if len(idx.Paths) != 1 || idx.Paths[0] != "real.txt" {
+		t.Fatalf("Paths = %v, want [real.txt]", idx.Paths)
+	}
+}
+
+func TestGitignoreMaintainsPerformanceMarginOnWideTree(t *testing.T) {
+	const dirs, filesPerDir = 600, 20 // 12,000 candidates
+	root := writeTree(t, dirs, filesPerDir)
+
+	gitignore := []byte("# Standard exclusion suite\nbuild/\n*.tmp\n*.log\nvendor/\nd999/\nf99.go\ndocs/*.md\n")
+	if err := os.WriteFile(filepath.Join(root.Dir(), ".gitignore"), gitignore, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	idx := Scan(root, Config{})
+
+	if idx.Stop == StopTimeout {
+		t.Fatalf("the %v cap stopped the walk after %v at %d candidates: .gitignore matching caused timeout to bind",
+			DefaultTimeout, idx.Elapsed.Round(time.Millisecond), idx.Candidates)
+	}
+	if idx.Stop != StopCandidates {
+		t.Fatalf("Stop = %q, want %q: this tree must stop on the candidate limit", idx.Stop, StopCandidates)
+	}
+	margin := float64(DefaultTimeout) / float64(idx.Elapsed)
+	t.Logf("%d candidates with .gitignore in %v against %v cap (%.1fx margin)",
+		idx.Candidates, idx.Elapsed.Round(time.Millisecond), DefaultTimeout, margin)
+	if idx.Elapsed >= DefaultTimeout/2 {
+		t.Fatalf("reaching %d candidates took %v, at or above half the %v cap: performance margin is gone",
+			idx.Candidates, idx.Elapsed.Round(time.Millisecond), DefaultTimeout)
+	}
+}
