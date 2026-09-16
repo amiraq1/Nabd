@@ -12,6 +12,7 @@ require (
 	github.com/muesli/cancelreader v0.2.2
 	github.com/muesli/termenv v0.16.0
 	golang.org/x/sys v0.48.0
+	golang.org/x/term v0.46.0
 )
 
 replace github.com/charmbracelet/bubbles => ./third_party/bubbles
