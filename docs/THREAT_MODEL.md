@@ -606,3 +606,21 @@ credential redaction and display sanitization. Raw journal bytes and raw
 error bodies are not clipboard sources. Unrecognized sensitive text
 remains a residual risk.
 Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand`.
+
+### @ path picker root resolution
+
+The `@` picker indexes exactly one root, and that root is chosen explicitly
+rather than inferred. `doChatWithFeed` calls `feed.SetPickerRoot(root.Dir())`
+with the resolved session root, so the picker walks the same tree the session was
+started in. `gitDir` is only the fallback for a feed constructed without a
+session root, and a feed with neither reports `no directory to index for @`
+rather than guessing. Before this wiring the picker used `gitDir`
+unconditionally, so outside a repository — or from a subdirectory — it indexed
+and disclosed the wrong tree.
+
+A root that cannot be resolved or read reports the `cannot index files for @: `
+status instead of panicking, and is not re-scanned on later keystrokes
+(`pickerScanned`), so one unusable root cannot turn into a scan per keypress.
+Evidence: `TestPickerExplicitSessionRootOverridesGitDir`,
+`TestPickerNoSessionRootFallsBackToGitDir`,
+`TestPickerUnreadableSessionRootReportsStatusWithoutCrash`.
