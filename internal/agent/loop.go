@@ -89,6 +89,7 @@ type Loop struct {
 	rateLimitTotalWait time.Duration // cumulative wait spent on 429s this Run
 	rateLimitAttempts  int           // turns that ended in 429 since last success
 	loopDetector       *loopDetector // tracks tool call fingerprints for active Run()
+	readTracker        *ReadTracker  // tracks file read completions for active Run()
 }
 
 func (l *Loop) clockNow() time.Time {
@@ -268,6 +269,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 	l.rateLimitTotalWait = 0
 	l.rateLimitAttempts = 0
 	l.loopDetector = newLoopDetector()
+	l.readTracker = NewReadTracker()
 	l.mu.Unlock()
 
 	// The default turn ceiling.
@@ -313,7 +315,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		// number of consecutive 429-aborted turns, must cap the run even if
 		// the hits ceiling is configured higher.
 		if totalWait >= maxRateLimitWait || attempts >= maxRateLimitAttempt {
-			_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
+			_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryRateLimit, Text: fmt.Sprintf(
 				"rate limit absolute bound reached (%s waited, %d attempts) · wait and retry",
 				totalWait.Round(time.Second), attempts)})
 			_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})
@@ -321,7 +323,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		}
 
 		if hits >= l.rateLimitCeiling() {
-			_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
+			_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryRateLimit, Text: fmt.Sprintf(
 				"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits)})
 			_ = l.emit(RunErrorEvent(ErrRateLimitBudget))
 			return ErrRateLimitBudget
@@ -349,17 +351,17 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		if p := l.pressure(ms); p > 0.75 {
 			if err := l.Compact(ctx, l.compactTarget()); err != nil {
 				if !errors.Is(err, ErrHistoryMutationInProgress) {
-					l.emit(Event{Type: Notice, Text: "compact failed: " + err.Error()})
+					l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryContextPressure, Text: "compact failed: " + err.Error()})
 				}
 			} else {
 				ms = Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
-				l.emit(Event{Type: Notice, Text: fmt.Sprintf("context compacted · %d%% → %d%%",
+				l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryContextPressure, Text: fmt.Sprintf("context compacted · %d%% → %d%%",
 					int(p*100), int(l.Budget.Pressure(ms)*100))})
 				l.warned = false
 			}
 		} else if p > 0.6 && !l.warned {
 			l.warned = true
-			l.emit(Event{Type: Notice, Text: fmt.Sprintf("context %d%%", int(p*100))})
+			l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryContextPressure, Text: fmt.Sprintf("context %d%%", int(p*100))})
 		}
 
 		calls, stop, err := l.streamTurn(ctx, ms)
@@ -380,7 +382,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 				l.mu.Lock()
 				hits2 := l.rateLimitHits
 				l.mu.Unlock()
-				_ = l.emit(Event{Type: Notice, Text: fmt.Sprintf(
+				_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryRateLimit, Text: fmt.Sprintf(
 					"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits2)})
 				_ = l.emit(RunErrorEvent(ErrRateLimitBudget))
 				return ErrRateLimitBudget
@@ -393,7 +395,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			// was, so anyone who wants to act on the notice needs to know
 			// which ceiling it came from (NBD-404).
 			if notice, ok := tpmLimitNotice(err); ok {
-				_ = l.emit(Event{Type: Notice, Text: l.tpmNoticeText(notice), Limit: notice.Limit, Requested: notice.Requested})
+				_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryTPM, Text: l.tpmNoticeText(notice), Limit: notice.Limit, Requested: notice.Requested})
 			}
 			_ = l.emit(RunErrorEvent(err))
 			return err
@@ -413,8 +415,20 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		l.mu.Unlock()
 
 		if len(calls) == 0 {
+			l.mu.Lock()
+			rt := l.readTracker
+			l.mu.Unlock()
+			if rt != nil {
+				for _, inc := range rt.IncompleteReads() {
+					_ = l.emit(Event{
+						Type:           Notice,
+						NoticeCategory: NoticeCategoryDisplay,
+						Text:           FormatTruncatedReadWarning(inc),
+					})
+				}
+			}
 			if stop == "max_tokens" {
-				_ = l.emit(Event{Type: Notice, Text: "reached length limit · say \"continue\""})
+				_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryLengthLimit, Text: "reached length limit · say \"continue\""})
 			}
 			return nil
 		}
@@ -531,7 +545,7 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 				// is session-varying state, and the log must show which
 				// budget the agent worked under.
 				if l.Budget.Calibrate(c.PromptTokens, l.Budget.Estimate(ms)) {
-					_ = l.emit(Event{Type: Notice, Calib: &Calibration{PromptTokens: c.PromptTokens}, Text: fmt.Sprintf("calibration: token ratio (observed prompt_tokens ÷ heuristic estimate) adopted %.2f · conservative ratchet, rises only (measured prompt_tokens=%d)", l.Budget.Ratio(), c.PromptTokens)})
+					_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryCalibration, Calib: &Calibration{PromptTokens: c.PromptTokens}, Text: fmt.Sprintf("calibration: token ratio (observed prompt_tokens ÷ heuristic estimate) adopted %.2f · conservative ratchet, rises only (measured prompt_tokens=%d)", l.Budget.Ratio(), c.PromptTokens)})
 				}
 			}
 
@@ -680,13 +694,15 @@ func (l *Loop) checkLoop(tool string, input []byte, ok bool, output string) erro
 
 	if count == LoopNoticeThreshold {
 		_ = l.emit(Event{
-			Type: Notice,
-			Text: fmt.Sprintf("loop detected: tool %q called %d times with identical arguments and outcome; please try a different approach", tool, count),
+			Type:           Notice,
+			NoticeCategory: NoticeCategoryLoopLimit,
+			Text:           fmt.Sprintf("loop detected: tool %q called %d times with identical arguments and outcome; please try a different approach", tool, count),
 		})
 	} else if count >= LoopAbortThreshold {
 		_ = l.emit(Event{
-			Type: Notice,
-			Text: fmt.Sprintf("tool loop detected: %s repeated %d times with identical input and output · aborting", tool, count),
+			Type:           Notice,
+			NoticeCategory: NoticeCategoryLoopLimit,
+			Text:           fmt.Sprintf("tool loop detected: %s repeated %d times with identical input and output · aborting", tool, count),
 		})
 		return ErrToolLoop
 	}
@@ -792,16 +808,26 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 			}
 		}
 
-		// A truncated read is a fact the journal must carry: the model saw
-		// part of the file, and later replays must know that too.
-		if out.OK && c.Name == "read_file" && out.Truncated {
-			if eerr := l.emit(Event{Type: EventRead, Read: &ReadRecord{
+		// A read_file call is journaled so replays and audit know what was seen,
+		// and the loop can track whether truncated reads were subsequently completed.
+		if out.OK && c.Name == "read_file" {
+			rec := ReadRecord{
 				Path:       pathOf(c.Input),
-				Truncated:  true,
+				Truncated:  out.Truncated,
 				NextOffset: out.NextOffset,
-			}}); eerr != nil {
+				LinesRead:  out.LinesRead,
+				TotalLines: out.TotalLines,
+				Offset:     out.Offset,
+			}
+			if eerr := l.emit(Event{Type: EventRead, Read: &rec}); eerr != nil {
 				return false, WrapToolCallError(ac, eerr)
 			}
+			l.mu.Lock()
+			if l.readTracker == nil {
+				l.readTracker = NewReadTracker()
+			}
+			l.readTracker.Record(rec)
+			l.mu.Unlock()
 		}
 	}
 	return false, nil
@@ -896,6 +922,12 @@ func (l *Loop) emit(e Event) error {
 // than dropping a status line.
 func (l *Loop) Note(text string) {
 	_ = l.emit(Event{Type: Notice, Text: text})
+}
+
+// NoteUndo emits an /undo result notice that reaches the model, because
+// the undo changed working-tree state the model was reasoning about.
+func (l *Loop) NoteUndo(text string) {
+	_ = l.emit(Event{Type: Notice, Text: text, NoticeCategory: NoticeCategoryUndoResult})
 }
 
 // End marks the session as finished. It emits exactly one RunEnd event and

@@ -117,6 +117,12 @@ func Messages(evs []Event) []provider.Message {
 			// system directive: this is a user-role message on every
 			// provider, and pretending it is "system" would mislead the
 			// model into treating a notice as an instruction.
+			//
+			// Only notices in the structured allowlist reach the model.
+			// Calibration, monitoring, and display notices are rejected by default.
+			if !NoticeAllowedForModel(ev.NoticeCategory) {
+				continue
+			}
 			if len(open) > 0 || len(calls) > 0 {
 				if len(pendingNotices) < maxPendingNotices {
 					pendingNotices = append(pendingNotices, ev.Text)

@@ -157,7 +157,7 @@ func TestNoticeInjectedDuringToolCallDoesNotCancelOrPrecedeToolResult(t *testing
 	evs := []Event{
 		{Seq: 1, Type: UserMsg, Text: "start"},
 		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "read_file"}},
-		{Seq: 3, Parent: 2, Type: Notice, Text: "calibrated"},
+		{Seq: 3, Parent: 2, Type: Notice, NoticeCategory: NoticeCategoryUndoResult, Text: "undo_state"},
 		{Seq: 4, Parent: 3, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "read_file", Output: "file_data", OK: true}},
 		{Seq: 5, Parent: 4, Type: TurnEnd},
 	}
@@ -176,7 +176,7 @@ func TestNoticeInjectedDuringToolCallDoesNotCancelOrPrecedeToolResult(t *testing
 		t.Fatalf("expected ms[2] to be tool result, got: %v", ms[2])
 	}
 	assertFenced(t, ms[2].ToolResults[0].Output, "read_file", "file_data")
-	if ms[3].Text != "«notice» calibrated" {
+	if ms[3].Text != "«notice» undo_state" {
 		t.Fatalf("expected ms[3] to be notice, got: %v", ms[3])
 	}
 }
@@ -185,8 +185,8 @@ func TestNoticePreservedAfterMultipleResults(t *testing.T) {
 	evs := []Event{
 		{Seq: 1, Type: UserMsg, Text: "start"},
 		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "read_file"}},
-		{Seq: 3, Parent: 2, Type: Notice, Text: "notice_one"},
-		{Seq: 4, Parent: 3, Type: Notice, Text: "notice_two"},
+		{Seq: 3, Parent: 2, Type: Notice, NoticeCategory: NoticeCategoryUndoResult, Text: "notice_one"},
+		{Seq: 4, Parent: 3, Type: Notice, NoticeCategory: NoticeCategoryUndoResult, Text: "notice_two"},
 		{Seq: 5, Parent: 4, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "read_file", Output: "res1", OK: true}},
 		{Seq: 6, Parent: 5, Type: TurnEnd},
 	}
@@ -213,7 +213,7 @@ func TestNoticeWithParallelToolCalls(t *testing.T) {
 		{Seq: 1, Type: UserMsg, Text: "start parallel"},
 		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "read_file"}},
 		{Seq: 3, Parent: 2, Type: ToolStart, Call: &ToolCall{ID: "t2", Name: "read_file"}},
-		{Seq: 4, Parent: 3, Type: Notice, Text: "parallel_notice"},
+		{Seq: 4, Parent: 3, Type: Notice, NoticeCategory: NoticeCategoryUndoResult, Text: "parallel_notice"},
 		{Seq: 5, Parent: 4, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "read_file", Output: "out1", OK: true}},
 		{Seq: 6, Parent: 5, Type: ToolEnd, Call: &ToolCall{ID: "t2", Name: "read_file", Output: "out2", OK: true}},
 		{Seq: 7, Parent: 6, Type: TurnEnd},
@@ -244,7 +244,7 @@ func TestPendingNoticesBoundedCap(t *testing.T) {
 	}
 	for i := 0; i < 50; i++ {
 		evs = append(evs, Event{
-			Seq: i + 3, Parent: i + 2, Type: Notice, Text: "spam",
+			Seq: i + 3, Parent: i + 2, Type: Notice, NoticeCategory: NoticeCategoryUndoResult, Text: "spam",
 		})
 	}
 	evs = append(evs, Event{
@@ -277,7 +277,7 @@ func TestReplayNoticeDuringToolCallSerializesToValidOpenAIOrder(t *testing.T) {
 		{Seq: 1, Type: UserMsg, Text: "run inspection"},
 		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "call_1", Name: "read_file"}},
 		{Seq: 3, Parent: 2, Type: ToolStart, Call: &ToolCall{ID: "call_2", Name: "read_file"}},
-		{Seq: 4, Parent: 3, Type: Notice, Text: "calibration: token ratio adopted 1.45"},
+		{Seq: 4, Parent: 3, Type: Notice, NoticeCategory: NoticeCategoryUndoResult, Text: "undo: reverted change"},
 		{Seq: 5, Parent: 4, Type: ToolEnd, Call: &ToolCall{ID: "call_1", Name: "read_file", Output: "notes content", OK: true}},
 		{Seq: 6, Parent: 5, Type: ToolEnd, Call: &ToolCall{ID: "call_2", Name: "read_file", Output: "readme content", OK: true}},
 		{Seq: 7, Parent: 6, Type: TurnEnd},
@@ -292,7 +292,7 @@ func TestReplayNoticeDuringToolCallSerializesToValidOpenAIOrder(t *testing.T) {
 	if ms[2].Role != "user" || len(ms[2].ToolResults) != 2 {
 		t.Fatalf("expected user with 2 tool results, got %v", ms[2])
 	}
-	if ms[3].Role != "user" || ms[3].Text != "«notice» calibration: token ratio adopted 1.45" {
+	if ms[3].Role != "user" || ms[3].Text != "«notice» undo: reverted change" {
 		t.Fatalf("expected user notice after tool results, got %v", ms[3])
 	}
 }
