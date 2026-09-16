@@ -7,6 +7,53 @@ import (
 	"testing"
 )
 
+// securityPathsFrom extracts the entries inside security_files=( ... ) from a
+// gate script. It is used to verify the gate does not reference a path that does
+// not exist in the repository (a typo silently weakens the boundary).
+func securityPathsFrom(script string) []string {
+	start := strings.Index(script, "security_files=(")
+	if start < 0 {
+		return nil
+	}
+	rest := script[start+len("security_files=("):]
+	end := strings.Index(rest, ")")
+	if end < 0 {
+		return nil
+	}
+	body := rest[:end]
+	var out []string
+	for _, tok := range strings.Fields(body) {
+		tok = strings.Trim(tok, `"`)
+		if tok != "" {
+			out = append(out, tok)
+		}
+	}
+	return out
+}
+
+func scriptName(content string) string {
+	if strings.Contains(content, "check-pr-security-checklist.sh") {
+		return "check-pr-security-checklist.sh"
+	}
+	return "check-threat-model-freshness.sh"
+}
+
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.IsDir()
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return !info.IsDir()
+}
+
 func readRepoFile(t *testing.T, name string) string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "..", name))
@@ -26,21 +73,26 @@ func TestPRChecklistGateScopesThreatModelClaim(t *testing.T) {
 	checklist := readRepoFile(t, "scripts/check-pr-security-checklist.sh")
 	freshness := readRepoFile(t, "scripts/check-threat-model-freshness.sh")
 
-	for _, file := range []string{
-		"internal/tools/path.go",
-		"internal/tools/bash.go",
-		"internal/perm/policy.go",
-		"internal/config/config.go",
-		"internal/snap/shadow.go",
-		"internal/safefs",
+	for _, path := range []string{
 		"internal/agent/fence.go",
+		"internal/config/",
+		"internal/perm/",
+		"internal/pathindex/",
+		"internal/provider/",
+		"internal/redact/",
+		"internal/safefs/",
+		"internal/snap/",
+		"internal/store/",
+		"internal/tools/",
 		"cmd/ag/main.go",
+		".goreleaser.yaml",
+		"scripts/",
 	} {
-		if !strings.Contains(freshness, file) {
-			t.Errorf("check-threat-model-freshness.sh no longer lists %q; keep both gates in sync", file)
+		if !strings.Contains(freshness, path) {
+			t.Errorf("check-threat-model-freshness.sh no longer lists %q; keep both gates in sync", path)
 		}
-		if !strings.Contains(checklist, file) {
-			t.Errorf("check-pr-security-checklist.sh missing security-relevant path %q", file)
+		if !strings.Contains(checklist, path) {
+			t.Errorf("check-pr-security-checklist.sh missing security-relevant path %q", path)
 		}
 	}
 
@@ -60,6 +112,33 @@ func TestPRChecklistGateScopesThreatModelClaim(t *testing.T) {
 	} {
 		if !strings.Contains(checklist, item) {
 			t.Errorf("checklist gate no longer requires %q", item)
+		}
+	}
+}
+
+// TestPRChecklistGateSecurityPathsAreRealBoundaries is the sufficiency assertion
+// the parity test could previously only promise. Each directory prefix in the
+// gate must be a real directory in the repository, and each single-file entry
+// must exist, so a typo in the gate silently weakens the boundary.
+func TestPRChecklistGateSecurityPathsAreRealBoundaries(t *testing.T) {
+	checklist := readRepoFile(t, "scripts/check-pr-security-checklist.sh")
+	freshness := readRepoFile(t, "scripts/check-threat-model-freshness.sh")
+
+	// Parse the security_files=() array from each script. The two scripts keep
+	// the same list by construction (the parity test above pins that).
+	for _, script := range []string{checklist, freshness} {
+		for _, path := range securityPathsFrom(script) {
+			if strings.HasSuffix(path, "/") {
+				dir := filepath.Join("..", "..", strings.TrimSuffix(path, "/"))
+				if !isDir(dir) {
+					t.Errorf("%q references directory %q that does not exist in the repo", scriptName(script), path)
+				}
+				continue
+			}
+			file := filepath.Join("..", "..", path)
+			if !fileExists(file) {
+				t.Errorf("%q references file %q that does not exist in the repo", scriptName(script), path)
+			}
 		}
 	}
 }
