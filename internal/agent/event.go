@@ -82,13 +82,14 @@ type Event struct {
 	// PromptTokens/CompletionTokens/FinishReason capture the provider's
 	// measured usage and stop reason for a successful request, so the
 	// charge model can be derived from raw observations, not estimates.
-	PromptTokens     int          `json:"prompt_tokens,omitempty"`
-	CompletionTokens int          `json:"completion_tokens,omitempty"`
-	FinishReason     string       `json:"finish_reason,omitempty"`
-	NormalizedStop   string       `json:"normalized_stop,omitempty"`
-	Edit             *EditRecord  `json:"edit,omitempty"`
-	Read             *ReadRecord  `json:"read,omitempty"`
-	Calib            *Calibration `json:"calib,omitempty"`
+	PromptTokens     int            `json:"prompt_tokens,omitempty"`
+	CompletionTokens int            `json:"completion_tokens,omitempty"`
+	FinishReason     string         `json:"finish_reason,omitempty"`
+	NormalizedStop   string         `json:"normalized_stop,omitempty"`
+	Edit             *EditRecord    `json:"edit,omitempty"`
+	Read             *ReadRecord    `json:"read,omitempty"`
+	NoticeCategory   NoticeCategory `json:"notice_category,omitempty"`
+	Calib            *Calibration   `json:"calib,omitempty"`
 
 	FirstKept int              `json:"first_kept,omitempty"`
 	Compact   *CompactionStats `json:"compact,omitempty"`
@@ -147,6 +148,81 @@ type ReadRecord struct {
 	Path       string `json:"path"`
 	Truncated  bool   `json:"truncated"`
 	NextOffset int    `json:"next_offset,omitempty"`
+	LinesRead  int    `json:"lines_read,omitempty"`
+	TotalLines int    `json:"total_lines,omitempty"`
+	Offset     int    `json:"offset,omitempty"`
+}
+
+// NoticeCategory classifies notice events for the allowlist that controls
+// which notices reach the model's context. The zero value (NoticeCategoryUnknown)
+// is deliberately not in the allowlist, so an event created without an
+// explicit category is blocked by default.
+type NoticeCategory int
+
+const (
+	// NoticeCategoryUnknown is the zero value. It does not appear in the
+	// model-facing allowlist, so a Notice with no explicit category is
+	// blocked from the model by default.
+	NoticeCategoryUnknown NoticeCategory = iota
+
+	// NoticeCategoryUndoResult is emitted after /undo changes working-tree
+	// state the model was reasoning about.
+	NoticeCategoryUndoResult
+
+	// NoticeCategoryPermissionDenied is emitted when a tool call the model
+	// requested was refused by the permission gate.
+	NoticeCategoryPermissionDenied
+
+	// NoticeCategoryLoopLimit is emitted when a loop or rate limit prevents
+	// the model from executing further steps.
+	NoticeCategoryLoopLimit
+
+	// NoticeCategoryCalibration is emitted when the token-ratio calibration
+	// ratchets. Monitoring only — must never reach the model.
+	NoticeCategoryCalibration
+
+	// NoticeCategoryContextPressure is emitted for context-window pressure
+	// warnings and compaction results. Monitoring only.
+	NoticeCategoryContextPressure
+
+	// NoticeCategoryRateLimit is emitted for rate-limit budget notices.
+	// These are informational for the operator, not the model.
+	NoticeCategoryRateLimit
+
+	// NoticeCategoryLengthLimit is emitted when the model's output was
+	// cut by max_tokens. Monitoring only.
+	NoticeCategoryLengthLimit
+
+	// NoticeCategoryTPM is emitted for per-minute token limit notices.
+	// Monitoring only.
+	NoticeCategoryTPM
+
+	// NoticeCategoryDisplay is emitted for UI/display informational
+	// notices (e.g. dropped events, config conflicts). Monitoring only.
+	NoticeCategoryDisplay
+)
+
+// noticeReachesModel is the enumerated allowlist of notice categories
+// permitted to enter the model's context. The default is deny: any
+// category not listed here is silently dropped from the message
+// projection. The criteria for inclusion:
+//
+//  1. The notice changed world-state the model was reasoning about, OR
+//  2. The notice prevents the model from executing a step it would
+//     otherwise attempt.
+//
+// Monitoring, calibration, display, and infrastructure notices do not
+// qualify and must not be added without a security review.
+var noticeReachesModel = map[NoticeCategory]bool{
+	NoticeCategoryUndoResult:       true,
+	NoticeCategoryPermissionDenied: true,
+	NoticeCategoryLoopLimit:        true,
+}
+
+// NoticeAllowedForModel reports whether a notice with the given category
+// is permitted to appear in the provider message projection.
+func NoticeAllowedForModel(c NoticeCategory) bool {
+	return noticeReachesModel[c]
 }
 
 // EditRecord is the persisted fingerprint of one file mutation. It is the
@@ -318,6 +394,10 @@ type Outcome struct {
 	// Registry.SetReadCredit, preserving the read→write audit for edit_record
 	// events without a cross-call mutable slot on the read side.
 	LinesRead int
+	// TotalLines is the total number of lines in the file being read.
+	TotalLines int
+	// Offset is the starting line that was requested.
+	Offset int
 	// ReadCredit carries the full provenance (composite key) of the read.
 	ReadCredit ReadCredit
 }

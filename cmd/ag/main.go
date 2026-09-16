@@ -414,7 +414,7 @@ func fileUndo(loop *agent.Loop, reg *tools.Registry, n int) string {
 		fmt.Fprintf(&b, "%s %s - %s\n", mark, r.Rel, r.Note)
 	}
 	s := strings.TrimRight(b.String(), "\n")
-	loop.Note(fmt.Sprintf("/undo %d - %s", n, s))
+	loop.NoteUndo(fmt.Sprintf("/undo %d - %s", n, s))
 	return ""
 }
 

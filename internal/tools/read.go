@@ -138,6 +138,8 @@ func (readFile) Name() string { return "read_file" }
 type readMeta struct {
 	credit     agent.ReadCredit
 	linesRead  int
+	totalLines int
+	offset     int
 	truncated  bool
 	nextOffset int
 }
@@ -167,6 +169,8 @@ func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		Truncated:  meta.truncated,
 		NextOffset: meta.nextOffset,
 		LinesRead:  meta.linesRead,
+		TotalLines: meta.totalLines,
+		Offset:     meta.offset,
 		ReadCredit: meta.credit,
 	}, nil
 }
@@ -284,6 +288,8 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 
 	var meta readMeta
+	meta.offset = from
+	meta.totalLines = total
 	line, shown, capped := 0, 0, ""
 	for sc.Scan() {
 		line++
