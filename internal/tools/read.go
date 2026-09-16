@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -22,6 +23,7 @@ const (
 	maxOutBytes  = 48 * 1024 // what one tool result may cost in context
 	maxLines     = 1200
 	maxLineRunes = 300 // a minified bundle must not eat the whole budget
+	maxHashBytes = 8 << 20
 )
 
 // defaultMaxRead is what NABD_MAX_READ falls back to when unset. Kept at the
@@ -218,13 +220,17 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 		return "", readMeta{}, false, err
 	}
 	defer f.Close()
+	rel, err := filepath.Rel(t.root.Dir(), p)
+	if err != nil {
+		return "", readMeta{}, false, err
+	}
+	rel = filepath.ToSlash(rel)
 
 	// The path rule runs before any byte is read, and after the descriptor is
 	// open because that descriptor — not a second path lookup — is what proves
 	// which file this is. It is deliberately NOT a second containment check:
 	// acceptance for this refusal is that a directly named path is refused for
 	// being ignored, not for being outside the root, and the message says which.
-	rel := filepath.ToSlash(t.root.Rel(p))
 	if t.reg != nil {
 		if refused, why := t.reg.pathRefused(rel); refused {
 			return "", readMeta{}, false, fmt.Errorf("read refused: %s", why)
@@ -239,26 +245,23 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 		return "", readMeta{}, false, fmt.Errorf("%s is a directory · use glob", t.root.Rel(p))
 	}
 
-	// Binary files are refused rather than mangled: a NUL byte in the
-	// first block is the only reliable cheap signal.
-	head := make([]byte, 8192)
-	n, _ := f.Read(head)
-	if strings.IndexByte(string(head[:n]), 0) >= 0 {
+	if fi.Size() > maxHashBytes {
+		return "", readMeta{}, false, fmt.Errorf("%s is %d bytes; read limit is %d", t.root.Rel(p), fi.Size(), maxHashBytes)
+	}
+	// Read once from the already-open descriptor. Hashing and rendering use the
+	// same bytes, so the read credit describes exactly what the model saw.
+	src, err := io.ReadAll(io.LimitReader(f, maxHashBytes+1))
+	if err != nil {
+		return "", readMeta{}, false, err
+	}
+	if len(src) > maxHashBytes {
+		return "", readMeta{}, false, fmt.Errorf("%s exceeds read limit %d", t.root.Rel(p), maxHashBytes)
+	}
+	if bytes.IndexByte(src[:minInt(len(src), 8192)], 0) >= 0 {
 		return "", readMeta{}, false, fmt.Errorf("%s is binary (%d bytes)", t.root.Rel(p), fi.Size())
 	}
-	if _, err := f.Seek(0, 0); err != nil {
-		return "", readMeta{}, false, err
-	}
-
-	// Compute full-file SHA-256 hash at read time for composite key provenance (NBD-034).
-	hasher := sha256.New()
-	if _, err := io.Copy(hasher, f); err != nil {
-		return "", readMeta{}, false, err
-	}
-	fileHash := hex.EncodeToString(hasher.Sum(nil))
-	if _, err := f.Seek(0, io.SeekStart); err != nil {
-		return "", readMeta{}, false, err
-	}
+	fileHashBytes := sha256.Sum256(src)
+	fileHash := hex.EncodeToString(fileHashBytes[:])
 
 	from := a.Offset
 	if from < 1 {
@@ -274,17 +277,9 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 	// Count the file's real line count up front: the truncation tail must
 	// say "stopped at line N of M" with the true M, not the number of lines
 	// the loop managed to read before the cap.
-	total := 0
-	tc := bufio.NewScanner(f)
-	tc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
-	for tc.Scan() {
-		total++
-	}
-	if _, err := f.Seek(0, 0); err != nil {
-		return "", readMeta{}, false, err
-	}
+	total := linesIn(string(src))
 
-	sc := bufio.NewScanner(f)
+	sc := bufio.NewScanner(bytes.NewReader(src))
 	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 
 	var meta readMeta
@@ -342,7 +337,7 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 
 	if shown == 0 {
 		meta.credit = agent.ReadCredit{
-			Path:      p,
+			Path:      rel,
 			Hash:      fileHash,
 			Offset:    from,
 			Limit:     limit,
@@ -358,13 +353,20 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 	}
 	meta.linesRead = shown
 	meta.credit = agent.ReadCredit{
-		Path:      p,
+		Path:      rel,
 		Hash:      fileHash,
 		Offset:    from,
 		Limit:     limit,
 		LinesRead: shown,
 	}
 	return b.String(), meta, true, nil
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func clip(s string, n int) string {

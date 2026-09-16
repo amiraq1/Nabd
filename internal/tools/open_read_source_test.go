@@ -31,6 +31,18 @@ func TestReadFileUsesDescriptorStat(t *testing.T) {
 
 // 11 + 12: the non-unix adapter is a documented compatibility path and must
 // not reach into the safe-open API.
+func TestToolPathAuthorityDoesNotCallResolveDirectly(t *testing.T) {
+	for _, name := range []string{"read.go", "write.go", "write_commit.go", "grep.go"} {
+		body, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(body), ".Resolve(") {
+			t.Errorf("%s calls Root.Resolve directly; descriptor-relative path adapters are authoritative", name)
+		}
+	}
+}
+
 func TestOpenReadOtherIsCompatibilityOnly(t *testing.T) {
 	src, err := os.ReadFile("open_read_other.go")
 	if err != nil {

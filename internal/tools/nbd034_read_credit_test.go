@@ -20,6 +20,7 @@ func TestReadCreditCompositeKeyStructure(t *testing.T) {
 	ctx := context.Background()
 
 	path := filepath.Join(dir, "target.txt")
+	relPath := filepath.ToSlash("target.txt")
 	content := "line 1\nline 2\nline 3\nline 4\nline 5\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -43,8 +44,8 @@ func TestReadCreditCompositeKeyStructure(t *testing.T) {
 	}
 
 	c := out.ReadCredit
-	if c.Path != path {
-		t.Errorf("ReadCredit.Path = %q, want %q", c.Path, path)
+	if c.Path != relPath {
+		t.Errorf("ReadCredit.Path = %q, want %q", c.Path, relPath)
 	}
 	if c.Hash != wantHash {
 		t.Errorf("ReadCredit.Hash = %q, want %q", c.Hash, wantHash)
