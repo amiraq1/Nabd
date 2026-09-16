@@ -424,6 +424,10 @@ func TestScanGitignoreSymlinkRefused(t *testing.T) {
 //     baseline clears baselineMeasurableMargin. Below that the absolute number
 //     would not be about the matcher, so the requirement is skipped rather than
 //     waived: the ratio above still bounds the matcher's cost on that host.
+//
+// Both walls measure time, so both apply to the plain build: see
+// race_enabled_test.go for why the race detector's run takes the functional
+// assertions only.
 const (
 	// gitignoreOverheadCeiling bounds the cost of matching relative to the same
 	// walk without a .gitignore. Twelve consecutive interleaved runs on
@@ -496,6 +500,10 @@ func TestGitignoreMaintainsPerformanceMarginOnWideTree(t *testing.T) {
 	t.Logf("%d candidates: %v without .gitignore (%.1fx), %v with it (%.1fx), overhead ratio %.2fx, against the %v cap",
 		idx.Candidates, baseline.Elapsed.Round(time.Millisecond), baselineMargin,
 		idx.Elapsed.Round(time.Millisecond), margin, ratio, DefaultTimeout)
+
+	if raceEnabled {
+		t.Skip("timing walls apply to the plain build only: ci.yml runs this package without -race and then with it, and the detector's overhead is not proportional between the walk and the matcher")
+	}
 
 	if baseline.Elapsed > 0 {
 		ceiling := time.Duration(float64(baseline.Elapsed) * gitignoreOverheadCeiling)

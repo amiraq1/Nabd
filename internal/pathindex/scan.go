@@ -32,7 +32,9 @@
 // enforced rather than assumed: the scan with a .gitignore must stay within
 // 2.5x of the identical tree without one, and must keep the >= 20x margin
 // whenever the baseline clears 50x, the point past which the number is about
-// the matcher and not about the host. Guarded by the untagged
+// the matcher and not about the host, in the plain build; race_enabled_test.go
+// records why the race detector's run takes the functional assertions only.
+// Guarded by the untagged
 // TestDefaultTimeoutDoesNotBindBeforeTheCandidateLimit and
 // TestGitignoreMaintainsPerformanceMarginOnWideTree in scan_test.go.
 package pathindex
