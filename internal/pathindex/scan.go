@@ -19,6 +19,11 @@
 // The limits are safety limits, not preferences. Scan stops at the first one
 // that trips and says which one in Stop, so a caller can tell a complete index
 // from a truncated one instead of guessing.
+//
+// DefaultTimeout measurement (android/arm64, Go 1.27.1, warm cache):
+// 10,000 candidates in 35ms on a 600x20 synthetic tree (12,000 candidates),
+// 57x margin below the 2s cap. Guarded by the untagged
+// TestDefaultTimeoutDoesNotBindBeforeTheCandidateLimit in scan_test.go.
 package pathindex
 
 import (
