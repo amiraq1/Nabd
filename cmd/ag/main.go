@@ -628,7 +628,7 @@ func pickProvider() (provider.Provider, error) {
 	case "nvidia":
 		return provider.BuildStandaloneProvider("nvidia")
 	case "anthropic":
-		return provider.NewAnthropic()
+		return provider.BuildStandaloneProvider("anthropic")
 	case "openrouter":
 		return provider.BuildStandaloneProvider("openrouter")
 	case "groq":
@@ -644,7 +644,7 @@ func pickProvider() (provider.Provider, error) {
 	if config.Has("NVIDIA_API_KEY") {
 		return provider.BuildStandaloneProvider("nvidia")
 	}
-	return provider.NewAnthropic()
+	return provider.BuildStandaloneProvider("anthropic")
 }
 
 func pickRouterProvider() (provider.Provider, error) {
