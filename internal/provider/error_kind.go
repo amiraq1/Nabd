@@ -16,6 +16,23 @@ const (
 	ErrorKindAuth      ErrorKind = "auth"
 )
 
+// ClassifyHTTPStatus maps an HTTP status onto the provider error kind, using
+// the same table ErrorKindOf applies to provider responses. Callers outside the
+// request path (for example the `models` probe) use it so a status is read one
+// way, not two.
+func ClassifyHTTPStatus(status int) ErrorKind {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return ErrorKindAuth
+	case http.StatusRequestTimeout, http.StatusConflict, http.StatusTooManyRequests, http.StatusGone:
+		return ErrorKindTemporary
+	}
+	if status >= 500 {
+		return ErrorKindTemporary
+	}
+	return ErrorKindUnknown
+}
+
 // ErrorKindOf classifies provider errors using typed/status data only.
 func ErrorKindOf(err error) ErrorKind {
 	if err == nil {
@@ -35,15 +52,7 @@ func ErrorKindOf(err error) ErrorKind {
 	}
 	var httpErr *httpError
 	if errors.As(err, &httpErr) {
-		switch httpErr.Status {
-		case http.StatusUnauthorized, http.StatusForbidden:
-			return ErrorKindAuth
-		case http.StatusRequestTimeout, http.StatusConflict, http.StatusTooManyRequests, http.StatusGone:
-			return ErrorKindTemporary
-		}
-		if httpErr.Status >= 500 {
-			return ErrorKindTemporary
-		}
+		return ClassifyHTTPStatus(httpErr.Status)
 	}
 	var tpm *TPMError
 	if errors.As(err, &tpm) {

@@ -349,6 +349,11 @@ func checkNoLiteralKeys(data []byte) error {
 	return nil
 }
 
+// ValidProviderID reports whether id is a legal provider identifier: 1..32
+// bytes matching [a-z0-9-_]. Callers outside this package use it to validate a
+// provider name before it reaches the registry.
+func ValidProviderID(id string) error { return validateProviderID(id) }
+
 // validateProviderID validates that a provider ID is [a-z0-9-_] and <= 32 bytes.
 func validateProviderID(id string) error {
 	if err := rejectBadBytes(id); err != nil {

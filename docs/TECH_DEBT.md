@@ -775,3 +775,27 @@ paths (`sh.Capture`, `os.ReadFile`, `snap.WriteAtomic`, `os.Remove`, and an
 no descriptor guarantee and are not covered by the Android/Termux claim in
 `docs/THREAT_MODEL.md`; the safe path is compiled under the `unix` tag so CI on
 linux and darwin exercises the same code Termux runs.
+
+## PROVIDER_LABEL_IS_THE_REGISTRY_ID — keyVar() still guesses from the label
+
+`OpenAICompat.Label()` now returns the registry provider id when one is set
+(previously it was derived from the base URL host), and `Name()` is
+`Label()+"/"+Model`. `keyVar()` still picks an environment-variable hint by
+substring-matching that label, so a custom provider whose id contains
+"groq"/"nvidia"/"openrouter" — say `my-groq-proxy` — produces a hint naming the
+wrong variable. The string is only ever a suggestion inside a 404/410 error
+body; no key is substituted, so this is a misdirection, not a disclosure.
+Resolution: carry the hint on the provider (the way `providerName` now is)
+instead of re-deriving it from a display string.
+
+## PROVIDER_READ_CAP_FROM_NAME — the legacy path keys the read cap on a name
+
+`NewOpenAICompatForRoute` derives the read ceiling from
+`readCapForRouteName`, which returns `GroqReadCapBytes` only for the exact name
+`groq`. A registry provider that speaks the same metered endpoint under another
+id — `groq-eu`, or a custom `baseURL` pointed at Groq — therefore gets
+`DefaultReadCapBytes` unless its `providers.json` entry sets `readCap`
+explicitly. The registry path is sound (it takes the cap from the definition);
+only the legacy constructor cannot express "this endpoint is metered".
+Resolution: move the cap onto the provider definition for every path, or expose
+`readCap` on the route entry, and delete the name table.
