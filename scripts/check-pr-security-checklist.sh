@@ -34,15 +34,24 @@ changed=$(git diff --name-only "$base" HEAD)
 # for. Only a diff that touches a security-relevant contract can therefore make
 # the document mandatory. The list below is the one enforced by
 # scripts/check-threat-model-freshness.sh, so the two gates cannot disagree.
+# Entries are directory prefixes, not individual files, so that a new file
+# inside a security boundary triggers the THREAT_MODEL requirement automatically
+# instead of silently escaping both gates. The exception is a single file that
+# is itself the boundary (fence.go, main.go, .goreleaser.yaml).
 security_files=(
-  internal/tools/path.go
-  internal/tools/bash.go
-  internal/perm/policy.go
-  internal/config/config.go
-  internal/snap/shadow.go
-  internal/safefs
   internal/agent/fence.go
+  internal/config/
+  internal/perm/
+  internal/pathindex/
+  internal/provider/
+  internal/redact/
+  internal/safefs/
+  internal/snap/
+  internal/store/
+  internal/tools/
   cmd/ag/main.go
+  .goreleaser.yaml
+  scripts/
 )
 
 if grep -Fq -- "- [x] I updated \`docs/THREAT_MODEL.md\`" <<<"$body"; then

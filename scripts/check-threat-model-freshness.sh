@@ -9,15 +9,23 @@ fi
 
 git cat-file -e "$base^{commit}"
 
+# Entries are directory prefixes, not individual files, so that a new file
+# inside a security boundary triggers the THREAT_MODEL requirement automatically
+# instead of silently escaping both gates.
 security_files=(
-  internal/tools/path.go
-  internal/tools/bash.go
-  internal/perm/policy.go
-  internal/config/config.go
-  internal/snap/shadow.go
-  internal/safefs
   internal/agent/fence.go
+  internal/config/
+  internal/perm/
+  internal/pathindex/
+  internal/provider/
+  internal/redact/
+  internal/safefs/
+  internal/snap/
+  internal/store/
+  internal/tools/
   cmd/ag/main.go
+  .goreleaser.yaml
+  scripts/
 )
 
 mapfile -t changed < <(git diff --name-only "$base" HEAD -- "${security_files[@]}")
