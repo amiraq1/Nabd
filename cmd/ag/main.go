@@ -315,6 +315,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 	feed.SetTouch(feedTouch)
 	feed.SetGitHeader(true)
 	feed.SetGitDir(root.Dir())
+	feed.SetPickerRoot(root.Dir())
 
 	if cont {
 		sess.loop.Seed(prevEvs)
