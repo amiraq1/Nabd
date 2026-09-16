@@ -88,6 +88,10 @@ type Policy struct {
 	granted map[string]bool
 	yolo    bool
 	mode    Mode
+	// ignored is the session ignore rule (see ignore.go). It is part of the
+	// policy, not of a tool: the same patterns must answer for the picker, for
+	// read_file and for grep.
+	ignored ignoredPaths
 }
 
 func New(cls Classifier) *Policy {

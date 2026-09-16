@@ -42,9 +42,23 @@ func newInteractiveSession(prov provider.Provider) (*interactiveSession, error) 
 	}
 	reg := tools.NewRegistry(root, sh)
 	pol := perm.New(reg)
+	wirePathRule(root, reg, pol)
 	ap := ui.NewApprover()
 	loop := newSessionLoop(prov, reg, gate{pol}, ap)
 	return &interactiveSession{root: root, reg: reg, pol: pol, ap: ap, loop: loop}, nil
+}
+
+// wirePathRule installs the session ignore rule on the policy and hands the same
+// policy to the registry as its path gate. Both entry points call it, and both
+// pass the same *perm.Policy they use as the gate, so a path and a tool name can
+// never be judged by two different rules.
+//
+// This is the whole wiring: if it is missing, the picker still hides ignored
+// paths and read_file still hands them over, which is exactly the cosmetic
+// boundary this replaces.
+func wirePathRule(root *tools.Root, reg *tools.Registry, pol *perm.Policy) {
+	pol.SetIgnoreFile(root.Dir())
+	reg.SetPathGate(pol)
 }
 
 // SetMode applies the permission policy to the built session. It is called by

@@ -20,6 +20,33 @@ type Tool interface {
 	Run(ctx context.Context, args json.RawMessage) (out string, ok bool, err error)
 }
 
+// PathGate is the path-level half of the gate: the policy's answer for one
+// root-relative path, as opposed to one tool name. The registry holds it so a
+// tool that can read file content — read_file, grep — can refuse a path the
+// policy denies even though the tool name itself is allowed.
+type PathGate interface {
+	CheckRead(rel string) (perm.Verdict, string)
+}
+
+// SetPathGate installs the policy's path rule. Called once at startup by cmd/ag
+// with the same *perm.Policy used as the gate, so the tool name and the path
+// cannot be judged by two different policies.
+func (r *Registry) SetPathGate(g PathGate) {
+	r.pathGate = g
+}
+
+// pathRefused asks the path rule about rel and reports whether the call must be
+// refused. A nil gate means no rule was installed (tests, and any caller that
+// builds a Registry without a policy), and then nothing is refused — the same
+// behaviour this registry had before the rule existed.
+func (r *Registry) pathRefused(rel string) (bool, string) {
+	if r.pathGate == nil {
+		return false, ""
+	}
+	v, why := r.pathGate.CheckRead(rel)
+	return v == perm.Deny, why
+}
+
 // Registry is the agent.Tools implementation: it owns the permission Class
 // lookup (perm.Classifier), stages read-credit for the next mutation
 // (NBD-034), and dispatches every tool including write_file, edit_file,
@@ -50,6 +77,10 @@ type Registry struct {
 	// It must not call back into the registry.
 	OnRepair func(Fix)
 
+	// pathGate is the policy's path rule (see SetPathGate). Set once at startup,
+	// before any tool runs, and never swapped afterwards.
+	pathGate PathGate
+
 	// repairOff disables pre-dispatch repair. Production leaves it false; the
 	// NBD-420 measurement harness sets it to measure each rule's effect against
 	// the same call with repair enabled (see repair_rounds_test.go).
@@ -59,7 +90,7 @@ type Registry struct {
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 	log := &editLog{}
 	r := &Registry{root: root, sh: sh, edits: log, byName: map[string]Tool{}, diffBudget: newDiffBudget(maxDiffCells)}
-	r.add(readFile{root, r}, globFiles{root}, grepFiles{root})
+	r.add(readFile{root, r}, globFiles{root}, grepFiles{root, r})
 	r.add(writeFile{root, sh, log, r}, editFile{root, sh, log, r})
 	r.add(bashTool{root})
 	return r
