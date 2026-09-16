@@ -202,3 +202,132 @@ func TestReadFileAllowReadsOverrideReadsIgnoredPath(t *testing.T) {
 		t.Fatalf("allow-reads must read the ignored file, got ok=%v err=%v out=%q", ok, err, out)
 	}
 }
+
+// TestEditFileRefusesIgnoredPathAndDoesNotLeakContent proves that edit_file
+// cannot touch an ignored file in any mode, refusing before reading and never
+// leaking any byte of content in output, error, diff, or shadow.
+func TestEditFileRefusesIgnoredPathAndDoesNotLeakContent(t *testing.T) {
+	r, _, dir := newGatedReg(t, "secrets.env\n")
+	secret := filepath.Join(dir, "secrets.env")
+	if err := os.WriteFile(secret, []byte("token=whatever\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	raw := json.RawMessage(`{"path":"secrets.env","old":"token=","new":"token=leaked"}`)
+	out, ok, err := r.Run(context.Background(), providerToolCall("edit_file", raw))
+	if ok || err == nil {
+		t.Fatalf("edit_file on an ignored path must be refused, got ok=%v err=%v out=%q", ok, err, out)
+	}
+	if !strings.Contains(err.Error(), "excluded by the session .gitignore") {
+		t.Fatalf("refusal must name the ignore rule, got: %v", err)
+	}
+	// Non-disclosure: neither out nor err may leak the secret content
+	if strings.Contains(out+err.Error(), "token=whatever") {
+		t.Fatalf("refused edit leaked content: out=%q err=%v", out, err)
+	}
+	// Disk content must be untouched
+	disk, err := os.ReadFile(secret)
+	if err != nil || string(disk) != "token=whatever\n" {
+		t.Fatalf("disk content modified despite refusal: %q", string(disk))
+	}
+}
+
+// TestShadowDoesNotRetainIgnoredPathContent proves that neither edit_file nor
+// write_file ever retains excluded file content in the shadow store (.ag/shadow),
+// and diffs (Patch) are suppressed so previous content is never disclosed.
+func TestShadowDoesNotRetainIgnoredPathContent(t *testing.T) {
+	r, _, dir := newGatedReg(t, "secrets.env\ndist/\n")
+	secret := filepath.Join(dir, "secrets.env")
+	if err := os.WriteFile(secret, []byte("token=whatever\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dist", "old.txt"), []byte("build_secret_old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1. Attempt edit_file on secrets.env (refused)
+	_, _, _ = r.Run(context.Background(), providerToolCall("edit_file", json.RawMessage(`{"path":"secrets.env","old":"token=","new":"token=leaked"}`)))
+
+	// 2. Perform write_file replacing dist/old.txt
+	wout, wok, werr := r.Run(context.Background(), providerToolCall("write_file", json.RawMessage(`{"path":"dist/old.txt","content":"build_new_content\n"}`)))
+	if !wok || werr != nil {
+		t.Fatalf("write_file to dist/old.txt failed: ok=%v err=%v out=%q", wok, werr, wout)
+	}
+
+	// 3. Perform write_file replacing secrets.env
+	wout2, wok2, werr2 := r.Run(context.Background(), providerToolCall("write_file", json.RawMessage(`{"path":"secrets.env","content":"token=replaced\n"}`)))
+	if !wok2 || werr2 != nil {
+		t.Fatalf("write_file to secrets.env failed: ok=%v err=%v out=%q", wok2, werr2, wout2)
+	}
+
+	// Verify shadow directory contains no blobs for any of the excluded files
+	shadowDir := filepath.Join(dir, ".ag", "shadow")
+	if entries, err := os.ReadDir(shadowDir); err == nil {
+		for _, e := range entries {
+			data, rerr := os.ReadFile(filepath.Join(shadowDir, e.Name()))
+			if rerr != nil {
+				continue
+			}
+			content := string(data)
+			for _, sensitive := range []string{"token=whatever", "token=replaced", "build_secret_old", "build_new_content"} {
+				if strings.Contains(content, sensitive) {
+					t.Fatalf("shadow store retained excluded path content %q in blob %s", sensitive, e.Name())
+				}
+			}
+		}
+	}
+
+	// Verify EditRecord for the writes: diff (Patch) must be suppressed so no previous bytes leaked
+	for _, edit := range r.Edits() {
+		if edit.Record != nil && edit.Record.Patch != "" {
+			t.Fatalf("excluded path edit record must suppress Patch, got %q", edit.Record.Patch)
+		}
+	}
+}
+
+// TestWriteFileToExcludedPathSucceedsWithoutDiffOrShadow proves that write_file
+// to excluded build paths (e.g. dist/, build/) succeeds, but with diffs and
+// shadow capture suppressed to prevent disclosure.
+func TestWriteFileToExcludedPathSucceedsWithoutDiffOrShadow(t *testing.T) {
+	r, _, dir := newGatedReg(t, "dist/\n")
+	distFile := filepath.Join(dir, "dist", "bundle.js")
+
+	// Write creates new file in dist/
+	out, ok, err := r.Run(context.Background(), providerToolCall("write_file", json.RawMessage(`{"path":"dist/bundle.js","content":"console.log(1);\n"}`)))
+	if !ok || err != nil {
+		t.Fatalf("write_file to dist/bundle.js failed: ok=%v err=%v out=%q", ok, err, out)
+	}
+	if !strings.Contains(out, "created dist/bundle.js") {
+		t.Fatalf("expected creation message, got: %q", out)
+	}
+
+	// Check file was written to disk
+	b, rerr := os.ReadFile(distFile)
+	if rerr != nil || string(b) != "console.log(1);\n" {
+		t.Fatalf("file not written properly: %v, content=%q", rerr, string(b))
+	}
+
+	// Write replaces file in dist/
+	out2, ok2, err2 := r.Run(context.Background(), providerToolCall("write_file", json.RawMessage(`{"path":"dist/bundle.js","content":"console.log(2);\n"}`)))
+	if !ok2 || err2 != nil {
+		t.Fatalf("write_file replacement failed: ok=%v err=%v out=%q", ok2, err2, out2)
+	}
+	if !strings.Contains(out2, "replaced dist/bundle.js") {
+		t.Fatalf("expected replacement message, got: %q", out2)
+	}
+
+	// LastEdit has empty patch and no blobs
+	last := r.LastEdit()
+	if last == nil {
+		t.Fatal("expected LastEdit record")
+	}
+	if last.Patch != "" {
+		t.Fatalf("Patch must be empty for excluded path, got %q", last.Patch)
+	}
+	if last.BlobBefore != "" || last.BlobAfter != "" {
+		t.Fatalf("BlobBefore and BlobAfter must be empty, got before=%q after=%q", last.BlobBefore, last.BlobAfter)
+	}
+}

@@ -21,11 +21,15 @@ type Tool interface {
 }
 
 // PathGate is the path-level half of the gate: the policy's answer for one
-// root-relative path, as opposed to one tool name. The registry holds it so a
-// tool that can read file content — read_file, grep — can refuse a path the
-// policy denies even though the tool name itself is allowed.
+// root-relative path, as opposed to one tool name. The registry holds it so
+// tools can enforce session .gitignore boundaries:
+//   - read_file and grep consult CheckRead
+//   - edit_file consults CheckEdit
+//   - write_file and commit consult IsPathExcluded
 type PathGate interface {
 	CheckRead(rel string) (perm.Verdict, string)
+	CheckEdit(rel string) (perm.Verdict, string)
+	IsPathExcluded(rel string) bool
 }
 
 // SetPathGate installs the policy's path rule. Called once at startup by cmd/ag
@@ -35,16 +39,38 @@ func (r *Registry) SetPathGate(g PathGate) {
 	r.pathGate = g
 }
 
-// pathRefused asks the path rule about rel and reports whether the call must be
-// refused. A nil gate means no rule was installed (tests, and any caller that
-// builds a Registry without a policy), and then nothing is refused — the same
-// behaviour this registry had before the rule existed.
+// pathRefused asks the path rule about rel for read_file/grep and reports
+// whether the call must be refused. A nil gate means no rule was installed
+// (tests, and any caller that builds a Registry without a policy), and then
+// nothing is refused — the same behaviour this registry had before the rule
+// existed.
 func (r *Registry) pathRefused(rel string) (bool, string) {
 	if r.pathGate == nil {
 		return false, ""
 	}
 	v, why := r.pathGate.CheckRead(rel)
 	return v == perm.Deny, why
+}
+
+// pathEditRefused asks the path rule about rel for edit_file and reports
+// whether the edit must be refused. Unlike reading, editing an excluded file
+// cannot be permitted in any mode because it requires reading and inspecting
+// the content to find and replace text.
+func (r *Registry) pathEditRefused(rel string) (bool, string) {
+	if r.pathGate == nil {
+		return false, ""
+	}
+	v, why := r.pathGate.CheckEdit(rel)
+	return v == perm.Deny, why
+}
+
+// isPathExcluded reports whether rel matches the session .gitignore.
+// Used by write_file and commit to suppress diffs and shadow storage.
+func (r *Registry) isPathExcluded(rel string) bool {
+	if r.pathGate == nil {
+		return false
+	}
+	return r.pathGate.IsPathExcluded(rel)
 }
 
 // Registry is the agent.Tools implementation: it owns the permission Class

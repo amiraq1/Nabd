@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -141,6 +142,57 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	relative, absPath, err := writePathFromRoot(root, abs)
 	if err != nil {
 		return snap.State{}, snap.State{}, err
+	}
+
+	if reg != nil && reg.isPathExcluded(relative) {
+		// An excluded path (e.g. build artifacts, dist/) may be written by write_file,
+		// but must NEVER disclose previous content in diffs and NEVER store blobs in
+		// snap.Shadow. Determine existing file mode without reading or capturing bytes into shadow.
+		mode := os.FileMode(0o644)
+		absent := true
+		if f, oerr := safefs.OpenRead(root.Dir(), relative); oerr == nil {
+			absent = false
+			if fi, serr := f.Stat(); serr == nil && fi.Mode().Perm() != 0 {
+				mode = fi.Mode().Perm()
+			}
+			f.Close()
+		}
+		before := snap.State{Rel: relative, Absent: absent, Mode: mode}
+		after := snap.State{Rel: relative, Size: int64(len(data)), Mode: mode}
+
+		if reg != nil {
+			reg.ConsumeLinesRead(abs, "")
+		}
+		rec := &agent.EditRecord{
+			Path:      relative,
+			HashAfter: sha256hex(data),
+		}
+		if err := writeFromRoot(root, relative, absPath, data, mode); err != nil {
+			return before, after, err
+		}
+		log.add(Edit{Tool: tool, Rel: root.Rel(absPath), Before: before, After: after, Record: rec})
+
+		// Verify the write on disk directly without writing any blob into the shadow store.
+		vf, verr := safefs.OpenRead(root.Dir(), relative)
+		if verr != nil {
+			return before, after, verr
+		}
+		defer vf.Close()
+		vfi, verr := vf.Stat()
+		if verr != nil {
+			return before, after, verr
+		}
+		if vfi.Size() != int64(len(data)) {
+			return before, after, errors.New("write did not verify on disk as-is")
+		}
+		hasher := sha256.New()
+		if _, herr := io.Copy(hasher, vf); herr != nil {
+			return before, after, herr
+		}
+		if hex.EncodeToString(hasher.Sum(nil)) != rec.HashAfter {
+			return before, after, errors.New("write did not verify on disk as-is")
+		}
+		return before, after, nil
 	}
 
 	before, err := captureFromRoot(sh, root, relative, absPath)

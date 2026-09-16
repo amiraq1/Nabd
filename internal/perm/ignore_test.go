@@ -167,3 +167,45 @@ func TestConcurrentCheckReadWithSetIgnoreFile(t *testing.T) {
 	}
 	<-done
 }
+
+// TestCheckEditRefusesInAllModes pins the non-disclosure contract: edit_file
+// cannot touch an ignored file in ANY mode, including allow-reads and yolo,
+// because editing requires reading and inspecting the excluded content.
+func TestCheckEditRefusesInAllModes(t *testing.T) {
+	dir := t.TempDir()
+	writeIgnoreFile(t, dir, "secrets.env\n")
+	p := New(testCls())
+	p.SetIgnoreFile(dir)
+	for _, mode := range []Mode{ModeAsk, ModeDeny, ModeAllowReads, ModePlan} {
+		p.SetMode(mode)
+		v, why := p.CheckEdit("secrets.env")
+		if v != Deny {
+			t.Errorf("mode %d: CheckEdit(secrets.env) = %v, want Deny", mode, v)
+		}
+		if !strings.Contains(why, "secrets.env") || !strings.Contains(why, "edit_file cannot inspect excluded files") {
+			t.Errorf("mode %d: refusal %q must explain why editing is refused", mode, why)
+		}
+		// Unmatched path is allowed
+		if v2, _ := p.CheckEdit("main.go"); v2 != Allow {
+			t.Errorf("mode %d: CheckEdit(main.go) = %v, want Allow", mode, v2)
+		}
+	}
+}
+
+// TestIsPathExcluded pins the mode-independent path exclusion query used by
+// commit and write_file to suppress diffs and shadow storage.
+func TestIsPathExcluded(t *testing.T) {
+	dir := t.TempDir()
+	writeIgnoreFile(t, dir, "secrets.env\ndist/\n")
+	p := New(testCls())
+	p.SetIgnoreFile(dir)
+	if !p.IsPathExcluded("secrets.env") {
+		t.Error("secrets.env should be excluded")
+	}
+	if !p.IsPathExcluded("dist/bundle.js") {
+		t.Error("dist/bundle.js should be excluded")
+	}
+	if p.IsPathExcluded("main.go") {
+		t.Error("main.go should not be excluded")
+	}
+}
