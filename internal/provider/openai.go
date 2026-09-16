@@ -370,8 +370,12 @@ func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chun
 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		body := apiMessage(msg)
+		if isModelNotFound(resp.StatusCode, body) {
+			return 0, fmt.Errorf("%s\n%s", body, modelLookupHint(o.providerName, o.Model))
+		}
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
-			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).\nاعرض المتاح:\n  curl -s %s/models -H \"Authorization: Bearer $%s\" | jq -r '.data[].id'\nثم ضع NABD_MODEL=<id> في ~/.ag/config", o.Model, resp.StatusCode, o.BaseURL, o.keyVar())
+			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d).\n%s", o.Model, resp.StatusCode, modelLookupHint(o.providerName, o.Model))
 		}
 		// Groq reports per-minute TPM violations as http 413 with a body
 		// naming "Limit N" and "Requested M". It is a rate ceiling, not a

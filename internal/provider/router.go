@@ -758,7 +758,9 @@ func (r *Router) classifyError(re Route, chunk Chunk) routeOutcome {
 	var he *httpError
 	if errors.As(chunk.Err, &he) {
 		if isModelNotFound(he.Status, he.Body) {
-			return r.makeFailure(re, he.Status, he.Body, true, he.Body)
+			body := SanitizeBody(he.Body, exactKeys(re.Client))
+			body = body + "\n" + modelLookupHint(re.Provider, re.Model)
+			return r.makeFailure(re, he.Status, body, true, body)
 		}
 		if he.Status == http.StatusBadRequest {
 			// Generic 400 Bad Request — Section K: no fallback.
@@ -771,6 +773,12 @@ func (r *Router) classifyError(re Route, chunk Chunk) routeOutcome {
 	}
 
 	errStr := chunk.Err.Error()
+	if isModelNotFound(400, errStr) {
+		body := SanitizeBody(errStr, exactKeys(re.Client))
+		body += "\n" + modelLookupHint(re.Provider, re.Model)
+		return r.makeFailure(re, 400, body, true, body)
+	}
+
 	if strings.Contains(errStr, "400") && !isModelNotFound(400, errStr) {
 		// Generic 400 in text format
 		return routeOutcome{
@@ -852,6 +860,10 @@ func isFallbackStatus(status int) bool {
 	return status >= 500
 }
 
+func modelLookupHint(providerID, model string) string {
+	return fmt.Sprintf("provider %s model %s was rejected; run `nabd models %s` to see the live model list", providerID, model, providerID)
+}
+
 func isModelNotFound(status int, body string) bool {
 	if status != http.StatusBadRequest && status != http.StatusNotFound {
 		return false
@@ -860,6 +872,7 @@ func isModelNotFound(status int, body string) bool {
 	patterns := []string{
 		"model_not_found",
 		"model_decommissioned",
+		"decommissioned",
 		"invalid_model",
 		"model not found",
 		"does not exist",
