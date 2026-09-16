@@ -1,6 +1,6 @@
 # Threat model — v9
 
-Last reviewed: 2026-09-15
+Last reviewed: 2026-09-16
 
 This is the only place nabd states security claims. README points here.
 
@@ -80,6 +80,7 @@ filesystem sandbox.
 | Pointer input can select and expand cards, but never answers permissions or executes tools | GUARANTEED | Evidence: `TestPointerNeverAnswersPermission`, `TestPointerNeverExecutesATool` |
 | Git status header inspects only the granted root and never traverses to a parent repository | GUARANTEED | `isGitRepo` checks `.git` strictly at the root; parent repos are out of bounds. Evidence: `TestIsGitRepoDetection` |
 | OSC 52 clipboard copy operates on projected cards only, after credential redaction and display sanitization | GUARANTEED | Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand` |
+| A bare `nabd` runs the feed UI, and `--feed=false` is the rollback that removes the `@` index | GUARANTEED | The `-feed` flag defaults to `true`, so the default interactive path is `doChatWithFeed` — the same path that calls `SetPickerRoot(root.Dir())` and therefore indexes the session root for `@`. `--feed=false` selects `doChat`, which wires no picker and performs no scan; the two entry points are mutually exclusive within one invocation, and the rollback needs no rebuild or reinstall. Evidence: `TestFeedIsTheDefaultInteractiveUI` |
 | Bash filesystem reach after approval | OUT OF SCOPE | approved shell commands run with the current user's filesystem authority |
 | Network/resource exhaustion from approved bash | OUT OF SCOPE | no namespace, cgroup, or Landlock boundary |
 
@@ -523,6 +524,36 @@ The empty flag preserves each path's existing default (interactive `ask`,
 headless `deny`), so adopting plan mode is opt-in and cannot silently
 change current behaviour. Evidence: `TestModeTable`,
 `TestModePlanOverridesGrants`, `TestModePlanAllowsReads`.
+
+### Default interactive UI and the @ index surface
+
+The `-feed` flag defaults to `true`: a bare `nabd` runs `doChatWithFeed`. That
+is not only a presentation choice. The feed path is the one that calls
+`feed.SetPickerRoot(root.Dir())`, so the `@` path index of the session root now
+runs for operators who never asked for it, whereas `doChat` wires no picker and
+reads nothing for completion. The default therefore widens the read surface of
+the default invocation, and the widening is bounded by the picker's own limits
+rather than by the flag: BFS traversal inside the resolved root, symlinks
+refused at directory read, `.ag` and the shadow store excluded, and the three
+reachable stop conditions of `pathindex.Scan` (see "Pathindex traversal surface
+and candidate picker limits"). No candidate is read as content; the index holds
+paths.
+
+`--feed=false` is the rollback, and it is a rollback in the operational sense:
+it selects the legacy chat entry point in the same binary, with no rebuild, no
+reinstall, and no source-control operation. A `git revert` of the default is not
+an equivalent, because it reaches the operator only through a new release. The
+flag is therefore expected to remain for at least one full release after the
+default flips, so that an operator who does not want the `@` index on by default
+has a switch rather than a downgrade.
+
+The two entry points stay mutually exclusive within one invocation: `main`
+branches once on `*useFeed` and returns, so a single run is either a feed
+session or a chat session, never both. Evidence:
+`TestFeedIsTheDefaultInteractiveUI`; the picker wiring it guards is proven by
+`TestPickerExplicitSessionRootOverridesGitDir`,
+`TestPickerNoSessionRootFallsBackToGitDir`, and
+`TestPickerUnreadableSessionRootReportsStatusWithoutCrash`.
 
 ### Git status header containment
 
