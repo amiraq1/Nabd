@@ -734,9 +734,6 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 			msg := fmt.Sprintf("unknown tool %q · available: %s", c.Name, strings.Join(l.toolNames(), ", "))
 			ac.OK, ac.Output = false, msg
 			l.emit(Event{Type: ToolEnd, Call: &ac})
-			if err := l.checkLoop(c.Name, c.Input, false, msg); err != nil {
-				return false, err
-			}
 			continue
 		}
 

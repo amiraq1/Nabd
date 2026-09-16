@@ -67,9 +67,13 @@ type staticMockTools struct {
 func (m *staticMockTools) Specs() []provider.ToolSpec {
 	return []provider.ToolSpec{{Name: "read_file"}}
 }
-func (m *staticMockTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
+func (m *staticMockTools) Run(_ context.Context, _ provider.ToolCall) (string, bool, error) {
 	return m.output, m.ok, nil
 }
+func (m *staticMockTools) Check(_ string) (Verdict, string)           { return VerdictAllow, "" }
+func (m *staticMockTools) Record(_ string, _ Decision)                {}
+func (m *staticMockTools) Effective(_ string, d Decision) Decision    { return d }
+func (m *staticMockTools) Ask(_ context.Context, _ ToolCall) Decision { return AllowOnce }
 
 type eventCollectorSink struct {
 	mu     sync.Mutex
@@ -93,9 +97,12 @@ func TestToolLoopNoticeAtThreeRepeats(t *testing.T) {
 		toolArgs: `{"path":"missing.go"}`,
 	}
 	sink := &eventCollectorSink{}
+	tools := &staticMockTools{output: "file not found", ok: false}
 	l := &Loop{
 		Provider: prov,
-		Tools:    &staticMockTools{output: "file not found", ok: false},
+		Tools:    tools,
+		Gate:     tools,
+		Human:    tools,
 		Sink:     sink,
 		Budget:   NewBudget(),
 	}
@@ -142,9 +149,12 @@ func TestToolLoopHardCutAtFiveRepeats(t *testing.T) {
 		toolArgs: `{"path":"missing.go"}`,
 	}
 	sink := &eventCollectorSink{}
+	tools := &staticMockTools{output: "file not found", ok: false}
 	l := &Loop{
 		Provider: prov,
-		Tools:    &staticMockTools{output: "file not found", ok: false},
+		Tools:    tools,
+		Gate:     tools,
+		Human:    tools,
 		Sink:     sink,
 		Budget:   NewBudget(),
 	}
@@ -210,9 +220,12 @@ func TestToolLoopResetAcrossRuns(t *testing.T) {
 		toolArgs: `{"path":"missing.go"}`,
 	}
 	sink := &eventCollectorSink{}
+	tools := &staticMockTools{output: "file not found", ok: false}
 	l := &Loop{
 		Provider: prov,
-		Tools:    &staticMockTools{output: "file not found", ok: false},
+		Tools:    tools,
+		Gate:     tools,
+		Human:    tools,
 		Sink:     sink,
 		Budget:   NewBudget(),
 	}
