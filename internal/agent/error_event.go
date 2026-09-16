@@ -19,6 +19,7 @@ const (
 	ErrBudget            ErrorCode = "budget"
 	ErrMaxTurnsCode      ErrorCode = "max_turns"
 	ErrCanceled          ErrorCode = "canceled"
+	ErrLoopDetected      ErrorCode = "loop_detected"
 	ErrUnknown           ErrorCode = "unknown"
 )
 
@@ -82,6 +83,8 @@ func ErrorCodeOf(err error) ErrorCode {
 		return ErrBudget
 	case errors.Is(err, ErrMaxTurns):
 		return ErrMaxTurnsCode
+	case errors.Is(err, ErrToolLoop):
+		return ErrLoopDetected
 	case errors.Is(err, context.Canceled):
 		return ErrCanceled
 	case errors.Is(err, ErrRateLimitBudget):
