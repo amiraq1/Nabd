@@ -50,6 +50,9 @@ type ProviderConfig struct {
 	Options ProviderOptions        `json:"options,omitempty"`
 	Models  map[string]ModelConfig `json:"models,omitempty"`
 	ReadCap int                    `json:"readCap,omitempty"`
+	// DefaultModel is the model used when nothing overrides it. It is what the
+	// deleted per-provider constructors used to hard-code.
+	DefaultModel string `json:"defaultModel,omitempty"`
 }
 
 // ProviderOptions carries options such as custom base URLs.
@@ -65,15 +68,17 @@ type ModelConfig struct {
 
 // Provider represents a fully resolved provider in the registry.
 type Provider struct {
-	ID        string
-	API       string // "openai" | "anthropic"
-	Name      string
-	BaseURL   string
-	Models    map[string]Model
-	ReadCap   int
-	Key       string // resolved credential
-	Source    string // "providers.json" | "builtin"
-	KeySource string // "auth.json" | "env" | "config" | "none"
+	ID      string
+	API     string // "openai" | "anthropic"
+	Name    string
+	BaseURL string
+	Models  map[string]Model
+	ReadCap int
+	// DefaultModel is the model to use when the caller does not name one.
+	DefaultModel string
+	Key          string // resolved credential
+	Source       string // "providers.json" | "builtin"
+	KeySource    string // "auth.json" | "env" | "config" | "none"
 }
 
 // Model represents a resolved model configuration.
@@ -211,13 +216,14 @@ func toProvider(id string, cfg ProviderConfig, source string) Provider {
 		}
 	}
 	return Provider{
-		ID:      id,
-		API:     cfg.API,
-		Name:    cfg.Name,
-		BaseURL: cfg.Options.BaseURL,
-		Models:  models,
-		ReadCap: readCap,
-		Source:  source,
+		ID:           id,
+		API:          cfg.API,
+		Name:         cfg.Name,
+		BaseURL:      cfg.Options.BaseURL,
+		Models:       models,
+		ReadCap:      readCap,
+		DefaultModel: cfg.DefaultModel,
+		Source:       source,
 	}
 }
 

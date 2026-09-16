@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 
+	"nabd/internal/config"
 	"nabd/internal/registry"
 )
 
@@ -81,6 +82,70 @@ func missingKeyError(reg *registry.Registry, id string) error {
 	}
 	return fmt.Errorf(
 		"route provider %q has no API key — add it to %s", id, reg.AuthPath)
+}
+
+// BuildStandaloneProvider builds the non-router provider for id — the path
+// NABD_PROVIDER selects. It resolves through the registry exactly as the router
+// path does, and applies the standalone retry policy the deleted per-provider
+// constructors used to set. NABD_MODEL and NABD_BASE_URL are read here, at the
+// edge, so the registry variant below stays pure (F14, X12).
+func BuildStandaloneProvider(id string) (Provider, error) {
+	reg, err := registry.Load()
+	if err != nil {
+		return nil, err
+	}
+	return BuildStandaloneProviderWithRegistry(reg, id, config.Get("NABD_MODEL"), config.Get("NABD_BASE_URL"))
+}
+
+// BuildStandaloneProviderWithRegistry is BuildStandaloneProvider with an
+// explicit registry and explicit overrides. modelOverride (NABD_MODEL) wins
+// over the provider's catalog default; baseOverride (NABD_BASE_URL) wins over
+// the catalog endpoint. The result retries on its own (RetryStandalone), which
+// is what the legacy constructors did and the router path deliberately does not.
+func BuildStandaloneProviderWithRegistry(reg *registry.Registry, id, modelOverride, baseOverride string) (Provider, error) {
+	prov, ok := reg.Get(id)
+	if !ok {
+		return nil, unknownProviderError(reg, id)
+	}
+	if prov.Key == "" {
+		return nil, missingKeyError(reg, prov.ID)
+	}
+
+	model := strings.TrimSpace(modelOverride)
+	if model == "" {
+		model = prov.DefaultModel
+	}
+	if model == "" {
+		return nil, fmt.Errorf(
+			"provider %q has no model — set NABD_MODEL or add \"defaultModel\" to %s",
+			prov.ID, reg.ProvidersPath)
+	}
+
+	baseURL := prov.BaseURL
+	if b := strings.TrimSpace(baseOverride); b != "" {
+		baseURL = b
+	}
+
+	switch prov.API {
+	case "anthropic":
+		p, err := NewAnthropicDialect(prov.ID, baseURL, model, prov.Key, prov.ReadCap)
+		if err != nil {
+			return nil, err
+		}
+		p.retryPolicy = RetryStandalone
+		return p, nil
+	case "openai":
+		p, err := NewOpenAIDialect(prov.ID, baseURL, model, prov.Key, prov.ReadCap)
+		if err != nil {
+			return nil, err
+		}
+		p.retryPolicy = RetryStandalone
+		return p, nil
+	default:
+		return nil, fmt.Errorf(
+			"provider %q: unsupported api dialect %q; must be 'openai' or 'anthropic'",
+			prov.ID, prov.API)
+	}
 }
 
 // AsSingleAttempt ensures p satisfies SingleAttempt.

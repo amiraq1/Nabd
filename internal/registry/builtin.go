@@ -44,7 +44,8 @@ func BuiltinCatalog() map[string]ProviderConfig {
 					ID:   "claude-3-5-haiku-20241022",
 				},
 			},
-			ReadCap: DefaultReadCapBytes,
+			DefaultModel: "claude-sonnet-5",
+			ReadCap:      DefaultReadCapBytes,
 		},
 		"groq": {
 			API:  "openai",
@@ -66,7 +67,8 @@ func BuiltinCatalog() map[string]ProviderConfig {
 					ID:   "llama-3.1-8b-instant",
 				},
 			},
-			ReadCap: GroqReadCapBytes,
+			DefaultModel: "qwen-2.5-32b",
+			ReadCap:      GroqReadCapBytes,
 		},
 		"openrouter": {
 			API:  "openai",
@@ -80,7 +82,8 @@ func BuiltinCatalog() map[string]ProviderConfig {
 					ID:   "anthropic/claude-3.5-haiku",
 				},
 			},
-			ReadCap: DefaultReadCapBytes,
+			DefaultModel: "anthropic/claude-3.5-haiku",
+			ReadCap:      DefaultReadCapBytes,
 		},
 		"nvidia": {
 			API:  "openai",
@@ -94,7 +97,8 @@ func BuiltinCatalog() map[string]ProviderConfig {
 					ID:   "moonshotai/kimi-k2.6",
 				},
 			},
-			ReadCap: DefaultReadCapBytes,
+			DefaultModel: "moonshotai/kimi-k2.6",
+			ReadCap:      DefaultReadCapBytes,
 		},
 	}
 }

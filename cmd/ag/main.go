@@ -626,23 +626,23 @@ func pickProvider() (provider.Provider, error) {
 	case "router":
 		return pickRouterProvider()
 	case "nvidia":
-		return provider.NewNVIDIA()
+		return provider.BuildStandaloneProvider("nvidia")
 	case "anthropic":
 		return provider.NewAnthropic()
 	case "openrouter":
-		return provider.NewOpenRouter()
+		return provider.BuildStandaloneProvider("openrouter")
 	case "groq":
-		return provider.NewGroq()
+		return provider.BuildStandaloneProvider("groq")
 	}
 
 	if config.Has("GROQ_API_KEY") {
-		return provider.NewGroq()
+		return provider.BuildStandaloneProvider("groq")
 	}
 	if config.Has("OPENROUTER_API_KEY") {
-		return provider.NewOpenRouter()
+		return provider.BuildStandaloneProvider("openrouter")
 	}
 	if config.Has("NVIDIA_API_KEY") {
-		return provider.NewNVIDIA()
+		return provider.BuildStandaloneProvider("nvidia")
 	}
 	return provider.NewAnthropic()
 }
