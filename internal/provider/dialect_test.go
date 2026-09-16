@@ -30,8 +30,8 @@ func TestStandaloneProviderReadsEnvEdge(t *testing.T) {
 		t.Setenv("NABD_BASE_URL", "")
 
 		o := standaloneOpenAI(t, "groq")
-		if o.Model != "qwen-2.5-32b" {
-			t.Errorf("Model = %q, want the catalog DefaultModel %q", o.Model, "qwen-2.5-32b")
+		if o.Model != "openai/gpt-oss-120b" {
+			t.Errorf("Model = %q, want the catalog DefaultModel %q", o.Model, "openai/gpt-oss-120b")
 		}
 		if o.BaseURL != "https://api.groq.com/openai/v1" {
 			t.Errorf("BaseURL = %q, want the catalog endpoint", o.BaseURL)
@@ -190,7 +190,7 @@ func TestReadCapComesFromRegistryNotName(t *testing.T) {
 	})
 
 	t.Run("3: the builtin groq carries its cap in the catalog", func(t *testing.T) {
-		routed, err := BuildRouteProviderWithRegistry(builtin, RouteEntry{Provider: "groq", Model: "qwen-2.5-32b"})
+		routed, err := BuildRouteProviderWithRegistry(builtin, RouteEntry{Provider: "groq", Model: "openai/gpt-oss-120b"})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -54,20 +54,12 @@ func BuiltinCatalog() map[string]ProviderConfig {
 				BaseURL: "https://api.groq.com/openai/v1",
 			},
 			Models: map[string]ModelConfig{
-				"qwen-2.5-32b": {
-					Name: "Qwen 2.5 32B",
-					ID:   "qwen-2.5-32b",
-				},
-				"llama-3.3-70b-versatile": {
-					Name: "Llama 3.3 70B Versatile",
-					ID:   "llama-3.3-70b-versatile",
-				},
-				"llama-3.1-8b-instant": {
-					Name: "Llama 3.1 8B Instant",
-					ID:   "llama-3.1-8b-instant",
+				"openai/gpt-oss-120b": {
+					Name: "OpenAI GPT OSS 120B",
+					ID:   "openai/gpt-oss-120b",
 				},
 			},
-			DefaultModel: "qwen-2.5-32b",
+			DefaultModel: "openai/gpt-oss-120b",
 			ReadCap:      GroqReadCapBytes,
 		},
 		"openrouter": {

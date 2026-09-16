@@ -1,12 +1,43 @@
 package registry
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 )
+
+func TestBuiltinDefaultsAreDeclaredNotGuessed(t *testing.T) {
+	cat := BuiltinCatalog()
+	for providerID, provider := range cat {
+		if provider.DefaultModel == "" {
+			t.Errorf("provider %q: empty DefaultModel", providerID)
+		}
+		model, ok := provider.Models[provider.DefaultModel]
+		if !ok {
+			t.Errorf("provider %q: DefaultModel %q is not declared in Models", providerID, provider.DefaultModel)
+		} else if model.ID == "" || model.Name == "" {
+			t.Errorf("provider %q default model %q: ID and Name must be non-empty", providerID, provider.DefaultModel)
+		}
+		for modelID, model := range provider.Models {
+			if model.ID == "" || model.Name == "" {
+				t.Errorf("provider %q model %q: ID and Name must be non-empty", providerID, modelID)
+			}
+		}
+		u, err := url.Parse(provider.Options.BaseURL)
+		if err != nil || u.Scheme != "https" {
+			t.Errorf("provider %q: BaseURL %q must use https", providerID, provider.Options.BaseURL)
+		}
+		if provider.ReadCap <= 0 {
+			t.Errorf("provider %q: ReadCap = %d, want positive", providerID, provider.ReadCap)
+		}
+	}
+	if _, ok := cat["groq"].Models["qwen-2.5-32b"]; ok {
+		t.Fatal("groq catalog still contains decommissioned qwen-2.5-32b")
+	}
+}
 
 func TestBuiltinCatalogCoversLegacyProviders(t *testing.T) {
 	cat := BuiltinCatalog()

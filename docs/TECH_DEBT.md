@@ -1,5 +1,9 @@
 # Technical Debt
 
+| ID | Debt | Consequence and guard |
+|---|---|---|
+| BUILTIN_CATALOG_STALENESS | The embedded catalog is a static list in source, while providers decommission models without notice; staleness is therefore a permanent condition, not a one-off incident. CI cannot guard it: the build has no network and no credentials, and querying a real provider from tests is forbidden. The only structural protection is that a default must be manually verified at edit time; `nabd models` is the live source of truth. The current Anthropic default `claude-sonnet-5` is unverified because no Anthropic key was available for measurement; it is recorded as unmeasured and is not changed by this PR. | Keep defaults declared in `Models`, verify them manually when editing the catalog, and direct users to `nabd models <provider>`. |
+
 ## G1: write.go diff/output/event baseline (NBD-011 limit selection)
 
 Measured on the reference device/environment to choose the starting ceilings

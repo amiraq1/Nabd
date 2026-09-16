@@ -37,7 +37,7 @@ func TestLegacyConstructorsAreGoneAndRoutesStillBuild(t *testing.T) {
 		key      string
 	}{
 		{"nvidia", "moonshotai/kimi-k2.6", "https://integrate.api.nvidia.com/v1", "nv-legacy"},
-		{"groq", "qwen-2.5-32b", "https://api.groq.com/openai/v1", "gq-legacy"},
+		{"groq", "openai/gpt-oss-120b", "https://api.groq.com/openai/v1", "gq-legacy"},
 		{"openrouter", "anthropic/claude-3.5-haiku", "https://openrouter.ai/api/v1", "or-legacy"},
 	}
 
