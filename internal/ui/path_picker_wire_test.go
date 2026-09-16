@@ -3,6 +3,7 @@ package ui
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -201,7 +202,160 @@ func TestPickerScansOnceAndReportsAnUnusableRoot(t *testing.T) {
 	if bad.status == "" {
 		t.Fatal("an unreadable root must be reported, not swallowed")
 	}
+	const wantPrefix = "cannot index files for @: "
+	if !strings.HasPrefix(bad.status, wantPrefix) {
+		t.Fatalf("status = %q, want prefix %q", bad.status, wantPrefix)
+	}
 	if !bad.pickerScanned {
 		t.Fatal("a failed scan must be remembered, or every keystroke retries the walk")
+	}
+}
+
+// TestPickerExplicitSessionRootOverridesGitDir verifies Scenario 1:
+// Explicit session root => indexing occurs under session root, not gitDir.
+func TestPickerExplicitSessionRootOverridesGitDir(t *testing.T) {
+	gitDir := t.TempDir()
+	sessionDir := t.TempDir()
+
+	gitFile := filepath.Join(gitDir, "git_exclusive.txt")
+	if err := os.WriteFile(gitFile, []byte("git"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sessionFile := filepath.Join(sessionDir, "session_exclusive.txt")
+	if err := os.WriteFile(sessionFile, []byte("session"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewFeed()
+	m.composer.focus()
+	m.SetGitDir(gitDir)
+	m.SetPickerRoot(sessionDir)
+
+	m.composer.setValue("@session")
+	m.syncPathPicker()
+
+	if !m.pickerVisible() {
+		t.Fatal("expected picker popup to be visible for explicit session root")
+	}
+	curr, ok := m.picker.currentPath()
+	if !ok || curr != "session_exclusive.txt" {
+		t.Fatalf("currentPath = %q (ok=%v), want %q", curr, ok, "session_exclusive.txt")
+	}
+	if !slices.Contains(m.pickerIndex.paths, "session_exclusive.txt") {
+		t.Fatalf("pickerIndex.paths missing session_exclusive.txt: %v", m.pickerIndex.paths)
+	}
+	if slices.Contains(m.pickerIndex.paths, "git_exclusive.txt") {
+		t.Fatalf("pickerIndex.paths must NOT contain git_exclusive.txt when session root is set: %v", m.pickerIndex.paths)
+	}
+
+	// Query matching git-only file must yield no results and close the picker.
+	m.composer.setValue("@git_ex")
+	m.syncPathPicker()
+	if m.pickerVisible() {
+		t.Fatal("picker should close when query only matches files outside the session root")
+	}
+}
+
+// TestPickerNoSessionRootFallsBackToGitDir verifies Scenario 2:
+// No session root => fallback to gitDir (no regression).
+func TestPickerNoSessionRootFallsBackToGitDir(t *testing.T) {
+	gitDir := t.TempDir()
+	gitFile := filepath.Join(gitDir, "fallback_repo_file.go")
+	if err := os.WriteFile(gitFile, []byte("package test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	m := NewFeed()
+	m.composer.focus()
+	m.SetGitDir(gitDir)
+	if m.pickerRoot != "" {
+		t.Fatalf("expected m.pickerRoot to be empty before SetPickerRoot, got %q", m.pickerRoot)
+	}
+
+	m.composer.setValue("@fallback")
+	m.syncPathPicker()
+
+	if !m.pickerVisible() {
+		t.Fatal("expected picker popup to be visible via gitDir fallback")
+	}
+	curr, ok := m.picker.currentPath()
+	if !ok || curr != "fallback_repo_file.go" {
+		t.Fatalf("currentPath = %q (ok=%v), want %q", curr, ok, "fallback_repo_file.go")
+	}
+	if !slices.Contains(m.pickerIndex.paths, "fallback_repo_file.go") {
+		t.Fatalf("pickerIndex.paths missing fallback_repo_file.go: %v", m.pickerIndex.paths)
+	}
+	if m.pickerErr != "" {
+		t.Fatalf("unexpected pickerErr on valid gitDir fallback: %q", m.pickerErr)
+	}
+
+	// When neither session root nor gitDir is configured, picker should fail
+	// cleanly with the designated error message without crashing.
+	noRootFeed := NewFeed()
+	noRootFeed.composer.focus()
+	noRootFeed.composer.setValue("@")
+	noRootFeed.syncPathPicker()
+	if noRootFeed.pickerVisible() {
+		t.Fatal("picker must not open when neither pickerRoot nor gitDir is configured")
+	}
+	if got, want := noRootFeed.pickerErr, "no directory to index for @"; got != want {
+		t.Fatalf("pickerErr = %q, want %q", got, want)
+	}
+}
+
+// TestPickerUnreadableSessionRootReportsStatusWithoutCrash verifies Scenario 3:
+// Unreadable session root => produces error message prefix "cannot index files for @: "
+// and sets status without crashing/panicking.
+func TestPickerUnreadableSessionRootReportsStatusWithoutCrash(t *testing.T) {
+	unreadableRoot := filepath.Join(t.TempDir(), "nonexistent_dir")
+	m := NewFeed()
+	m.composer.focus()
+	m.SetPickerRoot(unreadableRoot)
+
+	// Triggering @ must not panic or crash.
+	m.composer.setValue("@foo")
+	m.syncPathPicker()
+
+	if m.pickerVisible() {
+		t.Fatal("picker popup must remain closed for unreadable session root")
+	}
+	const wantPrefix = "cannot index files for @: "
+	if !strings.HasPrefix(m.status, wantPrefix) {
+		t.Fatalf("status = %q, want prefix %q", m.status, wantPrefix)
+	}
+	if !strings.HasPrefix(m.pickerErr, wantPrefix) {
+		t.Fatalf("pickerErr = %q, want prefix %q", m.pickerErr, wantPrefix)
+	}
+	if !m.pickerScanned {
+		t.Fatal("pickerScanned must be true to avoid repeated scans on subsequent keystrokes")
+	}
+
+	// Subsequent keystrokes should maintain status and not re-scan or panic.
+	m.composer.setValue("@foobar")
+	m.syncPathPicker()
+	if m.pickerVisible() {
+		t.Fatal("picker popup must remain closed on subsequent keystroke")
+	}
+	if !strings.HasPrefix(m.status, wantPrefix) {
+		t.Fatalf("status after edit = %q, want prefix %q", m.status, wantPrefix)
+	}
+
+	// Even with a valid gitDir configured, an explicit unreadable session root
+	// must report the error rather than silently falling back.
+	validGitDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(validGitDir, "git.txt"), []byte("g"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m2 := NewFeed()
+	m2.composer.focus()
+	m2.SetGitDir(validGitDir)
+	m2.SetPickerRoot(unreadableRoot)
+	m2.composer.setValue("@foo")
+	m2.syncPathPicker()
+	if m2.pickerVisible() {
+		t.Fatal("picker popup must remain closed when explicit session root is unreadable")
+	}
+	if !strings.HasPrefix(m2.status, wantPrefix) {
+		t.Fatalf("status = %q, want prefix %q", m2.status, wantPrefix)
 	}
 }
