@@ -95,7 +95,7 @@ func main() {
 	sessDir := flag.String("dir", "", "session directory (default ~/.ag/sessions)")
 	cont := flag.Bool("continue", false, "resume the latest session")
 	showVer := flag.Bool("version", false, "print version and exit")
-	useFeed := flag.Bool("feed", false, "use the new projected feed UI (experimental)")
+	useFeed := flag.Bool("feed", true, "use the projected feed UI (set --feed=false for the legacy chat UI)")
 	feedTouch := flag.Bool("feed-touch", false, "enable finger-swipe touch scrolling for feed UI")
 	prompt := flag.String("p", "", "headless one-shot task; \"-\" reads stdin")
 	jsonOut := flag.Bool("json", false, "headless: emit journal JSONL on stdout")
