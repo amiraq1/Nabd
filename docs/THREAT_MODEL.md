@@ -624,3 +624,47 @@ status instead of panicking, and is not re-scanned on later keystrokes
 Evidence: `TestPickerExplicitSessionRootOverridesGitDir`,
 `TestPickerNoSessionRootFallsBackToGitDir`,
 `TestPickerUnreadableSessionRootReportsStatusWithoutCrash`.
+
+### Pathindex traversal surface and candidate picker limits
+
+The `@` path candidate picker indexes repository files to provide interactive path completion. Because scanning touches the filesystem and feeds completion options into interactive input, its traversal surface is constrained by six security properties.
+
+**BFS traversal and deterministic candidate ordering.** `pathindex.Scan` traverses the directory hierarchy breadth-first starting from `"."` using a FIFO queue. Entries within each directory are sorted alphabetically (`sort.Slice` on `Name()`), ensuring candidate order is stable and deterministic across runs rather than dependent on filesystem directory iteration order. Only regular files (`e.Type().IsRegular()`) are admitted as completion candidates.
+
+**Single resolution per directory.** Directory containment is verified with `root.Resolve` exactly once per visited directory, never per candidate file. Child entries inherit the containment guarantee established for their parent directory, avoiding redundant resolution syscalls while preserving containment (`TestScanResolvesOncePerDirectory`).
+
+**Symlink rejection at directory read without secondary syscalls.** Symbolic links are rejected immediately upon inspecting `e.Type()&fs.ModeSymlink != 0` from `os.ReadDir`. Because `os.ReadDir` does not follow links, a symlink arrives with `fs.ModeSymlink` set and is discarded immediately without an additional `os.Stat` or `Lstat` call. This eliminates TOCTOU races where a path could be inspected as a regular file and subsequently traversed as a link, and prevents links targeting locations outside the root from entering the candidate set (`TestScanRefusesSymlinkedEntries`).
+
+**Shadow store and build directory exclusions.** `DefaultExcluded` skips known build, cache, and metadata directory subtrees (`.git`, `node_modules`, `vendor`, `.venv`, `__pycache__`, `target`, `dist`, `build`, `.next`, `.cache`, `.idea`). In particular, `.ag` is strictly excluded to keep the raw content-addressed shadow history (`.ag/shadow`) completely isolated from candidate completion (`TestScanSkipsExcludedDirectories`, `TestScanPathIndexNeverOffersTheShadowStore`).
+
+**Bounded execution limits and reachable stop conditions.** Indexing is bounded by three explicit limits: `DefaultMaxEntries = 50000`, `DefaultMaxCandidates = 10000`, and `DefaultTimeout = 2 * time.Second`. Traversal stops when entry count reaches `MaxEntries` (`StopEntries`), candidates reach `MaxCandidates` (`StopCandidates`), or elapsed time exceeds `Timeout` (`StopTimeout`), returning a clean partial index instead of hanging the process or exhausting memory. The invariant `DefaultMaxCandidates < DefaultMaxEntries` ensures that the candidate limit is structurally reachable (`TestDefaultCandidateLimitIsReachable`, `TestScanEntryLimitStopsTheWalk`, `TestScanCandidateLimitStopsTheWalk`, `TestScanTimeoutStopsTheWalk`).
+
+**Partial index disclosure.** When traversal trips any limit before full completion (`!idx.Complete()`), the picker UI explicitly discloses partial indexing in its header (`── Files (partial index) ` at normal width, `── Files (partial) ` at narrow width). Truncated search results are never presented to the user as the complete state of the repository (`TestPickerDisclosesAPartialIndex`).
+
+Evidence: `TestDefaultCandidateLimitIsReachable`, `TestScanRefusesSymlinkedEntries`, `TestScanSkipsExcludedDirectories`, `TestScanResolvesOncePerDirectory`, `TestScanEntryLimitStopsTheWalk`, `TestScanCandidateLimitStopsTheWalk`, `TestScanTimeoutStopsTheWalk`, `TestPickerDisclosesAPartialIndex`, `TestScanPathIndexNeverOffersTheShadowStore`.
+
+### Strict argument decoding in read_file
+
+`read_file` is the primary ReadOnly tool for reading project files. Malformed tool arguments could otherwise bypass containment or smuggle unexpected parameters prior to path resolution or descriptor open.
+
+**Strict JSON decoding before resolution or descriptor opening.** Arguments are unmarshaled via `decodeStrict`, which enforces two defenses before any filesystem operation:
+1. Duplicate key rejection: `rejectDuplicateKeys` tokenizes the raw JSON input stream and compares the number of discovered keys against the unmarshaled key map. Any duplicate key causes an immediate rejection (`invalid args: duplicate key in request`), defeating JSON parameter smuggling attacks where decoders disagree on precedence.
+2. Undeclared field rejection: `DisallowUnknownFields` forbids any JSON fields not declared on the target argument structure unless safely dropped into `DroppedArgs` by the read-only repair layer.
+
+**Boundary behind repair.** The read-only repair layer allows dropping inert undeclared fields for ReadOnly tools to prevent wasted conversational rounds, recording discarded keys in `DroppedArgs`. However, duplicate keys are declined by the repair layer and always fail strictly through `decodeStrict`, preventing argument injection or smuggling prior to path resolution or opening descriptors.
+
+Evidence: `TestReadFileStrictArgs`.
+
+### Disclosed discarded arguments in permission modal
+
+When the tool-call repair layer drops inert undeclared arguments from a call, the user must not be misled into believing the dropped arguments will be passed to the underlying tool.
+
+**Carried on ToolCall.** Any arguments discarded by repair are preserved on `agent.ToolCall.DroppedArgs`.
+
+**Explicit disclosure row in PermissionModal.** `PermissionModal` checks `hasDroppedArgs()` and displays an explicit `dropped:` row (`| dropped: <keys> |`) in both `permLevelFull` and `permLevelCompact` modes.
+
+**Responsive horizontal truncation.** At standard widths (120 columns), the complete list of discarded keys is shown. At narrow terminal widths down to the 24-column boundary, the row is preserved and truncated with an ellipsis (`dropped: …`) rather than omitted, ensuring the user is alerted to dropped parameters even in constrained displays.
+
+**Vertical degradation preserves safety floor.** Under constrained vertical terminal heights, `permModalShape` gracefully reduces reserved rows by dropping blank lines first, followed by the args row, and then the dropped row, descending to the fail-closed minimum 3-row floor without crashing or misaligning modal layout. When `DroppedArgs` is empty, no dropped row is allocated or rendered.
+
+Evidence: `TestModalDroppedArgsDisclosed`, `TestPermModalRowsMatchLineCount`.
