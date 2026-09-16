@@ -206,6 +206,34 @@ func TestScanTimeoutStopsTheWalk(t *testing.T) {
 	}
 }
 
+// TestDefaultTimeoutDoesNotBindBeforeTheCandidateLimit keeps the Phase 0
+// measurement under CI's eye. DefaultTimeout is documented as a safety valve,
+// not a budget, and the measure-tagged files that produced that number are never
+// compiled here. This test walks a tree wider than the candidate limit under the
+// production defaults and pins the conclusion: the walk stops on the counter,
+// not on the clock, with room to spare.
+func TestDefaultTimeoutDoesNotBindBeforeTheCandidateLimit(t *testing.T) {
+	// More candidates than DefaultMaxCandidates, so StopCandidates is the only
+	// stop the counter can explain.
+	const dirs, filesPerDir = 600, 20 // 12,000 candidates
+	idx := Scan(writeTree(t, dirs, filesPerDir), Config{})
+
+	if idx.Stop == StopTimeout {
+		t.Fatalf("the %v cap stopped the walk after %v at %d candidates: the cap is the binding limit, not a safety valve",
+			DefaultTimeout, idx.Elapsed.Round(time.Millisecond), idx.Candidates)
+	}
+	if idx.Stop != StopCandidates {
+		t.Fatalf("Stop = %q, want %q: this tree must stop on the candidate limit", idx.Stop, StopCandidates)
+	}
+	t.Logf("%d candidates in %v against a %v cap (%.0fx margin)",
+		idx.Candidates, idx.Elapsed.Round(time.Millisecond), DefaultTimeout,
+		float64(DefaultTimeout)/float64(idx.Elapsed))
+	if idx.Elapsed >= DefaultTimeout/2 {
+		t.Fatalf("reaching %d candidates took %v, at or above half the %v cap: the margin the cap claims is gone",
+			idx.Candidates, idx.Elapsed.Round(time.Millisecond), DefaultTimeout)
+	}
+}
+
 func TestScanCompletesUnderEveryLimit(t *testing.T) {
 	idx := Scan(writeTree(t, 4, 4), Config{})
 	if idx.Stop != StopComplete || !idx.Complete() {
