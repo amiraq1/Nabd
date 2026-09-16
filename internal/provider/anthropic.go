@@ -13,17 +13,14 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"nabd/internal/config"
 )
 
 const (
-	apiURL       = "https://api.anthropic.com/v1/messages"
-	apiVersion   = "2023-06-01"
-	defaultModel = "claude-sonnet-5"
-	maxAttempts  = 4
-	minBackoff   = time.Second
-	maxBackoff   = 10 * time.Second
+	apiURL      = "https://api.anthropic.com/v1/messages"
+	apiVersion  = "2023-06-01"
+	maxAttempts = 4
+	minBackoff  = time.Second
+	maxBackoff  = 10 * time.Second
 )
 
 type Anthropic struct {
@@ -59,22 +56,6 @@ func NewAnthropicDialect(name, baseURL, model, key string, readCap int) (*Anthro
 		retryPolicy:  RetrySingleAttempt,
 		readCapBytes: readCap,
 	}, nil
-}
-
-// NewAnthropic reads the key from ~/.ag/config, then the environment. The key is never
-// stored in the repo, never logged, and never written to the journal.
-func NewAnthropic() (*Anthropic, error) {
-	k := config.Get("ANTHROPIC_API_KEY")
-	if k == "" {
-		return nil, errors.New("ANTHROPIC_API_KEY is not set (env or ~/.ag/config)")
-	}
-	m := config.GetOr("NABD_MODEL", defaultModel)
-	p, err := NewAnthropicDialect("anthropic", apiURL, m, k, DefaultReadCapBytes)
-	if err != nil {
-		return nil, err
-	}
-	p.retryPolicy = RetryStandalone
-	return p, nil
 }
 
 // NewAnthropicForRoute creates an Anthropic provider for use by the router.

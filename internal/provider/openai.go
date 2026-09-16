@@ -98,7 +98,7 @@ func NewOpenAIDialect(name, baseURL, model, key string, readCap int) (*OpenAICom
 		}
 	}
 	if readCap <= 0 {
-		readCap = readCapForRouteName(name)
+		readCap = DefaultReadCapBytes
 	}
 	return &OpenAICompat{
 		providerName: name,
@@ -111,9 +111,11 @@ func NewOpenAIDialect(name, baseURL, model, key string, readCap int) (*OpenAICom
 	}, nil
 }
 
-// NewOpenAICompatForRoute creates an OpenAICompat provider for router use.
+// NewOpenAICompatForRoute creates an OpenAICompat provider for router use. The
+// read ceiling is the declared default: a cap that belongs to a provider comes
+// from that provider's registry entry, never from its name.
 func NewOpenAICompatForRoute(providerName, model, key, baseURL string) (*OpenAICompat, error) {
-	return NewOpenAIDialect(providerName, baseURL, model, key, 0)
+	return NewOpenAIDialect(providerName, baseURL, model, key, DefaultReadCapBytes)
 }
 
 func (c *OpenAICompat) Label() string {

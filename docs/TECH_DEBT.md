@@ -788,14 +788,17 @@ body; no key is substituted, so this is a misdirection, not a disclosure.
 Resolution: carry the hint on the provider (the way `providerName` now is)
 instead of re-deriving it from a display string.
 
-## PROVIDER_READ_CAP_FROM_NAME — the legacy path keys the read cap on a name
+## BASE_URL_UNIFIED — the standalone path now honours NABD_BASE_URL for every provider
 
-`NewOpenAICompatForRoute` derives the read ceiling from
-`readCapForRouteName`, which returns `GroqReadCapBytes` only for the exact name
-`groq`. A registry provider that speaks the same metered endpoint under another
-id — `groq-eu`, or a custom `baseURL` pointed at Groq — therefore gets
-`DefaultReadCapBytes` unless its `providers.json` entry sets `readCap`
-explicitly. The registry path is sound (it takes the cap from the definition);
-only the legacy constructor cannot express "this endpoint is metered".
-Resolution: move the cap onto the provider definition for every path, or expose
-`readCap` on the route entry, and delete the name table.
+The per-provider constructors that #134 deleted honoured `NABD_BASE_URL`
+unevenly: NVIDIA and OpenRouter read it, while groq ignored it and used its
+catalog endpoint unconditionally. Routing every provider through
+`BuildStandaloneProvider` made the rule uniform, so groq now honours the
+override too. That is a widening, not a narrowing: a configuration that set
+`NABD_BASE_URL` and selected groq previously reached Groq and now reaches the
+configured endpoint instead. Removing `NewAnthropic` in the same phase extended
+the same unification to the anthropic path, which also ignored `NABD_BASE_URL`
+before. The unified behaviour is pinned by
+`TestStandaloneProviderReadsEnvEdge` (case C). The widening was incidental to a
+refactor PR whose stated goal was deleting constructors, not an independently
+announced change, which is exactly why it is recorded here.

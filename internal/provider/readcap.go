@@ -72,8 +72,8 @@ func (o *OpenAICompat) ReadCapBytes() int {
 // ceiling — the failure this interface exists to avoid.
 //
 // The cap is read from each route's client, which holds the provider itself.
-// Route.Provider is a normalized allow-listed name and route.Client is the
-// concrete provider, so no display string is ever parsed.
+// Route.Provider is a normalized provider id and route.Client is the concrete
+// provider, so no display string is ever parsed.
 func (r *Router) ReadCapBytes() int {
 	cap := DefaultReadCapBytes
 	for _, route := range r.routes {
@@ -86,15 +86,4 @@ func (r *Router) ReadCapBytes() int {
 		}
 	}
 	return cap
-}
-
-// readCapForRouteName maps a normalized route provider name to its cap. It
-// exists for the route constructor, which receives the name rather than a
-// config key, and it is an explicit allow-list rather than a pattern: a name
-// this switch does not know gets the declared default, never a guess.
-func readCapForRouteName(providerName string) int {
-	if providerName == "groq" {
-		return GroqReadCapBytes
-	}
-	return DefaultReadCapBytes
 }

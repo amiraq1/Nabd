@@ -1,7 +1,10 @@
 package provider
 
 import (
+	"path/filepath"
 	"testing"
+
+	"nabd/internal/registry"
 )
 
 // NBD-404: the read ceiling each provider declares.
@@ -17,10 +20,10 @@ func TestProviderReadCaps(t *testing.T) {
 		p    Provider
 		want int
 	}{
-		{"groq meters tokens per minute", mustRoute(t, "groq", "llama"), GroqReadCapBytes},
-		{"openrouter declares no ceiling", mustRoute(t, "openrouter", "qwen"), DefaultReadCapBytes},
-		{"nvidia declares no ceiling", mustRoute(t, "nvidia", "nemotron"), DefaultReadCapBytes},
-		{"anthropic does not meter per minute", mustAnthropic(t), DefaultReadCapBytes},
+		{"groq meters tokens per minute", mustProvider(t, "groq", "llama"), GroqReadCapBytes},
+		{"openrouter declares no ceiling", mustProvider(t, "openrouter", "qwen"), DefaultReadCapBytes},
+		{"nvidia declares no ceiling", mustProvider(t, "nvidia", "nemotron"), DefaultReadCapBytes},
+		{"anthropic does not meter per minute", mustProvider(t, "anthropic", "claude-test"), DefaultReadCapBytes},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -93,22 +96,34 @@ func TestReadCapIsNotDerivedFromName(t *testing.T) {
 	}
 }
 
-// mustRoute builds a single-provider OpenAICompat the way the router does, with
-// placeholder credentials: nothing is sent, only the cap is read.
-func mustRoute(t *testing.T, providerName, model string) *OpenAICompat {
+// capsRegistry builds a registry over the builtin catalog with placeholder
+// credentials, so every cap below comes from the provider's catalog entry —
+// not from its name.
+func capsRegistry(t *testing.T) *registry.Registry {
 	t.Helper()
-	p, err := NewOpenAICompatForRoute(providerName, model, "test-key-not-used", "")
-	if err != nil {
-		t.Fatalf("NewOpenAICompatForRoute(%s): %v", providerName, err)
+	dir := t.TempDir()
+	env := map[string]string{}
+	for _, id := range []string{"anthropic", "groq", "openrouter", "nvidia"} {
+		env[registry.LegacyEnvKey(id)] = "test-key-not-used"
 	}
-	return p
+	reg, err := registry.LoadFromFiles(
+		filepath.Join(dir, "providers.json"),
+		filepath.Join(dir, "auth.json"),
+		func(k string) string { return env[k] },
+	)
+	if err != nil {
+		t.Fatalf("LoadFromFiles: %v", err)
+	}
+	return reg
 }
 
-func mustAnthropic(t *testing.T) *Anthropic {
+// mustProvider builds a single-provider client the way the router does, with a
+// placeholder credential: nothing is sent, only the cap is read.
+func mustProvider(t *testing.T, providerName, model string) Provider {
 	t.Helper()
-	p, err := NewAnthropicForRoute("claude-test", "test-key-not-used")
+	p, err := BuildRouteProviderWithRegistry(capsRegistry(t), RouteEntry{Provider: providerName, Model: model})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("build %s: %v", providerName, err)
 	}
 	return p
 }
@@ -120,12 +135,7 @@ func mustRouter(t *testing.T, providerNames ...string) *Router {
 	routes := make([]Route, 0, len(providerNames))
 	for _, name := range providerNames {
 		model := "model-" + name
-		var prov Provider
-		if name == "anthropic" {
-			prov = mustAnthropic(t)
-		} else {
-			prov = mustRoute(t, name, model)
-		}
+		prov := mustProvider(t, name, model)
 		routes = append(routes, Route{
 			Provider: name,
 			Model:    model,
