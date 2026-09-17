@@ -12,6 +12,8 @@ import (
 
 	"nabd/internal/config"
 	"nabd/internal/provider"
+	"nabd/internal/skill"
+	"nabd/internal/toolvocab"
 )
 
 // Sink receives every event. The journal is one; the UI is another.
@@ -49,6 +51,23 @@ type Tools interface {
 	Run(ctx context.Context, c provider.ToolCall) (out string, ok bool, err error)
 }
 
+// GuardedOutcome is a tool result that must be journaled as a structured event
+// rather than exposed through ToolEnd.Output. The tool layer owns which tools
+// have this property (GuardedFor); the loop keeps no allowlist of its own.
+//
+// The one name the loop does consult is the binary vocabulary, through
+// toolvocab.Guarded: a name declared guarded there but not offered by the
+// active layer is a broken wiring, and the loop refuses it instead of falling
+// back to plain execution. Without that net, a layer that registers "skill"
+// without implementing GuardedOutcome would return the body as ToolEnd.Output.
+type GuardedOutcome interface {
+	GuardedEvent(context.Context, json.RawMessage) (Event, error)
+}
+
+type guardedTools interface {
+	GuardedFor(name string) (GuardedOutcome, bool)
+}
+
 // Loop turns one user message into a settled conversation: it streams a
 // turn, runs whatever tools the model asked for, and streams again, until
 // the model stops asking. Every observable step becomes an Event.
@@ -61,6 +80,7 @@ type Loop struct {
 	System           string
 	Prompter         *Prompter
 	PromptSections   func() []Section
+	SkillInventory   []skill.EventSkills
 	MaxTurns         int
 	Gate             Gate
 	Human            Asker
@@ -249,7 +269,13 @@ func rateLimitWait(retryAfter time.Duration, consecutiveHits int) time.Duration 
 }
 
 func (l *Loop) Start(banner, projectRoot string) error {
-	return l.emit(Event{Type: RunStart, Text: banner, ProjectRoot: projectRoot})
+	if err := l.emit(Event{Type: RunStart, Text: banner, ProjectRoot: projectRoot}); err != nil {
+		return err
+	}
+	if l.SkillInventory != nil {
+		return l.emit(Event{Type: EventSkills, Skills: append([]skill.EventSkills(nil), l.SkillInventory...)})
+	}
+	return nil
 }
 
 // Run handles one user message to completion. Cancel ctx to interrupt;
@@ -782,7 +808,36 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		}
 
 		start := time.Now()
-		out, err := l.exec(ctx, c)
+		var out Outcome
+		var err error
+		var guardedEvent *Event
+		// A name the binary declares guarded but the active layer offers no
+		// guard for is broken wiring, not a fallback: l.exec would return the
+		// body as plain ToolEnd.Output. Refuse the call and abort the turn.
+		// The name set is the binary vocabulary (toolvocab.Guarded), so a
+		// future guarded tool is covered the moment its name enters it; the
+		// loop still keeps no allowlist for the normal path.
+		var guardRefusal bool
+		var guarded GuardedOutcome
+		var hasGuard bool
+		if gt, ok := l.Tools.(guardedTools); ok {
+			guarded, hasGuard = gt.GuardedFor(c.Name)
+		}
+		switch {
+		case hasGuard:
+			ev, gerr := guarded.GuardedEvent(ctx, c.Input)
+			if gerr != nil {
+				out, err = Outcome{OK: false}, gerr
+			} else {
+				guardedEvent, out = &ev, Outcome{Text: "skill body loaded", OK: true}
+			}
+		case toolvocab.Guarded(c.Name):
+			guardRefusal = true
+			err = fmt.Errorf("tool %q is a guarded capability but the active tool layer provides no guarded outcome; refusing to fall back to plain execution", c.Name)
+			out = Outcome{OK: false}
+		default:
+			out, err = l.exec(ctx, c)
+		}
 		if err != nil {
 			out.Text, out.OK = err.Error(), false
 		}
@@ -798,12 +853,27 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		}
 		ms := time.Since(start).Milliseconds()
 
+		if guardedEvent != nil {
+			if eerr := l.emit(*guardedEvent); eerr != nil {
+				return false, eerr
+			}
+		}
+		toolOutput := out.Text
+		if guardedEvent != nil {
+			toolOutput = ""
+		}
 		done := ToolCall{
-			ID: c.ID, Name: c.Name, Output: out.Text, OK: out.OK,
+			ID: c.ID, Name: c.Name, Output: toolOutput, OK: out.OK,
 			Exit: out.Exit, Signal: out.Signal, MS: ms,
 		}
 		if eerr := l.emit(Event{Type: ToolEnd, Call: &done}); eerr != nil {
 			return false, WrapToolCallError(done, eerr)
+		}
+		// The ToolEnd above keeps ToolStart/ToolEnd paired and carries the
+		// refusal as an error with no body; the turn then fails closed rather
+		// than continuing as if the capability were merely absent.
+		if guardRefusal {
+			return false, err
 		}
 		if err := l.checkLoop(c.Name, c.Input, done.OK, done.Output); err != nil {
 			return false, err

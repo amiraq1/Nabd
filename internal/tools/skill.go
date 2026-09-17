@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"nabd/internal/agent"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/skill"
@@ -35,6 +36,27 @@ func (skillTool) Spec() provider.ToolSpec {
 		`{"type":"object","properties":{
 			"name":{"type":"string","description":"skill name as listed in the skill index"}},
 		 "required":["name"]}`)
+}
+
+// SkillBodyProducer is the only production constructor for the guarded event.
+// It fixes the trust class here; callers cannot request a different class.
+func (t skillTool) GuardedEvent(ctx context.Context, raw json.RawMessage) (agent.Event, error) {
+	var a struct {
+		Name string `json:"name"`
+	}
+	if err := decodeStrict(raw, &a); err != nil {
+		return agent.Event{}, fmt.Errorf("invalid args: %w", err)
+	}
+	for _, s := range t.reg.skillList() {
+		if s.Name == strings.TrimSpace(a.Name) {
+			body, err := skill.OpenBody(s)
+			if err != nil {
+				return agent.Event{}, err
+			}
+			return agent.Event{Type: agent.EventSkillBody, SkillBody: &agent.SkillBodyEvent{Body: body, Scope: s.Scope, Class: agent.SkillContentClassUntrusted}}, nil
+		}
+	}
+	return agent.Event{}, fmt.Errorf("unknown skill %q; the skill index lists the available names", a.Name)
 }
 
 func (t skillTool) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {

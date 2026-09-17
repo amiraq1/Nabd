@@ -91,3 +91,31 @@ func TestSkillToolIsReadOnly(t *testing.T) {
 		t.Fatalf("skill tool class = %v, want ReadOnly", got)
 	}
 }
+
+// GuardedFor is the registry's side of the guarded seam: it must report a guard
+// exactly while the skill tool is installed, and must withdraw it when the index
+// is emptied. The agent loop fails closed on the false answer, so a stale true
+// or a stale false are both wrong.
+func TestRegistryGuardedForTracksSkillInstallation(t *testing.T) {
+	reg := &Registry{byName: map[string]Tool{}}
+
+	if g, ok := reg.GuardedFor("skill"); ok || g != nil {
+		t.Fatalf("an empty registry must not offer a guard: guard=%v ok=%v", g, ok)
+	}
+
+	reg.SetSkillIndex(func() []skill.Skill {
+		return []skill.Skill{{Name: "greet", Rel: "greet.md", Scope: skill.ScopeUser}}
+	})
+	g, ok := reg.GuardedFor("skill")
+	if !ok {
+		t.Fatal("an installed skill index must offer the guarded outcome")
+	}
+	if _, ok := g.(skillTool); !ok {
+		t.Fatalf("GuardedFor returned %T, want the skill tool's guard", g)
+	}
+
+	reg.SetSkillIndex(func() []skill.Skill { return nil })
+	if g, ok := reg.GuardedFor("skill"); ok || g != nil {
+		t.Fatalf("an emptied skill index must withdraw the guard: guard=%v ok=%v", g, ok)
+	}
+}
