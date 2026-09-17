@@ -125,7 +125,7 @@ A minimal valid `config.v2.json` file:
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `version` | `int` | Yes | Must be strictly `2`. |
-| `provider` | `string` | Yes | One of `"anthropic"`, `"groq"`, `"openrouter"`, `"nvidia"`, or `"router"`. |
+| `provider` | `string` | Yes | `"router"`, a builtin provider, or a provider ID declared in `~/.ag/providers.json`. |
 | `model` | `string` | Optional | Model identifier (e.g. `"claude-3-7-sonnet-20250219"`). Forbidden when `provider="router"`. |
 | `base_url` | `string` | No | **Forbidden in minimal strict v2.** Specifying `base_url` causes a fatal validation error. |
 | `routes` | `[]Route` | For router | Required when `provider="router"`. Maximum 32 routes. Each item: `{"provider": "...", "model": "..."}`. |
@@ -154,6 +154,8 @@ In Config v1, any missing key fell back to `os.Getenv(key)`. In Config v2, **imp
 - An environment variable like `GROQ_API_KEY` is only consulted if explicitly declared in `credentials.groq.source = "env"`.
 - Any undeclared environment variable is ignored and will never reach the provider client.
 - Every provider referenced by `provider` or `routes` must have a matching entry in `credentials`.
+- Custom provider IDs declared in `~/.ag/providers.json` are accepted. Their default environment credential name is the uppercase ID with `-` replaced by `_`, followed by `_API_KEY` (for example, `cerebras` → `CEREBRAS_API_KEY` and `groq-mirror` → `GROQ_MIRROR_API_KEY`). Builtin providers keep their historical environment names.
+- Provider membership is loaded before config v2 credentials are resolved; loading definitions never reads an API key.
 
 ### Credential Sources
 

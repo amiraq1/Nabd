@@ -676,3 +676,61 @@ func TestV2CredentialHomeExpansionStrict(t *testing.T) {
 		}
 	})
 }
+
+func TestV2AcceptsRegistryProvider(t *testing.T) {
+	t.Setenv("CEREBRAS_API_KEY", "cerebras-secret")
+	p := filepath.Join(t.TempDir(), "config.v2.json")
+	body := `{"version":2,"provider":"cerebras","credentials":{"cerebras":{"source":"env"}}}`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	known := func(id string) (string, bool) {
+		if id == "cerebras" {
+			return "CEREBRAS_API_KEY", true
+		}
+		return "", false
+	}
+	got, err := ParseV2FileWithProviderCheck(p, known)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["NABD_PROVIDER"] != "cerebras" {
+		t.Fatalf("NABD_PROVIDER = %q, want cerebras", got["NABD_PROVIDER"])
+	}
+	if got["CEREBRAS_API_KEY"] != "cerebras-secret" {
+		t.Fatal("custom provider credential was not resolved from its declared environment source")
+	}
+}
+
+func TestV2RegistryCheckStillRejectsUnknownProviderAndBaseURL(t *testing.T) {
+	known := func(id string) (string, bool) {
+		if id == "cerebras" {
+			return "CEREBRAS_API_KEY", true
+		}
+		return "", false
+	}
+	for name, tc := range map[string]struct {
+		body string
+		want string
+	}{
+		"unknown": {
+			body: `{"version":2,"provider":"missing","credentials":{"missing":{"source":"env"}}}`,
+			want: `unsupported provider "missing"`,
+		},
+		"base_url": {
+			body: `{"version":2,"provider":"cerebras","base_url":"https://example.invalid","credentials":{"cerebras":{"source":"env"}}}`,
+			want: "base_url is not supported",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "config.v2.json")
+			if err := os.WriteFile(p, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := ParseV2FileWithProviderCheck(p, known)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want substring %q", err, tc.want)
+			}
+		})
+	}
+}

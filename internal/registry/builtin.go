@@ -1,5 +1,7 @@
 package registry
 
+import "strings"
+
 const (
 	DefaultReadCapBytes = 16384
 	GroqReadCapBytes    = 3072
@@ -14,11 +16,19 @@ var legacyEnvKeyVars = map[string]string{
 	"nvidia":     "NVIDIA_API_KEY",
 }
 
-// LegacyEnvKey returns the legacy environment variable name for a provider ID,
-// or an empty string if unknown.
-func LegacyEnvKey(providerID string) string {
-	return legacyEnvKeyVars[providerID]
+// EnvKeyName returns the credential environment variable for a provider.
+// Builtins preserve their historical names; custom providers derive one from
+// their identifier. This is the sole derivation used by config and registry.
+func EnvKeyName(providerID string) string {
+	if v := legacyEnvKeyVars[providerID]; v != "" {
+		return v
+	}
+	return strings.ToUpper(strings.ReplaceAll(providerID, "-", "_")) + "_API_KEY"
 }
+
+// LegacyEnvKey is kept for compatibility with callers that need to distinguish
+// historical builtin variables from derived custom-provider variables.
+func LegacyEnvKey(providerID string) string { return legacyEnvKeyVars[providerID] }
 
 // BuiltinCatalog returns the immutable base catalog containing the four
 // canonical providers: anthropic, groq, openrouter, and nvidia.

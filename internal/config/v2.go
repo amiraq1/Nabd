@@ -12,6 +12,10 @@ import (
 	"strings"
 )
 
+// ProviderCheck resolves a provider ID to its credential environment name.
+// It is injected by the application bootstrap so config does not import registry.
+type ProviderCheck func(id string) (envKey string, ok bool)
+
 var providerKeyNames = map[string]string{
 	"anthropic":  "ANTHROPIC_API_KEY",
 	"groq":       "GROQ_API_KEY",
@@ -151,12 +155,16 @@ func pathPresent(path string) (bool, error) {
 }
 
 func loadSelected() (map[string]string, int, error) {
+	return loadSelectedWithProviderCheck(nil)
+}
+
+func loadSelectedWithProviderCheck(known ProviderCheck) (map[string]string, int, error) {
 	path, version, err := SelectedPath()
 	if err != nil {
 		return nil, 0, err
 	}
 	if version == 2 {
-		v, err := ParseV2File(path)
+		v, err := ParseV2FileWithProviderCheck(path, known)
 		return v, 2, err
 	}
 	v, err := ParseFile(path)
@@ -166,12 +174,16 @@ func loadSelected() (map[string]string, int, error) {
 // ParseSelectedFile parses the selected file without mutating the process-wide
 // load cache. It is used by the config diagnostics commands.
 func ParseSelectedFile() (map[string]string, int, error) {
+	return ParseSelectedFileWithProviderCheck(nil)
+}
+
+func ParseSelectedFileWithProviderCheck(known ProviderCheck) (map[string]string, int, error) {
 	path, version, err := SelectedPath()
 	if err != nil {
 		return nil, 0, err
 	}
 	if version == 2 {
-		v, err := ParseV2File(path)
+		v, err := ParseV2FileWithProviderCheck(path, known)
 		return v, 2, err
 	}
 	v, err := ParseFile(path)
@@ -179,6 +191,12 @@ func ParseSelectedFile() (map[string]string, int, error) {
 }
 
 func ParseV2File(path string) (map[string]string, error) {
+	return ParseV2FileWithProviderCheck(path, nil)
+}
+
+// ParseV2FileWithProviderCheck parses v2 with registry-aware provider validation.
+// A nil check accepts only the historical builtin provider set.
+func ParseV2FileWithProviderCheck(path string, known ProviderCheck) (map[string]string, error) {
 	data, err := readSecureFile(path, MaxFileBytes)
 	if err != nil {
 		return nil, err
@@ -192,7 +210,7 @@ func ParseV2File(path string) (map[string]string, error) {
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, errors.New("config v2: trailing JSON content")
 	}
-	return flattenV2(cfg)
+	return flattenV2WithProviderCheck(cfg, known)
 }
 
 func readSecureFile(path string, limit int64) ([]byte, error) {
@@ -218,11 +236,23 @@ func readSecureFile(path string, limit int64) ([]byte, error) {
 }
 
 func flattenV2(cfg V2Config) (map[string]string, error) {
+	return flattenV2WithProviderCheck(cfg, nil)
+}
+
+func builtinProviderCheck(id string) (string, bool) {
+	key, ok := providerKeyNames[id]
+	return key, ok
+}
+
+func flattenV2WithProviderCheck(cfg V2Config, known ProviderCheck) (map[string]string, error) {
+	if known == nil {
+		known = builtinProviderCheck
+	}
 	if cfg.Version != 2 {
 		return nil, errors.New("config v2: version must be 2")
 	}
-	if _, ok := providerKeyNames[cfg.Provider]; !ok && cfg.Provider != "router" {
-		return nil, fmt.Errorf("config v2: unsupported provider %q", cfg.Provider)
+	if _, ok := known(cfg.Provider); !ok && cfg.Provider != "router" {
+		return nil, fmt.Errorf("config v2: unsupported provider %q; add it to providers.json", cfg.Provider)
 	}
 	if cfg.BaseURL != "" {
 		return nil, errors.New("config v2: base_url is not supported by the minimal strict schema")
@@ -266,8 +296,8 @@ func flattenV2(cfg V2Config) (map[string]string, error) {
 	needed := map[string]struct{}{}
 	if cfg.Provider == "router" {
 		for i, route := range cfg.Routes {
-			if _, ok := providerKeyNames[route.Provider]; !ok {
-				return nil, fmt.Errorf("config v2: route %d has unsupported provider %q", i, route.Provider)
+			if _, ok := known(route.Provider); !ok {
+				return nil, fmt.Errorf("config v2: route %d has unsupported provider %q; add it to providers.json", i, route.Provider)
 			}
 			if strings.TrimSpace(route.Model) == "" || strings.ContainsAny(route.Model, ",:\r\n") {
 				return nil, fmt.Errorf("config v2: route %d has invalid model", i)
@@ -280,9 +310,9 @@ func flattenV2(cfg V2Config) (map[string]string, error) {
 		needed[cfg.Provider] = struct{}{}
 	}
 	for providerName, cred := range cfg.Credentials {
-		keyName, ok := providerKeyNames[providerName]
+		keyName, ok := known(providerName)
 		if !ok {
-			return nil, fmt.Errorf("config v2: credential for unsupported provider %q", providerName)
+			return nil, fmt.Errorf("config v2: credential for unsupported provider %q; add it to providers.json", providerName)
 		}
 		value, err := resolveCredential(providerName, keyName, cred)
 		if err != nil {

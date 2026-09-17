@@ -55,7 +55,14 @@ func Path() (string, error) {
 }
 
 func Load() error {
-	once.Do(func() { values, activeVersion, loadErr = loadSelected() })
+	return LoadWithProviderCheck(nil)
+}
+
+// LoadWithProviderCheck loads the selected config using the supplied registry
+// membership check for config v2. The first load wins, matching Load's existing
+// process-wide semantics. A nil check preserves the builtin-only behavior.
+func LoadWithProviderCheck(known ProviderCheck) error {
+	once.Do(func() { values, activeVersion, loadErr = loadSelectedWithProviderCheck(known) })
 	return loadErr
 }
 
