@@ -441,6 +441,14 @@ func fenceToolOf(t *testing.T, fenced string) string {
 // TestFenceToolNamesMatchRegistryAllowlist is the in-package half of the
 // allowlist contract: every name the fence advertises is echoed back
 // verbatim. internal/tools asserts this set equals the registry's.
+func TestFenceRejectsUnknownName(t *testing.T) {
+	for _, name := range []string{"", "skil", "skill ", "SKILL", "../skill", "exec"} {
+		if fenceToolName(name) != "unknown" {
+			t.Fatalf("fence accepted unknown name %q", name)
+		}
+	}
+}
+
 func TestFenceToolNamesMatchRegistryAllowlist(t *testing.T) {
 	names := FenceToolNames()
 	if len(names) == 0 {

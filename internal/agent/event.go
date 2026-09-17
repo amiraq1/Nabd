@@ -8,6 +8,8 @@ import (
 	"os"
 	"time"
 	"unicode/utf8"
+
+	"nabd/internal/skill"
 )
 
 // MaxPersistedOutput caps tool output on disk, not on screen.
@@ -36,7 +38,11 @@ const (
 	EventRateLimit     EventType = "rate_limit"
 	EventProviderUsage EventType = "provider_usage"
 	EventProviderRoute EventType = "provider_route"
-	RunEnd             EventType = "run_end"
+	// EventSkills records which skill definitions reached the session, with the
+	// hash of the body each one loaded, so a replay shows both what the model
+	// was told and whether it came from the trusted or the project scope.
+	EventSkills EventType = "skills"
+	RunEnd      EventType = "run_end"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.
@@ -90,6 +96,10 @@ type Event struct {
 	Read             *ReadRecord    `json:"read,omitempty"`
 	NoticeCategory   NoticeCategory `json:"notice_category,omitempty"`
 	Calib            *Calibration   `json:"calib,omitempty"`
+	// Skills is the session-start skill inventory (see skill.EventSkills). It is
+	// recorded once, before the first turn, because the prompt it describes is
+	// built once.
+	Skills []skill.EventSkills `json:"skills,omitempty"`
 
 	FirstKept int              `json:"first_kept,omitempty"`
 	Compact   *CompactionStats `json:"compact,omitempty"`

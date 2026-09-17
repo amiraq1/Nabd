@@ -9,6 +9,7 @@ import (
 	"nabd/internal/agent"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
+	"nabd/internal/skill"
 	"nabd/internal/snap"
 )
 
@@ -111,6 +112,42 @@ type Registry struct {
 	// NBD-420 measurement harness sets it to measure each rule's effect against
 	// the same call with repair enabled (see repair_rounds_test.go).
 	repairOff bool
+
+	// skills holds the skill index the skill tool resolves names against. It is
+	// set once before the first turn and read-only afterwards; the mutex exists
+	// because a tool call and the setter can meet on the session-start path.
+	skillsMu sync.Mutex
+	skillsFn func() []skill.Skill
+}
+
+// SetSkillIndex installs the loaded skills for the skill tool. It is called at
+// session start, before any turn, so a call can never observe a half-built
+// index. An empty index leaves skill disabled for this session; the binary
+// vocabulary remains independent in AllTools and the provider fence.
+func (r *Registry) SetSkillIndex(fn func() []skill.Skill) {
+	loaded := []skill.Skill(nil)
+	if fn != nil {
+		loaded = fn()
+	}
+	r.skillsMu.Lock()
+	r.skillsFn = func() []skill.Skill { return loaded }
+	r.skillsMu.Unlock()
+	if len(loaded) > 0 {
+		r.add(skillTool{r})
+	} else {
+		r.remove("skill")
+	}
+}
+
+// skillList returns the current skill index, or nil when none was installed.
+func (r *Registry) skillList() []skill.Skill {
+	r.skillsMu.Lock()
+	fn := r.skillsFn
+	r.skillsMu.Unlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
 }
 
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
@@ -120,6 +157,12 @@ func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 	r.add(writeFile{root, sh, log, r}, editFile{root, sh, log, r})
 	r.add(bashTool{root})
 	return r
+}
+
+// AllTools is the complete vocabulary compiled into the binary, independent
+// of which optional capabilities are active in the current session.
+func AllTools(root *Root) []Tool {
+	return []Tool{readFile{root, nil}, writeFile{root, nil, nil, nil}, editFile{root, nil, nil, nil}, bashTool{root}, skillTool{}, globFiles{root}, grepFiles{root, nil}}
 }
 
 // SetReadCredit records the provenance and line count of a read_file call (NBD-034).
@@ -225,9 +268,23 @@ func (r *Registry) Class(tool string) (perm.Class, bool) {
 
 func (r *Registry) add(ts ...Tool) {
 	for _, t := range ts {
+		if _, exists := r.byName[t.Name()]; exists {
+			continue
+		}
 		r.list = append(r.list, t)
 		r.byName[t.Name()] = t
 	}
+}
+
+func (r *Registry) remove(name string) {
+	delete(r.byName, name)
+	filtered := r.list[:0]
+	for _, t := range r.list {
+		if t.Name() != name {
+			filtered = append(filtered, t)
+		}
+	}
+	r.list = filtered
 }
 
 func (r *Registry) Specs() []provider.ToolSpec {

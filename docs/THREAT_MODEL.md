@@ -104,6 +104,7 @@ filesystem sandbox.
 | The models probe reads the endpoint's own catalog and classifies failures with the existing provider codes | GUARANTEED | `nabd models <provider>` sends `GET <baseURL>/models` with the key in a header (never a query parameter or path), parses only `data[].id`, and maps a non-200 through `provider.ClassifyHTTPStatus` while a transport failure is `temporary`, so a network failure surfaces as the same `provider_temporary`/`provider_auth` vocabulary the runtime uses. A 200 is catalog success only, never evidence that the key is valid: some endpoints answer `/models` without authenticating at all, so a bogus key still gets 200. The command states that limit, and the first inference request is the real check; model rejection errors direct the user back to `nabd models <provider>` for the live catalog. Evidence: `TestModelsCommandParsesCatalogResponse`, `TestModelsSuccessDoesNotImplyValidKey` |
 | The provider listing discloses sources, not secrets | GUARANTEED | `nabd provider` reports each provider's definition source (`builtin`/`providers.json`), key source (`auth.json`/`env`/`none`), and dialect, and names `~/.ag/auth.json` for a missing key; it prints no key value. Evidence: `TestProviderCommandReportsMissingKeys` |
 | Any endpoint declared in `providers.json` is accepted, including plaintext and non-public hosts | REDUCED | Withdrawn in v10: the five `base_url` admission conditions this document used to list were never implemented, and the registry accepts arbitrary endpoints, so stating them described a guard that did not exist. Residual: whoever can write `~/.ag/providers.json` can point every prompt, file excerpt, and tool result at an endpoint they control, receive the API key in the `authorization` header, and inject `tool_calls` into the response stream — over plaintext if they choose. Remaining controls: mode 0600 and an owner check on both registry files, exactly two fixed dialects (`openai`/`anthropic`) with no package loaded at request time, and credential redaction in logs and display. Evidence: `TestCustomEndpointIsAcceptedByDesign` |
+| Skills are progressive-disclosure, project scope is off unless an operator opts in, and every body is re-hashed before it is served | REDUCED | Only name, description and scope reach the prompt; the body is read on invocation. Containment is who may write into each scope plus the recorded SHA-256, not what the body says. The complete binary tool vocabulary is independent of the session's active registry, so continuation can fence historical `skill` calls while an empty skill index leaves the tool inactive. Evidence: `TestProjectSkillsAreAbsentWhenOptInIsOff`, `TestProjectSkillSymlinkEscapeIsRefused`, `TestJournalRecordsHashMatchesLoadedBytes`, `TestSkillToolRefusesBodyChangedSinceLoad`, `TestSkillRegistrationFollowsLoadedIndex`, `TestFenceRejectsUnknownName` |
 | Bash filesystem reach after approval | OUT OF SCOPE | approved shell commands run with the current user's filesystem authority |
 | Network/resource exhaustion from approved bash | OUT OF SCOPE | no namespace, cgroup, or Landlock boundary |
 
@@ -238,6 +239,55 @@ deliberate: config v2 is the locked-down schema for an operator who wants no
 custom endpoint at all, while the registry is the open door for one who does.
 Evidence: `TestCustomEndpointIsAcceptedByDesign`,
 `TestV2CredentialFileAndClosedEndpointPolicy`.
+
+## Skills
+
+A skill is a Markdown file with a small frontmatter header. Its name,
+description and scope are listed in the system prompt when the session wiring
+loads the skill index; its body is read only when the model calls the `skill`
+tool with that name. The binary knows the `skill` vocabulary and fence even
+when the current session has no loaded index; until session wiring enables the
+index, the tool is not present in the active registry. Twenty installed skills
+therefore cost tens of prompt lines rather than twenty file bodies — the body is
+not part of the prompt at all until it is asked for.
+
+**Two scopes, one trust boundary.** `~/.config/nabd/skills` is the user scope
+and is loaded unconditionally: a file there was put in place by the operator,
+who is the principal this document is written for. `<root>/.nabd/skills` is the
+project scope and is **disabled by default**. Turning it on is an operator
+decision (`--skills=project` or the equivalent config key) and never something
+the repository can do for itself: a repository able to enable its own
+instructions would be granting itself trust before the human was asked, which is
+the boundary this project exists to keep.
+
+**What is recorded.** At session start one `skills` event lists
+`{name, rel, hash, scope}` for every definition that reached the prompt. The
+hash is SHA-256 over the body bytes as loaded, so a replay shows both which
+instructions the session ran with and whether they came from the trusted or the
+project scope. The `skill` tool re-opens the body through `internal/safefs`,
+re-verifies that hash, and refuses on mismatch: a file edited after load — by the
+model, by a checkout, by anything — is instructions the session never approved,
+and serving it would make the journal a false record of the run.
+
+**Bounds.** Names are `[a-z0-9-]{1,64}` with no leading, trailing or doubled
+hyphen; a description is required and at most 1024 bytes; a body is at most
+64 KiB and is read through `io.LimitReader` before it exists in memory; one
+scope contributes at most 128 skills and the prompt contribution is capped at
+16 KiB, with anything dropped reported as a diagnostic rather than silently
+omitted. Discovery is bounded in depth and entry count, honors
+`internal/ignorefile`, and never follows a symlink — a symlinked entry is
+reported and refused, so a project skill cannot borrow a path outside its tree.
+A name defined twice keeps the first and reports the loser with the path that
+won.
+
+**Residual risk (REDUCED, not GUARANTEED).** An operator who enables project
+skills is accepting instructions authored by whoever wrote the repository. The
+controls above bound the blast radius and make the choice visible and recorded;
+they do not make repository instructions trustworthy. That is the same stance
+this document takes on any tool output: the fence is a semantic signal, and the
+permission layer — not the prompt — is what stands between a hostile instruction
+and a sensitive action. A user-scope skill has the same reach and is trusted for
+the same reason a config file is: the principal wrote it.
 
 ## Journal, shadow, and history concurrency
 
