@@ -42,21 +42,29 @@ func TestDiffAndFingerprint(t *testing.T) {
 	}
 }
 
-func TestBuildToolSectionsIsDeterministic(t *testing.T) {
+func TestPrompterSectionsUseActiveRichTools(t *testing.T) {
 	in := []provider.ToolSpec{{Name: "z", Description: "Z"}, {Name: "a", Description: "A"}}
-	got := BuildToolSections(in)
-	if strings.Index(got, "## tool a") > strings.Index(got, "## tool z") {
-		t.Fatalf("tool sections are not sorted: %q", got)
-	}
-	in[0].Name = "mutated"
-	if strings.Contains(got, "mutated") {
-		t.Fatal("section construction retained mutable input")
+	got, err := (Prompter{Base: "base"}).BuildSections(in, []Section{{Name: "a", Body: "snippet"}})
+	if err != nil || !strings.Contains(got, "snippet") || strings.Contains(got, "Description") {
+		t.Fatalf("prompt=%q err=%v", got, err)
 	}
 }
 
 func TestPrompterBuildKeepsBaseAndExtra(t *testing.T) {
-	got := (Prompter{Base: "base", Extra: "skills"}).Build(nil)
-	if !strings.HasPrefix(got, "base") || !strings.Contains(got, "PROMPT_SECTION[extra]") || !strings.Contains(got, "skills") {
-		t.Fatalf("prompt = %q", got)
+	got, err := (Prompter{Base: "base", Extra: "skills"}).Build(nil)
+	if err != nil || !strings.HasPrefix(got, "base") || !strings.Contains(got, "PROMPT_SECTION[extra]") || !strings.Contains(got, "skills") {
+		t.Fatalf("prompt = %q err=%v", got, err)
+	}
+}
+
+func TestRenderRejectsDuplicateSections(t *testing.T) {
+	if _, err := Render([]Section{{Name: "tools", Body: "a"}, {Name: "tools", Body: "b"}}); err == nil {
+		t.Fatal("duplicate section accepted")
+	}
+}
+
+func TestDiffIdenticalReturnsNil(t *testing.T) {
+	if got := Diff([]Section{{Name: "tools", Body: "a"}}, []Section{{Name: "tools", Body: "a"}}); got != nil {
+		t.Fatalf("identical diff = %#v, want nil", got)
 	}
 }

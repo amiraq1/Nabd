@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 
 	"nabd/internal/provider"
@@ -15,7 +14,7 @@ import (
 // the raw preamble; all other names are rendered as stable tagged sections.
 type Section struct{ Name, Body string }
 
-var sectionName = regexp.MustCompile(`^[a-z]*$`)
+var sectionName = regexp.MustCompile(`^[a-z0-9_]+$`)
 
 // Prompter builds the model-facing system prompt from the stable base and the
 // tools active in this session. It is deliberately outside tools: prompt
@@ -26,17 +25,26 @@ type Prompter struct {
 }
 
 // Render renders independently tagged sections. Empty Name is the raw
-// preamble; all other names must be lowercase ASCII letters.
+// preamble; all other names must be lowercase ASCII letters, digits, or underscores.
 func Render(secs []Section) (string, error) {
 	var b strings.Builder
+	seen := make(map[string]bool, len(secs))
 	for _, s := range secs {
 		if s.Name == "" {
+			if seen[s.Name] {
+				return "", fmt.Errorf("duplicate prompt section %q", s.Name)
+			}
+			seen[s.Name] = true
 			b.WriteString(s.Body)
 			continue
 		}
 		if !sectionName.MatchString(s.Name) {
 			return "", fmt.Errorf("invalid prompt section name %q", s.Name)
 		}
+		if seen[s.Name] {
+			return "", fmt.Errorf("duplicate prompt section %q", s.Name)
+		}
+		seen[s.Name] = true
 		fmt.Fprintf(&b, "\n<<<PROMPT_SECTION[%s]>>>\n%s\n<<<END_PROMPT_SECTION[%s]>>>", s.Name, s.Body, s.Name)
 	}
 	return b.String(), nil
@@ -56,6 +64,9 @@ func Diff(prev, cur []Section) map[string]*string {
 		if _, ok := now[name]; !ok {
 			out[name] = nil
 		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -77,27 +88,21 @@ func Fingerprint(secs []Section) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// BuildToolSections retains the legacy text API while keeping deterministic
-// ordering. The richer ToolPrompter path is used by tools.Registry.
-func BuildToolSections(specs []provider.ToolSpec) string {
-	cp := append([]provider.ToolSpec(nil), specs...)
-	sort.SliceStable(cp, func(i, j int) bool { return cp[i].Name < cp[j].Name })
-	var b strings.Builder
-	for _, spec := range cp {
-		b.WriteString("\n## tool ")
-		b.WriteString(spec.Name)
-	}
-	return b.String()
-}
+// PromptSections is an optional session-level source for rich tool sections.
+type PromptSections interface{ PromptSections() []Section }
 
-// Build appends session-specific prompt data after the fixed base.
-func (p Prompter) Build(specs []provider.ToolSpec) string {
+// BuildSections renders the base, optional extra, and active rich sections.
+func (p Prompter) BuildSections(specs []provider.ToolSpec, rich []Section) (string, error) {
 	sections := []Section{{Name: "", Body: p.Base}}
 	if p.Extra != "" {
 		sections = append(sections, Section{Name: "extra", Body: p.Extra})
 	}
-	if text, err := Render(sections); err == nil {
-		return text + BuildToolSections(specs)
-	}
-	return p.Base
+	sections = append(sections, rich...)
+	return Render(sections)
+}
+
+// Build preserves the old call shape while now returning errors instead of
+// silently falling back to a prompt that lost its tools.
+func (p Prompter) Build(specs []provider.ToolSpec) (string, error) {
+	return p.BuildSections(specs, nil)
 }

@@ -92,6 +92,13 @@ func TestSkillRegistrationFollowsLoadedIndex(t *testing.T) {
 	}
 }
 
+func TestRegistrySectionsRenderWithoutError(t *testing.T) {
+	r := NewRegistry(nil, nil)
+	if _, err := agent.Render(r.PromptSections()); err != nil {
+		t.Fatalf("registry sections do not render: %v", err)
+	}
+}
+
 func containsName(names []string, want string) bool {
 	for _, name := range names {
 		if name == want {

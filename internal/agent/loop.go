@@ -60,6 +60,7 @@ type Loop struct {
 	Sink             Sink
 	System           string
 	Prompter         *Prompter
+	PromptSections   func() []Section
 	MaxTurns         int
 	Gate             Gate
 	Human            Asker
@@ -479,7 +480,15 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 	defer cancel()
 	system := l.System
 	if l.Prompter != nil {
-		system = l.Prompter.Build(specs)
+		var err error
+		sections := []Section(nil)
+		if l.PromptSections != nil {
+			sections = l.PromptSections()
+		}
+		system, err = l.Prompter.BuildSections(specs, sections)
+		if err != nil {
+			return nil, "", fmt.Errorf("prompt render: %w", err)
+		}
 	}
 	ch, err := l.Provider.Stream(turnCtx, provider.Request{
 		System:   system,
