@@ -269,10 +269,14 @@ and serving it would make the journal a false record of the run.
 Plain `skillTool.Run` is refused, and `Registry.Run`/`RunDetailed` cannot extract
 a body; only the single `GuardedOutcome` producer emits the structured body
 event. The producer fixes `SkillContentClassUntrusted` internally, so no caller
-can promote the class. `ToolEnd.Output` remains empty. The loop passes an empty
-result string to loop detection for guarded calls, so detection is based on the
-tool name and input, never on the body or producer text. A guarded name without
-a producer is refused rather than falling back to plain execution. Evidence:
+can promote the class. On successful guarded projection, `ToolEnd.Output`
+remains empty and the loop passes an empty result string to loop detection, so detection is based on the
+tool name and input, never on the body or producer text. A guarded producer
+error is deliberately returned as an ordinary failed tool result so the error
+remains visible to the model; this is a named product trust boundary, not a
+claim that arbitrary product error text is body-free. The product must not
+include skill-body bytes in that error. A guarded name without a producer is
+refused rather than falling back to plain execution. Evidence:
 `TestSkillPlainExecutionIsRefused`, `TestGuardedOutcomeProjectsBodyAndSkipsPlainExecution`,
 `TestLoopInputForGuardedCallIsEmpty`, `TestGuardedOutcomeTextNeverLeavesTheGuardedPath`, `TestGuardedNameWithoutGuardFailsClosed`,
 `TestGuardedProductErrorIsNotMasked`, `TestRegistryGuardedForTracksSkillInstallation`.
