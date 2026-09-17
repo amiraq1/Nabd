@@ -14,7 +14,7 @@ import (
 // the raw preamble; all other names are rendered as stable tagged sections.
 type Section struct{ Name, Body string }
 
-var sectionName = regexp.MustCompile(`^[a-z0-9_]+$`)
+var sectionName = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 
 // Prompter builds the model-facing system prompt from the stable base and the
 // tools active in this session. It is deliberately outside tools: prompt
@@ -82,8 +82,8 @@ func sectionMap(secs []Section) map[string]string {
 // Fingerprint identifies the exact ordered sections seen by the model.
 func Fingerprint(secs []Section) string {
 	h := sha256.New()
-	for _, s := range secs {
-		fmt.Fprintf(h, "%d:%s%d:%s;", len(s.Name), s.Name, len(s.Body), s.Body)
+	for i, s := range secs {
+		fmt.Fprintf(h, "%d:%d:%s%d:%s;", i, len(s.Name), s.Name, len(s.Body), s.Body)
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -92,7 +92,7 @@ func Fingerprint(secs []Section) string {
 type PromptSections interface{ PromptSections() []Section }
 
 // BuildSections renders the base, optional extra, and active rich sections.
-func (p Prompter) BuildSections(specs []provider.ToolSpec, rich []Section) (string, error) {
+func (p Prompter) BuildSections(rich []Section) (string, error) {
 	sections := []Section{{Name: "", Body: p.Base}}
 	if p.Extra != "" {
 		sections = append(sections, Section{Name: "extra", Body: p.Extra})
@@ -104,5 +104,7 @@ func (p Prompter) BuildSections(specs []provider.ToolSpec, rich []Section) (stri
 // Build preserves the old call shape while now returning errors instead of
 // silently falling back to a prompt that lost its tools.
 func (p Prompter) Build(specs []provider.ToolSpec) (string, error) {
-	return p.BuildSections(specs, nil)
+	// specs is intentionally retained for source compatibility; rich sections
+	// are the sole prompt tool path now.
+	return p.BuildSections(nil)
 }

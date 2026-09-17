@@ -485,7 +485,7 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 		if l.PromptSections != nil {
 			sections = l.PromptSections()
 		}
-		system, err = l.Prompter.BuildSections(specs, sections)
+		system, err = l.Prompter.BuildSections(sections)
 		if err != nil {
 			return nil, "", fmt.Errorf("prompt render: %w", err)
 		}

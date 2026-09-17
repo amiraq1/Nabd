@@ -3,8 +3,6 @@ package agent
 import (
 	"strings"
 	"testing"
-
-	"nabd/internal/provider"
 )
 
 func TestRenderStableAndSectioned(t *testing.T) {
@@ -24,9 +22,14 @@ func TestRenderStableAndSectioned(t *testing.T) {
 	}
 }
 
-func TestRenderRejectsInvalidSectionName(t *testing.T) {
-	if _, err := Render([]Section{{Name: "Tool-1", Body: "x"}}); err == nil {
-		t.Fatal("invalid section name accepted")
+func TestRenderSectionNameRules(t *testing.T) {
+	for _, name := range []string{"_skills", "1", "__"} {
+		if _, err := Render([]Section{{Name: name, Body: "x"}}); err == nil {
+			t.Fatalf("invalid section %q accepted", name)
+		}
+	}
+	if _, err := Render([]Section{{Name: "skill-index", Body: "x"}}); err != nil {
+		t.Fatalf("hyphenated section rejected: %v", err)
 	}
 }
 
@@ -37,14 +40,13 @@ func TestDiffAndFingerprint(t *testing.T) {
 	if d[""] != nil || *d["tools"] != "b" || d["old"] != nil || *d["new"] != "n" {
 		t.Fatalf("unexpected diff: %#v", d)
 	}
-	if Fingerprint(prev) == Fingerprint(cur) || Fingerprint(prev) == Fingerprint([]Section{{Name: "", Body: "p"}, {Name: "tools", Body: "a"}, {Name: "old", Body: "y"}}) {
+	if Fingerprint(prev) == Fingerprint(cur) || Fingerprint(prev) == Fingerprint([]Section{{Name: "", Body: "p"}, {Name: "tools", Body: "a"}, {Name: "old", Body: "y"}}) || Fingerprint([]Section{{Name: "a", Body: "x"}, {Name: "b", Body: "y"}}) == Fingerprint([]Section{{Name: "b", Body: "y"}, {Name: "a", Body: "x"}}) {
 		t.Fatal("fingerprint missed a change")
 	}
 }
 
 func TestPrompterSectionsUseActiveRichTools(t *testing.T) {
-	in := []provider.ToolSpec{{Name: "z", Description: "Z"}, {Name: "a", Description: "A"}}
-	got, err := (Prompter{Base: "base"}).BuildSections(in, []Section{{Name: "a", Body: "snippet"}})
+	got, err := (Prompter{Base: "base"}).BuildSections([]Section{{Name: "a", Body: "snippet"}})
 	if err != nil || !strings.Contains(got, "snippet") || strings.Contains(got, "Description") {
 		t.Fatalf("prompt=%q err=%v", got, err)
 	}
