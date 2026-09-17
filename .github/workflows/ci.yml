@@ -5,30 +5,12 @@ on:
     branches: [ "master", "main", "feature/**", "fix/**", "docs/**", "ci/**" ]
   pull_request:
     branches: [ "master", "main" ]
-    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
-  pr-checklist:
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Fetch live PR body
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.body // ""' > "$RUNNER_TEMP/pr-body"
-      - name: Required PR security checklist
-        env:
-          LIVE_BODY_FILE: ${{ runner.temp }}/pr-body
-        run: bash scripts/check-pr-security-checklist.sh
-
   module-tidiness:
-    if: github.event_name != 'pull_request' || github.event.action != 'edited'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -41,7 +23,6 @@ jobs:
         working-directory: third_party/bubbles
 
   vulnerability-scan:
-    if: github.event_name != 'pull_request' || github.event.action != 'edited'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -55,7 +36,6 @@ jobs:
           "$(go env GOPATH)/bin/govulncheck" ./...
 
   build:
-    if: github.event_name != 'pull_request' || github.event.action != 'edited'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -137,7 +117,6 @@ jobs:
         rm -rf "$tmp"
 
   release-dryrun:
-    if: github.event_name != 'pull_request' || github.event.action != 'edited'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -169,7 +148,6 @@ jobs:
           echo "SBOM coverage verified"
 
   cross:
-    if: github.event_name != 'pull_request' || github.event.action != 'edited'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:

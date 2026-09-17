@@ -38,8 +38,8 @@ func (skillTool) Spec() provider.ToolSpec {
 		 "required":["name"]}`)
 }
 
-// GuardedResult is the only production path that opens a skill body. It fixes
-// the trust class here; callers cannot request a different class.
+// GuardedResult is skillTool's only production path that opens a skill body;
+// it fixes the trust class here so callers cannot request a different class.
 func (t skillTool) GuardedResult(ctx context.Context, raw json.RawMessage) (agent.GuardedResult, error) {
 	ev, err := t.guardedEvent(ctx, raw)
 	if err != nil {

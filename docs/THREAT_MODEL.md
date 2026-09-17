@@ -274,7 +274,7 @@ result string to loop detection for guarded calls, so detection is based on the
 tool name and input, never on the body or producer text. A guarded name without
 a producer is refused rather than falling back to plain execution. Evidence:
 `TestSkillPlainExecutionIsRefused`, `TestGuardedOutcomeProjectsBodyAndSkipsPlainExecution`,
-`TestGuardedOutcomeTextNeverLeavesTheGuardedPath`, `TestGuardedNameWithoutGuardFailsClosed`,
+`TestLoopInputForGuardedCallIsEmpty`, `TestGuardedOutcomeTextNeverLeavesTheGuardedPath`, `TestGuardedNameWithoutGuardFailsClosed`,
 `TestGuardedProductErrorIsNotMasked`, `TestRegistryGuardedForTracksSkillInstallation`.
 
 **Bounds.** Names are `[a-z0-9-]{1,64}` with no leading, trailing or doubled

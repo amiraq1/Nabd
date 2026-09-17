@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -109,6 +110,15 @@ func skillBodyEvents(evs []Event) []Event {
 	return out
 }
 
+func TestLoopInputForGuardedCallIsEmpty(t *testing.T) {
+	if got := loopInput(Outcome{Text: guardedBody}, true); got != "" {
+		t.Fatalf("guarded loop input=%q, want empty", got)
+	}
+	if got := loopInput(Outcome{Text: guardedBody}, false); got != guardedBody {
+		t.Fatalf("plain loop input=%q, want producer text", got)
+	}
+}
+
 // A guarded call produces the structured event, does NOT run the plain tool,
 // and leaves the body out of ToolEnd.Output.
 func TestGuardedOutcomeTextNeverLeavesTheGuardedPath(t *testing.T) {
@@ -122,7 +132,7 @@ func TestGuardedOutcomeTextNeverLeavesTheGuardedPath(t *testing.T) {
 	l := &Loop{Tools: tools, Sink: sink, Gate: allowGate{}}
 	calls := make([]provider.ToolCall, 5)
 	for i := range calls {
-		calls[i] = provider.ToolCall{ID: "c", Name: "skill", Input: json.RawMessage(`{"name":"greet"}`)}
+		calls[i] = provider.ToolCall{ID: fmt.Sprintf("c%d", i+1), Name: "skill", Input: json.RawMessage(`{"name":"greet"}`)}
 	}
 	interrupted, err := l.runCalls(context.Background(), calls)
 	if !interrupted && !errors.Is(err, ErrToolLoop) {
@@ -134,8 +144,11 @@ func TestGuardedOutcomeTextNeverLeavesTheGuardedPath(t *testing.T) {
 	notices := 0
 	for _, e := range sink.events {
 		if e.Type == ToolEnd {
-			if e.Call.Output != "" || strings.Contains(e.Call.Output, guardedBody) {
+			if e.Call.Output != "" {
 				t.Fatalf("guarded output leaked: %q", e.Call.Output)
+			}
+			if strings.Contains(e.Call.Output, guardedBody) {
+				t.Fatalf("guarded body leaked: %q", e.Call.Output)
 			}
 		}
 		if e.Type == Notice && strings.Contains(e.Text, guardedBody) {
