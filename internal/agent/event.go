@@ -41,8 +41,9 @@ const (
 	// EventSkills records which skill definitions reached the session, with the
 	// hash of the body each one loaded, so a replay shows both what the model
 	// was told and whether it came from the trusted or the project scope.
-	EventSkills EventType = "skills"
-	RunEnd      EventType = "run_end"
+	EventSkills    EventType = "skills"
+	EventSkillBody EventType = "skill_body"
+	RunEnd         EventType = "run_end"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.
@@ -99,12 +100,19 @@ type Event struct {
 	// Skills is the session-start skill inventory (see skill.EventSkills). It is
 	// recorded once, before the first turn, because the prompt it describes is
 	// built once.
-	Skills []skill.EventSkills `json:"skills,omitempty"`
+	Skills    []skill.EventSkills `json:"skills,omitempty"`
+	SkillBody *SkillBodyEvent     `json:"skill_body,omitempty"`
 
 	FirstKept int              `json:"first_kept,omitempty"`
 	Compact   *CompactionStats `json:"compact,omitempty"`
 	Usage     *ProviderUsage   `json:"usage,omitempty"`
 	Route     *ProviderRoute   `json:"route,omitempty"`
+}
+
+type SkillBodyEvent struct {
+	Body  string            `json:"body"`
+	Scope skill.Scope       `json:"scope"`
+	Class SkillContentClass `json:"class"`
 }
 
 // ProviderRoute records one routing decision attempt/event (Section O).
@@ -168,6 +176,25 @@ type ReadRecord struct {
 // is deliberately not in the allowlist, so an event created without an
 // explicit category is blocked by default.
 type NoticeCategory int
+
+// SkillContentClass classifies a skill body before it can enter the model
+// context. Unknown is fail-closed; only the explicit untrusted class reaches
+// the message projection.
+type SkillContentClass uint8
+
+const (
+	SkillContentClassUnknown SkillContentClass = iota
+	SkillContentClassUntrusted
+)
+
+func SkillContentAllowedForModel(c SkillContentClass) bool {
+	switch c {
+	case SkillContentClassUntrusted:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	// NoticeCategoryUnknown is the zero value. It does not appear in the
