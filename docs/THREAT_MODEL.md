@@ -265,17 +265,17 @@ re-verifies that hash, and refuses on mismatch: a file edited after load — by 
 model, by a checkout, by anything — is instructions the session never approved,
 and serving it would make the journal a false record of the run.
 
-**Guarded projection.** A skill body never travels as ordinary tool output. Plain `skillTool.Run` is refused, and `Registry.Run`/`RunDetailed` cannot extract a body; only the guarded producer emits the body event. Evidence: `TestSkillToolRefusesBodyChangedSinceLoad`, `TestGuardedOutcomeProjectsBodyAndSkipsPlainExecution`. The
-body is produced only by the guarded producer, which fixes
-`SkillContentClassUntrusted` internally so no caller can promote the class, and
-is journaled as a `skill_body` event the message projection fences; the
-`ToolEnd` that answers the call carries no body. The loop treats the guard as a
-property of the tool layer, not of a name: when a layer advertises the `skill`
-name without providing the guard, the loop refuses the call and fails the turn
-rather than falling back to plain execution. Evidence:
-`TestGuardedOutcomeProjectsBodyAndSkipsPlainExecution`,
-`TestGuardedNameWithoutGuardFailsClosed`, `TestGuardedProductErrorIsNotMasked`,
-`TestRegistryGuardedForTracksSkillInstallation`.
+**Guarded projection.** A skill body never travels as ordinary tool output.
+Plain `skillTool.Run` is refused, and `Registry.Run`/`RunDetailed` cannot extract
+a body; only the single `GuardedOutcome` producer emits the structured body
+event. The producer fixes `SkillContentClassUntrusted` internally, so no caller
+can promote the class. `ToolEnd.Output` remains empty. The loop passes an empty
+result string to loop detection for guarded calls, so detection is based on the
+tool name and input, never on the body or producer text. A guarded name without
+a producer is refused rather than falling back to plain execution. Evidence:
+`TestSkillPlainExecutionIsRefused`, `TestGuardedOutcomeProjectsBodyAndSkipsPlainExecution`,
+`TestGuardedOutcomeTextNeverLeavesTheGuardedPath`, `TestGuardedNameWithoutGuardFailsClosed`,
+`TestGuardedProductErrorIsNotMasked`, `TestRegistryGuardedForTracksSkillInstallation`.
 
 **Bounds.** Names are `[a-z0-9-]{1,64}` with no leading, trailing or doubled
 hyphen; a description is required and at most 1024 bytes; a body is at most

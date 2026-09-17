@@ -51,28 +51,23 @@ type Tools interface {
 	Run(ctx context.Context, c provider.ToolCall) (out string, ok bool, err error)
 }
 
-// GuardedOutcome is a tool result that must be journaled as a structured event
-// rather than exposed through ToolEnd.Output. The tool layer owns which tools
-// have this property (GuardedFor); the loop keeps no allowlist of its own.
+// GuardedOutcome is the sole execution contract for capabilities whose
+// content must be journaled as a structured event rather than exposed through
+// ToolEnd.Output. The loop keeps no tool-specific allowlist.
 //
 // The one name the loop does consult is the binary vocabulary, through
-// toolvocab.Guarded: a name declared guarded there but not offered by the
-// active layer is a broken wiring, and the loop refuses it instead of falling
-// back to plain execution. Without that net, a layer that registers "skill"
-// without implementing GuardedOutcome would return the body as ToolEnd.Output.
+// toolvocab.Guarded: a guarded name without this producer is broken wiring,
+// so the loop refuses it instead of falling back to plain execution.
 type GuardedOutcome interface {
-	GuardedEvent(context.Context, json.RawMessage) (Event, error)
-}
-
-// GuardedResult is produced by a guarded capability. Outcome is an internal,
-// safe summary; the guarded event carries any protected content.
-type GuardedResult struct {
-	Event   Event
-	Outcome Outcome
-}
-
-type guardedResultProducer interface {
 	GuardedResult(context.Context, json.RawMessage) (GuardedResult, error)
+}
+
+// GuardedResult carries only the structured event and execution status. It has
+// no text channel: protected content and producer messages must not enter the
+// loop detector or ordinary tool output.
+type GuardedResult struct {
+	Event Event
+	OK    bool
 }
 
 type guardedTools interface {
@@ -836,20 +831,11 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		}
 		switch {
 		case hasGuard:
-			if producer, ok := guarded.(guardedResultProducer); ok {
-				result, gerr := producer.GuardedResult(ctx, c.Input)
-				if gerr != nil {
-					out, err = Outcome{OK: false}, gerr
-				} else {
-					guardedEvent, out = &result.Event, result.Outcome
-				}
+			result, gerr := guarded.GuardedResult(ctx, c.Input)
+			if gerr != nil {
+				out, err = Outcome{OK: false}, gerr
 			} else {
-				ev, gerr := guarded.GuardedEvent(ctx, c.Input)
-				if gerr != nil {
-					out, err = Outcome{OK: false}, gerr
-				} else {
-					guardedEvent, out = &ev, Outcome{OK: true}
-				}
+				guardedEvent, out = &result.Event, Outcome{OK: result.OK}
 			}
 		case toolvocab.Guarded(c.Name):
 			guardRefusal = true
@@ -882,9 +868,12 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		if guardedEvent != nil {
 			toolOutput = ""
 		}
-		// Guarded summaries are safe internal data for loop detection, never
-		// ordinary ToolEnd output. The body is intentionally excluded.
+		// Guarded calls are keyed by name and input only. Producer text is
+		// never accepted by the detector or emitted as ordinary output.
 		loopOutcome := out.Text
+		if guardedEvent != nil {
+			loopOutcome = ""
+		}
 		done := ToolCall{
 			ID: c.ID, Name: c.Name, Output: toolOutput, OK: out.OK,
 			Exit: out.Exit, Signal: out.Signal, MS: ms,
