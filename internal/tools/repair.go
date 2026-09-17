@@ -70,7 +70,15 @@ const (
 //
 // TestRepairInferenceIsReadOnlyOnly checks this against Registry.Class rather
 // than against a second written list, so the two cannot drift.
-var readOnlyTools = toolvocab.ReadOnly
+var readOnlyTools = func() map[string]bool {
+	out := map[string]bool{}
+	for _, name := range toolvocab.Names() {
+		if toolvocab.IsReadOnly(name) {
+			out[name] = true
+		}
+	}
+	return out
+}()
 
 // toolAliases maps an explicit, observed misspelling to a declared tool name.
 //

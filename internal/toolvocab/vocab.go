@@ -3,13 +3,29 @@
 // concrete tools package can share it without an import cycle.
 package toolvocab
 
-var Names = []string{"read_file", "write_file", "edit_file", "bash", "skill", "glob", "grep"}
+// names is immutable by API: callers only receive copies through Names.
+var names = [...]string{"read_file", "write_file", "edit_file", "bash", "skill", "glob", "grep"}
 
-var ReadOnly = map[string]bool{
-	"read_file": true,
-	"glob":      true,
-	"grep":      true,
-	"skill":     true,
+// Names returns a copy of the complete tool vocabulary compiled into the
+// binary. It is deliberately independent of the tools active in one session.
+func Names() []string { return append([]string(nil), names[:]...) }
+
+// Has reports whether name belongs to the binary vocabulary.
+func Has(name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
-func IsReadOnly(name string) bool { return ReadOnly[name] }
+// IsReadOnly is fail-closed: unknown names are not read-only.
+func IsReadOnly(name string) bool {
+	switch name {
+	case "read_file", "glob", "grep", "skill":
+		return true
+	default:
+		return false
+	}
+}

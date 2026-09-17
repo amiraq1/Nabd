@@ -64,8 +64,9 @@ func defangFenceMarkers(raw string) string {
 // session has no skill index, so the provider-facing fence must still know the
 // name and preserve it rather than relabel it as unknown.
 var fenceToolNames = func() map[string]struct{} {
-	out := make(map[string]struct{}, len(toolvocab.Names))
-	for _, name := range toolvocab.Names {
+	names := toolvocab.Names()
+	out := make(map[string]struct{}, len(names))
+	for _, name := range names {
 		out[name] = struct{}{}
 	}
 	return out

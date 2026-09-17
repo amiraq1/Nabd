@@ -9,6 +9,7 @@ import (
 	"nabd/internal/perm"
 	"nabd/internal/skill"
 	"nabd/internal/snap"
+	"nabd/internal/toolvocab"
 )
 
 // wantRegisteredTools is the exact tool set this registry must serve, in
@@ -19,9 +20,6 @@ import (
 // this list are the two halves of one claim, and both drift silently if a tool
 // moves. (A previous version of that comment named a "list_dir" that was never
 // registered: directory listing is served by glob.)
-var declaredToolNames = []string{"read_file", "write_file", "edit_file", "bash", "skill", "glob", "grep"}
-var declaredReadOnly = []string{"read_file", "skill", "glob", "grep"}
-
 var wantRegisteredTools = []string{
 	"bash", "edit_file", "glob", "grep", "read_file", "write_file",
 }
@@ -41,28 +39,35 @@ func TestFenceRejectsUnknownName(t *testing.T) {
 	}
 }
 
-func TestVocabularyDeclarationsMatchDerivedTypes(t *testing.T) {
-	got := make(map[string]bool)
-	for _, tool := range AllTools(nil) {
-		got[tool.Name()] = true
-	}
-	want := make(map[string]bool)
-	for _, name := range declaredToolNames {
-		want[name] = true
-	}
-	if len(got) != len(want) {
-		t.Fatalf("vocabulary size=%d want=%d", len(got), len(want))
-	}
-	for name := range want {
-		if !got[name] {
-			t.Errorf("declared tool %q missing", name)
+func TestVocabCoversEveryConstructedTool(t *testing.T) {
+	constructed := AllTools(nil)
+	for _, tool := range constructed {
+		if !toolvocab.Has(tool.Name()) {
+			t.Errorf("tool %q exists but is absent from toolvocab", tool.Name())
+		}
+		c, ok := tool.(Classified)
+		if !ok {
+			t.Errorf("tool %q is unclassified", tool.Name())
+			continue
+		}
+		wantReadOnly := c.Class() == perm.ReadOnly
+		if toolvocab.IsReadOnly(tool.Name()) != wantReadOnly {
+			t.Errorf("tool %q: vocab ReadOnly=%v, Class=%v", tool.Name(), toolvocab.IsReadOnly(tool.Name()), c.Class())
 		}
 	}
-	for _, name := range declaredReadOnly {
-		for _, tool := range AllTools(nil) {
-			if tool.Name() == name && tool.(Classified).Class() != perm.ReadOnly {
-				t.Errorf("%q is not read-only", name)
+	if got, want := len(toolvocab.Names()), len(constructed); got != want {
+		t.Fatalf("vocab has %d names, package constructs %d tools", got, want)
+	}
+	for _, name := range toolvocab.Names() {
+		found := false
+		for _, tool := range constructed {
+			if tool.Name() == name {
+				found = true
+				break
 			}
+		}
+		if !found {
+			t.Errorf("vocab name %q has no constructed tool", name)
 		}
 	}
 }
