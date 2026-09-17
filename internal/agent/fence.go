@@ -67,6 +67,7 @@ var fenceToolNames = map[string]struct{}{
 	"glob":       {},
 	"grep":       {},
 	"read_file":  {},
+	"skill":      {},
 	"write_file": {},
 }
 

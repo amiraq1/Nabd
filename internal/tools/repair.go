@@ -73,6 +73,9 @@ var readOnlyTools = map[string]bool{
 	"read_file": true,
 	"glob":      true,
 	"grep":      true,
+	// A skill body is instructions the model reads; inferring toward it is the
+	// same safe direction as inferring toward read_file.
+	"skill": true,
 }
 
 // toolAliases maps an explicit, observed misspelling to a declared tool name.

@@ -9,6 +9,7 @@ import (
 	"nabd/internal/agent"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
+	"nabd/internal/skill"
 	"nabd/internal/snap"
 )
 
@@ -111,6 +112,32 @@ type Registry struct {
 	// NBD-420 measurement harness sets it to measure each rule's effect against
 	// the same call with repair enabled (see repair_rounds_test.go).
 	repairOff bool
+
+	// skills holds the skill index the skill tool resolves names against. It is
+	// set once before the first turn and read-only afterwards; the mutex exists
+	// because a tool call and the setter can meet on the session-start path.
+	skillsMu sync.Mutex
+	skillsFn func() []skill.Skill
+}
+
+// SetSkillIndex installs the loaded skills for the skill tool. It is called at
+// session start, before any turn, so a call can never observe a half-built
+// index.
+func (r *Registry) SetSkillIndex(fn func() []skill.Skill) {
+	r.skillsMu.Lock()
+	r.skillsFn = fn
+	r.skillsMu.Unlock()
+}
+
+// skillList returns the current skill index, or nil when none was installed.
+func (r *Registry) skillList() []skill.Skill {
+	r.skillsMu.Lock()
+	fn := r.skillsFn
+	r.skillsMu.Unlock()
+	if fn == nil {
+		return nil
+	}
+	return fn()
 }
 
 func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
@@ -119,6 +146,7 @@ func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 	r.add(readFile{root, r}, globFiles{root}, grepFiles{root, r})
 	r.add(writeFile{root, sh, log, r}, editFile{root, sh, log, r})
 	r.add(bashTool{root})
+	r.add(skillTool{r})
 	return r
 }
 

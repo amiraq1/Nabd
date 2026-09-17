@@ -18,7 +18,7 @@ import (
 // moves. (A previous version of that comment named a "list_dir" that was never
 // registered: directory listing is served by glob.)
 var wantRegisteredTools = []string{
-	"bash", "edit_file", "glob", "grep", "read_file", "write_file",
+	"bash", "edit_file", "glob", "grep", "read_file", "skill", "write_file",
 }
 
 // TestRegistryToolSet pins the registered tool names. A tool that exists
