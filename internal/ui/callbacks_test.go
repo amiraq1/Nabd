@@ -39,7 +39,7 @@ func TestChatRewindSetsInput(t *testing.T) {
 	c.SetCallbacks(&SessionCallbacks{
 		OnRewind: func(n int) (string, string) { return "restored draft", "rewound" },
 	})
-	if got := c.command("/rewind 2"); got != "rewound" {
+	if got, _ := c.command("/rewind 2"); got != "rewound" {
 		t.Fatalf("Chat /rewind status = %q, want rewound", got)
 	}
 	if c.input != "restored draft" {
@@ -54,7 +54,7 @@ func TestChatRewindEmptyStatusFallsBack(t *testing.T) {
 	c.SetCallbacks(&SessionCallbacks{
 		OnRewind: func(n int) (string, string) { return "", "" },
 	})
-	if got := c.command("/rewind 1"); got != "rewound" {
+	if got, _ := c.command("/rewind 1"); got != "rewound" {
 		t.Fatalf("Chat /rewind empty-status fallback = %q, want rewound", got)
 	}
 }

@@ -112,7 +112,10 @@ func TestSlashCommandParityBetweenFeedAndChat(t *testing.T) {
 		}
 
 		// Test Chat
-		res := c.command(input)
+		// Command settles any asynchronous leg (/models) synchronously, the
+		// same way the old synchronous command did, so the parity assertion
+		// still sees the callback fire.
+		res := c.Command(input)
 		if strings.HasPrefix(res, "unknown command") {
 			t.Errorf("Chat reported unknown for command: %s", cmd.Name)
 		}
@@ -133,7 +136,7 @@ func TestSlashCommandParityBetweenFeedAndChat(t *testing.T) {
 		t.Errorf("Feed unknown command status = %q, want %q", f.status, "unknown command: "+unknownInput)
 	}
 
-	chatRes := c.command(unknownInput)
+	chatRes := c.Command(unknownInput)
 	if chatRes != "unknown command: "+unknownInput {
 		t.Errorf("Chat unknown command status = %q, want %q", chatRes, "unknown command: "+unknownInput)
 	}

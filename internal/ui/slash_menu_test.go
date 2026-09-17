@@ -15,8 +15,8 @@ func TestSlashMenuOpenOnSlash(t *testing.T) {
 	if !f.menu.visible {
 		t.Fatal("slash menu must be visible after typing '/'")
 	}
-	if len(f.menu.items) != 8 {
-		t.Fatalf("expected 8 commands, got %d", len(f.menu.items))
+	if want := len(AllSlashCommands()); len(f.menu.items) != want {
+		t.Fatalf("expected all %d registered commands, got %d", want, len(f.menu.items))
 	}
 
 	view := f.View()

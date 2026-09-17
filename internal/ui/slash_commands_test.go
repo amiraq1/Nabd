@@ -112,10 +112,10 @@ func TestParseSlashCommand(t *testing.T) {
 // TestFilterSlashCommandsDeterministic verifies deterministic ordering:
 // exact > prefix > alias > substring > alphabetical.
 func TestFilterSlashCommandsDeterministic(t *testing.T) {
-	// Empty or "/" returns all commands capped at 8
+	// Empty or "/" returns every registered command (the menu hides none).
 	all := FilterSlashCommands("/")
-	if len(all) != 8 {
-		t.Fatalf("expected 8 commands for '/' (capped at 8), got %d", len(all))
+	if want := len(AllSlashCommands()); len(all) != want {
+		t.Fatalf("expected every registered command for '/', got %d want %d", len(all), want)
 	}
 
 	// "/re" -> prefix match "/rewind"

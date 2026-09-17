@@ -86,6 +86,15 @@ var supportedSlashCommands = []SlashCommand{
 	},
 }
 
+// maxSlashMenuEntries bounds how many commands the slash menu shows for one
+// query. It is deliberately as large as supportedSlashCommands: a registered
+// command that the empty query cannot list is undiscoverable, and the only
+// command that defines a user's provider state (/provider) would be the one
+// they never see. Raising this is the intended edit when a tenth command is
+// added; TestSlashMenuListsEveryRegisteredCommand ties the two together so the
+// omission fails the build instead of silently hiding the last command.
+const maxSlashMenuEntries = 9
+
 // AllSlashCommands returns a copy of all registered slash commands.
 func AllSlashCommands() []SlashCommand {
 	out := make([]SlashCommand, len(supportedSlashCommands))
@@ -203,10 +212,11 @@ func ParseSlashCommand(line string) ParsedSlashCommand {
 func FilterSlashCommands(query string) []SlashCommand {
 	trimmed := strings.TrimSpace(query)
 	if trimmed == "" || trimmed == "/" {
-		// Return all commands in their defined order (capped at 8)
+		// Empty query: every registered command, in defined order. The cap
+		// equals the registered set, so nothing is hidden from discovery.
 		all := AllSlashCommands()
-		if len(all) > 8 {
-			return all[:8]
+		if len(all) > maxSlashMenuEntries {
+			return all[:maxSlashMenuEntries]
 		}
 		return all
 	}
@@ -261,7 +271,7 @@ func FilterSlashCommands(query string) []SlashCommand {
 	out := make([]SlashCommand, 0, len(matches))
 	for _, m := range matches {
 		out = append(out, m.cmd)
-		if len(out) == 8 {
+		if len(out) == maxSlashMenuEntries {
 			break
 		}
 	}
