@@ -119,8 +119,8 @@ func TestLoopInputForGuardedCallIsEmpty(t *testing.T) {
 	}
 }
 
-// A guarded call produces the structured event, does NOT run the plain tool,
-// and leaves the body out of ToolEnd.Output.
+// Guarded calls contribute no producer text to loop detection; the body stays
+// in the structured event and out of ordinary tool output.
 func TestGuardedOutcomeTextNeverLeavesTheGuardedPath(t *testing.T) {
 	var runHits, guardHits int
 	tools := guardedFakeTools{
@@ -135,7 +135,7 @@ func TestGuardedOutcomeTextNeverLeavesTheGuardedPath(t *testing.T) {
 		calls[i] = provider.ToolCall{ID: fmt.Sprintf("c%d", i+1), Name: "skill", Input: json.RawMessage(`{"name":"greet"}`)}
 	}
 	interrupted, err := l.runCalls(context.Background(), calls)
-	if !interrupted && !errors.Is(err, ErrToolLoop) {
+	if interrupted || !errors.Is(err, ErrToolLoop) {
 		t.Fatalf("repeated guarded calls: interrupted=%v err=%v", interrupted, err)
 	}
 	if guardHits != 5 || runHits != 0 {
@@ -143,13 +143,8 @@ func TestGuardedOutcomeTextNeverLeavesTheGuardedPath(t *testing.T) {
 	}
 	notices := 0
 	for _, e := range sink.events {
-		if e.Type == ToolEnd {
-			if e.Call.Output != "" {
-				t.Fatalf("guarded output leaked: %q", e.Call.Output)
-			}
-			if strings.Contains(e.Call.Output, guardedBody) {
-				t.Fatalf("guarded body leaked: %q", e.Call.Output)
-			}
+		if e.Type == ToolEnd && e.Call.Output != "" {
+			t.Fatalf("guarded output leaked: %q", e.Call.Output)
 		}
 		if e.Type == Notice && strings.Contains(e.Text, guardedBody) {
 			t.Fatalf("guarded body leaked into notice: %q", e.Text)

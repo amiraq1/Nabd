@@ -726,9 +726,6 @@ func (l *Loop) knownTool(name string) bool {
 	return false
 }
 
-// checkLoop updates the repetition count for the given tool call outcome.
-// It emits a conversational Notice event at LoopNoticeThreshold (3) and
-// returns ErrToolLoop at LoopAbortThreshold (5).
 // loopInput is the value the repetition detector keys on for one call.
 // Guarded calls contribute nothing: the detector already has name+input, and
 // admitting producer text would make a body leak depend on producer behavior.
@@ -739,6 +736,9 @@ func loopInput(out Outcome, guarded bool) string {
 	return out.Text
 }
 
+// checkLoop updates the repetition count for the given tool call outcome.
+// It emits a conversational Notice event at LoopNoticeThreshold (3) and
+// returns ErrToolLoop at LoopAbortThreshold (5).
 func (l *Loop) checkLoop(tool string, input []byte, ok bool, output string) error {
 	l.mu.Lock()
 	if l.loopDetector == nil {
