@@ -40,7 +40,7 @@ func (skillTool) Spec() provider.ToolSpec {
 
 // SkillBodyProducer is the only production constructor for the guarded event.
 // It fixes the trust class here; callers cannot request a different class.
-func (t skillTool) SkillBodyEvent(ctx context.Context, raw json.RawMessage) (agent.Event, error) {
+func (t skillTool) GuardedEvent(ctx context.Context, raw json.RawMessage) (agent.Event, error) {
 	var a struct {
 		Name string `json:"name"`
 	}

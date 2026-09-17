@@ -140,6 +140,15 @@ func (r *Registry) SetSkillIndex(fn func() []skill.Skill) {
 }
 
 // skillList returns the current skill index, or nil when none was installed.
+func (r *Registry) GuardedFor(name string) (agent.GuardedOutcome, bool) {
+	if t, ok := r.byName[name]; ok {
+		if g, ok := t.(agent.GuardedOutcome); ok {
+			return g, true
+		}
+	}
+	return nil, false
+}
+
 func (r *Registry) skillList() []skill.Skill {
 	r.skillsMu.Lock()
 	fn := r.skillsFn

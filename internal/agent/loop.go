@@ -50,6 +50,17 @@ type Tools interface {
 	Run(ctx context.Context, c provider.ToolCall) (out string, ok bool, err error)
 }
 
+// GuardedOutcome is a tool result that must be journaled as a structured event
+// rather than exposed through ToolEnd.Output. The registry owns which tools have
+// this property; the loop must not maintain a name-based allowlist.
+type GuardedOutcome interface {
+	GuardedEvent(context.Context, json.RawMessage) (Event, error)
+}
+
+type guardedTools interface {
+	GuardedFor(name string) (GuardedOutcome, bool)
+}
+
 // Loop turns one user message into a settled conversation: it streams a
 // turn, runs whatever tools the model asked for, and streams again, until
 // the model stops asking. Every observable step becomes an Event.
@@ -792,22 +803,19 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		start := time.Now()
 		var out Outcome
 		var err error
-		var skillEvent *Event
-		if c.Name == "skill" {
-			if producer, ok := l.Tools.(interface {
-				SkillBodyEvent(context.Context, json.RawMessage) (Event, error)
-			}); ok {
-				ev, perr := producer.SkillBodyEvent(ctx, c.Input)
-				if perr != nil {
-					err = perr
+		var guardedEvent *Event
+		if gt, ok := l.Tools.(guardedTools); ok {
+			if guarded, found := gt.GuardedFor(c.Name); found {
+				ev, gerr := guarded.GuardedEvent(ctx, c.Input)
+				if gerr != nil {
+					out, err = Outcome{OK: false}, gerr
 				} else {
-					skillEvent = &ev
-					err = nil
-					out = Outcome{Text: "skill body loaded", OK: true}
+					guardedEvent, out = &ev, Outcome{Text: "skill body loaded", OK: true}
 				}
+			} else {
+				out, err = l.exec(ctx, c)
 			}
-		}
-		if skillEvent == nil {
+		} else {
 			out, err = l.exec(ctx, c)
 		}
 		if err != nil {
@@ -825,13 +833,13 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		}
 		ms := time.Since(start).Milliseconds()
 
-		if skillEvent != nil {
-			if eerr := l.emit(*skillEvent); eerr != nil {
+		if guardedEvent != nil {
+			if eerr := l.emit(*guardedEvent); eerr != nil {
 				return false, eerr
 			}
 		}
 		toolOutput := out.Text
-		if skillEvent != nil {
+		if guardedEvent != nil {
 			toolOutput = ""
 		}
 		done := ToolCall{
