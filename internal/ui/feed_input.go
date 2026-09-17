@@ -29,6 +29,10 @@ func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.onCtrlD()
 	}
 
+	if m.secretPrompt {
+		return m.secretPromptKey(k)
+	}
+
 	if m.modalVisible || m.decisionPending {
 		return m.modalKey(k)
 	}
@@ -131,6 +135,11 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 // until the blocked run returns. context.CancelFunc is safe to call from
 // any goroutine and never touches the Bubble Tea model.
 func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
+	if m.secretPrompt {
+		m.cancelSecretPrompt()
+		m.setStatus("connect canceled", rankResult)
+		return m, nil
+	}
 	if m.modalVisible || m.decisionPending {
 		if m.running || m.busy {
 			m.cancelRun("canceling…")
@@ -167,6 +176,9 @@ func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
 //     never quit.
 //   - Composer empty: quit only when every safe-exit condition holds.
 func (m *Feed) onCtrlD() (tea.Model, tea.Cmd) {
+	if m.secretPrompt {
+		return m, nil
+	}
 	if m.modalVisible || m.decisionPending {
 		return m, nil
 	}
@@ -205,6 +217,57 @@ func (m *Feed) cancelRun(status string) {
 	if status != "" {
 		m.setStatus(status, rankRunLifecycle)
 	}
+}
+
+func (m *Feed) cancelSecretPrompt() {
+	m.secretPrompt = false
+	m.secretProvider = ""
+	m.secretKey = ""
+	m.clearStatus()
+}
+
+func (m *Feed) secretPromptKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.Type {
+	case tea.KeyEsc:
+		m.cancelSecretPrompt()
+		m.setStatus("connect canceled", rankResult)
+		return m, nil
+	case tea.KeyBackspace:
+		if len(m.secretKey) > 0 {
+			r := []rune(m.secretKey)
+			m.secretKey = string(r[:len(r)-1])
+		}
+		return m, nil
+	case tea.KeyCtrlU:
+		m.secretKey = ""
+		return m, nil
+	case tea.KeyEnter:
+		key := strings.TrimSpace(m.secretKey)
+		providerID := m.secretProvider
+		m.cancelSecretPrompt()
+		if key == "" {
+			m.setStatus("empty key; nothing written", rankResult)
+			return m, nil
+		}
+		if m.callbacks.OnConnect == nil {
+			m.setStatus("connect not supported in this version", rankResult)
+			return m, nil
+		}
+		summary, err := m.callbacks.OnConnect(providerID, key)
+		if err != nil {
+			m.setStatus("connect failed: "+err.Error(), rankResult)
+			return m, nil
+		}
+		m.setStatus(summary, rankResult)
+		return m, nil
+	case tea.KeyRunes:
+		m.secretKey += string(k.Runes)
+		return m, nil
+	case tea.KeySpace:
+		m.secretKey += " "
+		return m, nil
+	}
+	return m, nil
 }
 
 // modalKey routes keys while the permission modal is visible. Every
@@ -403,6 +466,9 @@ func (m *Feed) trySend() (tea.Model, tea.Cmd) {
 func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 	parsed := ParseSlashCommand(line)
 	if !parsed.Valid {
+		if parsed.Command.Name == "/connect" || parsed.RawCmd == "/connect" {
+			m.composer.clear()
+		}
 		m.setStatus(parsed.Error, rankResult)
 		return m, nil
 	}
@@ -456,6 +522,40 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 	case "/help":
 		m.composer.clear()
 		m.setCommandResult(CommandHelp(m.width))
+		return m, nil
+	case "/provider":
+		m.composer.clear()
+		if m.callbacks.OnProvider == nil {
+			m.setStatus("provider not supported in this version", rankResult)
+			return m, nil
+		}
+		m.setCommandResult(m.callbacks.OnProvider())
+		return m, nil
+	case "/models":
+		m.composer.clear()
+		if m.callbacks.OnModels == nil {
+			m.setStatus("models not supported in this version", rankResult)
+			return m, nil
+		}
+		m.busy = true
+		m.setStatus("fetching models… · ctrl+c to cancel", rankResult)
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancel = cancel
+		return m, func() tea.Msg {
+			models, disclaimer, err := m.callbacks.OnModels(ctx, parsed.Arg)
+			cancel()
+			return modelsResultMsg{provider: parsed.Arg, models: models, disclaimer: disclaimer, err: err}
+		}
+	case "/connect":
+		m.composer.clear()
+		if m.callbacks.OnConnect == nil {
+			m.setStatus("connect not supported in this version", rankResult)
+			return m, nil
+		}
+		m.secretPrompt = true
+		m.secretProvider = parsed.Arg
+		m.secretKey = ""
+		m.setStatus("API key (input hidden) · enter to submit · esc to cancel", rankResult)
 		return m, nil
 	}
 	// Unknown command: keep the text, tell the user.

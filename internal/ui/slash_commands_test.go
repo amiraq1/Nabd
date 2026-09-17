@@ -9,20 +9,23 @@ import (
 // present and match expected properties.
 func TestSlashCommandsRegistryDefinitions(t *testing.T) {
 	cmds := AllSlashCommands()
-	if len(cmds) != 6 {
-		t.Fatalf("expected 6 commands, got %d", len(cmds))
+	if len(cmds) != 9 {
+		t.Fatalf("expected 9 commands, got %d", len(cmds))
 	}
 
 	expected := map[string]struct {
 		hasArg    bool
 		allowBusy bool
 	}{
-		"/undo":    {hasArg: true, allowBusy: false},
-		"/rewind":  {hasArg: true, allowBusy: false},
-		"/ctx":     {hasArg: false, allowBusy: false},
-		"/compact": {hasArg: false, allowBusy: false},
-		"/edits":   {hasArg: false, allowBusy: false},
-		"/help":    {hasArg: false, allowBusy: false},
+		"/undo":     {hasArg: true, allowBusy: false},
+		"/rewind":   {hasArg: true, allowBusy: false},
+		"/ctx":      {hasArg: false, allowBusy: false},
+		"/compact":  {hasArg: false, allowBusy: false},
+		"/edits":    {hasArg: false, allowBusy: false},
+		"/help":     {hasArg: false, allowBusy: false},
+		"/connect":  {hasArg: true, allowBusy: false},
+		"/models":   {hasArg: true, allowBusy: false},
+		"/provider": {hasArg: false, allowBusy: false},
 	}
 
 	for _, c := range cmds {
@@ -69,15 +72,50 @@ func TestParseSlashCommand(t *testing.T) {
 	if !rewindN.Valid || rewindN.N != 3 || !rewindN.HasN {
 		t.Fatalf("expected rewind n=3, got %+v", rewindN)
 	}
+
+	prov := ParseSlashCommand("/provider")
+	if !prov.Valid {
+		t.Fatalf("expected /provider to be valid, got error: %s", prov.Error)
+	}
+	provArg := ParseSlashCommand("/provider extra")
+	if provArg.Valid || !strings.Contains(provArg.Error, "usage: /provider") {
+		t.Fatalf("expected /provider extra to fail with usage, got %+v", provArg)
+	}
+
+	modelsNoArg := ParseSlashCommand("/models")
+	if modelsNoArg.Valid || !strings.Contains(modelsNoArg.Error, "usage: /models") {
+		t.Fatalf("expected /models without args to fail with usage, got %+v", modelsNoArg)
+	}
+	modelsValid := ParseSlashCommand("/models groq")
+	if !modelsValid.Valid || modelsValid.Arg != "groq" {
+		t.Fatalf("expected /models groq to parse arg 'groq', got %+v", modelsValid)
+	}
+
+	connNoArg := ParseSlashCommand("/connect")
+	if connNoArg.Valid || !strings.Contains(connNoArg.Error, "usage: /connect") {
+		t.Fatalf("expected /connect without args to fail with usage, got %+v", connNoArg)
+	}
+	connValid := ParseSlashCommand("/connect groq")
+	if !connValid.Valid || connValid.Arg != "groq" {
+		t.Fatalf("expected /connect groq to parse arg 'groq', got %+v", connValid)
+	}
+	connWithKey := ParseSlashCommand("/connect groq sk-1234567890")
+	if connWithKey.Valid || !strings.Contains(connWithKey.Error, "refusing a key") {
+		t.Fatalf("expected /connect with key to fail refusing key, got %+v", connWithKey)
+	}
+	connKeyDirect := ParseSlashCommand("/connect sk-1234567890")
+	if connKeyDirect.Valid || !strings.Contains(connKeyDirect.Error, "refusing a key") {
+		t.Fatalf("expected /connect with key as first arg to fail refusing key, got %+v", connKeyDirect)
+	}
 }
 
 // TestFilterSlashCommandsDeterministic verifies deterministic ordering:
 // exact > prefix > alias > substring > alphabetical.
 func TestFilterSlashCommandsDeterministic(t *testing.T) {
-	// Empty or "/" returns all commands
+	// Empty or "/" returns all commands capped at 8
 	all := FilterSlashCommands("/")
-	if len(all) != 6 {
-		t.Fatalf("expected 6 commands for '/', got %d", len(all))
+	if len(all) != 8 {
+		t.Fatalf("expected 8 commands for '/' (capped at 8), got %d", len(all))
 	}
 
 	// "/re" -> prefix match "/rewind"
@@ -86,19 +124,19 @@ func TestFilterSlashCommandsDeterministic(t *testing.T) {
 		t.Fatalf("expected /rewind first for '/re', got %+v", re)
 	}
 
-	// "/c" -> prefix match "/compact" and "/ctx", alphabetical tie-break
+	// "/c" -> prefix match "/compact", "/connect", and "/ctx", alphabetical tie-break
 	c := FilterSlashCommands("/c")
-	if len(c) < 2 {
-		t.Fatalf("expected at least 2 commands for '/c', got %d", len(c))
+	if len(c) < 3 {
+		t.Fatalf("expected at least 3 commands for '/c', got %d", len(c))
 	}
-	if c[0].Name != "/compact" || c[1].Name != "/ctx" {
-		t.Fatalf("expected /compact then /ctx, got %s, %s", c[0].Name, c[1].Name)
+	if c[0].Name != "/compact" || c[1].Name != "/connect" || c[2].Name != "/ctx" {
+		t.Fatalf("expected /compact, /connect then /ctx, got %s, %s, %s", c[0].Name, c[1].Name, c[2].Name)
 	}
 
 	// Same query must produce identical ordering on repeated calls
 	for i := 0; i < 5; i++ {
 		res := FilterSlashCommands("/c")
-		if res[0].Name != "/compact" || res[1].Name != "/ctx" {
+		if res[0].Name != "/compact" || res[1].Name != "/connect" || res[2].Name != "/ctx" {
 			t.Fatalf("non-deterministic results on iteration %d", i)
 		}
 	}

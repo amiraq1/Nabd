@@ -1,10 +1,13 @@
 package ui
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"nabd/internal/agent"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // TestSlashCommandParityBetweenFeedAndChat verifies that all registered
@@ -37,6 +40,18 @@ func TestSlashCommandParityBetweenFeedAndChat(t *testing.T) {
 			feedCalls["/edits"] = true
 			return "edits"
 		},
+		OnProvider: func() string {
+			feedCalls["/provider"] = true
+			return "providers"
+		},
+		OnModels: func(ctx context.Context, providerID string) ([]string, string, error) {
+			feedCalls["/models"] = true
+			return []string{"model-1"}, "note", nil
+		},
+		OnConnect: func(providerID, key string) (string, error) {
+			feedCalls["/connect"] = true
+			return "connected", nil
+		},
 	})
 
 	// Track Chat callbacks
@@ -63,19 +78,47 @@ func TestSlashCommandParityBetweenFeedAndChat(t *testing.T) {
 			chatCalls["/edits"] = true
 			return "edits"
 		},
+		OnProvider: func() string {
+			chatCalls["/provider"] = true
+			return "providers"
+		},
+		OnModels: func(ctx context.Context, providerID string) ([]string, string, error) {
+			chatCalls["/models"] = true
+			return []string{"model-1"}, "note", nil
+		},
+		OnConnect: func(providerID, key string) (string, error) {
+			chatCalls["/connect"] = true
+			return "connected", nil
+		},
 	})
 
 	for _, cmd := range cmds {
+		input := cmd.Name
+		if cmd.Name == "/connect" || cmd.Name == "/models" {
+			input += " mock-provider"
+		}
+
 		// Test Feed
-		_, _ = f.runCommand(cmd.Name)
+		_, cmdFn := f.runCommand(input)
+		if cmdFn != nil {
+			cmdFn()
+		}
+		if cmd.Name == "/connect" {
+			f.secretKey = "mock-key"
+			f.Update(tea.KeyMsg{Type: tea.KeyEnter})
+		}
 		if cmd.Name != "/help" && !feedCalls[cmd.Name] {
 			t.Errorf("Feed failed to dispatch command: %s", cmd.Name)
 		}
 
 		// Test Chat
-		res := c.command(cmd.Name)
+		res := c.command(input)
 		if strings.HasPrefix(res, "unknown command") {
 			t.Errorf("Chat reported unknown for command: %s", cmd.Name)
+		}
+		if cmd.Name == "/connect" {
+			c.secretKey = "mock-key"
+			c.Update(tea.KeyMsg{Type: tea.KeyEnter})
 		}
 		if cmd.Name != "/help" && !chatCalls[cmd.Name] {
 			t.Errorf("Chat failed to dispatch command: %s", cmd.Name)

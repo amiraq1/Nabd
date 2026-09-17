@@ -44,8 +44,8 @@ func TestOverlayFullEndToEndIntegration(t *testing.T) {
 	if !f.menu.visible {
 		t.Fatal("step 2: slash menu must appear on '/'")
 	}
-	if len(f.menu.items) != 6 {
-		t.Fatalf("step 2: expected 6 commands, got %d", len(f.menu.items))
+	if len(f.menu.items) != 8 {
+		t.Fatalf("step 2: expected 8 commands, got %d", len(f.menu.items))
 	}
 
 	// 3. Type query 'un': filtered to /undo

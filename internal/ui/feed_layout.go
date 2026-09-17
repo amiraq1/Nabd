@@ -54,6 +54,30 @@ func (m *Feed) addNotice(kind presentation.ItemType, text string) {
 	}
 }
 
+// addErrorNotice appends a permanent error notice carrying a structured ErrorCard
+// to the feed, rendering with the 4 error card fields (code/wait/details/action).
+func (m *Feed) addErrorNotice(card *presentation.ErrorCard, text string) {
+	if card == nil && text == "" {
+		return
+	}
+	m.notices = append(m.notices, presentation.FeedItem{
+		Type:  presentation.ItemError,
+		ID:    fmt.Sprintf("ui_%d_%d", m.lastSeq, len(m.notices)),
+		Seq:   m.lastSeq,
+		Text:  text,
+		Error: card,
+	})
+	if len(m.notices) > maxUINotices {
+		m.notices = m.notices[len(m.notices)-maxUINotices:]
+	}
+	m.refresh()
+	if m.follow && !m.modalVisible && !m.decisionPending {
+		m.scrollToEnd()
+	} else {
+		m.unseen++
+	}
+}
+
 // mergeNotices interleaves UI notices into the Seq-sorted projector items.
 // A notice anchored at Seq k is placed after every item with Seq <= k.
 // Notices are appended in chronological order with non-decreasing anchors,

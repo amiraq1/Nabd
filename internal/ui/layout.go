@@ -100,6 +100,13 @@ func (m *Feed) computeLayout() layoutMetrics {
 			pausedMsg = ansi.Truncate("· composer paused", w, "…")
 		}
 		lm.pausedLine = pausedMsg
+	} else if m.secretPrompt {
+		lm.ComposerRows = 1
+		prompt := "API key (input hidden): "
+		if ansi.StringWidth(prompt) > w {
+			prompt = ansi.Truncate(prompt, w, "…")
+		}
+		lm.pausedLine = prompt
 	} else {
 		h := m.composer.height
 		if h < minComposerHeight {
@@ -516,7 +523,7 @@ func (m *Feed) View() string {
 	}
 
 	// 9. Composer slot.
-	if m.modalVisible || m.decisionPending {
+	if m.modalVisible || m.decisionPending || m.secretPrompt {
 		b.WriteString(dim.Render(lm.pausedLine))
 	} else {
 		b.WriteString(m.composer.view())
