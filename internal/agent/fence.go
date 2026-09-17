@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"nabd/internal/toolvocab"
 )
 
 // FenceToolOutput wraps a tool's raw output so the model sees it as data,
@@ -57,19 +59,17 @@ func defangFenceMarkers(raw string) string {
 	).Replace(raw)
 }
 
-// fenceToolNames is the allowlist of tool names the fence is allowed to echo.
-// It is exactly the set internal/tools registers; that package asserts the
-// two agree, so registering a tool without telling the fence fails a test
-// instead of silently fencing it as "unknown" at the provider.
-var fenceToolNames = map[string]struct{}{
-	"bash":       {},
-	"edit_file":  {},
-	"glob":       {},
-	"grep":       {},
-	"read_file":  {},
-	"skill":      {},
-	"write_file": {},
-}
+// fenceToolNames is the complete binary vocabulary, not the set activated in
+// one session. A continued journal may contain a skill call even when today's
+// session has no skill index, so the provider-facing fence must still know the
+// name and preserve it rather than relabel it as unknown.
+var fenceToolNames = func() map[string]struct{} {
+	out := make(map[string]struct{}, len(toolvocab.Names))
+	for _, name := range toolvocab.Names {
+		out[name] = struct{}{}
+	}
+	return out
+}()
 
 // FenceToolNames returns the fence's tool-name allowlist, sorted. It is
 // exported so internal/tools can assert that the fence knows every registered

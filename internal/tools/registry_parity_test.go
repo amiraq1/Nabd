@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/perm"
+	"nabd/internal/skill"
 	"nabd/internal/snap"
 )
 
@@ -17,13 +19,83 @@ import (
 // this list are the two halves of one claim, and both drift silently if a tool
 // moves. (A previous version of that comment named a "list_dir" that was never
 // registered: directory listing is served by glob.)
+var declaredToolNames = []string{"read_file", "write_file", "edit_file", "bash", "skill", "glob", "grep"}
+var declaredReadOnly = []string{"read_file", "skill", "glob", "grep"}
+
 var wantRegisteredTools = []string{
-	"bash", "edit_file", "glob", "grep", "read_file", "skill", "write_file",
+	"bash", "edit_file", "glob", "grep", "read_file", "write_file",
 }
 
 // TestRegistryToolSet pins the registered tool names. A tool that exists
 // without being listed, or is listed without existing, breaks the model's
 // view of what it can call and the unknown-tool error's "available:" clause.
+func TestFenceRejectsUnknownName(t *testing.T) {
+	allowed := map[string]bool{}
+	for _, name := range agent.FenceToolNames() {
+		allowed[name] = true
+	}
+	for _, name := range []string{"", "skil", "skill ", "SKILL", "../skill", "exec"} {
+		if allowed[name] {
+			t.Fatalf("fence accepted unknown name %q", name)
+		}
+	}
+}
+
+func TestVocabularyDeclarationsMatchDerivedTypes(t *testing.T) {
+	got := make(map[string]bool)
+	for _, tool := range AllTools(nil) {
+		got[tool.Name()] = true
+	}
+	want := make(map[string]bool)
+	for _, name := range declaredToolNames {
+		want[name] = true
+	}
+	if len(got) != len(want) {
+		t.Fatalf("vocabulary size=%d want=%d", len(got), len(want))
+	}
+	for name := range want {
+		if !got[name] {
+			t.Errorf("declared tool %q missing", name)
+		}
+	}
+	for _, name := range declaredReadOnly {
+		for _, tool := range AllTools(nil) {
+			if tool.Name() == name && tool.(Classified).Class() != perm.ReadOnly {
+				t.Errorf("%q is not read-only", name)
+			}
+		}
+	}
+}
+
+func TestSkillRegistrationFollowsLoadedIndex(t *testing.T) {
+	r := NewRegistry(nil, nil)
+	if _, ok := r.byName["skill"]; ok {
+		t.Fatal("skill must be absent when no skill index is installed")
+	}
+	if !containsName(agent.FenceToolNames(), "skill") {
+		t.Fatal("fence must recognise skill independently of session activation")
+	}
+
+	r.SetSkillIndex(func() []skill.Skill { return nil })
+	if _, ok := r.byName["skill"]; ok {
+		t.Fatal("empty skill index must not activate skill")
+	}
+	loaded := []skill.Skill{{Name: "demo", Desc: "demo", Rel: "demo.md"}}
+	r.SetSkillIndex(func() []skill.Skill { return loaded })
+	if _, ok := r.byName["skill"]; !ok {
+		t.Fatal("non-empty skill index did not activate skill")
+	}
+}
+
+func containsName(names []string, want string) bool {
+	for _, name := range names {
+		if name == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestRegistryToolSet(t *testing.T) {
 	r := NewRegistry(nil, nil)
 
@@ -87,11 +159,9 @@ func TestRegistrySpecsParity(t *testing.T) {
 // fence it as "unknown" at the provider boundary, and a stale allowlist entry
 // would advertise a tool the model cannot call.
 func TestFenceToolNameAllowlistMatchesRegistry(t *testing.T) {
-	r := NewRegistry(nil, nil)
-
-	registered := make(map[string]bool, len(r.byName))
-	for name := range r.byName {
-		registered[name] = true
+	registered := make(map[string]bool, len(AllTools(nil)))
+	for _, tool := range AllTools(nil) {
+		registered[tool.Name()] = true
 	}
 	if len(registered) == 0 {
 		t.Fatal("registry registered no tools; the comparison would be vacuous")

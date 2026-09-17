@@ -201,9 +201,9 @@ func TestRepairInferenceIsReadOnlyOnly(t *testing.T) {
 	// ReadOnly tool cannot be inferred to while readOnlyTools says otherwise,
 	// and a tool that changes class is caught here.
 	declaredReadOnly := map[string]bool{}
-	for _, spec := range reg.Specs() {
-		if class, ok := reg.Class(spec.Name); ok && class == perm.ReadOnly {
-			declaredReadOnly[spec.Name] = true
+	for _, tool := range AllTools(nil) {
+		if class, ok := tool.(Classified); ok && class.Class() == perm.ReadOnly {
+			declaredReadOnly[tool.Name()] = true
 		}
 	}
 	for name := range declaredReadOnly {

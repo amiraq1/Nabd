@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"nabd/internal/provider"
+	"nabd/internal/toolvocab"
 )
 
 // Tool-call repair (NBD-420).
@@ -69,14 +70,7 @@ const (
 //
 // TestRepairInferenceIsReadOnlyOnly checks this against Registry.Class rather
 // than against a second written list, so the two cannot drift.
-var readOnlyTools = map[string]bool{
-	"read_file": true,
-	"glob":      true,
-	"grep":      true,
-	// A skill body is instructions the model reads; inferring toward it is the
-	// same safe direction as inferring toward read_file.
-	"skill": true,
-}
+var readOnlyTools = toolvocab.ReadOnly
 
 // toolAliases maps an explicit, observed misspelling to a declared tool name.
 //

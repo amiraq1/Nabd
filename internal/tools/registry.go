@@ -122,11 +122,21 @@ type Registry struct {
 
 // SetSkillIndex installs the loaded skills for the skill tool. It is called at
 // session start, before any turn, so a call can never observe a half-built
-// index.
+// index. An empty index leaves skill disabled for this session; the binary
+// vocabulary remains independent in AllTools and the provider fence.
 func (r *Registry) SetSkillIndex(fn func() []skill.Skill) {
+	loaded := []skill.Skill(nil)
+	if fn != nil {
+		loaded = fn()
+	}
 	r.skillsMu.Lock()
-	r.skillsFn = fn
+	r.skillsFn = func() []skill.Skill { return loaded }
 	r.skillsMu.Unlock()
+	if len(loaded) > 0 {
+		r.add(skillTool{r})
+	} else {
+		r.remove("skill")
+	}
 }
 
 // skillList returns the current skill index, or nil when none was installed.
@@ -146,8 +156,13 @@ func NewRegistry(root *Root, sh *snap.Shadow) *Registry {
 	r.add(readFile{root, r}, globFiles{root}, grepFiles{root, r})
 	r.add(writeFile{root, sh, log, r}, editFile{root, sh, log, r})
 	r.add(bashTool{root})
-	r.add(skillTool{r})
 	return r
+}
+
+// AllTools is the complete vocabulary compiled into the binary, independent
+// of which optional capabilities are active in the current session.
+func AllTools(root *Root) []Tool {
+	return []Tool{readFile{root, nil}, writeFile{root, nil, nil, nil}, editFile{root, nil, nil, nil}, bashTool{root}, skillTool{}, globFiles{root}, grepFiles{root, nil}}
 }
 
 // SetReadCredit records the provenance and line count of a read_file call (NBD-034).
@@ -253,9 +268,23 @@ func (r *Registry) Class(tool string) (perm.Class, bool) {
 
 func (r *Registry) add(ts ...Tool) {
 	for _, t := range ts {
+		if _, exists := r.byName[t.Name()]; exists {
+			continue
+		}
 		r.list = append(r.list, t)
 		r.byName[t.Name()] = t
 	}
+}
+
+func (r *Registry) remove(name string) {
+	delete(r.byName, name)
+	filtered := r.list[:0]
+	for _, t := range r.list {
+		if t.Name() != name {
+			filtered = append(filtered, t)
+		}
+	}
+	r.list = filtered
 }
 
 func (r *Registry) Specs() []provider.ToolSpec {
