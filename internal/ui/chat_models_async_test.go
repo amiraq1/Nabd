@@ -2,10 +2,13 @@ package ui
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/providercmd"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -76,33 +79,65 @@ func TestChatModelsRunsOffTheEventLoop(t *testing.T) {
 	}
 }
 
-// TestChatModelsCancelShowsCanceled proves the probe's context is cancellable:
-// the old code passed context.Background(), so a cancellation could not reach
-// the provider call.
+// TestChatModelsCancelShowsCanceled proves the probe's context is cancellable
+// and that the handler recognizes the error chain a real canceled request
+// produces. A transport cancel is not a bare context.Canceled: it arrives as
+// providercmd's classified error wrapping *url.Error wrapping context.Canceled.
+// The handler must unwrap that (errors.Is), not compare text or identity, or a
+// cancellation would be reported as a provider failure.
 func TestChatModelsCancelShowsCanceled(t *testing.T) {
-	c := NewChat(runnerStub{}, make(chan agent.Event, 1))
-	c.SetCallbacks(&SessionCallbacks{
-		OnModels: func(ctx context.Context, providerID string) ([]string, string, error) {
-			<-ctx.Done()
-			return nil, "", ctx.Err()
+	// The real chain, built on the test goroutine so a setup failure is a test
+	// failure rather than a t.Fatal from a command goroutine.
+	canceledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, wrappedErr := providercmd.FetchModels(canceledCtx, "openai", "http://127.0.0.1:1", "k", &http.Client{})
+	if wrappedErr == nil {
+		t.Fatal("setup: a canceled context must produce a transport error")
+	}
+	if !errors.Is(wrappedErr, context.Canceled) {
+		t.Fatalf("setup: the transport error must wrap context.Canceled, got %#v", wrappedErr)
+	}
+
+	cases := []struct {
+		name string
+		run  func(ctx context.Context) error
+	}{
+		{
+			name: "bare context.Canceled",
+			run:  func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() },
 		},
-	})
-
-	for _, r := range "/models mockserver" {
-		c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-	}
-	_, cmd := c.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("expected an async cmd")
+		{
+			name: "classified wraps url.Error wraps context.Canceled",
+			run:  func(context.Context) error { return wrappedErr },
+		},
 	}
 
-	done := make(chan tea.Msg, 1)
-	go func() { done <- cmd() }()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewChat(runnerStub{}, make(chan agent.Event, 1))
+			c.SetCallbacks(&SessionCallbacks{
+				OnModels: func(ctx context.Context, providerID string) ([]string, string, error) {
+					return nil, "", tc.run(ctx)
+				},
+			})
 
-	c.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	c.Update(<-done)
+			for _, r := range "/models mockserver" {
+				c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+			}
+			_, cmd := c.Update(tea.KeyMsg{Type: tea.KeyEnter})
+			if cmd == nil {
+				t.Fatal("expected an async cmd")
+			}
 
-	if got := c.Status(); got != "canceled" {
-		t.Fatalf("status after cancel = %q, want canceled", got)
+			done := make(chan tea.Msg, 1)
+			go func() { done <- cmd() }()
+
+			c.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+			c.Update(<-done)
+
+			if got := c.Status(); got != "canceled" {
+				t.Fatalf("status after cancel = %q, want canceled", got)
+			}
+		})
 	}
 }

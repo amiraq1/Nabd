@@ -404,6 +404,12 @@ func (m *Chat) Status() string { return m.status }
 // with an asynchronous leg is settled synchronously here: this helper is not
 // the event loop, so blocking on the probe is acceptable and lets the parity
 // tests assert the final status instead of an intermediate one.
+//
+// It is a test convenience, not the production path: it runs the command the
+// way the UI never does (the UI hands the tea.Cmd back to Bubble Tea). It must
+// not be read as evidence that Chat and Feed schedule or present /models
+// identically — what they share is the command contract, not the scheduling
+// and not the rendering of the result.
 func (m *Chat) Command(line string) string {
 	status, cmd := m.command(line)
 	m.status = status
