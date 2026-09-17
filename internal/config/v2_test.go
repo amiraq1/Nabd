@@ -63,6 +63,35 @@ func TestV1AndV2TogetherAreFatal(t *testing.T) {
 	}
 }
 
+func TestProjectSkillsOptInConfigV2(t *testing.T) {
+	tests := []struct {
+		name, skills, env, want string
+	}{
+		{"v2_true_enables_project_skills", `"skills":{"project":true},`, "", "1"},
+		{"v2_absent_ignores_environment_opt_in", "", "1", ""},
+		{"v2_false_ignores_environment_opt_in", `"skills":{"project":false},`, "1", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("NABD_SKILLS_PROJECT", tc.env)
+			p := writeExplicit(t, "skills.json", `{"version":2,"provider":"groq",`+tc.skills+`"credentials":{"groq":{"source":"env"}}}`)
+			t.Setenv(V2EnvVar, p)
+			ResetForTest()
+			t.Cleanup(ResetForTest)
+			if err := Load(); err != nil {
+				t.Fatal(err)
+			}
+			if got := Get("NABD_SKILLS_PROJECT"); got != tc.want {
+				t.Fatalf("got %q want %q", got, tc.want)
+			}
+		})
+	}
+	p := writeExplicit(t, "unknown-skills.json", `{"version":2,"provider":"groq","skills":{"project":true,"unexpected":true},"credentials":{"groq":{"source":"env"}}}`)
+	if _, err := ParseV2File(p); err == nil {
+		t.Fatal("unknown skill field accepted")
+	}
+}
+
 func TestV2DisablesImplicitEnvironmentFallback(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("GROQ_API_KEY", "secret")

@@ -2,10 +2,17 @@
 set -euo pipefail
 
 [[ ${GITHUB_EVENT_NAME:-} == pull_request ]] || exit 0
-: "${GITHUB_EVENT_PATH:?GITHUB_EVENT_PATH is required}"
 : "${GITHUB_BASE_REF:?GITHUB_BASE_REF is required for diff cross-check}"
 
-body=$(jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH")
+if [[ -n "${PR_BODY_FILE:-}" ]]; then
+  [[ -f "$PR_BODY_FILE" ]] || { echo "PR_BODY_FILE does not exist" >&2; exit 1; }
+  body=$(<"$PR_BODY_FILE")
+elif [[ -n "${PR_BODY:-}" ]]; then
+  body=$PR_BODY
+else
+  : "${GITHUB_EVENT_PATH:?GITHUB_EVENT_PATH is required for local fixture mode}"
+  body=$(jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH")
+fi
 
 # Phase 1: All checklist items must be checked.
 required=(

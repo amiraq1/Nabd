@@ -29,7 +29,12 @@ type V2Config struct {
 	RouterPrestreamTimeout string                  `json:"router_prestream_timeout,omitempty"`
 	ProviderTurnTimeout    string                  `json:"provider_turn_timeout,omitempty"`
 	Limits                 V2Limits                `json:"limits,omitempty"`
+	Skills                 V2Skills                `json:"skills,omitempty"`
 	Credentials            map[string]V2Credential `json:"credentials"`
+}
+
+type V2Skills struct {
+	Project bool `json:"project,omitempty"`
 }
 
 type V2Route struct {
@@ -236,6 +241,9 @@ func flattenV2(cfg V2Config) (map[string]string, error) {
 		return nil, errors.New("config v2: routes exceeds 32 entries")
 	}
 	out := map[string]string{"NABD_PROVIDER": cfg.Provider}
+	if cfg.Skills.Project {
+		out["NABD_SKILLS_PROJECT"] = "1"
+	}
 	if cfg.Model != "" {
 		out["NABD_MODEL"] = cfg.Model
 	}

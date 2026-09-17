@@ -74,7 +74,30 @@ All configuration and credential files read by Nabd must satisfy strict OS-level
 
 ---
 
-## 4. Config v2 Schema Reference
+## 4. Project skills
+
+Project skills are disabled by default and project files are never consulted to enable them.
+
+Config v1 accepts `NABD_SKILLS_PROJECT=1` in `~/.ag/config` (or `NABD_CONFIG`), and may use the process environment when the v1 file omits it. Other values do not enable the feature. The default is disabled.
+
+Config v2 does not use the `NABD_SKILLS_PROJECT` environment variable. Enable project skills only with the structured boolean `skills.project` field:
+
+```json
+{
+  "version": 2,
+  "provider": "groq",
+  "skills": { "project": true },
+  "credentials": { "groq": { "source": "env" } }
+}
+```
+
+The schema field `skills.project` has type `boolean` and default `false`. It is a user setting, not a project setting; merely having `.nabd/skills` in a repository never enables it. Config v2 does not restore implicit environment fallback, so `NABD_SKILLS_PROJECT` is ignored under v2 and cannot override `false` or an absent field.
+
+### Config v1 keys
+
+`NABD_SKILLS_PROJECT` is a known v1 key. Its only enabling value is `1`.
+
+## 5. Config v2 Schema Reference
 
 A minimal valid `config.v2.json` file:
 
@@ -110,6 +133,7 @@ A minimal valid `config.v2.json` file:
 | `router_prestream_timeout` | `string` | Optional | Timeout before attempting the next route (e.g. `"15s"`). |
 | `provider_turn_timeout` | `string` | Optional | Overall turn timeout (e.g. `"60s"`). |
 | `limits` | `Limits` | Optional | Operational constraints (see below). |
+| `skills.project` | `boolean` | Optional | Enable project skills; defaults to `false`. |
 | `credentials` | `map[string]Cred` | Yes | Declares credential source for each active provider. |
 
 ### Operational Limits (`limits`)

@@ -254,14 +254,7 @@ bodies — the body is not part of the prompt at all until it is asked for.
 **Two scopes, one trust boundary.** `~/.config/nabd/skills` is the user scope
 and is loaded unconditionally: a file there was put in place by the operator,
 who is the principal this document is written for. `<root>/.nabd/skills` is the
-project scope and is **disabled by default**. Turning it on is an operator
-decision, supplied through user-scoped configuration or environment
-(`NABD_SKILLS_PROJECT=1`, read via `config.Get`) and never something the
-repository can do for itself: `config.Get` consults `~/.ag/config` and the
-process environment only, never the project tree, so a repository cannot enable
-its own instructions before the human was asked — the boundary this project
-exists to keep. Evidence: `TestProjectSkillsStayDisabledWhenOptInLivesInTheProjectRoot`,
-`TestProjectSkillsLoadWhenOptInIsUserScoped`.
+project scope and is **disabled by default**. In v1, `NABD_SKILLS_PROJECT=1` may come from the user v1 file or the v1 environment fallback. In v2, only user-configured `skills.project=true` enables it; the `NABD_SKILLS_PROJECT` environment variable is ignored and there is no implicit environment fallback. In both versions project files are never consulted, so a repository cannot enable its own instructions. Evidence: `TestProjectSkillsStayDisabledWhenOptInLivesInTheProjectRoot`, `TestProjectSkillsLoadWhenOptInIsUserScoped`, `TestProjectSkillsOptInConfigV2`.
 
 **What is recorded.** At session start one `skills` event lists
 `{name, rel, hash, scope}` for every definition that reached the prompt. The
@@ -272,7 +265,7 @@ re-verifies that hash, and refuses on mismatch: a file edited after load — by 
 model, by a checkout, by anything — is instructions the session never approved,
 and serving it would make the journal a false record of the run.
 
-**Guarded projection.** A skill body never travels as ordinary tool output. The
+**Guarded projection.** A skill body never travels as ordinary tool output. Plain `skillTool.Run` is refused, and `Registry.Run`/`RunDetailed` cannot extract a body; only the guarded producer emits the body event. Evidence: `TestSkillToolRefusesBodyChangedSinceLoad`, `TestGuardedOutcomeProjectsBodyAndSkipsPlainExecution`. The
 body is produced only by the guarded producer, which fixes
 `SkillContentClassUntrusted` internally so no caller can promote the class, and
 is journaled as a `skill_body` event the message projection fences; the
