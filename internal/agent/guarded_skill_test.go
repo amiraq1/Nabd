@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -64,18 +65,18 @@ type fakeGuard struct {
 	class SkillContentClass
 }
 
-func (g fakeGuard) GuardedEvent(context.Context, json.RawMessage) (Event, error) {
+func (g fakeGuard) GuardedResult(context.Context, json.RawMessage) (GuardedResult, error) {
 	if g.hits != nil {
 		*g.hits++
 	}
 	if g.err != nil {
-		return Event{}, g.err
+		return GuardedResult{}, g.err
 	}
-	return Event{Type: EventSkillBody, SkillBody: &SkillBodyEvent{
+	return GuardedResult{Event: Event{Type: EventSkillBody, SkillBody: &SkillBodyEvent{
 		Body:  guardedBody,
 		Scope: skill.ScopeProject,
 		Class: g.class,
-	}}, nil
+	}}, OK: true}, nil
 }
 
 func runSkillOnce(t *testing.T, tools Tools) (*recSink, error) {
@@ -109,8 +110,62 @@ func skillBodyEvents(evs []Event) []Event {
 	return out
 }
 
+func TestLoopInputForGuardedCallIsEmpty(t *testing.T) {
+	if got := loopInput(Outcome{Text: guardedBody}, true); got != "" {
+		t.Fatalf("guarded loop input=%q, want empty", got)
+	}
+	if got := loopInput(Outcome{Text: guardedBody}, false); got != guardedBody {
+		t.Fatalf("plain loop input=%q, want producer text", got)
+	}
+}
+
 // A guarded call produces the structured event, does NOT run the plain tool,
 // and leaves the body out of ToolEnd.Output.
+func TestGuardedOutcomeTextNeverLeavesTheGuardedPath(t *testing.T) {
+	var runHits, guardHits int
+	tools := guardedFakeTools{
+		plainFakeTools: plainFakeTools{name: "skill", runHits: &runHits},
+		guard:          fakeGuard{hits: &guardHits, class: SkillContentClassUntrusted},
+		found:          true,
+	}
+	sink := &recSink{}
+	l := &Loop{Tools: tools, Sink: sink, Gate: allowGate{}}
+	calls := make([]provider.ToolCall, 5)
+	for i := range calls {
+		calls[i] = provider.ToolCall{ID: fmt.Sprintf("c%d", i+1), Name: "skill", Input: json.RawMessage(`{"name":"greet"}`)}
+	}
+	interrupted, err := l.runCalls(context.Background(), calls)
+	if !interrupted && !errors.Is(err, ErrToolLoop) {
+		t.Fatalf("repeated guarded calls: interrupted=%v err=%v", interrupted, err)
+	}
+	if guardHits != 5 || runHits != 0 {
+		t.Fatalf("guardHits=%d runHits=%d, want 5 and 0", guardHits, runHits)
+	}
+	notices := 0
+	for _, e := range sink.events {
+		if e.Type == ToolEnd {
+			if e.Call.Output != "" {
+				t.Fatalf("guarded output leaked: %q", e.Call.Output)
+			}
+			if strings.Contains(e.Call.Output, guardedBody) {
+				t.Fatalf("guarded body leaked: %q", e.Call.Output)
+			}
+		}
+		if e.Type == Notice && strings.Contains(e.Text, guardedBody) {
+			t.Fatalf("guarded body leaked into notice: %q", e.Text)
+		}
+		if e.Type == Notice && e.NoticeCategory == NoticeCategoryLoopLimit {
+			notices++
+		}
+		if e.Type == RunError && strings.Contains(e.Err, guardedBody) {
+			t.Fatalf("guarded body leaked into abort: %q", e.Err)
+		}
+	}
+	if notices != 2 {
+		t.Fatalf("loop notices=%d, want notice at 3 and abort notice at 5", notices)
+	}
+}
+
 func TestGuardedOutcomeProjectsBodyAndSkipsPlainExecution(t *testing.T) {
 	var runHits, guardHits int
 	tools := guardedFakeTools{

@@ -45,7 +45,7 @@ func TestSkillToolRefusesBodyChangedSinceLoad(t *testing.T) {
 	if err == nil || ok || out != "" || !strings.Contains(err.Error(), "guarded execution") {
 		t.Fatalf("plain execution must be refused: out=%q ok=%v err=%v", out, ok, err)
 	}
-	if _, err := tool.GuardedEvent(context.Background(), json.RawMessage(`{"name":"greet"}`)); err != nil {
+	if _, err := tool.GuardedResult(context.Background(), json.RawMessage(`{"name":"greet"}`)); err != nil {
 		t.Fatalf("guarded load must succeed: %v", err)
 	}
 
@@ -54,7 +54,7 @@ func TestSkillToolRefusesBodyChangedSinceLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = tool.GuardedEvent(context.Background(), json.RawMessage(`{"name":"greet"}`))
+	_, err = tool.GuardedResult(context.Background(), json.RawMessage(`{"name":"greet"}`))
 	if err == nil {
 		t.Fatal("a mutated body must be refused")
 	}
@@ -98,7 +98,7 @@ func TestSkillToolIsReadOnly(t *testing.T) {
 // or a stale false are both wrong.
 func TestSkillPlainExecutionIsRefused(t *testing.T) {
 	dir := t.TempDir()
-	path := writeTestSkill(t, dir, "greet", "PLAIN-SKILL-BODY")
+	writeTestSkill(t, dir, "greet", "PLAIN-SKILL-BODY")
 	loaded, _ := skill.LoadUser(dir)
 	reg := &Registry{byName: map[string]Tool{}}
 	reg.SetSkillIndex(func() []skill.Skill { return loaded })
@@ -125,10 +125,9 @@ func TestSkillPlainExecutionIsRefused(t *testing.T) {
 	if !ok {
 		t.Fatal("guarded producer missing")
 	}
-	if _, err := guard.GuardedEvent(context.Background(), json.RawMessage(`{"name":"greet"}`)); err != nil {
+	if _, err := guard.GuardedResult(context.Background(), json.RawMessage(`{"name":"greet"}`)); err != nil {
 		t.Fatal(err)
 	}
-	_ = path
 }
 
 func TestRegistrySkillLifecycleSupportsConcurrentReaders(t *testing.T) {

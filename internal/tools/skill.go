@@ -38,18 +38,14 @@ func (skillTool) Spec() provider.ToolSpec {
 		 "required":["name"]}`)
 }
 
-// SkillBodyProducer is the only production constructor for the guarded event.
-// It fixes the trust class here; callers cannot request a different class.
+// GuardedResult is skillTool's only production path that opens a skill body;
+// it fixes the trust class here so callers cannot request a different class.
 func (t skillTool) GuardedResult(ctx context.Context, raw json.RawMessage) (agent.GuardedResult, error) {
 	ev, err := t.guardedEvent(ctx, raw)
 	if err != nil {
 		return agent.GuardedResult{}, err
 	}
-	return agent.GuardedResult{Event: ev, Outcome: agent.Outcome{Text: "skill body loaded", OK: true}}, nil
-}
-
-func (t skillTool) GuardedEvent(ctx context.Context, raw json.RawMessage) (agent.Event, error) {
-	return t.guardedEvent(ctx, raw)
+	return agent.GuardedResult{Event: ev, OK: true}, nil
 }
 
 func (t skillTool) guardedEvent(ctx context.Context, raw json.RawMessage) (agent.Event, error) {

@@ -2,7 +2,6 @@ package build
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -123,24 +122,11 @@ func gateScripts(t *testing.T) (string, string) {
 	return freshness, checklist
 }
 
-func writePREventJSON(t *testing.T, dir, body string) string {
-	t.Helper()
-	data, err := json.Marshal(map[string]any{"pull_request": map[string]any{"body": body}})
-	if err != nil {
-		t.Fatalf("marshal PR event: %v", err)
-	}
-	path := filepath.Join(dir, "event.json")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write event.json: %v", err)
-	}
-	return path
-}
-
-func prGateEnv(eventPath, baseRef string) []string {
+func prGateEnv(bodyFile, baseRef string) []string {
 	return append(os.Environ(),
 		"GITHUB_EVENT_NAME=pull_request",
-		"GITHUB_EVENT_PATH="+eventPath,
 		"GITHUB_BASE_REF="+baseRef,
+		"LIVE_BODY_FILE="+bodyFile,
 	)
 }
 
@@ -201,8 +187,11 @@ func TestSecurityGates(t *testing.T) {
 			t.Fatalf("freshness gate failed on doc-only diff with exit %d: %s", code, stderr)
 		}
 
-		eventPath := writePREventJSON(t, repoDir, validPRBody)
-		code, stdout, stderr := runCmd(t, repoDir, prGateEnv(eventPath, "master"), "bash", checklistScript)
+		bodyPath := filepath.Join(repoDir, "live-body.txt")
+		if err := os.WriteFile(bodyPath, []byte(validPRBody), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, stdout, stderr := runCmd(t, repoDir, prGateEnv(bodyPath, "master"), "bash", checklistScript)
 		if code != 0 {
 			t.Fatalf("checklist gate failed on doc-only diff with exit %d: %s", code, stderr)
 		}
@@ -229,8 +218,11 @@ func TestSecurityGates(t *testing.T) {
 		runGit(t, repoDir, "add", ".")
 		runGit(t, repoDir, "commit", "-qm", "code change without tests")
 
-		eventPath := writePREventJSON(t, repoDir, validPRBody)
-		code, _, stderr := runCmd(t, repoDir, prGateEnv(eventPath, "master"), "bash", checklistScript)
+		bodyPath := filepath.Join(repoDir, "live-body.txt")
+		if err := os.WriteFile(bodyPath, []byte(validPRBody), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, _, stderr := runCmd(t, repoDir, prGateEnv(bodyPath, "master"), "bash", checklistScript)
 		if code != 1 {
 			t.Fatalf("expected exit 1 for missing regression test, got %d", code)
 		}
@@ -244,8 +236,11 @@ func TestSecurityGates(t *testing.T) {
 	t.Run("Case4_UnresolvableBaseSHA_Fails", func(t *testing.T) {
 		repoDir, _ := initTestRepo(t)
 
-		eventPath := writePREventJSON(t, repoDir, validPRBody)
-		code, _, stderr := runCmd(t, repoDir, prGateEnv(eventPath, "unresolvable_ref_xyz"), "bash", checklistScript)
+		bodyPath := filepath.Join(repoDir, "live-body.txt")
+		if err := os.WriteFile(bodyPath, []byte(validPRBody), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		code, _, stderr := runCmd(t, repoDir, prGateEnv(bodyPath, "unresolvable_ref_xyz"), "bash", checklistScript)
 		if code != 1 {
 			t.Fatalf("expected exit 1 from checklist gate on unresolvable base ref, got %d", code)
 		}
