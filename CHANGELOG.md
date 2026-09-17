@@ -14,6 +14,8 @@ Published changes and downloadable artifacts are available on the
   callbacks) is now built by one `interactiveSession` helper used by both `Chat` and `Feed`,
   removing the duplicated wiring in `cmd/ag/main.go`. `Chat` and `Feed` share a single
   `ui.SessionCallbacks` contract, so `/rewind` has one signature on both paths.
+- **Groq catalog updated:** the default model is now `openai/gpt-oss-120b` (replacing `qwen-2.5-32b`), and `llama-3.3-70b-versatile` was dropped from the builtin catalog; users with `NABD_MODEL` set to dropped models should update to `openai/gpt-oss-120b` or run `nabd models groq` to select an available alternative.
+
 
 ## v1.5.0
 
