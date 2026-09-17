@@ -2,11 +2,16 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"nabd/internal/agent"
+	"nabd/internal/config"
+	"nabd/internal/ignorefile"
+	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
+	"nabd/internal/skill"
 	"nabd/internal/snap"
 	"nabd/internal/tools"
 	"nabd/internal/ui"
@@ -31,6 +36,19 @@ type interactiveSession struct {
 // open a journal or wire a sink: the journal and the view are the caller's
 // concern, and they are the only things the two entry points legitimately
 // differ on.
+func wireSkills(root *tools.Root, reg *tools.Registry) ([]skill.Skill, []skill.Diagnostic, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	userSkills, userDiag := skill.LoadUser(skill.DefaultUserDir(home))
+	projectEnabled := config.Get("NABD_SKILLS_PROJECT") == "1"
+	projectSkills, projectDiag := skill.LoadProject(root.Dir(), ignorefile.LoadDir(root.Dir()), projectEnabled)
+	all := append(userSkills, projectSkills...)
+	reg.SetSkillIndex(func() []skill.Skill { return all })
+	return all, append(userDiag, projectDiag...), nil
+}
+
 func newInteractiveSession(prov provider.Provider) (*interactiveSession, error) {
 	root, err := tools.NewRoot("")
 	if err != nil {
@@ -41,10 +59,31 @@ func newInteractiveSession(prov provider.Provider) (*interactiveSession, error) 
 		return nil, err
 	}
 	reg := tools.NewRegistry(root, sh)
+	allSkills, diagnostics, err := wireSkills(root, reg)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range diagnostics {
+		fmt.Fprintln(os.Stderr, d.String())
+	}
+	skillText, skillPromptDiag := skill.FormatForPrompt(allSkills)
+	for _, d := range skillPromptDiag {
+		fmt.Fprintln(os.Stderr, d.String())
+	}
 	pol := perm.New(reg)
 	wirePathRule(root, reg, pol)
 	ap := ui.NewApprover()
 	loop := newSessionLoop(prov, reg, gate{pol}, ap)
+	loop.Prompter = &agent.Prompter{Base: payload.DefaultSystemPrompt}
+	loop.PromptSections = func() []agent.Section {
+		text := skillText
+		sections := reg.PromptSections()
+		if text != "" {
+			sections = append(sections, agent.Section{Name: "skills", Body: text})
+		}
+		return sections
+	}
+	loop.PromptSkills = skill.JournalRecords(allSkills)
 	return &interactiveSession{root: root, reg: reg, pol: pol, ap: ap, loop: loop}, nil
 }
 

@@ -452,6 +452,9 @@ func JournalRecords(skills []Skill) []EventSkills {
 // otherwise the model would be following instructions the session never
 // approved and the journal would not show it.
 func OpenBody(s Skill) (string, error) {
+	if s.Base() == "" {
+		return "", fmt.Errorf("skill %s: missing base", s.Name)
+	}
 	f, err := safefs.OpenRead(s.Base(), s.Rel)
 	if err != nil {
 		return "", err

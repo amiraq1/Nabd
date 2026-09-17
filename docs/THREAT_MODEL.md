@@ -243,11 +243,13 @@ Evidence: `TestCustomEndpointIsAcceptedByDesign`,
 ## Skills
 
 A skill is a Markdown file with a small frontmatter header. Its name,
-description and scope are listed in the system prompt when the session wiring
-loads the skill index; its body is read only when the model calls the `skill`
-tool with that name. The binary knows the `skill` vocabulary and fence even
-when the current session has no loaded index; until session wiring enables the
-index, the tool is not present in the active registry. Twenty installed skills
+description and scope are listed in the tagged `skills` system-prompt section
+when session wiring loads the skill index; its body is read only when the model
+calls the `skill` tool with that name. The binary knows the `skill` vocabulary
+and fence even when the current session has no loaded index; until session
+wiring enables the index, the tool is not present in the active registry. The
+prompt fingerprint and the session-start `skills` event record the ordered
+prompt input before the first provider call. Twenty installed skills
 therefore cost tens of prompt lines rather than twenty file bodies — the body is
 not part of the prompt at all until it is asked for.
 

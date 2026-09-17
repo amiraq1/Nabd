@@ -103,7 +103,7 @@ Windows is not a release target. Some platform helper files compile there, but t
 - `internal/config`: secure v1 and strict v2 configuration loading.
 - `internal/store`: append-only JSONL journal.
 - `internal/provider`: Anthropic and OpenAI-compatible providers plus ordered fallback router.
-- `internal/tools`: path containment and read/write/edit/grep/bash tools.
+- `internal/tools`: path containment and read/write/edit/grep/bash tools, plus the read-only `skill` tool for an active skill index.
 - `internal/perm`: permission gate.
 - `internal/snap`: content-addressed shadow store and undo.
 - `internal/ui`: live display and replay.

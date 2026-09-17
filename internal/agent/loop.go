@@ -12,6 +12,7 @@ import (
 
 	"nabd/internal/config"
 	"nabd/internal/provider"
+	"nabd/internal/skill"
 )
 
 // Sink receives every event. The journal is one; the UI is another.
@@ -55,20 +56,23 @@ type Tools interface {
 type MessageEstimator func([]provider.Message) int
 
 type Loop struct {
-	Provider         provider.Provider
-	Tools            Tools
-	Sink             Sink
-	System           string
-	Prompter         *Prompter
-	PromptSections   func() []Section
-	MaxTurns         int
-	Gate             Gate
-	Human            Asker
-	Budget           *Budget
-	SpendBudget      *SpendBudget
-	EstimateMessages MessageEstimator
-	CompactBudget    int
-	KeepFullRounds   int
+	Provider           provider.Provider
+	Tools              Tools
+	Sink               Sink
+	System             string
+	Prompter           *Prompter
+	PromptSections     func() []Section
+	PromptFingerprint  string
+	PromptSectionsPrev []Section
+	PromptSkills       []skill.EventSkills
+	MaxTurns           int
+	Gate               Gate
+	Human              Asker
+	Budget             *Budget
+	SpendBudget        *SpendBudget
+	EstimateMessages   MessageEstimator
+	CompactBudget      int
+	KeepFullRounds     int
 	// RateLimitBudget is the max 429 events allowed per Run(); 0 means 3.
 	RateLimitBudget int
 	// now is the clock the loop uses for rate-limit timing. nil means the
@@ -249,6 +253,18 @@ func rateLimitWait(retryAfter time.Duration, consecutiveHits int) time.Duration 
 }
 
 func (l *Loop) Start(banner, projectRoot string) error {
+	if l.Prompter != nil && l.PromptSections != nil {
+		sections := l.PromptSections()
+		if _, err := l.Prompter.BuildSections(sections); err != nil {
+			return fmt.Errorf("prompt render: %w", err)
+		}
+		l.PromptSectionsPrev = append([]Section(nil), sections...)
+		l.PromptFingerprint = Fingerprint(sections)
+		if err := l.emit(Event{Type: RunStart, Text: banner, ProjectRoot: projectRoot, PromptFingerprint: l.PromptFingerprint}); err != nil {
+			return err
+		}
+		return l.emit(Event{Type: EventSkills, Skills: append([]skill.EventSkills(nil), l.PromptSkills...), PromptFingerprint: l.PromptFingerprint})
+	}
 	return l.emit(Event{Type: RunStart, Text: banner, ProjectRoot: projectRoot})
 }
 
@@ -488,6 +504,12 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 		system, err = l.Prompter.BuildSections(sections)
 		if err != nil {
 			return nil, "", fmt.Errorf("prompt render: %w", err)
+		}
+		if patch := Diff(l.PromptSectionsPrev, sections); patch != nil {
+			if err := l.emit(Event{Type: EventPromptPatch, PromptPatch: patch, PromptFingerprint: Fingerprint(sections)}); err != nil {
+				return nil, "", err
+			}
+			l.PromptSectionsPrev = append([]Section(nil), sections...)
 		}
 	}
 	ch, err := l.Provider.Stream(turnCtx, provider.Request{

@@ -41,8 +41,9 @@ const (
 	// EventSkills records which skill definitions reached the session, with the
 	// hash of the body each one loaded, so a replay shows both what the model
 	// was told and whether it came from the trusted or the project scope.
-	EventSkills EventType = "skills"
-	RunEnd      EventType = "run_end"
+	EventSkills      EventType = "skills"
+	EventPromptPatch EventType = "prompt_patch"
+	RunEnd           EventType = "run_end"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.
@@ -99,7 +100,9 @@ type Event struct {
 	// Skills is the session-start skill inventory (see skill.EventSkills). It is
 	// recorded once, before the first turn, because the prompt it describes is
 	// built once.
-	Skills []skill.EventSkills `json:"skills,omitempty"`
+	Skills            []skill.EventSkills `json:"skills,omitempty"`
+	PromptFingerprint string              `json:"prompt_fingerprint,omitempty"`
+	PromptPatch       map[string]*string  `json:"prompt_patch,omitempty"`
 
 	FirstKept int              `json:"first_kept,omitempty"`
 	Compact   *CompactionStats `json:"compact,omitempty"`

@@ -74,7 +74,17 @@ All configuration and credential files read by Nabd must satisfy strict OS-level
 
 ---
 
-## 4. Config v2 Schema Reference
+## 4. Project skills
+
+Project skills are disabled by default. To opt in, set the user-scoped
+`NABD_SKILLS_PROJECT=1` in `~/.ag/config` (or the process environment). Nabd
+never reads this key from the project root, so a repository cannot enable its
+own instructions. User skills under `~/.config/nabd/skills` remain trusted and
+available without this opt-in. Project skill names and descriptions are shown
+as bounded, labeled prompt data; bodies are loaded only by the read-only
+`skill` tool and are hash-checked before serving.
+
+## 5. Config v2 Schema Reference
 
 A minimal valid `config.v2.json` file:
 

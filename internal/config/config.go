@@ -30,7 +30,7 @@ var knownV1Keys = map[string]struct{}{
 	"NABD_PROVIDER": {}, "NABD_MODEL": {}, "NABD_BASE_URL": {}, "NABD_ROUTES": {},
 	"NABD_ROUTER_MODE": {}, "NABD_ROUTER_PRESTREAM_TIMEOUT": {}, "NABD_PROVIDER_TURN_TIMEOUT": {},
 	"NABD_ROUTER_RETRY_AFTER_WAIT": {},
-	"NABD_CTX":                     {}, "NABD_MAX_TOKENS": {}, "NABD_MAX_TOKENS_PER_RUN": {}, "NABD_MAX_READ": {},
+	"NABD_CTX":                     {}, "NABD_MAX_TOKENS": {}, "NABD_MAX_TOKENS_PER_RUN": {}, "NABD_MAX_READ": {}, "NABD_SKILLS_PROJECT": {},
 }
 
 var (
