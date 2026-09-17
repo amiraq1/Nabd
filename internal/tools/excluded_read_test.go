@@ -2,12 +2,15 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"nabd/internal/agent"
 	"nabd/internal/perm"
 )
 
@@ -232,10 +235,10 @@ func TestEditFileRefusesIgnoredPathAndDoesNotLeakContent(t *testing.T) {
 	}
 }
 
-// TestShadowDoesNotRetainIgnoredPathContent proves that neither edit_file nor
-// write_file ever retains excluded file content in the shadow store (.ag/shadow),
-// and diffs (Patch) are suppressed so previous content is never disclosed.
-func TestShadowDoesNotRetainIgnoredPathContent(t *testing.T) {
+// TestShadowRetainsBlobsForUndoWhileSuppressingDiff proves that edit_file is refused
+// and retains no content, while write_file retains shadow blobs to enable /undo
+// while suppressing Patch (diffs) so previous content is never disclosed.
+func TestShadowRetainsBlobsForUndoWhileSuppressingDiff(t *testing.T) {
 	r, _, dir := newGatedReg(t, "secrets.env\ndist/\n")
 	secret := filepath.Join(dir, "secrets.env")
 	if err := os.WriteFile(secret, []byte("token=whatever\n"), 0o644); err != nil {
@@ -263,35 +266,22 @@ func TestShadowDoesNotRetainIgnoredPathContent(t *testing.T) {
 		t.Fatalf("write_file to secrets.env failed: ok=%v err=%v out=%q", wok2, werr2, wout2)
 	}
 
-	// Verify shadow directory contains no blobs for any of the excluded files
-	shadowDir := filepath.Join(dir, ".ag", "shadow")
-	if entries, err := os.ReadDir(shadowDir); err == nil {
-		for _, e := range entries {
-			data, rerr := os.ReadFile(filepath.Join(shadowDir, e.Name()))
-			if rerr != nil {
-				continue
-			}
-			content := string(data)
-			for _, sensitive := range []string{"token=whatever", "token=replaced", "build_secret_old", "build_new_content"} {
-				if strings.Contains(content, sensitive) {
-					t.Fatalf("shadow store retained excluded path content %q in blob %s", sensitive, e.Name())
-				}
-			}
-		}
-	}
-
-	// Verify EditRecord for the writes: diff (Patch) must be suppressed so no previous bytes leaked
+	// Verify EditRecord for the writes: diff (Patch) must be suppressed so no previous bytes leaked,
+	// while shadow blobs are retained so /undo can revert the mutation.
 	for _, edit := range r.Edits() {
 		if edit.Record != nil && edit.Record.Patch != "" {
 			t.Fatalf("excluded path edit record must suppress Patch, got %q", edit.Record.Patch)
 		}
+		if edit.Record != nil && (edit.Record.BlobBefore == "" || edit.Record.BlobAfter == "") {
+			t.Fatalf("excluded path edit record must retain blobs for /undo, got before=%q after=%q", edit.Record.BlobBefore, edit.Record.BlobAfter)
+		}
 	}
 }
 
-// TestWriteFileToExcludedPathSucceedsWithoutDiffOrShadow proves that write_file
-// to excluded build paths (e.g. dist/, build/) succeeds, but with diffs and
-// shadow capture suppressed to prevent disclosure.
-func TestWriteFileToExcludedPathSucceedsWithoutDiffOrShadow(t *testing.T) {
+// TestWriteFileToExcludedPathSucceedsWithUndoTracking proves that write_file
+// to excluded build paths (e.g. dist/, build/) succeeds with diffs suppressed
+// but shadow blobs preserved for /undo reversibility.
+func TestWriteFileToExcludedPathSucceedsWithUndoTracking(t *testing.T) {
 	r, _, dir := newGatedReg(t, "dist/\n")
 	distFile := filepath.Join(dir, "dist", "bundle.js")
 
@@ -310,6 +300,21 @@ func TestWriteFileToExcludedPathSucceedsWithoutDiffOrShadow(t *testing.T) {
 		t.Fatalf("file not written properly: %v, content=%q", rerr, string(b))
 	}
 
+	// Creation edit record: Patch empty, BlobBefore empty (absent), BlobAfter populated
+	first := r.LastEdit()
+	if first == nil {
+		t.Fatal("expected LastEdit record for creation")
+	}
+	if first.Patch != "" {
+		t.Fatalf("Patch must be empty for excluded path, got %q", first.Patch)
+	}
+	if first.BlobBefore != "" {
+		t.Fatalf("BlobBefore must be empty for newly created file, got %q", first.BlobBefore)
+	}
+	if first.BlobAfter == "" {
+		t.Fatal("BlobAfter must be populated for newly created file to enable undo verification")
+	}
+
 	// Write replaces file in dist/
 	out2, ok2, err2 := r.Run(context.Background(), providerToolCall("write_file", json.RawMessage(`{"path":"dist/bundle.js","content":"console.log(2);\n"}`)))
 	if !ok2 || err2 != nil {
@@ -319,15 +324,134 @@ func TestWriteFileToExcludedPathSucceedsWithoutDiffOrShadow(t *testing.T) {
 		t.Fatalf("expected replacement message, got: %q", out2)
 	}
 
-	// LastEdit has empty patch and no blobs
+	// Replacement edit record: Patch empty, BlobBefore and BlobAfter populated for /undo
 	last := r.LastEdit()
 	if last == nil {
-		t.Fatal("expected LastEdit record")
+		t.Fatal("expected LastEdit record for replacement")
 	}
 	if last.Patch != "" {
 		t.Fatalf("Patch must be empty for excluded path, got %q", last.Patch)
 	}
-	if last.BlobBefore != "" || last.BlobAfter != "" {
-		t.Fatalf("BlobBefore and BlobAfter must be empty, got before=%q after=%q", last.BlobBefore, last.BlobAfter)
+	if last.BlobBefore == "" || last.BlobAfter == "" {
+		t.Fatalf("BlobBefore and BlobAfter must both be populated for excluded path to enable /undo, got before=%q after=%q", last.BlobBefore, last.BlobAfter)
+	}
+}
+
+// TestUndoRevertsWriteToGitignoredFile proves that a write_file to an excluded path
+// is tracked in shadow storage and can be reversed by /undo (PersistedUndo),
+// restoring previous content byte-for-byte on replacement, and deleting the file on creation.
+func TestUndoRevertsWriteToGitignoredFile(t *testing.T) {
+	r, _, dir := newGatedReg(t, "dist/\nsecrets.env\n")
+
+	// 1. Creation case: write_file creates a new file in dist/
+	distPath := filepath.Join(dir, "dist", "new.txt")
+	out, ok, err := r.Run(context.Background(), providerToolCall("write_file", json.RawMessage(`{"path":"dist/new.txt","content":"created in dist\n"}`)))
+	if !ok || err != nil {
+		t.Fatalf("write_file creation failed: ok=%v err=%v out=%q", ok, err, out)
+	}
+	if b, err := os.ReadFile(distPath); err != nil || string(b) != "created in dist\n" {
+		t.Fatalf("file not written: %v, content=%q", err, string(b))
+	}
+
+	// Perform PersistedUndo for the creation
+	lastCreate := r.LastEdit()
+	if lastCreate == nil {
+		t.Fatal("expected LastEdit record for creation")
+	}
+	resCreate := r.PersistedUndo([]*agent.EditRecord{lastCreate}, 1)
+	if len(resCreate) != 1 || !resCreate[0].OK {
+		t.Fatalf("undo creation failed: %+v", resCreate)
+	}
+	if _, err := os.Stat(distPath); !os.IsNotExist(err) {
+		t.Fatalf("undo must delete newly created excluded file, got err: %v", err)
+	}
+
+	// 2. Replacement case: pre-existing excluded file
+	secretPath := filepath.Join(dir, "secrets.env")
+	origContent := "SECRET_TOKEN=initial_secret_12345\n"
+	if err := os.WriteFile(secretPath, []byte(origContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out2, ok2, err2 := r.Run(context.Background(), providerToolCall("write_file", json.RawMessage(`{"path":"secrets.env","content":"SECRET_TOKEN=overwritten_by_agent\n"}`)))
+	if !ok2 || err2 != nil {
+		t.Fatalf("write_file replacement failed: ok=%v err=%v out=%q", ok2, err2, out2)
+	}
+	if b, err := os.ReadFile(secretPath); err != nil || string(b) != "SECRET_TOKEN=overwritten_by_agent\n" {
+		t.Fatalf("file not overwritten: %v, content=%q", err, string(b))
+	}
+
+	// Perform PersistedUndo for the replacement
+	lastReplace := r.LastEdit()
+	if lastReplace == nil {
+		t.Fatal("expected LastEdit record for replacement")
+	}
+	resReplace := r.PersistedUndo([]*agent.EditRecord{lastReplace}, 1)
+	if len(resReplace) != 1 || !resReplace[0].OK {
+		t.Fatalf("undo replacement failed: %+v", resReplace)
+	}
+	restored, err := os.ReadFile(secretPath)
+	if err != nil {
+		t.Fatalf("read restored file: %v", err)
+	}
+	if string(restored) != origContent {
+		t.Fatalf("undo failed to restore byte-for-byte: got %q, want %q", string(restored), origContent)
+	}
+}
+
+// TestExcludedWriteConsumesReadCredit proves that read credit staged on the Registry
+// is consumed by write_file on an excluded path when path and pre-mutation hash match,
+// recording readLines in the EditRecord and clearing the staged credit.
+func TestExcludedWriteConsumesReadCredit(t *testing.T) {
+	r, _, dir := newGatedReg(t, "dist/\n")
+
+	distFile := filepath.Join(dir, "dist", "bundle.js")
+	if err := os.MkdirAll(filepath.Join(dir, "dist"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initialContent := "console.log('original');\n"
+	if err := os.WriteFile(distFile, []byte(initialContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	h := sha256.Sum256([]byte(initialContent))
+	beforeHash := hex.EncodeToString(h[:])
+
+	// Stage read credit for dist/bundle.js
+	credit := agent.ReadCredit{
+		Path:      "dist/bundle.js",
+		Hash:      beforeHash,
+		Offset:    1,
+		Limit:     10,
+		LinesRead: 42,
+	}
+	r.SetReadCredit(credit)
+
+	// Verify credit is staged
+	if staged := r.ReadCredit(); staged != credit {
+		t.Fatalf("staged credit mismatch: got %+v, want %+v", staged, credit)
+	}
+
+	// Write to dist/bundle.js
+	out, ok, err := r.Run(context.Background(), providerToolCall("write_file", json.RawMessage(`{"path":"dist/bundle.js","content":"console.log('updated');\n"}`)))
+	if !ok || err != nil {
+		t.Fatalf("write_file failed: ok=%v err=%v out=%q", ok, err, out)
+	}
+
+	// Staged credit must be consumed (empty)
+	if empty := r.ReadCredit(); empty != (agent.ReadCredit{}) {
+		t.Fatalf("staged read credit was not consumed: %+v", empty)
+	}
+
+	// EditRecord must record the consumed read lines
+	last := r.LastEdit()
+	if last == nil {
+		t.Fatal("expected LastEdit record")
+	}
+	if last.ReadLines != 42 {
+		t.Fatalf("LastEdit.ReadLines = %d, want 42", last.ReadLines)
+	}
+	if last.HashBefore != beforeHash {
+		t.Fatalf("LastEdit.HashBefore = %q, want %q", last.HashBefore, beforeHash)
 	}
 }

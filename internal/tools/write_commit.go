@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -144,57 +143,6 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 		return snap.State{}, snap.State{}, err
 	}
 
-	if reg != nil && reg.isPathExcluded(relative) {
-		// An excluded path (e.g. build artifacts, dist/) may be written by write_file,
-		// but must NEVER disclose previous content in diffs and NEVER store blobs in
-		// snap.Shadow. Determine existing file mode without reading or capturing bytes into shadow.
-		mode := os.FileMode(0o644)
-		absent := true
-		if f, oerr := safefs.OpenRead(root.Dir(), relative); oerr == nil {
-			absent = false
-			if fi, serr := f.Stat(); serr == nil && fi.Mode().Perm() != 0 {
-				mode = fi.Mode().Perm()
-			}
-			f.Close()
-		}
-		before := snap.State{Rel: relative, Absent: absent, Mode: mode}
-		after := snap.State{Rel: relative, Size: int64(len(data)), Mode: mode}
-
-		if reg != nil {
-			reg.ConsumeLinesRead(relative, "")
-		}
-		rec := &agent.EditRecord{
-			Path:      relative,
-			HashAfter: sha256hex(data),
-		}
-		if err := writeFromRoot(root, relative, absPath, data, mode); err != nil {
-			return before, after, err
-		}
-		log.add(Edit{Tool: tool, Rel: root.Rel(absPath), Before: before, After: after, Record: rec})
-
-		// Verify the write on disk directly without writing any blob into the shadow store.
-		vf, verr := safefs.OpenRead(root.Dir(), relative)
-		if verr != nil {
-			return before, after, verr
-		}
-		defer vf.Close()
-		vfi, verr := vf.Stat()
-		if verr != nil {
-			return before, after, verr
-		}
-		if vfi.Size() != int64(len(data)) {
-			return before, after, errors.New("write did not verify on disk as-is")
-		}
-		hasher := sha256.New()
-		if _, herr := io.Copy(hasher, vf); herr != nil {
-			return before, after, herr
-		}
-		if hex.EncodeToString(hasher.Sum(nil)) != rec.HashAfter {
-			return before, after, errors.New("write did not verify on disk as-is")
-		}
-		return before, after, nil
-	}
-
 	before, err := captureFromRoot(sh, root, relative, absPath)
 	if err != nil {
 		return before, snap.State{}, err
@@ -225,11 +173,17 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 
 	// The diff (LCS matrix allocation) runs here — BEFORE the write. If it
 	// aborts (budget exceeded, ctx cancelled), the project file is untouched.
-	var budget *diffBudget
-	if reg != nil {
-		budget = reg.diffBudget
+	var rec *agent.EditRecord
+	var rerr error
+	if reg != nil && reg.isPathExcluded(relative) {
+		rec, rerr = buildExcludedRecord(sh, before, after, data, readLines)
+	} else {
+		var budget *diffBudget
+		if reg != nil {
+			budget = reg.diffBudget
+		}
+		rec, rerr = buildRecord(ctx, budget, sh, before, after, data, readLines)
 	}
-	rec, rerr := buildRecord(ctx, budget, sh, before, after, data, readLines)
 	if rerr != nil {
 		// Clean up the orphan blob that CaptureBytes wrote to the shadow
 		// store. The mutation is aborted, so no Edit will ever reference it;
@@ -286,6 +240,26 @@ func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, befor
 	} else {
 		if patch, err := unifiedDiffWithBudget(ctx, budget, nil, data, rec.Path); err == nil {
 			rec.Patch = patch
+		}
+	}
+	return boundEditEvent(rec)
+}
+
+// buildExcludedRecord fingerprints a mutation on an excluded path without computing
+// a unified diff, guaranteeing that excluded content is never disclosed in diffs
+// while retaining shadow blobs and hashes so /undo reversibility remains guaranteed.
+func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*agent.EditRecord, error) {
+	rec := &agent.EditRecord{
+		Path:       after.Rel,
+		HashAfter:  sha256hex(data),
+		ReadLines:  readLines,
+		BlobAfter:  after.Blob,
+		BlobBefore: before.Blob,
+		ModeBefore: before.Mode,
+	}
+	if !before.Absent {
+		if b, err := sh.Read(before.Blob); err == nil {
+			rec.HashBefore = sha256hex(b)
 		}
 	}
 	return boundEditEvent(rec)
