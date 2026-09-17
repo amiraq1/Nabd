@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -112,6 +113,30 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case modelsResultMsg:
+		// The /models probe settled off the event loop. The fetch held
+		// running/cancel, so releasing them here is what re-arms Ctrl+C and
+		// the send gate.
+		m.running = false
+		m.cancel = nil
+		if msg.err != nil {
+			if errors.Is(msg.err, context.Canceled) {
+				m.status = "canceled"
+				return m, nil
+			}
+			m.status = fmt.Sprintf("nabd models: provider_%s: %v", providercmd.KindOf(msg.err), msg.err)
+			return m, nil
+		}
+		var b strings.Builder
+		for _, mod := range msg.models {
+			b.WriteString(mod + "\n")
+		}
+		if msg.disclaimer != "" {
+			b.WriteString(msg.disclaimer)
+		}
+		m.status = strings.TrimRight(b.String(), "\n")
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.key(msg)
 	}
@@ -217,8 +242,9 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.input = ""
-			m.status = m.command(line)
-			return m, nil
+			status, cmd := m.command(line)
+			m.status = status
+			return m, cmd
 		}
 		if m.running {
 			m.status = "wait for turn to finish · your text is kept"
@@ -293,75 +319,78 @@ func (m *Chat) View() string {
 	return fmt.Sprint(line)
 }
 
-func (m *Chat) command(line string) string {
+// command executes one slash command line and returns the status line to show
+// plus, for commands with an asynchronous leg, a tea.Cmd for Bubble Tea to run
+// off the event loop. /models performs network I/O: running it inside Update
+// froze the renderer and the Ctrl+C handler, so it now goes through a tea.Cmd
+// with a cancellable context, exactly as the run path does. running/cancel are
+// reused rather than adding new state, so the existing Ctrl+C and send gates
+// cover a fetch in flight too.
+func (m *Chat) command(line string) (string, tea.Cmd) {
 	parsed := ParseSlashCommand(line)
 	if !parsed.Valid {
-		return parsed.Error
+		return parsed.Error, nil
 	}
 	switch parsed.Command.Name {
 	case "/rewind":
 		if m.callbacks.OnRewind == nil {
-			return "rewind not supported in this version"
+			return "rewind not supported in this version", nil
 		}
 		restored, status := m.callbacks.OnRewind(parsed.N)
 		m.SetInput(restored)
 		if status == "" {
 			status = "rewound"
 		}
-		return status
+		return status, nil
 	case "/ctx":
 		if m.callbacks.OnCtx == nil {
-			return "—"
+			return "—", nil
 		}
-		return m.callbacks.OnCtx()
+		return m.callbacks.OnCtx(), nil
 	case "/compact":
 		if m.callbacks.OnCompact == nil {
-			return "—"
+			return "—", nil
 		}
-		return m.callbacks.OnCompact()
+		return m.callbacks.OnCompact(), nil
 	case "/undo":
 		if m.callbacks.OnUndo == nil {
-			return "undo not supported in this version"
+			return "undo not supported in this version", nil
 		}
-		return m.callbacks.OnUndo(parsed.N)
+		return m.callbacks.OnUndo(parsed.N), nil
 	case "/edits":
 		if m.callbacks.OnEdits == nil {
-			return "—"
+			return "—", nil
 		}
-		return m.callbacks.OnEdits()
+		return m.callbacks.OnEdits(), nil
 	case "/help":
-		return CommandHelp(m.width)
+		return CommandHelp(m.width), nil
 	case "/provider":
 		if m.callbacks.OnProvider == nil {
-			return "provider not supported in this version"
+			return "provider not supported in this version", nil
 		}
-		return m.callbacks.OnProvider()
+		return m.callbacks.OnProvider(), nil
 	case "/models":
 		if m.callbacks.OnModels == nil {
-			return "models not supported in this version"
+			return "models not supported in this version", nil
 		}
-		models, disclaimer, err := m.callbacks.OnModels(context.Background(), parsed.Arg)
-		if err != nil {
-			return fmt.Sprintf("nabd models: provider_%s: %v", providercmd.KindOf(err), err)
+		m.running = true
+		ctx, cancel := context.WithCancel(context.Background())
+		m.cancel = cancel
+		return "fetching models… · ctrl+c to cancel", func() tea.Msg {
+			models, disclaimer, err := m.callbacks.OnModels(ctx, parsed.Arg)
+			cancel()
+			return modelsResultMsg{provider: parsed.Arg, models: models, disclaimer: disclaimer, err: err}
 		}
-		var b strings.Builder
-		for _, mod := range models {
-			b.WriteString(mod + "\n")
-		}
-		if disclaimer != "" {
-			b.WriteString(disclaimer)
-		}
-		return strings.TrimRight(b.String(), "\n")
 	case "/connect":
 		if m.callbacks.OnConnect == nil {
-			return "connect not supported in this version"
+			return "connect not supported in this version", nil
 		}
 		m.secretPrompt = true
 		m.secretProvider = parsed.Arg
 		m.secretKey = ""
-		return "enter API key for " + parsed.Arg + " (input hidden)"
+		return "enter API key for " + parsed.Arg + " (input hidden)", nil
 	}
-	return "unknown command: " + parsed.RawCmd
+	return "unknown command: " + parsed.RawCmd, nil
 }
 
 func (m *Chat) SetInput(s string) {
@@ -371,8 +400,20 @@ func (m *Chat) SetInput(s string) {
 // Status returns the current status line (for tests).
 func (m *Chat) Status() string { return m.status }
 
-// Command parses and executes a slash command (for testing/parity).
-func (m *Chat) Command(line string) string { return m.command(line) }
+// Command parses and executes a slash command (for testing/parity). A command
+// with an asynchronous leg is settled synchronously here: this helper is not
+// the event loop, so blocking on the probe is acceptable and lets the parity
+// tests assert the final status instead of an intermediate one.
+func (m *Chat) Command(line string) string {
+	status, cmd := m.command(line)
+	m.status = status
+	if cmd != nil {
+		if msg := cmd(); msg != nil {
+			m.Update(msg)
+		}
+	}
+	return m.status
+}
 
 // errSummary formats a runtime error for the UI status bar while ensuring no
 // non-ASCII runes outside AllowedUISymbols leak into the interface.

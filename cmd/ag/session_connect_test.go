@@ -132,13 +132,19 @@ func TestConnectSecretNeverEntersTheJournal(t *testing.T) {
 		t.Fatalf("Chat.View() leaked secret after submission: %q", chat.View())
 	}
 
-	// Chat rejection of key as argument
-	chatRes := chat.Command("/connect testprov " + canarySecret)
-	if chatRes != providercmd.ErrKeyAsArgument.Error() {
-		t.Fatalf("Chat command = %q, want ErrKeyAsArgument", chatRes)
+	// Chat rejection of a key passed as an argument, driven by keypresses so
+	// the test exercises the KeyEnter handler that clears m.input. Calling
+	// Command() directly skipped that path, so the canary never entered the
+	// model and the old no-leak assertion was vacuous.
+	for _, r := range "/connect testprov " + canarySecret {
+		chat.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+	chat.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if chat.Status() != providercmd.ErrKeyAsArgument.Error() {
+		t.Fatalf("Chat status = %q, want ErrKeyAsArgument", chat.Status())
 	}
 	if strings.Contains(chat.View(), canarySecret) {
-		t.Fatalf("Chat.View() leaked secret argument on refusal: %q", chat.View())
+		t.Fatalf("Chat.View() leaked the refused secret argument: %q", chat.View())
 	}
 
 	// -------------------------------------------------------------------------

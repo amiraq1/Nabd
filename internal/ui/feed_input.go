@@ -14,13 +14,27 @@ import (
 // This file owns the deterministic input router and every key, mouse, and
 // send handler. Pure moves out of feed.go: no behaviour changes.
 
-// routeKey is the deterministic input router. Precedence:
+// routeKey is the deterministic input router. Precedence, in the order the
+// branches are tested:
 //
 //  1. Ctrl-C / Ctrl-D (safety keys, always first)
-//  2. Permission modal
-//  3. Composer (when focused)
-//  4. Viewport scrolling
-//  5. Global shortcuts
+//  2. Secret prompt (/connect key entry)
+//  3. Permission modal
+//  4. Search
+//  5. Slash menu
+//  6. @ path picker
+//  7. Navigation mode
+//  8. Tool expansion toggle
+//  9. Composer (when focused)
+//
+// 10. Viewport scrolling
+//
+// The secret prompt is tested before the modal even though the modal is the
+// more consequential state, because the two can never be active together:
+// /connect is refused while a run is in flight (trySend rejects commands
+// while busy), and the modal only opens from a PermAsk, which only a run
+// emits. The order therefore fixes a tie that cannot occur rather than
+// hiding one state behind the other.
 func (m *Feed) routeKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch k.Type {
 	case tea.KeyCtrlC:
@@ -468,6 +482,11 @@ func (m *Feed) runCommand(line string) (tea.Model, tea.Cmd) {
 	if !parsed.Valid {
 		if parsed.Command.Name == "/connect" || parsed.RawCmd == "/connect" {
 			m.composer.clear()
+			// The rejected line was typed through composerEdit, which stored
+			// it as the history draft. Clearing the composer without
+			// resetting browsing would leave that text — including a refused
+			// credential argument — retained in memory.
+			m.history.resetBrowsing()
 		}
 		m.setStatus(parsed.Error, rankResult)
 		return m, nil
@@ -902,6 +921,15 @@ func (m *Feed) handlePointerTap(lm layoutMetrics, y int) (tea.Model, tea.Cmd) {
 // It handles finger-swipe scrolling via vertical wheel reports, scrolling by 3 rows.
 // It enforces strict viewport hit-testing and ignores gestures over chrome or during modal interaction.
 func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// The secret prompt owns the input while a credential is being typed: a
+	// pointer gesture must not enter navigation mode, focus the composer or
+	// select a card. Pointer state is reset so a press taken before the
+	// prompt opened cannot complete as a tap after it.
+	if m.secretPrompt {
+		m.pointerDown = false
+		m.pointerDragged = false
+		return m, nil
+	}
 	if !m.MouseEnabled() {
 		m.pointerDown = false
 		m.pointerDragged = false

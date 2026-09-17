@@ -70,6 +70,8 @@ In interactive sessions, commands start with `/`:
 | `/models` | `/models <provider>` | query provider endpoint for live advertised models |
 | `/provider` | `/provider` | show configured providers, definition sources, and credential status |
 
+`/models` performs its probe off the UI event loop on both surfaces, so the interface keeps drawing and Ctrl+C keeps working while the request is pending. The surfaces differ in how they present the result: Chat is line-oriented and writes the model list, or an error summary of the form `nabd models: provider_<kind>: …`, to its status line; Feed posts the list as a feed notice and a failure as a four-field error card (code, details, action, wait). The command contract is shared; the result presentation is not identical.
+
 ## Configuration
 
 Config v1 uses `NABD_CONFIG` or `~/.ag/config`:
