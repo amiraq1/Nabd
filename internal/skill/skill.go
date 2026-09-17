@@ -276,41 +276,46 @@ func walk(base string, ig ignorefile.Matcher) ([]string, []Diagnostic) {
 			diag = append(diag, Diagnostic{DiagTruncated, rel, fmt.Sprintf("directory depth exceeds %d; not descended", maxWalkDepth)})
 			return
 		}
-		entries, err := os.ReadDir(dir)
+		f, err := os.Open(dir)
 		if err != nil {
 			return // an absent directory is not a diagnostic; nothing was promised
 		}
-		for _, e := range entries {
-			if seen >= maxWalkEntries {
-				diag = append(diag, Diagnostic{DiagTruncated, rel, fmt.Sprintf("more than %d entries; remaining files skipped", maxWalkEntries)})
-				return
-			}
-			seen++
-			name := e.Name()
-			child := path.Join(rel, name)
-			if e.IsDir() {
-				if name == ".git" || name == "node_modules" {
+		defer f.Close()
+		for {
+			entries, readErr := f.ReadDir(64)
+			for _, e := range entries {
+				if seen >= maxWalkEntries {
+					diag = append(diag, Diagnostic{DiagTruncated, rel, fmt.Sprintf("more than %d entries; remaining files skipped", maxWalkEntries)})
+					return
+				}
+				seen++
+				name := e.Name()
+				child := path.Join(rel, name)
+				if e.IsDir() {
+					if name == ".git" || name == "node_modules" {
+						continue
+					}
+					if _, ok := ig.Match(child+"/", name, true); ok {
+						continue
+					}
+					rec(filepath.Join(dir, name), child, depth+1)
 					continue
 				}
-				if _, ok := ig.Match(child+"/", name, true); ok {
+				if e.Type()&os.ModeSymlink != 0 {
+					diag = append(diag, Diagnostic{DiagUnreadable, child, "refused: symlinks are not followed"})
 					continue
 				}
-				rec(filepath.Join(dir, name), child, depth+1)
-				continue
+				if !strings.HasSuffix(name, ".md") {
+					continue
+				}
+				if _, ok := ig.Match(child, name, false); ok {
+					continue
+				}
+				out = append(out, child)
 			}
-			if e.Type()&os.ModeSymlink != 0 {
-				// Reported, not followed, and the later safefs open would refuse
-				// it anyway. Saying so is what keeps the refusal visible.
-				diag = append(diag, Diagnostic{DiagUnreadable, child, "refused: symlinks are not followed"})
-				continue
+			if readErr == io.EOF || readErr != nil {
+				break
 			}
-			if !strings.HasSuffix(name, ".md") {
-				continue
-			}
-			if _, ok := ig.Match(child, name, false); ok {
-				continue
-			}
-			out = append(out, child)
 		}
 	}
 	rec(base, "", 0)
