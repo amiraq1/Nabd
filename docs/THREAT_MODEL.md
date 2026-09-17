@@ -42,11 +42,12 @@ filesystem sandbox.
 | `Root.Resolve` rejects traversal, outside absolute paths, NUL, and empty paths | GUARANTEED | `TestResolveRefusesTraversal` and path tests |
 | Symlink escapes, including a missing tail under a linked parent, are rejected at resolution time | GUARANTEED | `TestResolveRefusesSymlinkEscape`, `TestResolveRefusesEscapeViaMissingTail` |
 | A root that is itself a symlink contains its real children | GUARANTEED | `TestRootBehindSymlink` |
-| File tools are expected to pass paths through `Resolve` | GUARANTEED | package contract in `internal/tools/path.go` and per-tool tests |
+| File tools use normalized root-relative paths and descriptor-relative operations as their filesystem authority | GUARANTEED | `TestToolPathAuthorityDoesNotCallResolveDirectly`, `TestReadFileUsesDescriptorStat`, and per-tool safefs tests; `Resolve` remains reporting/compatibility-only |
 | Unknown or empty tool names are denied | GUARANTEED | `TestUnknownToolIsDenied` |
 | ReadOnly tools allow without a prompt; Mutating and Executing tools ask | GUARANTEED | `TestReadIsFreeWritesAsk` |
 | `bash` cannot receive a session-wide grant | GUARANTEED | `TestSessionGrantAppliesToWritesOnly`, `TestRawDecisionForBash` |
 | Denied `bash` starts no subprocess | GUARANTEED | `TestBashDeniedRunsNoSubprocess` |
+| Permission decisions are journal-first and effective decisions are returned to the loop | GUARANTEED | `TestDecideLogsEffectiveDecision`, `TestDecideRefusesWhenPermissionQuestionCannotBeJournaled`; failed permission events deny execution and do not record a session grant |
 | Bash child environment is an allowlist that strips unsafe PATH entries, uses an isolated HOME, and points TMPDIR/TMP/TEMP at one private per-invocation directory | GUARANTEED | `childEnv` starts from an empty environment and copies only its allowlist. The temp-directory variables are no longer inherited: each invocation gets its own `nabd-tmp-*` directory, created 0700, never shared across invocations, and removed when the command finishes; if it cannot be created the child gets no temp variable at all rather than the caller's value. Evidence: `TestBashChildEnvAllowlistIntegration`, `TestBashChildEnvPathStripping`, `TestBashChildEnvHomePolicy`, `TestBashChildTempDirIsIsolatedAndRemoved` |
 | Bash arguments are decoded strictly before any subprocess starts | GUARANTEED | `bashTool.RunDetailed` uses the shared `decodeStrict` decoder — duplicate keys rejected by tokenizing the raw object, undeclared fields by `DisallowUnknownFields` — instead of `json.Unmarshal`, which keeps the last duplicate key and ignores undeclared ones. The boundary is the net behind repair: with repair disabled, or for a call the layer declines, an undeclared or duplicate key fails as `invalid args` and runs nothing. Evidence: `TestBashRejectsNonStrictArgs`, `TestBashStrictDecodeStillFailsThroughLoop` |
 | Git header subprocess inherits no parent environment: only PATH/TERM/LANG/LC_ALL are forwarded, secrets and `GIT_CONFIG_GLOBAL` are dropped, and Env is never nil | GUARANTEED | `TestGitChildEnvForwardsOnlyAllowlist` |
@@ -89,6 +90,8 @@ filesystem sandbox.
 | Security gate scripts are mechanically checked | GUARANTEED | `scripts/check-pr-security-checklist.sh` enforces Phase 1 of the PR template; `scripts/check-threat-model-tests.sh` verifies every backtick-quoted test citation in this document resolves to a real `Test*` function. Evidence: `TestPRChecklistGateScopesThreatModelClaim`, `TestPRChecklistGateSecurityPathsAreRealBoundaries` |
 | Pathindex is a security surface in the default UI | GUARANTEED | The `@` picker is reachable by default through `Feed.SetPickerRoot`; its traversal, session root `.gitignore` awareness, static exclusions, limits, and partial-index disclosure are documented and tested. Evidence: `TestDefaultTimeoutDoesNotBindBeforeTheCandidateLimit`, `TestGitignoreMaintainsPerformanceMarginOnWideTree`, `TestPickerExplicitSessionRootOverridesGitDir`, `TestScanRefusesSymlinkedEntries`, `TestScanGitignoreExcludesMatchingFiles` |
 | Session `.gitignore` exclusions are enforced at the permission layer | GUARANTEED | Patterns from the session root `.gitignore` are parsed by `internal/ignorefile` (the same matcher `pathindex.Scan` uses for the `@` picker, so the picker, reader, and mutators cannot disagree) and installed on `perm.Policy` at startup via `wirePathRule`, which is also the registry's path gate. `read_file` and `edit_file` refuse directly named excluded paths before any byte is read or inspected; `grep` skips excluded paths, appending an `N files excluded by the session .gitignore` disclosure instead of silently searching less. `write_file` permits writes to excluded paths (preserving legitimate generation of build artifacts in `dist/`, `build/`) but suppresses diff generation (`Patch` is empty) and skips shadow storage (`.ag/shadow`), guaranteeing that excluded content is never disclosed or retained. Scope decision: the refusal for reads and edits is default in `ask`, `deny`, and `plan` modes; `--permission-mode allow-reads` is the override for `read_file` and `grep` only (`edit_file` remains denied in all modes as editing cannot be performed without inspecting content). `bash` and `glob` are out of scope: glob sees names only, and an approved shell command already runs with the user's authority. A zero-value or missing ignore file leaves the rule inert. Evidence: `TestInteractiveSessionWiresPathRule`, `TestHeadlessSessionWiresPathRule`, `TestReadFileRefusesIgnoredPath`, `TestReadFileRefusalIsNotFromPathindex`, `TestReadFileWithoutGateUnchanged`, `TestReadFileAllowReadsOverrideReadsIgnoredPath`, `TestEditFileRefusesIgnoredPathAndDoesNotLeakContent`, `TestShadowDoesNotRetainIgnoredPathContent`, `TestWriteFileToExcludedPathSucceedsWithoutDiffOrShadow`, `TestGrepSkipsIgnoredFilesWithDisclosure`, `TestGrepFromExcludedDirCannotEscape`, `TestCheckReadRefusesInAskAndDenyAndPlan`, `TestCheckReadAllowReadsOverride`, `TestCheckEditRefusesInAllModes`, `TestIsPathExcluded`, `TestPrefixDirectoryInheritance` |
+| A bash cleanup signal cannot target a recycled process-group ID after the leader has been reaped | GUARANTEED | `killGroup` runs only on timeout/cancellation before `Wait` returns; clean completion does not perform a post-reap group sweep |
+| Read-credit hashes and renders one bounded snapshot, and uses one normalized relative key for read/write matching | GUARANTEED | `TestReadCreditCompositeKeyStructure`, `TestReadFileCreditPathForAbsoluteInside`, `TestReadFileUsesDescriptorStat`, and `TestReadCreditValidMatchingCycle`; files over the bounded snapshot limit are refused |
 | Semantic loop detection bounds repeating identical tool executions | GUARANTEED | Tool calls are fingerprinted by `(tool, hash(input), hash(output-error))` across turns in a run; identical calls trigger a conversational notice at 3 repeats and a hard cut with `ErrToolLoop` at 5 repeats, preventing token and turn exhaustion from looping models. Evidence: `TestToolLoopNoticeAtThreeRepeats`, `TestToolLoopHardCutAtFiveRepeats`, `TestToolLoopCanonicalJSONKeyOrdering`, `TestToolLoopResetAcrossRuns` |
 | Provider registry schema rejects undeclared dialects, unknown fields, and literal credential keys | GUARANTEED | `TestRegistryRejectsUnknownDialect`, `TestRegistryRejectsUnknownFields`, `TestRegistryRejectsLiteralKeyInProvidersFile`, `TestModelIDAliasIsSentToProvider` |
 | Provider registry auth file enforces private 0600 permissions, owner check, and redaction in errors | GUARANTEED | `TestAuthFileRejectsOpenPermissions`, `TestAuthKeysAreRedactedInErrors` |
@@ -106,20 +109,15 @@ filesystem sandbox.
 
 ## Path layer
 
-`internal/tools/path.go` owns path acceptance. `Resolve` rejects empty/NUL
-input, anchors relative input to the real project root, resolves the deepest
-existing ancestor, and verifies containment using `filepath.Rel`.
-
-`Resolve` proves containment at the instant it runs and nothing later. For
-every file tool, the relative path is the reference and the operation is
-re-proved at the syscall: on unix, `internal/safefs` walks the relative path
-from a root descriptor with `O_NOFOLLOW`, opens each component exactly once,
-and acts relative to the parent's descriptor (`openat`, `unlinkat`, `mkdirat`,
-`renameat`). A component replaced after resolution therefore fails instead of
-redirecting the operation, so the resolve-then-open race is closed for
-`read_file`, `glob`, `grep`, `write_file`, `edit_file`, and `/undo`. The
-absolute path is reporting metadata: journal records, read-credit accounting,
-and messages.
+`internal/tools/path.go` retains `Resolve` for display and compatibility paths.
+Unix file tools normalize input into a root-relative path, and
+`internal/safefs` walks that relative path from a root descriptor with
+`O_NOFOLLOW`; the descriptor operation is the filesystem authority. A
+component replaced after normalization therefore fails instead of redirecting
+the operation, so the resolve-then-open race is closed for `read_file`,
+`glob`, `grep`, `write_file`, `edit_file`, and `/undo`. The absolute path is
+reporting metadata; read-credit matching uses the same normalized relative key
+as mutation.
 
 Reads refuse symlinks, directories, FIFOs, sockets, and devices. Mutations
 publish atomically — a temporary file in the parent descriptor, a file fsync, a
@@ -127,7 +125,10 @@ rename, then a directory fsync — and share one target rule. Traversal tools
 refuse symlinked entries outright and skip `.ag`, so the shadow store's
 cleartext history is never searched.
 
-`bash` deliberately does not use this layer. `!unix` builds keep documented
+`bash` deliberately does not use this layer. Its cleanup signals are issued
+only on timeout or cancellation before the leader is reaped; clean completion
+performs no post-reap process-group sweep, avoiding a recycled group-ID signal.
+`!unix` builds keep documented
 compatibility paths and carry no descriptor guarantee. `snap.Restore` and
 `snap.RestoreAt` remain a second, path-based publish path and are test-only
 (see `docs/TECH_DEBT.md`). Configuration reading still traverses

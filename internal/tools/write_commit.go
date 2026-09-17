@@ -135,11 +135,11 @@ func writePathFromRoot(root *Root, input string) (relative, absolute string, err
 // on-disk trace. The critical window — between the write and log.add — contains
 // only log.add, shrinking the interruption window that the Android
 // lowmemorykiller could exploit.
-func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg *Registry, tool, abs string, data []byte) (snap.State, snap.State, error) {
-	// One lexical conversion, once: relative is the filesystem authority and
-	// absPath is reporting metadata. Every project-file access below goes
-	// through the platform adapters, which on Android are descriptor-relative.
-	relative, absPath, err := writePathFromRoot(root, abs)
+func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg *Registry, tool, path string, data []byte) (snap.State, snap.State, error) {
+	// Normalize once at the shared mutation boundary. Callers may provide a
+	// root-relative path; legacy internal tests may provide the equivalent
+	// absolute path. The descriptor-relative adapters receive only relative.
+	relative, absPath, err := writePathFromRoot(root, path)
 	if err != nil {
 		return snap.State{}, snap.State{}, err
 	}
@@ -161,7 +161,7 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 		after := snap.State{Rel: relative, Size: int64(len(data)), Mode: mode}
 
 		if reg != nil {
-			reg.ConsumeLinesRead(abs, "")
+			reg.ConsumeLinesRead(relative, "")
 		}
 		rec := &agent.EditRecord{
 			Path:      relative,
@@ -220,7 +220,7 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 				beforeHash = sha256hex(b)
 			}
 		}
-		readLines = reg.ConsumeLinesRead(abs, beforeHash)
+		readLines = reg.ConsumeLinesRead(relative, beforeHash)
 	}
 
 	// The diff (LCS matrix allocation) runs here — BEFORE the write. If it

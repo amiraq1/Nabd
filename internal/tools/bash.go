@@ -138,10 +138,9 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		werr = <-wait
 	}
 
-	// Sweep the group even after a clean exit. A backgrounded process that
-	// outlives the approval that spawned it is a permission with no expiry,
-	// and nothing later in this program would ever ask about it again.
-	killGroup(pgid)
+	// Do not sweep a process group after Wait has reaped its leader. A reused
+	// process-group id could otherwise make this invocation signal unrelated
+	// processes. Timeout/cancellation paths kill the group before waiting above.
 	select {
 	case <-read:
 	case <-time.After(bashDrainGrace):

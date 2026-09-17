@@ -89,9 +89,13 @@ func TestOnceAndDenyLeaveNothingBehind(t *testing.T) {
 func TestResetRevokes(t *testing.T) {
 	p := New(testCls())
 	p.Record("write_file", agent.AllowSession)
+	p.SetYOLO(true)
 	p.Reset()
 	if v, _ := p.Check("write_file"); v != Ask {
-		t.Error("Reset did not revoke")
+		t.Error("Reset did not revoke grant and YOLO")
+	}
+	if p.YOLO() {
+		t.Error("Reset left YOLO enabled")
 	}
 }
 

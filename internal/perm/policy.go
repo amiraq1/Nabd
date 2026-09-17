@@ -34,8 +34,8 @@ const (
 	// ModeDeny answers "deny" to every ungranted write or command, so the
 	// run never waits and never changes a byte.
 	ModeDeny
-	// ModeAllowReads is kept for compatibility: reads are always allowed,
-	// and everything else is denied, which is identical to ModeDeny today.
+	// ModeAllowReads is kept for compatibility: it preserves the explicit
+	// read override for session .gitignore paths.
 	ModeAllowReads
 	// ModePlan is strict read-only: reads pass, every Mutating and
 	// Executing call is denied regardless of standing grants or YOLO. A
@@ -215,5 +215,6 @@ func (p *Policy) SessionGrantAllowed(tool string) bool {
 func (p *Policy) Reset() {
 	p.mu.Lock()
 	p.granted = map[string]bool{}
+	p.yolo = false
 	p.mu.Unlock()
 }

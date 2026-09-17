@@ -153,8 +153,8 @@ func TestOpenReadFromRootMissingKeepsNotExist(t *testing.T) {
 	}
 }
 
-// 3 (end to end): reading through an absolute inside-root path keeps
-// ReadCredit.Path equal to that absolute path.
+// 3 (end to end): absolute and relative input use the same root-relative
+// ReadCredit.Path key.
 func TestReadFileCreditPathForAbsoluteInside(t *testing.T) {
 	r, dir := newReg(t)
 	target := filepath.Join(dir, "target.txt")
@@ -165,8 +165,8 @@ func TestReadFileCreditPathForAbsoluteInside(t *testing.T) {
 	if err != nil || !out.OK {
 		t.Fatalf("read_file: ok=%v err=%v", out.OK, err)
 	}
-	if out.ReadCredit.Path != target {
-		t.Fatalf("ReadCredit.Path=%q, want %q", out.ReadCredit.Path, target)
+	if out.ReadCredit.Path != filepath.ToSlash("target.txt") {
+		t.Fatalf("ReadCredit.Path=%q, want %q", out.ReadCredit.Path, filepath.ToSlash("target.txt"))
 	}
 }
 

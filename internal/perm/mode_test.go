@@ -86,8 +86,12 @@ func TestModeAskIsDefault(t *testing.T) {
 
 func TestParseModeRoundTrip(t *testing.T) {
 	for _, s := range []string{"ask", "deny", "allow-reads", "plan", ""} {
-		if _, err := ParseMode(s); err != nil {
+		mode, err := ParseMode(s)
+		if err != nil {
 			t.Errorf("ParseMode(%q) failed: %v", s, err)
+		}
+		if s == "allow-reads" && mode != ModeAllowReads {
+			t.Errorf("ParseMode(%q) = %v, want ModeAllowReads", s, mode)
 		}
 	}
 	if _, err := ParseMode("nope"); err == nil {

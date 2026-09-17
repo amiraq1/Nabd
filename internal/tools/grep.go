@@ -72,7 +72,7 @@ func (t grepFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	if strings.TrimSpace(start) == "" {
 		start = "."
 	}
-	base, err := t.root.Resolve(start)
+	_, base, err := readPathFromRoot(t.root, start)
 	if err != nil {
 		return "", false, err
 	}

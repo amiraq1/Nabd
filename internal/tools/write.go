@@ -192,11 +192,11 @@ func (w writeFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	if len(content) > maxWriteBytes {
 		return "", false, fmt.Errorf("content is %d bytes, limit is %d", len(content), maxWriteBytes)
 	}
-	abs, err := w.root.Resolve(deref(m.Path))
+	rel, abs, err := writePathFromRoot(w.root, deref(m.Path))
 	if err != nil {
 		return "", false, err
 	}
-	before, after, err := commit(ctx, w.root, w.sh, w.log, w.reg, "write_file", abs, []byte(content))
+	before, after, err := commit(ctx, w.root, w.sh, w.log, w.reg, "write_file", rel, []byte(content))
 	if err != nil {
 		return "", false, err
 	}
@@ -284,7 +284,7 @@ func (w editFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 	if len(out) > maxEditBytes {
 		return "", false, fmt.Errorf("edit output is %d bytes, limit is %d", len(out), maxEditBytes)
 	}
-	if _, _, err := commit(ctx, w.root, w.sh, w.log, w.reg, "edit_file", abs, []byte(out)); err != nil {
+	if _, _, err := commit(ctx, w.root, w.sh, w.log, w.reg, "edit_file", rel, []byte(out)); err != nil {
 		return "", false, err
 	}
 	return fmt.Sprintf("edited %s (%d replacements, %d lines → %d)",

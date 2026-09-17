@@ -54,18 +54,25 @@ func (l *Loop) decide(ctx context.Context, c ToolCall, emit func(Event) error) (
 		if why == "" {
 			why = "unknown or forbidden tool"
 		}
-		emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: why})
+		if err := emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: why}); err != nil {
+			return Deny, "لم يُدوَّن قرار الإذن: " + err.Error()
+		}
 		return Deny, why
 	}
 	if l.Human == nil {
-		emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: "no prompt interface"})
-		return Deny, "no prompt interface"
+		const noPrompt = "no prompt interface"
+		if err := emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: noPrompt}); err != nil {
+			return Deny, "لم يُدوَّن قرار الإذن: " + err.Error()
+		}
+		return Deny, noPrompt
 	}
 	if policy, ok := l.Gate.(SessionGrantPolicy); ok {
 		c.SessionGrantKnown = true
 		c.SessionGrantAllowed = policy.SessionGrantAllowed(c.Name)
 	}
-	emit(Event{Type: PermAsk, Call: &c, Text: why})
+	if err := emit(Event{Type: PermAsk, Call: &c, Text: why}); err != nil {
+		return Deny, "لم يُدوَّن سؤال الإذن: " + err.Error()
+	}
 	d := l.Human.Ask(ctx, c)
 	if ctx.Err() != nil {
 		d = Deny // ctrl+c must never widen permission
@@ -73,9 +80,11 @@ func (l *Loop) decide(ctx context.Context, c ToolCall, emit func(Event) error) (
 	// Apply policy constraints: the effective decision may differ from the
 	// raw click (e.g. AllowSession for bash → AllowOnce).
 	effective := l.Gate.Effective(c.Name, d)
-	emit(Event{Type: PermReply, Call: &c, Decision: effective, RawDecision: d})
+	if err := emit(Event{Type: PermReply, Call: &c, Decision: effective, RawDecision: d}); err != nil {
+		return Deny, "لم يُدوَّن جواب الإذن: " + err.Error()
+	}
 	if effective == AllowSession {
 		l.Gate.Record(c.Name, effective)
 	}
-	return d, ""
+	return effective, ""
 }
