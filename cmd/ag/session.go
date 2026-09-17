@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -11,6 +12,8 @@ import (
 	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
+	"nabd/internal/providercmd"
+	"nabd/internal/registry"
 	"nabd/internal/skill"
 	"nabd/internal/snap"
 	"nabd/internal/tools"
@@ -108,12 +111,54 @@ func (s *interactiveSession) SetMode(m perm.Mode) {
 // is one signature instead of the two it used to be.
 func (s *interactiveSession) callbacks() *ui.SessionCallbacks {
 	return &ui.SessionCallbacks{
-		OnUndo:    func(n int) string { return fileUndo(s.loop, s.reg, n) },
-		OnCompact: func() string { return chatOnCompact(s.loop) },
-		OnRewind:  func(n int) (string, string) { return rewindSummary(s.loop, n) },
-		OnCtx:     func() string { return ctxSummary(s.loop) },
-		OnEdits:   func() string { return editsSummary(s.loop) },
+		OnUndo:     func(n int) string { return fileUndo(s.loop, s.reg, n) },
+		OnCompact:  func() string { return chatOnCompact(s.loop) },
+		OnRewind:   func(n int) (string, string) { return rewindSummary(s.loop, n) },
+		OnCtx:      func() string { return ctxSummary(s.loop) },
+		OnEdits:    func() string { return editsSummary(s.loop) },
+		OnProvider: sessionProvider,
+		OnModels:   sessionModels,
+		OnConnect:  sessionConnect,
 	}
+}
+
+func sessionProvider() string {
+	reg, err := registry.Load()
+	if err != nil {
+		return "provider: " + err.Error()
+	}
+	return providercmd.FormatProviders(providercmd.DescribeProviders(reg), reg)
+}
+
+func sessionModels(ctx context.Context, providerID string) ([]string, string, error) {
+	reg, err := registry.Load()
+	if err != nil {
+		return nil, "", err
+	}
+	prov, ok := reg.Get(providerID)
+	if !ok {
+		return nil, "", fmt.Errorf("provider %q is not configured — see /provider and add it to %s",
+			providerID, reg.ProvidersPath)
+	}
+	if prov.Key == "" {
+		return nil, "", fmt.Errorf("provider %q has no API key — add it to %s with `/connect %s`",
+			providerID, reg.AuthPath, providerID)
+	}
+	ids, err := providercmd.FetchModels(ctx, prov.API, prov.BaseURL, prov.Key, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	return ids, providercmd.CatalogIsNotACredentialCheck, nil
+}
+
+func sessionConnect(providerID, key string) (string, error) {
+	_, authPath, err := registry.DefaultPaths()
+	if err != nil {
+		return "", err
+	}
+	return providercmd.Connect(authPath, providerID, func() (string, error) {
+		return key, nil
+	})
 }
 
 // rewindSummary cuts n turns and returns the restored text for the composer

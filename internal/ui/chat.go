@@ -7,6 +7,7 @@ import (
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
+	"nabd/internal/providercmd"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -22,18 +23,21 @@ type doneMsg struct{ err error }
 // Chat is a single-line prompt with a scrollback of printed events.
 // Deliberately not a textarea: one line, one hand, one thumb.
 type Chat struct {
-	runner     Runner
-	events     <-chan agent.Event
-	width      int
-	input      string
-	buf        string
-	running    bool
-	cancel     context.CancelFunc
-	status     string
-	statusProj *presentation.StatusProjector
-	Approve    *Approver
-	pending    *agent.ToolCall
-	callbacks  SessionCallbacks
+	runner         Runner
+	events         <-chan agent.Event
+	width          int
+	input          string
+	buf            string
+	running        bool
+	cancel         context.CancelFunc
+	status         string
+	statusProj     *presentation.StatusProjector
+	Approve        *Approver
+	pending        *agent.ToolCall
+	callbacks      SessionCallbacks
+	secretPrompt   bool
+	secretProvider string
+	secretKey      string
 }
 
 func NewChat(r Runner, events <-chan agent.Event) *Chat {
@@ -139,6 +143,52 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil // no typing while prompt is pending
 		}
 	}
+	if m.secretPrompt {
+		switch k.Type {
+		case tea.KeyCtrlC, tea.KeyEsc:
+			m.secretPrompt = false
+			m.secretProvider = ""
+			m.secretKey = ""
+			m.status = "connect canceled"
+			return m, nil
+		case tea.KeyBackspace:
+			if r := []rune(m.secretKey); len(r) > 0 {
+				m.secretKey = string(r[:len(r)-1])
+			}
+			return m, nil
+		case tea.KeyCtrlU:
+			m.secretKey = ""
+			return m, nil
+		case tea.KeyEnter:
+			key := strings.TrimSpace(m.secretKey)
+			provID := m.secretProvider
+			m.secretPrompt = false
+			m.secretProvider = ""
+			m.secretKey = ""
+			if key == "" {
+				m.status = "empty key; nothing written"
+				return m, nil
+			}
+			if m.callbacks.OnConnect == nil {
+				m.status = "connect not supported in this version"
+				return m, nil
+			}
+			summary, err := m.callbacks.OnConnect(provID, key)
+			if err != nil {
+				m.status = "connect failed: " + err.Error()
+				return m, nil
+			}
+			m.status = summary
+			return m, nil
+		case tea.KeySpace:
+			m.secretKey += " "
+			return m, nil
+		case tea.KeyRunes:
+			m.secretKey += string(k.Runes)
+			return m, nil
+		}
+		return m, nil
+	}
 	switch k.Type {
 	case tea.KeyCtrlC:
 		// First ctrl+c cancels the turn; it never quits mid-flight,
@@ -209,6 +259,13 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // View is the prompt line only. Everything else lives in the scrollback,
 // which is what lets you scroll back with your thumb and grep it later.
 func (m *Chat) View() string {
+	if m.secretPrompt {
+		line := "API key (input hidden): ▌"
+		if m.status != "" {
+			line = dim.Render("· "+m.status) + "\n" + line
+		}
+		return fmt.Sprint(line)
+	}
 	if m.running && m.pending == nil {
 		s := "· working · ctrl+c to cancel"
 		if m.status != "" {
@@ -274,6 +331,35 @@ func (m *Chat) command(line string) string {
 		return m.callbacks.OnEdits()
 	case "/help":
 		return CommandHelp(m.width)
+	case "/provider":
+		if m.callbacks.OnProvider == nil {
+			return "provider not supported in this version"
+		}
+		return m.callbacks.OnProvider()
+	case "/models":
+		if m.callbacks.OnModels == nil {
+			return "models not supported in this version"
+		}
+		models, disclaimer, err := m.callbacks.OnModels(context.Background(), parsed.Arg)
+		if err != nil {
+			return fmt.Sprintf("nabd models: provider_%s: %v", providercmd.KindOf(err), err)
+		}
+		var b strings.Builder
+		for _, mod := range models {
+			b.WriteString(mod + "\n")
+		}
+		if disclaimer != "" {
+			b.WriteString(disclaimer)
+		}
+		return strings.TrimRight(b.String(), "\n")
+	case "/connect":
+		if m.callbacks.OnConnect == nil {
+			return "connect not supported in this version"
+		}
+		m.secretPrompt = true
+		m.secretProvider = parsed.Arg
+		m.secretKey = ""
+		return "enter API key for " + parsed.Arg + " (input hidden)"
 	}
 	return "unknown command: " + parsed.RawCmd
 }
@@ -281,6 +367,12 @@ func (m *Chat) command(line string) string {
 func (m *Chat) SetInput(s string) {
 	m.input = s
 }
+
+// Status returns the current status line (for tests).
+func (m *Chat) Status() string { return m.status }
+
+// Command parses and executes a slash command (for testing/parity).
+func (m *Chat) Command(line string) string { return m.command(line) }
 
 // errSummary formats a runtime error for the UI status bar while ensuring no
 // non-ASCII runes outside AllowedUISymbols leak into the interface.

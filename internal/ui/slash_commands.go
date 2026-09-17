@@ -4,6 +4,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"nabd/internal/providercmd"
+	"nabd/internal/registry"
 )
 
 // SlashCommand defines metadata and execution constraints for a slash command.
@@ -60,6 +63,27 @@ var supportedSlashCommands = []SlashCommand{
 		HasArg:      false,
 		AllowBusy:   false,
 	},
+	{
+		Name:        "/connect",
+		Usage:       "/connect <provider>",
+		Description: "store API key for provider in auth.json",
+		HasArg:      true,
+		AllowBusy:   false,
+	},
+	{
+		Name:        "/models",
+		Usage:       "/models <provider>",
+		Description: "query provider for advertised models",
+		HasArg:      true,
+		AllowBusy:   false,
+	},
+	{
+		Name:        "/provider",
+		Usage:       "/provider",
+		Description: "show configured providers and API keys",
+		HasArg:      false,
+		AllowBusy:   false,
+	},
 }
 
 // AllSlashCommands returns a copy of all registered slash commands.
@@ -90,6 +114,7 @@ type ParsedSlashCommand struct {
 	RawCmd  string
 	N       int
 	HasN    bool
+	Arg     string
 	Valid   bool
 	Error   string
 }
@@ -114,20 +139,56 @@ func ParseSlashCommand(line string) ParsedSlashCommand {
 		N:       1,
 		Valid:   true,
 	}
-	if len(f) > 1 {
-		if !cmd.HasArg || len(f) != 2 {
+	switch cmd.Name {
+	case "/undo", "/rewind":
+		if len(f) > 1 {
+			if len(f) != 2 {
+				res.Valid = false
+				res.Error = "usage: " + cmd.Usage
+				return res
+			}
+			v, err := strconv.Atoi(f[1])
+			if err != nil || v <= 0 {
+				res.Valid = false
+				res.Error = "usage: " + cmd.Usage
+				return res
+			}
+			res.N = v
+			res.HasN = true
+		}
+	case "/connect":
+		if len(f) == 1 {
 			res.Valid = false
 			res.Error = "usage: " + cmd.Usage
 			return res
 		}
-		v, err := strconv.Atoi(f[1])
-		if err != nil || v <= 0 {
+		id, err := providercmd.ParseConnectArgs(f[1:])
+		if err != nil {
+			res.Valid = false
+			res.Error = err.Error()
+			return res
+		}
+		res.Arg = id
+	case "/models":
+		if len(f) != 2 {
 			res.Valid = false
 			res.Error = "usage: " + cmd.Usage
 			return res
 		}
-		res.N = v
-		res.HasN = true
+		id := strings.ToLower(strings.TrimSpace(f[1]))
+		if err := registry.ValidProviderID(id); err != nil {
+			res.Valid = false
+			res.Error = err.Error()
+			return res
+		}
+		res.Arg = id
+	default:
+		// Commands taking no arguments: /ctx, /compact, /edits, /help, /provider
+		if len(f) > 1 {
+			res.Valid = false
+			res.Error = "usage: " + cmd.Usage
+			return res
+		}
 	}
 	return res
 }

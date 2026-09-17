@@ -2,14 +2,18 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 	"unicode/utf8"
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
+	"nabd/internal/provider"
+	"nabd/internal/providercmd"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -84,6 +88,11 @@ type Feed struct {
 
 	// Callbacks wired by the CLI.
 	callbacks SessionCallbacks
+
+	// Secret prompt state for /connect (input hidden, never touches journal).
+	secretPrompt   bool
+	secretProvider string
+	secretKey      string
 
 	// Composer.
 	composer *composer
@@ -204,9 +213,12 @@ type SessionCallbacks struct {
 	// OnRewind returns the restored text (for the composer) and a status
 	// message. The restored text is what /rewind cut away, put back for
 	// editing.
-	OnRewind func(n int) (restored, status string)
-	OnCtx    func() string
-	OnEdits  func() string
+	OnRewind   func(n int) (restored, status string)
+	OnCtx      func() string
+	OnEdits    func() string
+	OnProvider func() string
+	OnModels   func(ctx context.Context, providerID string) (models []string, disclaimer string, err error)
+	OnConnect  func(providerID, key string) (string, error)
 }
 
 // SetHeader sets the header line shown above the viewport.
@@ -236,6 +248,17 @@ func (m *Feed) HistoryLen() int { return m.history.len() }
 
 // HistoryBrowsing reports whether Up/Down history recall is active (tests).
 func (m *Feed) HistoryBrowsing() bool { return m.history.browsing() }
+
+// ComposerValue returns the current text in the composer (for tests).
+func (m *Feed) ComposerValue() string {
+	if m.composer == nil {
+		return ""
+	}
+	return m.composer.value()
+}
+
+// Status returns the current transient status line (for tests).
+func (m *Feed) Status() string { return m.status }
 
 // SetToolsExpanded sets the expanded state of tool output cards.
 func (m *Feed) SetToolsExpanded(expanded bool) {
@@ -328,8 +351,46 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.decisionPending = false
 		m.permModal.decisionPending = false
 		return m, nil
+	case modelsResultMsg:
+		m.busy = false
+		m.cancel = nil
+		m.clearStatus()
+		if msg.err != nil {
+			if errors.Is(msg.err, context.Canceled) {
+				m.setStatus("canceled", rankResult)
+				return m, nil
+			}
+			var code agent.ErrorCode
+			switch providercmd.KindOf(msg.err) {
+			case provider.ErrorKindAuth:
+				code = agent.ErrProviderAuth
+			case provider.ErrorKindTemporary:
+				code = agent.ErrProviderTemporary
+			default:
+				code = agent.ErrUnknown
+			}
+			card := presentation.NewErrorCard(code, msg.err.Error(), "")
+			m.addErrorNotice(card, msg.err.Error())
+			return m, nil
+		}
+		var b strings.Builder
+		for _, mod := range msg.models {
+			b.WriteString(mod + "\n")
+		}
+		if msg.disclaimer != "" {
+			b.WriteString(msg.disclaimer)
+		}
+		m.addNotice(presentation.ItemNotice, strings.TrimRight(b.String(), "\n"))
+		return m, nil
 	}
 	return m, nil
+}
+
+type modelsResultMsg struct {
+	provider   string
+	models     []string
+	disclaimer string
+	err        error
 }
 
 // applyBatch processes a batch of events through the projector. The batch

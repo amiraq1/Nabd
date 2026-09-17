@@ -30,11 +30,16 @@ See [docs/RELEASING.md](docs/RELEASING.md) for the release process.
 go build -o nabd ./cmd/ag
 # or: ./build.sh
 
-./nabd                            # new conversation in the current directory
+./nabd                            # interactive feed in the current directory
 ./nabd --continue                 # resume the latest session
 ./nabd --replay <file.jsonl>      # replay a session; --speed 0 is instant
-./nabd -feed                      # experimental full-screen UI
+./nabd -feed                      # scrollable feed UI
 ./nabd --version                  # version · commit · date
+
+./nabd connect <provider>         # store API key in ~/.ag/auth.json (hidden prompt, mode 0600)
+./nabd models <provider>          # list live advertised models from provider endpoint
+./nabd provider                   # list configured providers, sources, and key status
+./nabd migrate                    # migrate legacy v1 config to ~/.ag/auth.json and providers.json
 
 ./nabd -p "task text"             # headless answer on stdout
 ./nabd -p - < file                # task from stdin
@@ -48,6 +53,22 @@ go build -o nabd ./cmd/ag
 ```
 
 `--export` writes the journal as JSONL to stdout and exits; diagnostics go to stderr. Without `--redact` the source is copied verbatim (unknown fields, blank lines, and a truncated final line are preserved) and a stderr warning notes the output may be sensitive. With `--redact` the journal is re-encoded through the same redaction and encoding path as the live journal and `--json`: recognized credential patterns become `[REDACTED]`, but unknown JSON fields are dropped, a truncated final line is ignored, and unrecognized sensitive content stays cleartext. The source file is never written. `--redact` requires `--export`, and `--export` cannot be combined with any run mode (`-p`, `--continue`, `--replay`, `--feed`, `--json`, `--dir`, `--version`, and the headless tuning flags).
+
+## Slash commands
+
+In interactive sessions, commands start with `/`:
+
+| Command | Usage | Description |
+|---|---|---|
+| `/undo` | `/undo [n]` | undo file edits recorded in the journal |
+| `/rewind` | `/rewind [n]` | rewind conversation turns and restore prompt |
+| `/ctx` | `/ctx` | show context window token usage |
+| `/compact` | `/compact` | compact conversation history in background |
+| `/edits` | `/edits` | list pending reversible file edits |
+| `/help` | `/help` | show supported slash commands |
+| `/connect` | `/connect <provider>` | store API key for provider in `auth.json` via hidden prompt (mode 0600) |
+| `/models` | `/models <provider>` | query provider endpoint for live advertised models |
+| `/provider` | `/provider` | show configured providers, definition sources, and credential status |
 
 ## Configuration
 
@@ -66,6 +87,8 @@ EOF
 ```
 
 Config v2 uses `NABD_CONFIG_V2` or `~/.ag/config.v2.json`. It is strict JSON, rejects unknown fields and trailing documents, requires explicit credential sources (`env` or an absolute secure file), rejects command credentials, and cannot be enabled together with v1. Custom `base_url` is deliberately unsupported by the minimal v2 schema.
+
+The OpenCode registry stores provider definitions in `~/.ag/providers.json` and API credentials in `~/.ag/auth.json` (mode 0600). Builtin catalog providers default to modern endpoints (e.g. Groq defaults to `openai/gpt-oss-120b`). Providers and keys can be inspected and enrolled using `nabd provider`, `nabd models`, and `nabd connect` or their corresponding slash commands.
 
 Do not put credentials in project files. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for exact guarantees and residual risks. Report suspected escapes through [SECURITY.md](SECURITY.md), not a public issue.
 
