@@ -59,6 +59,7 @@ type Loop struct {
 	Tools            Tools
 	Sink             Sink
 	System           string
+	Prompter         *Prompter
 	MaxTurns         int
 	Gate             Gate
 	Human            Asker
@@ -476,8 +477,12 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 
 	turnCtx, cancel := providerTurnContext(ctx)
 	defer cancel()
+	system := l.System
+	if l.Prompter != nil {
+		system = l.Prompter.Build(specs)
+	}
 	ch, err := l.Provider.Stream(turnCtx, provider.Request{
-		System:   l.System,
+		System:   system,
 		Messages: ms,
 		Tools:    specs,
 		MaxTok:   maxOutputTokens(),
