@@ -2,11 +2,16 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"nabd/internal/agent"
+	"nabd/internal/config"
+	"nabd/internal/ignorefile"
+	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
+	"nabd/internal/skill"
 	"nabd/internal/snap"
 	"nabd/internal/tools"
 	"nabd/internal/ui"
@@ -27,6 +32,16 @@ type interactiveSession struct {
 	loop *agent.Loop
 }
 
+func loadSessionSkills(root *tools.Root) ([]skill.Skill, []skill.Diagnostic, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, nil, err
+	}
+	user, ud := skill.LoadUser(skill.DefaultUserDir(home))
+	project, pd := skill.LoadProject(root.Dir(), ignorefile.LoadDir(root.Dir()), config.Get("NABD_SKILLS_PROJECT") == "1")
+	return append(user, project...), append(ud, pd...), nil
+}
+
 // newInteractiveSession builds the shared core. It deliberately does not
 // open a journal or wire a sink: the journal and the view are the caller's
 // concern, and they are the only things the two entry points legitimately
@@ -41,10 +56,31 @@ func newInteractiveSession(prov provider.Provider) (*interactiveSession, error) 
 		return nil, err
 	}
 	reg := tools.NewRegistry(root, sh)
+	allSkills, diagnostics, err := loadSessionSkills(root)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range diagnostics {
+		fmt.Fprintln(os.Stderr, d.String())
+	}
+	reg.SetSkillIndex(func() []skill.Skill { return allSkills })
 	pol := perm.New(reg)
 	wirePathRule(root, reg, pol)
 	ap := ui.NewApprover()
 	loop := newSessionLoop(prov, reg, gate{pol}, ap)
+	promptSkills, promptDiag := skill.FormatForPrompt(allSkills)
+	for _, d := range promptDiag {
+		fmt.Fprintln(os.Stderr, d.String())
+	}
+	loop.Prompter = &agent.Prompter{Base: payload.DefaultSystemPrompt}
+	loop.PromptSections = func() []agent.Section {
+		sections := reg.PromptSections()
+		if promptSkills != "" {
+			sections = append(sections, agent.Section{Name: "skills", Body: promptSkills})
+		}
+		return sections
+	}
+	loop.SkillInventory = skill.JournalRecords(allSkills)
 	return &interactiveSession{root: root, reg: reg, pol: pol, ap: ap, loop: loop}, nil
 }
 

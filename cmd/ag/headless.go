@@ -15,8 +15,10 @@ import (
 	"nabd/internal/agent"
 	"nabd/internal/build"
 	"nabd/internal/config"
+	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
+	"nabd/internal/skill"
 	"nabd/internal/snap"
 	"nabd/internal/store"
 	"nabd/internal/tools"
@@ -202,6 +204,15 @@ func runHeadlessErr(cfg headlessConfig) error {
 		return err
 	}
 	reg := tools.NewRegistry(root, sh)
+	allSkills, diagnostics, err := loadSessionSkills(root)
+	if err != nil {
+		journal.Close()
+		return err
+	}
+	for _, d := range diagnostics {
+		fmt.Fprintln(cfg.stderr, d.String())
+	}
+	reg.SetSkillIndex(func() []skill.Skill { return allSkills })
 	pol := perm.New(reg)
 	wirePathRule(root, reg, pol)
 	pol.SetMode(cfg.mode)
@@ -216,6 +227,19 @@ func runHeadlessErr(cfg headlessConfig) error {
 	}
 
 	loop := newSessionLoop(prov, reg, gate{pol}, silentAsker{})
+	promptSkills, promptDiag := skill.FormatForPrompt(allSkills)
+	for _, d := range promptDiag {
+		fmt.Fprintln(cfg.stderr, d.String())
+	}
+	loop.Prompter = &agent.Prompter{Base: payload.DefaultSystemPrompt}
+	loop.PromptSections = func() []agent.Section {
+		sections := reg.PromptSections()
+		if promptSkills != "" {
+			sections = append(sections, agent.Section{Name: "skills", Body: promptSkills})
+		}
+		return sections
+	}
+	loop.SkillInventory = skill.JournalRecords(allSkills)
 	loop.Sink = sinks
 	loop.MaxTurns = cfg.maxTurns
 

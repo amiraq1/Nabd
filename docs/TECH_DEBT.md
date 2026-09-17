@@ -2,7 +2,6 @@
 
 | ID | Debt | Consequence and guard |
 |---|---|---|
-| SKILLS_DECLARED_NOT_WIRED | The skill surface, classification, and guarded projection boundary are declared, but the active index is empty, the `skill` tool still returns `unknown skill`, and operational capability is zero. No loader or session wiring is present by design; wiring is deferred until this boundary is merged, and this row is removed only by the wiring PR. | Keep the boundary tested independently with synthetic events; do not activate loaders here. |
 
 | ID | Debt | Consequence and guard |
 |---|---|---|

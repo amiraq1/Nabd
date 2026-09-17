@@ -12,6 +12,7 @@ import (
 
 	"nabd/internal/config"
 	"nabd/internal/provider"
+	"nabd/internal/skill"
 )
 
 // Sink receives every event. The journal is one; the UI is another.
@@ -61,6 +62,7 @@ type Loop struct {
 	System           string
 	Prompter         *Prompter
 	PromptSections   func() []Section
+	SkillInventory   []skill.EventSkills
 	MaxTurns         int
 	Gate             Gate
 	Human            Asker
@@ -249,7 +251,13 @@ func rateLimitWait(retryAfter time.Duration, consecutiveHits int) time.Duration 
 }
 
 func (l *Loop) Start(banner, projectRoot string) error {
-	return l.emit(Event{Type: RunStart, Text: banner, ProjectRoot: projectRoot})
+	if err := l.emit(Event{Type: RunStart, Text: banner, ProjectRoot: projectRoot}); err != nil {
+		return err
+	}
+	if l.SkillInventory != nil {
+		return l.emit(Event{Type: EventSkills, Skills: append([]skill.EventSkills(nil), l.SkillInventory...)})
+	}
+	return nil
 }
 
 // Run handles one user message to completion. Cancel ctx to interrupt;
@@ -782,7 +790,26 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		}
 
 		start := time.Now()
-		out, err := l.exec(ctx, c)
+		var out Outcome
+		var err error
+		var skillEvent *Event
+		if c.Name == "skill" {
+			if producer, ok := l.Tools.(interface {
+				SkillBodyEvent(context.Context, json.RawMessage) (Event, error)
+			}); ok {
+				ev, perr := producer.SkillBodyEvent(ctx, c.Input)
+				if perr != nil {
+					err = perr
+				} else {
+					skillEvent = &ev
+					err = nil
+					out = Outcome{Text: "skill body loaded", OK: true}
+				}
+			}
+		}
+		if skillEvent == nil {
+			out, err = l.exec(ctx, c)
+		}
 		if err != nil {
 			out.Text, out.OK = err.Error(), false
 		}
@@ -798,8 +825,17 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		}
 		ms := time.Since(start).Milliseconds()
 
+		if skillEvent != nil {
+			if eerr := l.emit(*skillEvent); eerr != nil {
+				return false, eerr
+			}
+		}
+		toolOutput := out.Text
+		if skillEvent != nil {
+			toolOutput = ""
+		}
 		done := ToolCall{
-			ID: c.ID, Name: c.Name, Output: out.Text, OK: out.OK,
+			ID: c.ID, Name: c.Name, Output: toolOutput, OK: out.OK,
 			Exit: out.Exit, Signal: out.Signal, MS: ms,
 		}
 		if eerr := l.emit(Event{Type: ToolEnd, Call: &done}); eerr != nil {
