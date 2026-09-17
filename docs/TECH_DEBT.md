@@ -2,9 +2,7 @@
 
 | ID | Debt | Consequence and guard |
 |---|---|---|
-
-| ID | Debt | Consequence and guard |
-|---|---|---|
+| SKILLS_PROMPT_SECTION_FINGERPRINT | `agent.Fingerprint` and `agent.Diff` exist in `internal/agent/prompt.go` and are unit-tested, but the session never records the fingerprint of the ordered prompt sections at start, nor diffs them within a session. The skill index is journaled (the `skills` event), so the skill contribution is covered by body hash; the general prompt-section identity is not. | Follow-up, deliberately out of the session-wiring PR: wire `Fingerprint` at `Loop.Start` and emit the per-turn `Diff` when sections change. Until then, a prompt-section change mid-session is not journaled. |
 | BUILTIN_CATALOG_STALENESS | The embedded catalog is a static list in source, while providers decommission models without notice; staleness is therefore a permanent condition, not a one-off incident. CI cannot guard it: the build has no network and no credentials, and querying a real provider from tests is forbidden. The only structural protection is that a default must be manually verified at edit time; `nabd models` is the live source of truth. The current Anthropic default `claude-sonnet-5` is unverified because no Anthropic key was available for measurement; it is recorded as unmeasured and is not changed by this PR. | Keep defaults declared in `Models`, verify them manually when editing the catalog, and direct users to `nabd models <provider>`. |
 
 ## G1: write.go diff/output/event baseline (NBD-011 limit selection)

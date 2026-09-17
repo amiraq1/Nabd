@@ -13,6 +13,7 @@ import (
 	"nabd/internal/config"
 	"nabd/internal/provider"
 	"nabd/internal/skill"
+	"nabd/internal/toolvocab"
 )
 
 // Sink receives every event. The journal is one; the UI is another.
@@ -51,8 +52,14 @@ type Tools interface {
 }
 
 // GuardedOutcome is a tool result that must be journaled as a structured event
-// rather than exposed through ToolEnd.Output. The registry owns which tools have
-// this property; the loop must not maintain a name-based allowlist.
+// rather than exposed through ToolEnd.Output. The tool layer owns which tools
+// have this property (GuardedFor); the loop keeps no allowlist of its own.
+//
+// The one name the loop does consult is the binary vocabulary, through
+// toolvocab.Guarded: a name declared guarded there but not offered by the
+// active layer is a broken wiring, and the loop refuses it instead of falling
+// back to plain execution. Without that net, a layer that registers "skill"
+// without implementing GuardedOutcome would return the body as ToolEnd.Output.
 type GuardedOutcome interface {
 	GuardedEvent(context.Context, json.RawMessage) (Event, error)
 }
@@ -804,18 +811,31 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		var out Outcome
 		var err error
 		var guardedEvent *Event
+		// A name the binary declares guarded but the active layer offers no
+		// guard for is broken wiring, not a fallback: l.exec would return the
+		// body as plain ToolEnd.Output. Refuse the call and abort the turn.
+		// The name set is the binary vocabulary (toolvocab.Guarded), so a
+		// future guarded tool is covered the moment its name enters it; the
+		// loop still keeps no allowlist for the normal path.
+		var guardRefusal bool
+		var guarded GuardedOutcome
+		var hasGuard bool
 		if gt, ok := l.Tools.(guardedTools); ok {
-			if guarded, found := gt.GuardedFor(c.Name); found {
-				ev, gerr := guarded.GuardedEvent(ctx, c.Input)
-				if gerr != nil {
-					out, err = Outcome{OK: false}, gerr
-				} else {
-					guardedEvent, out = &ev, Outcome{Text: "skill body loaded", OK: true}
-				}
+			guarded, hasGuard = gt.GuardedFor(c.Name)
+		}
+		switch {
+		case hasGuard:
+			ev, gerr := guarded.GuardedEvent(ctx, c.Input)
+			if gerr != nil {
+				out, err = Outcome{OK: false}, gerr
 			} else {
-				out, err = l.exec(ctx, c)
+				guardedEvent, out = &ev, Outcome{Text: "skill body loaded", OK: true}
 			}
-		} else {
+		case toolvocab.Guarded(c.Name):
+			guardRefusal = true
+			err = fmt.Errorf("tool %q is a guarded capability but the active tool layer provides no guarded outcome; refusing to fall back to plain execution", c.Name)
+			out = Outcome{OK: false}
+		default:
 			out, err = l.exec(ctx, c)
 		}
 		if err != nil {
@@ -848,6 +868,12 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		}
 		if eerr := l.emit(Event{Type: ToolEnd, Call: &done}); eerr != nil {
 			return false, WrapToolCallError(done, eerr)
+		}
+		// The ToolEnd above keeps ToolStart/ToolEnd paired and carries the
+		// refusal as an error with no body; the turn then fails closed rather
+		// than continuing as if the capability were merely absent.
+		if guardRefusal {
+			return false, err
 		}
 		if err := l.checkLoop(c.Name, c.Input, done.OK, done.Output); err != nil {
 			return false, err

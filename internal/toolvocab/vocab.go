@@ -29,3 +29,19 @@ func IsReadOnly(name string) bool {
 		return false
 	}
 }
+
+// Guarded reports whether name belongs to the binary vocabulary of tools whose
+// result must be projected as a structured event and must never travel as plain
+// tool output. The live guard is owned by the tool layer (agent.GuardedOutcome
+// through GuardedFor); this list is the binary's declaration of which names
+// carry that obligation, so the agent loop can fail closed when a tool layer
+// advertises a guarded name without providing the guard. It is fail-closed:
+// unknown names are not guarded.
+func Guarded(name string) bool {
+	switch name {
+	case "skill":
+		return true
+	default:
+		return false
+	}
+}

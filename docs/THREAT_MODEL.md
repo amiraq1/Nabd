@@ -243,23 +243,25 @@ Evidence: `TestCustomEndpointIsAcceptedByDesign`,
 
 ## Skills
 
-A skill is a Markdown file with a small frontmatter header. Its name,
-description and scope are listed in the system prompt when the session wiring
-loads the skill index; its body is read only when the model calls the `skill`
-tool with that name. The binary knows the `skill` vocabulary and fence even
-when the current session has no loaded index; until session wiring enables the
-index, the tool is not present in the active registry. Twenty installed skills
-therefore cost tens of prompt lines rather than twenty file bodies — the body is
-not part of the prompt at all until it is asked for.
+A skill is a Markdown file with a small frontmatter header. Session wiring loads
+the index at startup: its name, description and scope are listed in the system
+prompt, and its body is read only when the model calls the `skill` tool with that
+name. The binary knows the `skill` vocabulary and fence even when a session has
+no loaded index; the tool is then absent from the active registry. Twenty
+installed skills therefore cost tens of prompt lines rather than twenty file
+bodies — the body is not part of the prompt at all until it is asked for.
 
 **Two scopes, one trust boundary.** `~/.config/nabd/skills` is the user scope
 and is loaded unconditionally: a file there was put in place by the operator,
 who is the principal this document is written for. `<root>/.nabd/skills` is the
 project scope and is **disabled by default**. Turning it on is an operator
-decision (`--skills=project` or the equivalent config key) and never something
-the repository can do for itself: a repository able to enable its own
-instructions would be granting itself trust before the human was asked, which is
-the boundary this project exists to keep.
+decision, supplied through user-scoped configuration or environment
+(`NABD_SKILLS_PROJECT=1`, read via `config.Get`) and never something the
+repository can do for itself: `config.Get` consults `~/.ag/config` and the
+process environment only, never the project tree, so a repository cannot enable
+its own instructions before the human was asked — the boundary this project
+exists to keep. Evidence: `TestProjectSkillsStayDisabledWhenOptInLivesInTheProjectRoot`,
+`TestProjectSkillsLoadWhenOptInIsUserScoped`.
 
 **What is recorded.** At session start one `skills` event lists
 `{name, rel, hash, scope}` for every definition that reached the prompt. The
@@ -269,6 +271,18 @@ project scope. The `skill` tool re-opens the body through `internal/safefs`,
 re-verifies that hash, and refuses on mismatch: a file edited after load — by the
 model, by a checkout, by anything — is instructions the session never approved,
 and serving it would make the journal a false record of the run.
+
+**Guarded projection.** A skill body never travels as ordinary tool output. The
+body is produced only by the guarded producer, which fixes
+`SkillContentClassUntrusted` internally so no caller can promote the class, and
+is journaled as a `skill_body` event the message projection fences; the
+`ToolEnd` that answers the call carries no body. The loop treats the guard as a
+property of the tool layer, not of a name: when a layer advertises the `skill`
+name without providing the guard, the loop refuses the call and fails the turn
+rather than falling back to plain execution. Evidence:
+`TestGuardedOutcomeProjectsBodyAndSkipsPlainExecution`,
+`TestGuardedNameWithoutGuardFailsClosed`, `TestGuardedProductErrorIsNotMasked`,
+`TestRegistryGuardedForTracksSkillInstallation`.
 
 **Bounds.** Names are `[a-z0-9-]{1,64}` with no leading, trailing or doubled
 hyphen; a description is required and at most 1024 bytes; a body is at most
