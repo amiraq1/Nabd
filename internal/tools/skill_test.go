@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+
+	"nabd/internal/provider"
 
 	"nabd/internal/perm"
 	"nabd/internal/skill"
@@ -39,11 +42,11 @@ func TestSkillToolRefusesBodyChangedSinceLoad(t *testing.T) {
 	tool := skillTool{reg}
 
 	out, ok, err := tool.Run(context.Background(), json.RawMessage(`{"name":"greet"}`))
-	if err != nil || !ok {
-		t.Fatalf("first load must succeed: ok=%v err=%v", ok, err)
+	if err == nil || ok || out != "" || !strings.Contains(err.Error(), "guarded execution") {
+		t.Fatalf("plain execution must be refused: out=%q ok=%v err=%v", out, ok, err)
 	}
-	if !strings.Contains(out, "original body") {
-		t.Fatalf("body not returned: %q", out)
+	if _, err := tool.GuardedEvent(context.Background(), json.RawMessage(`{"name":"greet"}`)); err != nil {
+		t.Fatalf("guarded load must succeed: %v", err)
 	}
 
 	// The file changes under the session's feet.
@@ -51,12 +54,9 @@ func TestSkillToolRefusesBodyChangedSinceLoad(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, ok, err = tool.Run(context.Background(), json.RawMessage(`{"name":"greet"}`))
+	_, err = tool.GuardedEvent(context.Background(), json.RawMessage(`{"name":"greet"}`))
 	if err == nil {
 		t.Fatal("a mutated body must be refused")
-	}
-	if ok {
-		t.Error("a refused load must not report success")
 	}
 	if !strings.Contains(err.Error(), "changed since load") {
 		t.Errorf("the refusal must say why, got %q", err)
@@ -96,6 +96,69 @@ func TestSkillToolIsReadOnly(t *testing.T) {
 // exactly while the skill tool is installed, and must withdraw it when the index
 // is emptied. The agent loop fails closed on the false answer, so a stale true
 // or a stale false are both wrong.
+func TestSkillPlainExecutionIsRefused(t *testing.T) {
+	dir := t.TempDir()
+	path := writeTestSkill(t, dir, "greet", "PLAIN-SKILL-BODY")
+	loaded, _ := skill.LoadUser(dir)
+	reg := &Registry{byName: map[string]Tool{}}
+	reg.SetSkillIndex(func() []skill.Skill { return loaded })
+	for _, tc := range []struct {
+		name string
+		run  func() (string, bool, error)
+	}{
+		{"Run", func() (string, bool, error) {
+			return reg.Run(context.Background(), provider.ToolCall{Name: "skill", Input: json.RawMessage(`{"name":"greet"}`)})
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, ok, err := tc.run()
+			if err == nil || ok || out != "" || strings.Contains(err.Error(), "PLAIN-SKILL-BODY") {
+				t.Fatalf("plain output was not refused: out=%q ok=%v err=%v", out, ok, err)
+			}
+		})
+	}
+	outcome, err := reg.RunDetailed(context.Background(), "skill", json.RawMessage(`{"name":"greet"}`))
+	if err == nil || outcome.OK || outcome.Text != "" || strings.Contains(err.Error(), "PLAIN-SKILL-BODY") {
+		t.Fatalf("detailed plain output was not refused: outcome=%+v err=%v", outcome, err)
+	}
+	guard, ok := reg.GuardedFor("skill")
+	if !ok {
+		t.Fatal("guarded producer missing")
+	}
+	if _, err := guard.GuardedEvent(context.Background(), json.RawMessage(`{"name":"greet"}`)); err != nil {
+		t.Fatal(err)
+	}
+	_ = path
+}
+
+func TestRegistrySkillLifecycleSupportsConcurrentReaders(t *testing.T) {
+	reg := &Registry{byName: map[string]Tool{}}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				reg.Specs()
+				reg.GuardedFor("skill")
+				reg.Class("skill")
+			}
+		}()
+	}
+	for i := 0; i < 100; i++ {
+		if i%2 == 0 {
+			reg.SetSkillIndex(func() []skill.Skill { return []skill.Skill{{Name: "greet"}} })
+		} else {
+			reg.SetSkillIndex(func() []skill.Skill { return nil })
+		}
+	}
+	wg.Wait()
+	reg.SetSkillIndex(func() []skill.Skill { return nil })
+	if _, ok := reg.GuardedFor("skill"); ok {
+		t.Fatal("empty final index still registered")
+	}
+}
+
 func TestRegistryGuardedForTracksSkillInstallation(t *testing.T) {
 	reg := &Registry{byName: map[string]Tool{}}
 

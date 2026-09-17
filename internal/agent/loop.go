@@ -64,6 +64,17 @@ type GuardedOutcome interface {
 	GuardedEvent(context.Context, json.RawMessage) (Event, error)
 }
 
+// GuardedResult is produced by a guarded capability. Outcome is an internal,
+// safe summary; the guarded event carries any protected content.
+type GuardedResult struct {
+	Event   Event
+	Outcome Outcome
+}
+
+type guardedResultProducer interface {
+	GuardedResult(context.Context, json.RawMessage) (GuardedResult, error)
+}
+
 type guardedTools interface {
 	GuardedFor(name string) (GuardedOutcome, bool)
 }
@@ -825,11 +836,20 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		}
 		switch {
 		case hasGuard:
-			ev, gerr := guarded.GuardedEvent(ctx, c.Input)
-			if gerr != nil {
-				out, err = Outcome{OK: false}, gerr
+			if producer, ok := guarded.(guardedResultProducer); ok {
+				result, gerr := producer.GuardedResult(ctx, c.Input)
+				if gerr != nil {
+					out, err = Outcome{OK: false}, gerr
+				} else {
+					guardedEvent, out = &result.Event, result.Outcome
+				}
 			} else {
-				guardedEvent, out = &ev, Outcome{Text: "skill body loaded", OK: true}
+				ev, gerr := guarded.GuardedEvent(ctx, c.Input)
+				if gerr != nil {
+					out, err = Outcome{OK: false}, gerr
+				} else {
+					guardedEvent, out = &ev, Outcome{OK: true}
+				}
 			}
 		case toolvocab.Guarded(c.Name):
 			guardRefusal = true
@@ -862,6 +882,9 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		if guardedEvent != nil {
 			toolOutput = ""
 		}
+		// Guarded summaries are safe internal data for loop detection, never
+		// ordinary ToolEnd output. The body is intentionally excluded.
+		loopOutcome := out.Text
 		done := ToolCall{
 			ID: c.ID, Name: c.Name, Output: toolOutput, OK: out.OK,
 			Exit: out.Exit, Signal: out.Signal, MS: ms,
@@ -875,7 +898,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		if guardRefusal {
 			return false, err
 		}
-		if err := l.checkLoop(c.Name, c.Input, done.OK, done.Output); err != nil {
+		if err := l.checkLoop(c.Name, c.Input, done.OK, loopOutcome); err != nil {
 			return false, err
 		}
 

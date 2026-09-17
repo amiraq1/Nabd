@@ -5,9 +5,11 @@ on:
     branches: [ "master", "main", "feature/**", "fix/**", "docs/**", "ci/**" ]
   pull_request:
     branches: [ "master", "main" ]
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   pr-checklist:
@@ -15,7 +17,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Fetch live PR body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api "repos/${{ github.repository }}/pulls/${PR_NUMBER}" --jq '.body // ""' > "$RUNNER_TEMP/pr-body"
       - name: Required PR security checklist
+        env:
+          PR_BODY_FILE: ${{ runner.temp }}/pr-body
         run: bash scripts/check-pr-security-checklist.sh
 
   module-tidiness:

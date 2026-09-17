@@ -31,9 +31,9 @@ func TestParseEnforcesBounds(t *testing.T) {
 
 func TestWarningsNameUnknownKeysWithoutValues(t *testing.T) {
 	const secret = "do-not-print-this-value"
-	got := Warnings(map[string]string{"NABD_MODEL": "ok", "TYPO_KEY": secret})
-	if len(got) != 1 || !strings.Contains(got[0], "TYPO_KEY") || strings.Contains(got[0], secret) {
-		t.Fatalf("unsafe warnings: %q", got)
+	got := Warnings(map[string]string{"NABD_MODEL": "ok", "NABD_SKILLS_PROJECT": "1", "TYPO_KEY": secret})
+	if len(got) != 1 || !strings.Contains(got[0], "TYPO_KEY") || strings.Contains(got[0], secret) || strings.Contains(strings.Join(got, "\n"), "NABD_SKILLS_PROJECT") {
+		t.Fatalf("unsafe or incorrect warnings: %q", got)
 	}
 }
 

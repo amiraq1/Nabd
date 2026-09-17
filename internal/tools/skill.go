@@ -40,7 +40,19 @@ func (skillTool) Spec() provider.ToolSpec {
 
 // SkillBodyProducer is the only production constructor for the guarded event.
 // It fixes the trust class here; callers cannot request a different class.
+func (t skillTool) GuardedResult(ctx context.Context, raw json.RawMessage) (agent.GuardedResult, error) {
+	ev, err := t.guardedEvent(ctx, raw)
+	if err != nil {
+		return agent.GuardedResult{}, err
+	}
+	return agent.GuardedResult{Event: ev, Outcome: agent.Outcome{Text: "skill body loaded", OK: true}}, nil
+}
+
 func (t skillTool) GuardedEvent(ctx context.Context, raw json.RawMessage) (agent.Event, error) {
+	return t.guardedEvent(ctx, raw)
+}
+
+func (t skillTool) guardedEvent(ctx context.Context, raw json.RawMessage) (agent.Event, error) {
 	var a struct {
 		Name string `json:"name"`
 	}
@@ -60,32 +72,6 @@ func (t skillTool) GuardedEvent(ctx context.Context, raw json.RawMessage) (agent
 }
 
 func (t skillTool) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {
-	var a struct {
-		Name string `json:"name"`
-	}
-	if err := decodeStrict(raw, &a); err != nil {
-		return "", false, fmt.Errorf("invalid args: %w", err)
-	}
-	name := strings.TrimSpace(a.Name)
-	if name == "" {
-		return "", false, errors.New("empty name")
-	}
+	return "", false, errors.New("skill requires guarded execution")
 
-	var found *skill.Skill
-	for _, s := range t.reg.skillList() {
-		if s.Name == name {
-			c := s
-			found = &c
-			break
-		}
-	}
-	if found == nil {
-		return "", false, fmt.Errorf("unknown skill %q; the skill index lists the available names", name)
-	}
-
-	body, err := skill.OpenBody(*found)
-	if err != nil {
-		return "", false, err
-	}
-	return fmt.Sprintf("skill %s (scope %s)\n%s", found.Name, found.Scope, body), true, nil
 }

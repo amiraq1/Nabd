@@ -96,6 +96,7 @@ type Registry struct {
 	edits      *editLog
 	list       []Tool
 	byName     map[string]Tool
+	toolsMu    sync.RWMutex
 	meta       metadata
 	diffBudget *diffBudget
 
@@ -139,9 +140,12 @@ func (r *Registry) SetSkillIndex(fn func() []skill.Skill) {
 	}
 }
 
-// skillList returns the current skill index, or nil when none was installed.
+// GuardedFor returns the guarded producer for a registered tool.
 func (r *Registry) GuardedFor(name string) (agent.GuardedOutcome, bool) {
-	if t, ok := r.byName[name]; ok {
+	r.toolsMu.RLock()
+	t, ok := r.byName[name]
+	r.toolsMu.RUnlock()
+	if ok {
 		if g, ok := t.(agent.GuardedOutcome); ok {
 			return g, true
 		}
@@ -265,7 +269,9 @@ type Classified interface {
 }
 
 func (r *Registry) Class(tool string) (perm.Class, bool) {
+	r.toolsMu.RLock()
 	t, ok := r.byName[tool]
+	r.toolsMu.RUnlock()
 	if !ok {
 		return 0, false
 	}
@@ -276,6 +282,8 @@ func (r *Registry) Class(tool string) (perm.Class, bool) {
 }
 
 func (r *Registry) add(ts ...Tool) {
+	r.toolsMu.Lock()
+	defer r.toolsMu.Unlock()
 	for _, t := range ts {
 		if _, exists := r.byName[t.Name()]; exists {
 			continue
@@ -286,6 +294,8 @@ func (r *Registry) add(ts ...Tool) {
 }
 
 func (r *Registry) remove(name string) {
+	r.toolsMu.Lock()
+	defer r.toolsMu.Unlock()
 	delete(r.byName, name)
 	filtered := r.list[:0]
 	for _, t := range r.list {
@@ -297,8 +307,11 @@ func (r *Registry) remove(name string) {
 }
 
 func (r *Registry) Specs() []provider.ToolSpec {
-	out := make([]provider.ToolSpec, 0, len(r.list))
-	for _, t := range r.list {
+	r.toolsMu.RLock()
+	list := append([]Tool(nil), r.list...)
+	r.toolsMu.RUnlock()
+	out := make([]provider.ToolSpec, 0, len(list))
+	for _, t := range list {
 		out = append(out, t.Spec())
 	}
 	return out
@@ -310,7 +323,9 @@ func (r *Registry) Run(ctx context.Context, c provider.ToolCall) (string, bool, 
 	fixed, _ := r.repairCall(c)
 	name, args := fixed.Name, fixed.Input
 
+	r.toolsMu.RLock()
 	t, found := r.byName[name]
+	r.toolsMu.RUnlock()
 	if !found {
 		return "", false, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -415,7 +430,9 @@ func (r *Registry) RunDetailed(ctx context.Context, name string, raw json.RawMes
 	fixed, _ := r.repairCall(provider.ToolCall{Name: name, Input: raw})
 	name, raw = fixed.Name, fixed.Input
 
+	r.toolsMu.RLock()
 	t, ok := r.byName[name]
+	r.toolsMu.RUnlock()
 	if !ok {
 		return agent.Outcome{}, fmt.Errorf("unknown tool: %s", name)
 	}
