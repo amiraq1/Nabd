@@ -21,8 +21,13 @@ func rowOfCard(m *Feed, idx int) int {
 		return -1
 	}
 	line := m.offsets[idx]
-	top := lm.viewportTop()
-	if line < m.scrollTop || line >= m.scrollTop+lm.ViewportRows {
+	// Mirror the production mapping in pointerLine: the viewport top padding
+	// is skipped, and only the rows below it show feed content. The padding no
+	// longer depends on follow, so this holds for browsing sessions too.
+	topPad := m.viewportTopPadding(lm)
+	top := lm.viewportTop() + topPad
+	visible := lm.ViewportRows - topPad
+	if visible <= 0 || line < m.scrollTop || line >= m.scrollTop+visible {
 		return -1
 	}
 	return top + (line - m.scrollTop)

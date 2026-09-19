@@ -109,13 +109,19 @@ func (m *Feed) bottomStart(vh int) int {
 }
 
 // viewportTopPadding returns the number of blank rows to place before the
-// feed content in the viewport. When the feed is shorter than the viewport
-// and the view is anchored at the bottom (following), content sits at the
-// bottom of the screen instead of floating at the top with dead space
-// below. Shared by View (which emits the padding) and pointerLine (which
-// must skip it) so touch coordinates stay consistent with the rendering.
+// feed content in the viewport, so short conversations sit at the bottom of
+// the screen instead of floating at the top with dead space below. Shared by
+// View (which emits the padding) and pointerLine (which must skip it) so
+// touch coordinates stay consistent with the rendering.
+//
+// It depends on the rendered content length and the viewport height only, NOT
+// on m.follow: making it follow-dependent meant that pressing PgUp on short
+// content (which clears follow) collapsed the padding to zero and the content
+// jumped upward, although there was nothing to scroll. When content is shorter
+// than the viewport its canonical scroll position is already 0, so a stable
+// padding is always correct.
 func (m *Feed) viewportTopPadding(lm layoutMetrics) int {
-	if !m.follow || m.modalVisible || m.decisionPending {
+	if m.modalVisible || m.decisionPending {
 		return 0
 	}
 	if len(m.lines) >= lm.ViewportRows {
