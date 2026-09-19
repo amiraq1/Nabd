@@ -121,6 +121,7 @@ func RenderEvent(e agent.Event, width int) string {
 		if e.Read.Truncated {
 			return warn.Render("✂ " + e.Read.Path + " · partially read")
 		}
+		return ""
 	case agent.EventRateLimit:
 		return warn.Render(fmt.Sprintf("⚑ rate limit %d · retry in %.1fs (attempt %d)", e.Code, e.WaitSec, e.Attempt))
 
@@ -133,6 +134,46 @@ func RenderEvent(e agent.Event, width int) string {
 			return ""
 		}
 		return block("⚑", text, width, warn)
+
+	case agent.TextDelta:
+		// Streaming text is accumulated into the caller's buffer (chat.go,
+		// replay.go, headless.go) and printed once by flushJoin when the
+		// buffer is flushed. Rendering it here would duplicate every token.
+		return ""
+
+	case agent.EventProviderUsage:
+		// Accounting/measurement, not screen content. Matches EventCalib.
+		return ""
+
+	case agent.EventSkillBody:
+		// The body is untrusted content and block() performs no ANSI
+		// sanitisation. Printing it raw is a terminal-injection path.
+		// If it is ever shown, it must go through presentation first.
+		return ""
+
+	case agent.EventSkills:
+		// Skill inventory: what the model was told, from which scope.
+		// Summary only — names, paths and bodies are not printed.
+		// An empty inventory (nil or legacy record without the field) carries
+		// no information, same rule as a complete read: do not print.
+		if len(e.Skills) == 0 {
+			return ""
+		}
+		proj := 0
+		for _, s := range e.Skills {
+			if s.Scope == "project" {
+				proj++
+			}
+		}
+		return dim.Render(fmt.Sprintf("⚑ %d skills · %d project", len(e.Skills), proj))
+
+	case agent.Rewind:
+		// A rewind is a branch point in the session tree. Hiding it makes
+		// replay show an unexplained jump. Reuses the RunStart separator.
+		if e.Parent > 0 {
+			return dim.Render(fmt.Sprintf("── rewind to #%d", e.Parent))
+		}
+		return dim.Render("── rewind")
 
 	case agent.TurnStart, agent.TurnEnd, agent.EventCalib:
 		// TurnEnd and calibration are structure, not content: nothing to show.
