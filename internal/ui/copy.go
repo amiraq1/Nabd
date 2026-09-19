@@ -30,6 +30,9 @@ var (
 	// other visible UI string.
 	copyCommandTimeoutNotice = "termux-clipboard-set timed out; install and open the Termux:API app"
 	copyCommandMissingNotice = "termux-clipboard-set not found; install the termux-api package"
+	// copyCommandFailedNotice covers every remaining failure (non-zero exit,
+	// permission denied, I/O): err.Error() names neither the tool nor the fix.
+	copyCommandFailedNotice = "termux-clipboard-set failed; check the termux-api install"
 
 	// copyRescueFailedNotice is appended when a failed clipboard delivery could
 	// not be rescued to a file either. The text is lost, and the status line
@@ -89,6 +92,11 @@ func copyCmd(name string, body redactedText, notice string) tea.Cmd {
 			// path that does not exist surfaces as ENOENT instead. Both mean
 			// the same thing to the user: the binary is not there.
 			res.detail = copyCommandMissingNotice
+		default:
+			// Any other failure (non-zero exit, permission denied, I/O) would
+			// otherwise surface err.Error() verbatim, which names neither the
+			// tool nor the fix.
+			res.detail = copyCommandFailedNotice
 		}
 		return res
 	}

@@ -512,3 +512,39 @@ func TestCopyFailureThatCannotBeRescuedIsNotSilent(t *testing.T) {
 		t.Fatalf("status = %q, want it to report the failed export", m.status)
 	}
 }
+
+// TestCopyCommandUnknownErrorIsClassified pins the default arm of the error
+// classification: a command that exists but fails for any other reason must
+// yield the classified notice, never the raw exec error.
+func TestCopyCommandUnknownErrorIsClassified(t *testing.T) {
+	t.Setenv("TERMUX_VERSION", "0.119.0")
+	t.Setenv("SSH_CONNECTION", "")
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no sh on PATH to host the failing command: %v", err)
+	}
+	script := filepath.Join(t.TempDir(), "failing-clipboard")
+	if err := os.WriteFile(script, []byte("#!"+sh+"\nexit 3\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	m := feedWithCustomTexts(t, []string{"card output"}, 80)
+	m.enterNavigation()
+	m.selectItem(0)
+	m.clipboardCommand = script
+
+	_, cmd := m.copySelectedCard()
+	if cmd == nil {
+		t.Fatal("expected non-nil tea.Cmd in Termux environment")
+	}
+	res, ok := cmd().(clipboardResultMsg)
+	if !ok {
+		t.Fatalf("cmd returned %T, want clipboardResultMsg", cmd())
+	}
+	if res.err == nil {
+		t.Fatal("expected the injected command to exit non-zero")
+	}
+	if res.detail != copyCommandFailedNotice {
+		t.Fatalf("detail = %q, want %q", res.detail, copyCommandFailedNotice)
+	}
+}
