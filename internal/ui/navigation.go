@@ -152,6 +152,10 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case "y", "c":
 		m, cmd := m.copySelectedCard()
 		return m, cmd, true
+	case "Y":
+		// Uppercase Y copies the whole report (all cards, tools expanded).
+		m, cmd := m.copyFullReport()
+		return m, cmd, true
 	case "?":
 		if m.status == "" {
 			m.setStatus(navigationHint(m.width), rankHint)

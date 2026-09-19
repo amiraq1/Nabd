@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"encoding/base64"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -252,5 +255,222 @@ func TestCopyDoesNotMutateProjection(t *testing.T) {
 		if it.Fingerprint() != fps[i] {
 			t.Fatalf("projector item %d mutated by copy", i)
 		}
+	}
+}
+
+func TestCopyTermuxAsynchronousCmd(t *testing.T) {
+	t.Setenv("TERMUX_VERSION", "0.119.0")
+	t.Setenv("SSH_CONNECTION", "")
+
+	m := feedWithCustomTexts(t, []string{"termux card output"}, 80)
+	m.enterNavigation()
+	m.selectItem(0)
+
+	// Inject a harmless command so the test never runs the real
+	// termux-clipboard-set: it is absent outside Termux and can block for
+	// seconds on a device whose Termux:API app is cold, making the test
+	// depend on the host rather than on copySelectedCard.
+	m.clipboardCommand = "cat"
+
+	// In Termux without a mock writer, copySelectedCard returns an async cmd
+	_, cmd := m.copySelectedCard()
+	if cmd == nil {
+		t.Fatal("expected non-nil tea.Cmd in Termux environment")
+	}
+
+	// Executing the cmd yields a clipboardResultMsg
+	msg := cmd()
+	res, ok := msg.(clipboardResultMsg)
+	if !ok {
+		t.Fatalf("cmd returned %T, want clipboardResultMsg", msg)
+	}
+	if res.notice != copySuccessNotice {
+		t.Fatalf("notice = %q, want %q", res.notice, copySuccessNotice)
+	}
+
+	// Delivering the message to Update sets the status
+	m.Update(res)
+	if res.err != nil {
+		if !strings.HasPrefix(m.status, "copy failed: ") {
+			t.Fatalf("status = %q, want prefix 'copy failed: '", m.status)
+		}
+	} else {
+		if m.status != copySuccessNotice {
+			t.Fatalf("status = %q, want %q", m.status, copySuccessNotice)
+		}
+	}
+}
+
+func TestCopyUnavailableOutsideTermuxAndSSH(t *testing.T) {
+	t.Setenv("TERMUX_VERSION", "")
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("PREFIX", "")
+
+	m := feedWithCustomTexts(t, []string{"card output"}, 80)
+	m.enterNavigation()
+	m.selectItem(0)
+
+	_, cmd := m.copySelectedCard()
+	if cmd != nil {
+		t.Fatal("expected nil cmd when clipboard is unavailable")
+	}
+	if m.status != copyUnavailableNotice {
+		t.Fatalf("status = %q, want %q", m.status, copyUnavailableNotice)
+	}
+}
+
+// TestCopyTermuxDetectedByPrefixOnly pins the fallback added because
+// TERMUX_VERSION is not inherited by every child process on a real device:
+// without it a valid Termux install with an empty TERMUX_VERSION is mistaken
+// for "copy unavailable" and never reaches termux-clipboard-set.
+func TestCopyTermuxDetectedByPrefixOnly(t *testing.T) {
+	t.Setenv("TERMUX_VERSION", "")
+	t.Setenv("SSH_CONNECTION", "")
+	t.Setenv("PREFIX", "/data/data/com.termux/files/usr")
+
+	m := feedWithCustomTexts(t, []string{"termux card output"}, 80)
+	m.enterNavigation()
+	m.selectItem(0)
+	m.clipboardCommand = "cat"
+
+	_, cmd := m.copySelectedCard()
+	if cmd == nil {
+		t.Fatal("expected non-nil cmd when only PREFIX identifies Termux")
+	}
+	if m.status == copyUnavailableNotice {
+		t.Fatalf("status = %q, want a copy attempt, not unavailable", m.status)
+	}
+}
+
+// TestCopyFailureRescuesTextToFile covers the failure path that used to lose
+// the user's text outright: the clipboard command cannot run, so the
+// already-redacted body is written to the export directory and the status line
+// says where it went. The clipboard is best-effort; the text is not.
+func TestCopyFailureRescuesTextToFile(t *testing.T) {
+	t.Setenv("TERMUX_VERSION", "0.119.0")
+	t.Setenv("SSH_CONNECTION", "")
+	dir := t.TempDir()
+	t.Setenv(ExportsDirEnv, dir)
+
+	secret := "ghp_abcdefghijklmnop12345678"
+	m := feedWithCustomTexts(t, []string{"output with credential: " + secret + " and other text"}, 100)
+	m.enterNavigation()
+	m.selectItem(0)
+	// A command that cannot exist, so the failure path is exercised without
+	// depending on whether the real binary is installed on this host.
+	m.clipboardCommand = "/nonexistent-clipboard-binary"
+
+	_, cmd := m.copySelectedCard()
+	if cmd == nil {
+		t.Fatal("expected non-nil tea.Cmd in Termux environment")
+	}
+	res, ok := cmd().(clipboardResultMsg)
+	if !ok {
+		t.Fatalf("cmd returned %T, want clipboardResultMsg", cmd())
+	}
+	if res.err == nil {
+		t.Fatal("expected the injected command to fail")
+	}
+	if res.detail != copyCommandMissingNotice {
+		t.Fatalf("detail = %q, want %q", res.detail, copyCommandMissingNotice)
+	}
+
+	if _, cmd2 := m.Update(res); cmd2 != nil {
+		t.Fatal("clipboardResultMsg must not schedule further work")
+	}
+
+	if !strings.HasPrefix(m.status, "copy failed: ") {
+		t.Fatalf("status = %q, want prefix 'copy failed: '", m.status)
+	}
+	if !strings.Contains(m.status, copyFullReportSaved) {
+		t.Fatalf("status = %q, want it to name the saved report", m.status)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read exports dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("exported %d files, want exactly 1", len(entries))
+	}
+	path := filepath.Join(dir, entries[0].Name())
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read exported report: %v", err)
+	}
+	if strings.Contains(string(data), secret) {
+		t.Fatalf("exported report leaked the credential: %q", string(data))
+	}
+	if !strings.Contains(string(data), "output with credential:") {
+		t.Fatalf("exported report lost the card text: %q", string(data))
+	}
+	info, err := entries[0].Info()
+	if err != nil {
+		t.Fatalf("stat exported report: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("exported report mode = %o, want 600", perm)
+	}
+}
+
+// captureClipboardCommand returns an executable that copies its own stdin to
+// the file named by CLIP_CAPTURE. It exists because the other Termux tests only
+// prove the command *ran*: none of them inspects what reached its stdin, which
+// is exactly how an empty payload can pass while the clipboard ends up empty.
+func captureClipboardCommand(t *testing.T) string {
+	t.Helper()
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skipf("no sh on PATH to host the capture command: %v", err)
+	}
+	script := filepath.Join(t.TempDir(), "capture-clipboard")
+	// The shebang names the shell resolved on this host, so the test runs the
+	// same way on Linux and under Termux ($PREFIX/bin/sh is not /bin/sh).
+	body := "#!" + sh + "\ncat > \"$CLIP_CAPTURE\"\n"
+	if err := os.WriteFile(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return script
+}
+
+// TestCopyTermuxSendsNonEmptyPayloadToStdin pins the payload itself, not just
+// the execution: the bytes handed to the clipboard command must be non-empty
+// and must carry the card text. A copy that runs successfully while sending
+// zero bytes is the failure this guards.
+func TestCopyTermuxSendsNonEmptyPayloadToStdin(t *testing.T) {
+	t.Setenv("TERMUX_VERSION", "0.119.0")
+	t.Setenv("SSH_CONNECTION", "")
+	out := filepath.Join(t.TempDir(), "stdin.bin")
+	t.Setenv("CLIP_CAPTURE", out)
+
+	script := captureClipboardCommand(t)
+
+	card := "card line one\ncard line two with arabic: مرحبا بالعالم"
+	m := feedWithCustomTexts(t, []string{card}, 100)
+	m.enterNavigation()
+	m.selectItem(0)
+	m.clipboardCommand = script
+
+	_, cmd := m.copySelectedCard()
+	if cmd == nil {
+		t.Fatal("expected non-nil tea.Cmd in Termux environment")
+	}
+	res, ok := cmd().(clipboardResultMsg)
+	if !ok {
+		t.Fatal("cmd did not return clipboardResultMsg")
+	}
+	if res.err != nil {
+		t.Fatalf("capture command failed: %v", res.err)
+	}
+
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read captured stdin: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("copy sent zero bytes to the clipboard command's stdin")
+	}
+	if !strings.Contains(string(data), "card line one") {
+		t.Fatalf("captured stdin = %q, want it to contain the card text", string(data))
 	}
 }
