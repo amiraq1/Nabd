@@ -23,6 +23,8 @@ Published changes and downloadable artifacts are available on the
 - **The dialect is a fact a model may declare (stage 6):** `Provider.API` is renamed `Provider.DefaultAPI` because its meaning changed — `api` can now be declared per model in `providers.json` (`"models": {"claude-sonnet-5": {"api": "anthropic"}}`), and the model wins. One providers.json entry can now serve an OpenAI-dialect and an Anthropic-dialect catalog on one base URL and one key; `nabd provider add --model` is repeatable and accepts `"key=anthropic"`. Load-time rules apply to the set of declared dialects: the base URL must be legal for all of them, a declared `options.auth` must be accepted by all of them (an absent one resolves per model), and `compat` is judged against the model's resolved dialect. `nabd models` still asks with the provider's default dialect — documented in TECH_DEBT as `CATALOG_FOLLOWS_DEFAULT_API`, not an oversight.
 
 
+- **Clipboard transport in the feed is environment-gated (documented behaviour, review item N1):** OSC 52 is written to stdout only in remote sessions (`SSH_CONNECTION` set) or to an explicitly supplied writer (tests); on Termux the redacted payload is piped to `termux-clipboard-set` asynchronously with a 10s deadline; every other environment reports `copy unavailable` rather than emitting an escape sequence into a local terminal. Credential redaction and display sanitization always run before any transport. See `docs/reports/ui-parity.md` §8.
+
 ## v1.5.0
 
 Descriptor-relative file access on Android/Termux (Phase 3).
