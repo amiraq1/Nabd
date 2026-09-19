@@ -142,13 +142,13 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 const ctrlCClearHint = "input cleared · press ctrl+c again to quit"
 
 // onCtrlC implements the deterministic cancel policy (ADR-0001, rule 12):
-//   1. Secret prompt visible: cancel prompt only; never quit.
-//   2. Modal visible / decision pending + run in flight: cancel run, decision stays; never approve.
-//   3. Modal visible / decision pending without run (orphan ask): ignore safely; never quit.
-//   4. Run in flight (running or busy): cancel run; never quit mid-flight.
-//   5. Search active: cancel search; never quit.
-//   6. Composer non-empty: clear composer, reset browsing, close popups, set quit hint; never quit.
-//   7. Fully idle + empty composer: quit.
+//  1. Secret prompt visible: cancel prompt only; never quit.
+//  2. Modal visible / decision pending + run in flight: cancel run, decision stays; never approve.
+//  3. Modal visible / decision pending without run (orphan ask): ignore safely; never quit.
+//  4. Run in flight (running or busy): cancel run; never quit mid-flight.
+//  5. Search active: cancel search; never quit.
+//  6. Composer non-empty: clear composer, reset browsing, close popups, set quit hint; never quit.
+//  7. Fully idle + empty composer: quit.
 //
 // Cancellation calls m.cancel() (a context.CancelFunc) directly: the run
 // command may be blocking the Bubble Tea loop right now, so the cancel must
