@@ -24,6 +24,7 @@ import (
 	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
+	"nabd/internal/registry"
 	"nabd/internal/store"
 	"nabd/internal/tools"
 	"nabd/internal/ui"
@@ -625,9 +626,14 @@ func die(err error) {
 // an error naming the file — never a silent fall-through to the
 // credential-detection order below, which now runs only when nothing was named.
 func pickProvider() (provider.Provider, error) {
-	if err := config.Load(); err != nil {
+	known, err := registry.KnownProviderCheck()
+	if err != nil {
 		return nil, err
 	}
+	if err := config.LoadWithProviderCheck(known); err != nil {
+		return nil, err
+	}
+	tools.ConfigureReadCapFromConfig()
 	if id := strings.ToLower(strings.TrimSpace(config.Get("NABD_PROVIDER"))); id != "" {
 		if id == "router" {
 			return pickRouterProvider()

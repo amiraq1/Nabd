@@ -131,6 +131,34 @@ func DefaultPaths() (providersPath, authPath string, err error) {
 	return providersPath, authPath, nil
 }
 
+// KnownProviderCheck loads provider definitions without reading config or
+// credentials and returns a registry-backed check suitable for config v2
+// bootstrap. User definitions override builtins exactly as in LoadFromFiles.
+func KnownProviderCheck() (func(string) (string, bool), error) {
+	providersPath, _, err := DefaultPaths()
+	if err != nil {
+		return nil, err
+	}
+	known := make(map[string]struct{})
+	for id := range BuiltinCatalog() {
+		known[id] = struct{}{}
+	}
+	userProviders, err := ParseProvidersFile(providersPath)
+	if err != nil {
+		return nil, err
+	}
+	for id := range userProviders {
+		known[id] = struct{}{}
+	}
+	return func(id string) (string, bool) {
+		_, ok := known[id]
+		if !ok {
+			return "", false
+		}
+		return EnvKeyName(id), true
+	}, nil
+}
+
 // Load loads the registry using default file paths and environment variables.
 func Load() (*Registry, error) {
 	provPath, authPath, err := DefaultPaths()
@@ -180,10 +208,7 @@ func LoadFromFiles(providersPath, authPath string, envLookup func(string) string
 			prov.KeySource = "auth.json"
 		} else {
 			// Check legacy environment variable
-			legacyVar := LegacyEnvKey(id)
-			if legacyVar == "" {
-				legacyVar = strings.ToUpper(strings.ReplaceAll(id, "-", "_")) + "_API_KEY"
-			}
+			legacyVar := EnvKeyName(id)
 			if val := strings.TrimSpace(envLookup(legacyVar)); val != "" {
 				prov.Key = val
 				prov.KeySource = "env"

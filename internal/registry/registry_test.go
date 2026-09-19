@@ -537,3 +537,37 @@ func TestRegistryPrecedenceIsDocumented(t *testing.T) {
 		t.Errorf("nvidia keySource = %q, want 'none'", nvidia.KeySource)
 	}
 }
+
+func TestKnownProviderCheckIncludesCustomProvidersWithoutCredentials(t *testing.T) {
+	dir := t.TempDir()
+	providersPath := filepath.Join(dir, "providers.json")
+	authPath := filepath.Join(dir, "auth.json")
+	if err := os.WriteFile(providersPath, []byte(`{
+  "provider": {
+    "groq-mirror": {
+      "api": "openai",
+      "options": {"baseURL": "https://mirror.example/v1"},
+      "defaultModel": "m"
+    }
+  }
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("NABD_PROVIDERS_FILE", providersPath)
+	t.Setenv("NABD_AUTH_FILE", authPath)
+
+	known, err := KnownProviderCheck()
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, ok := known("groq-mirror")
+	if !ok {
+		t.Fatal("custom provider was not included in the bootstrap definitions")
+	}
+	if key != "GROQ_MIRROR_API_KEY" {
+		t.Fatalf("environment key = %q, want GROQ_MIRROR_API_KEY", key)
+	}
+	if _, ok := known("missing"); ok {
+		t.Fatal("unknown provider was accepted")
+	}
+}

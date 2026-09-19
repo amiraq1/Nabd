@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"nabd/internal/config"
+	"nabd/internal/registry"
 )
 
 func runConfigCommand(args []string, out, errOut io.Writer) int {
@@ -33,7 +34,7 @@ func runConfigCommand(args []string, out, errOut io.Writer) int {
 			fmt.Fprintln(errOut, "usage: nabd config validate")
 			return 2
 		}
-		vals, selectedVersion, err := config.ParseSelectedFile()
+		vals, selectedVersion, err := parseSelectedConfigWithRegistry()
 		if err != nil {
 			fmt.Fprintln(errOut, "invalid config:", err)
 			return 1
@@ -51,7 +52,7 @@ func runConfigCommand(args []string, out, errOut io.Writer) int {
 			fmt.Fprintln(errOut, "usage: nabd config show --redacted")
 			return 2
 		}
-		vals, selectedVersion, err := config.ParseSelectedFile()
+		vals, selectedVersion, err := parseSelectedConfigWithRegistry()
 		if err != nil {
 			fmt.Fprintln(errOut, "invalid config:", err)
 			return 1
@@ -92,4 +93,12 @@ func sensitiveConfigKey(key string) bool {
 		}
 	}
 	return false
+}
+
+func parseSelectedConfigWithRegistry() (map[string]string, int, error) {
+	known, err := registry.KnownProviderCheck()
+	if err != nil {
+		return nil, 0, err
+	}
+	return config.ParseSelectedFileWithProviderCheck(known)
 }
