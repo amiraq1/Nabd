@@ -30,6 +30,11 @@ var (
 	// other visible UI string.
 	copyCommandTimeoutNotice = "termux-clipboard-set timed out; install and open the Termux:API app"
 	copyCommandMissingNotice = "termux-clipboard-set not found; install the termux-api package"
+
+	// copyRescueFailedNotice is appended when a failed clipboard delivery could
+	// not be rescued to a file either. The text is lost, and the status line
+	// must say so rather than staying silent about it.
+	copyRescueFailedNotice = "export failed; text not saved"
 )
 
 // defaultClipboardCommand is the external clipboard-set binary used on Termux.

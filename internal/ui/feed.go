@@ -399,8 +399,10 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The clipboard is best-effort; the user's text is not. Whatever
 			// the clipboard command did, the already-redacted body is rescued
 			// to a private file so a failed copy never loses it.
-			if suffix := reportSavedSuffix(msg.body); suffix != "" {
+			if suffix, exportFailed := reportSavedSuffix(msg.body); suffix != "" {
 				status += "; " + suffix
+			} else if exportFailed {
+				status += "; " + copyRescueFailedNotice
 			}
 			m.setStatus(status, rankResult)
 		} else {

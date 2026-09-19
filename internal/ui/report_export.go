@@ -89,16 +89,18 @@ func saveReport(body redactedText) (string, error) {
 }
 
 // reportSavedSuffix exports body and returns the status-line suffix naming the
-// file it landed in. It returns "" when there is nothing to save or the export
-// itself failed, so a caller can append it unconditionally without claiming a
-// save that did not happen.
-func reportSavedSuffix(body redactedText) string {
+// file it landed in, plus whether an export was required but failed. It returns
+// ("", false) when there is nothing to save, so a caller can append the suffix
+// unconditionally without claiming a save that did not happen, and ("", true)
+// when the rescue could not be written, so the caller reports the loss instead
+// of staying silent.
+func reportSavedSuffix(body redactedText) (string, bool) {
 	if strings.TrimSpace(string(body)) == "" {
-		return ""
+		return "", false
 	}
 	path, err := saveReport(body)
 	if err != nil {
-		return ""
+		return "", true
 	}
-	return copyFullReportSaved + path
+	return copyFullReportSaved + path, false
 }

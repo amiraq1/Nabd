@@ -474,3 +474,41 @@ func TestCopyTermuxSendsNonEmptyPayloadToStdin(t *testing.T) {
 		t.Fatalf("captured stdin = %q, want it to contain the card text", string(data))
 	}
 }
+
+// TestCopyFailureThatCannotBeRescuedIsNotSilent covers the other half of the
+// rescue path: when the export itself fails there is no file to name, and the
+// status line must report the loss instead of going quiet about it.
+func TestCopyFailureThatCannotBeRescuedIsNotSilent(t *testing.T) {
+	t.Setenv("TERMUX_VERSION", "0.119.0")
+	t.Setenv("SSH_CONNECTION", "")
+	// A directory path whose parent is a regular file cannot be created, so
+	// ensurePrivateDir fails and the rescue cannot be written.
+	parent := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(ExportsDirEnv, filepath.Join(parent, "exports"))
+
+	m := feedWithCustomTexts(t, []string{"card output"}, 80)
+	m.enterNavigation()
+	m.selectItem(0)
+	m.clipboardCommand = "/nonexistent-clipboard-binary"
+
+	_, cmd := m.copySelectedCard()
+	if cmd == nil {
+		t.Fatal("expected non-nil tea.Cmd in Termux environment")
+	}
+	res, ok := cmd().(clipboardResultMsg)
+	if !ok {
+		t.Fatalf("cmd returned %T, want clipboardResultMsg", cmd())
+	}
+	if _, cmd2 := m.Update(res); cmd2 != nil {
+		t.Fatal("clipboardResultMsg must not schedule further work")
+	}
+	if !strings.HasPrefix(m.status, "copy failed: ") {
+		t.Fatalf("status = %q, want prefix 'copy failed: '", m.status)
+	}
+	if !strings.Contains(m.status, copyRescueFailedNotice) {
+		t.Fatalf("status = %q, want it to report the failed export", m.status)
+	}
+}
