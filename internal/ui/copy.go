@@ -111,6 +111,23 @@ func isTermux() bool {
 		strings.Contains(os.Getenv("PREFIX"), "com.termux")
 }
 
+// writeOSC52 encodes the sanitized payload and writes the escape sequence to w.
+// It is the single implementation shared by the explicit-writer and stdout
+// transports, so the two cannot drift apart.
+func (m *Feed) writeOSC52(w io.Writer, sanitized, notice string) (tea.Model, tea.Cmd) {
+	seq, err := encodeOSC52(sanitized, defaultMaxCopyBytes)
+	if err != nil || seq == "" {
+		m.setStatus(copyUnavailableNotice, rankResult)
+		return m, nil
+	}
+	if _, err := io.WriteString(w, seq); err != nil {
+		m.setStatus(copyUnavailableNotice, rankResult)
+		return m, nil
+	}
+	m.setStatus(notice, rankResult)
+	return m, nil
+}
+
 // dispatchCopy routes clipboard content according to the environment:
 //  1. Custom test clipboard writer (m.clipboardWriter != nil) -> synchronous OSC 52
 //  2. Remote SSH connection (SSH_CONNECTION != "") -> synchronous OSC 52 to stdout
@@ -119,31 +136,13 @@ func isTermux() bool {
 func (m *Feed) dispatchCopy(body redactedText, notice string) (tea.Model, tea.Cmd) {
 	sanitized := string(body)
 	if m.clipboardWriter != nil {
-		seq, err := encodeOSC52(sanitized, defaultMaxCopyBytes)
-		if err != nil || seq == "" {
-			m.setStatus(copyUnavailableNotice, rankResult)
-			return m, nil
-		}
-		if _, err := io.WriteString(m.clipboardWriter, seq); err != nil {
-			m.setStatus(copyUnavailableNotice, rankResult)
-			return m, nil
-		}
-		m.setStatus(notice, rankResult)
-		return m, nil
+		return m.writeOSC52(m.clipboardWriter, sanitized, notice)
 	}
 
+	// Remote sessions receive OSC 52 on stdout. This single condition is the
+	// environment gate documented in CHANGELOG and ui-parity §8.
 	if os.Getenv("SSH_CONNECTION") != "" {
-		seq, err := encodeOSC52(sanitized, defaultMaxCopyBytes)
-		if err != nil || seq == "" {
-			m.setStatus(copyUnavailableNotice, rankResult)
-			return m, nil
-		}
-		if _, err := io.WriteString(os.Stdout, seq); err != nil {
-			m.setStatus(copyUnavailableNotice, rankResult)
-			return m, nil
-		}
-		m.setStatus(notice, rankResult)
-		return m, nil
+		return m.writeOSC52(os.Stdout, sanitized, notice)
 	}
 
 	if isTermux() {
