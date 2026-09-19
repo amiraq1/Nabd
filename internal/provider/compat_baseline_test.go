@@ -13,8 +13,8 @@ func TestOpenAIEncodingBaseline(t *testing.T) {
 		System: "system instructions",
 		MaxTok: 321,
 		Messages: []Message{{
-			Role: User,
-			Text: "after tool",
+			Role:        User,
+			Text:        "after tool",
 			ToolResults: []ToolResult{{ID: "call_1", Output: "result"}},
 		}},
 	})
@@ -22,7 +22,7 @@ func TestOpenAIEncodingBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	var got struct {
-		MaxTokens int `json:"max_tokens"`
+		MaxTokens     int `json:"max_tokens"`
 		StreamOptions *struct {
 			IncludeUsage bool `json:"include_usage"`
 		} `json:"stream_options"`
