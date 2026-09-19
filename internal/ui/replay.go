@@ -60,7 +60,7 @@ func (m Replay) step() tea.Cmd {
 	cmds = append(cmds, tea.Tick(m.delay(i), func(time.Time) tea.Msg {
 		return tickMsg(i + 1)
 	}))
-	return tea.Batch(cmds...)
+	return tea.Sequence(cmds...)
 }
 
 // delay is the wall gap to the following event, scaled and capped.
