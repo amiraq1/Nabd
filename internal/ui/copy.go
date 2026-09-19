@@ -78,6 +78,7 @@ func copyCmd(name string, body redactedText, notice string) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		c := exec.CommandContext(ctx, name)
+		c.Env = clipboardChildEnv(os.Environ())
 		c.Stdin = strings.NewReader(string(body))
 		err := c.Run()
 		res := clipboardResultMsg{err: err, notice: notice, body: body}
@@ -100,6 +101,24 @@ func copyCmd(name string, body redactedText, notice string) tea.Cmd {
 		}
 		return res
 	}
+}
+
+// clipboardChildEnv returns a filtered environment for clipboard command execution.
+// It forwards only the variables needed by clipboard utilities (e.g. termux-clipboard-set)
+// and mock scripts (PATH, TMPDIR, PREFIX, TERMUX_VERSION), dropping session credentials.
+func clipboardChildEnv(parent []string) []string {
+	out := make([]string, 0, 8)
+	for _, kv := range parent {
+		k, _, ok := strings.Cut(kv, "=")
+		if !ok || k == "" {
+			continue
+		}
+		switch k {
+		case "PATH", "PREFIX", "TMPDIR", "TEMP", "TMP", "TERMUX_VERSION", "ANDROID_ROOT", "ANDROID_DATA", "CLIP_CAPTURE":
+			out = append(out, kv)
+		}
+	}
+	return out
 }
 
 // isTermux reports whether this process runs inside Termux. TERMUX_VERSION is the
