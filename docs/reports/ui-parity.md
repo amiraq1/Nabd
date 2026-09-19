@@ -201,3 +201,34 @@ func TestChatRemovedFromGoCode(t *testing.T) {
   EventType "provider_usage" fell through to the unknown-type fallback: "· provider_usage"
   ```
 
+---
+
+## ٦. Stage B: تقسيم render.go إلى طبقتي نصّ وأحداث
+
+* **تاريخ التنفيذ:** 2026-09-19
+
+### الملفان الناتجان
+
+| ملف | المسؤولية | الاستيرادات المسموحة |
+|---|---|---|
+| `render_text.go` | طبقة النصّ الخالية من المجال: قياس، لفّ، قصّ، تنسيق | `fmt`, `strings`, `lipgloss`, `ansi` فقط |
+| `render_event.go` | تحويل `agent.Event` إلى سطور شاشة | الأربعة أعلاه + `encoding/json`, `agent`, `presentation` |
+
+### القرار بشأن `green`
+
+`green` **مُستخدم** في `feed_render.go:92` (`green.Render("Nabd")`). نُقل إلى `render_text.go` مع بقية المتغيّرات.
+
+### حارس الطبقات (`render_layers_test.go`)
+
+* `TestRenderTextLayerStaysDomainFree` — يتحقّق أن استيرادات `render_text.go` هي الأربعة المسموحة حصرًا.
+* `TestRenderTextLayerDeclarations` — قائمة مجمّدة بـ 18 تصريحًا.
+* `TestRenderEventLayerDeclarations` — قائمة مجمّدة بـ 5 تصريحات.
+* `TestRenderEventLayerImportsAgent` — يتحقّق أن `render_event.go` يستورد `agent`.
+
+### بند فحص يدوي لـ PR حذف Chat
+
+تعليق `flushJoin` يقول "Both Chat and Replay call it" — سيصبح خاطئًا بعد حذف Chat. يجب تحديثه في PR الحذف لا هنا.
+
+### لا تضارب أسماء
+
+`parseImports`, `topLevelNames`, `equalStrings` لم تكن موجودة في الحزمة قبل هذا الحارس.
