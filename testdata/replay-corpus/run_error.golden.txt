@@ -1,0 +1,5 @@
+── nabd · /corpus
+› invalid op
+✗ dial tcp: connection refused · network_err
+⊘ stopped
+── 0 turns · error

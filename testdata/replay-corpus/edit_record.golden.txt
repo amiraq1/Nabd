@@ -1,0 +1,7 @@
+── nabd · /corpus
+› fix typo
+⚙ edit_file cmd/main.go
+✎ cmd/main.go · read 25 lines
+✓ edit_file · 110ms
+  applied patch
+── 1 turn · 1s

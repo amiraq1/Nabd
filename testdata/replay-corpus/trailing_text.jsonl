@@ -1,0 +1,4 @@
+{"seq":1,"t":"2026-09-01T10:00:00Z","type":"run_start","text":"nabd · /corpus"}
+{"seq":2,"parent":1,"t":"2026-09-01T10:00:01Z","type":"user_msg","text":"write a poem"}
+{"seq":3,"parent":2,"t":"2026-09-01T10:00:02Z","type":"turn_start"}
+{"seq":4,"parent":3,"t":"2026-09-01T10:00:03Z","type":"text_delta","text":"a river runs through the mountain pass"}

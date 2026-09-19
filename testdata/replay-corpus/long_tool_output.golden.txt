@@ -1,0 +1,13 @@
+── nabd · /corpus
+› list files
+⚙ glob *.go
+✓ glob · 85ms
+  … file5.go
+  file6.go
+  file7.go
+  file8.go
+  file9.go
+  file10.go
+  file11.go
+  file12.go
+── 1 turn · 1s

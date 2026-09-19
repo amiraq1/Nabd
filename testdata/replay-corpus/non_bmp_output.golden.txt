@@ -1,0 +1,7 @@
+── nabd · /corpus
+› deploy spaceship
+  initiating launch sequence 🚀🛸✨
+⚙ bash echo 🛰️
+✓ bash · 95ms
+  telemetry: 🛰️ active
+── 1 turn · 1s
