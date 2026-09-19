@@ -137,11 +137,18 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// onCtrlC implements the deterministic cancel policy:
-//   - Modal visible: cancel the in-flight run; never approve, never quit.
-//   - Run in flight: cancel it; never quit mid-flight.
-//   - Composer non-empty: clear it (and history browsing); never quit.
-//   - Otherwise: quit (the app's exit policy, unchanged).
+// ctrlCClearHint is asserted verbatim by feed_ctrlc_contract_test.go. Changing
+// the wording is a UX decision, so it must be a deliberate edit in both places.
+const ctrlCClearHint = "input cleared · press ctrl+c again to quit"
+
+// onCtrlC implements the deterministic cancel policy (ADR-0001, rule 12):
+//   1. Secret prompt visible: cancel prompt only; never quit.
+//   2. Modal visible / decision pending + run in flight: cancel run, decision stays; never approve.
+//   3. Modal visible / decision pending without run (orphan ask): ignore safely; never quit.
+//   4. Run in flight (running or busy): cancel run; never quit mid-flight.
+//   5. Search active: cancel search; never quit.
+//   6. Composer non-empty: clear composer, reset browsing, close popups, set quit hint; never quit.
+//   7. Fully idle + empty composer: quit.
 //
 // Cancellation calls m.cancel() (a context.CancelFunc) directly: the run
 // command may be blocking the Bubble Tea loop right now, so the cancel must
@@ -168,7 +175,7 @@ func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
 	if m.search.active {
 		return m.cancelSearch()
 	}
-	if !m.composer.isEmpty() {
+	if m.composer.value() != "" {
 		m.composer.clear()
 		m.history.resetBrowsing()
 		m.menu.close()
@@ -176,7 +183,7 @@ func (m *Feed) onCtrlC() (tea.Model, tea.Cmd) {
 		// with it rather than keep offering paths for a token that no
 		// longer exists.
 		m.picker.close()
-		m.clearStatus()
+		m.setStatus(ctrlCClearHint, rankResult)
 		return m, nil
 	}
 	// Empty composer, idle: quit.
