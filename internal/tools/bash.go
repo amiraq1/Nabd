@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/config"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/sandbox"
@@ -67,6 +68,16 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	if strings.TrimSpace(a.Cmd) == "" {
 		return agent.Outcome{}, errors.New("empty command")
 	}
+	mode, err := sandbox.ParseMode(config.Get("NABD_BASH_SANDBOX"))
+	if err != nil {
+		return agent.Outcome{}, err
+	}
+	helper, helperOK := sandbox.HelperPath()
+	landlockOK := mode != sandbox.ModeOff && sandbox.Available()
+	useHelper, err := sandbox.UseHelper(mode, helperOK, landlockOK)
+	if err != nil {
+		return agent.Outcome{}, err
+	}
 	to := bashDefaultTimeout
 	if a.T > 0 {
 		to = time.Duration(a.T) * time.Second
@@ -106,7 +117,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	}
 
 	cmdArgs := []string{"sh", "-c", a.Cmd}
-	if helper, ok := sandbox.HelperPath(); ok && sandbox.Available() {
+	if useHelper {
 		cmdArgs = []string{
 			helper,
 			sandbox.HelperCommand,
