@@ -69,7 +69,7 @@ func (p *Projector) Apply(e agent.Event) error {
 		return p.appendInterrupted(e)
 	case agent.EventRead:
 		return p.appendReadRecord(e)
-	case agent.Compact, agent.Rewind, agent.EventEdit, agent.EventCalib, agent.EventRateLimit, agent.EventProviderUsage:
+	case agent.Compact, agent.Rewind, agent.EventEditIntent, agent.EventEditAbort, agent.EventEdit, agent.EventCalib, agent.EventRateLimit, agent.EventProviderUsage:
 		return nil
 	case agent.EventProviderRoute:
 		text, ok := FormatRouteNotice(e.Route)

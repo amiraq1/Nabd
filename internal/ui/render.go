@@ -112,6 +112,11 @@ func RenderEvent(e agent.Event, width int) string {
 		}
 		return dim.Render(s)
 
+	case agent.EventEditIntent, agent.EventEditAbort:
+		// Recovery bookkeeping is journal-only. The committed edit_record
+		// remains the single human-facing mutation summary.
+		return ""
+
 	case agent.EventRead:
 		// Summary only: the truncation tail is in the tool_result the model
 		// already saw; the screen just marks the fact.

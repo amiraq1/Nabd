@@ -158,17 +158,33 @@ func (j *JSONL) Append(e agent.Event) error {
 	return j.w.Flush()
 }
 
-// Close flushes and syncs. This is the only fsync in the package.
+// Sync flushes buffered bytes and calls fsync without closing the journal.
+// The agent uses this for mutation and permission events whose loss would
+// invalidate recovery or auditability.
+func (j *JSONL) Sync() error {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.syncLocked()
+}
+
+func (j *JSONL) syncLocked() error {
+	if j.f == nil {
+		return nil
+	}
+	if err := j.w.Flush(); err != nil {
+		return err
+	}
+	return j.f.Sync()
+}
+
+// Close flushes and syncs.
 func (j *JSONL) Close() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.f == nil {
 		return nil
 	}
-	err := j.w.Flush()
-	if serr := j.f.Sync(); err == nil {
-		err = serr
-	}
+	err := j.syncLocked()
 	if cerr := j.f.Close(); err == nil {
 		err = cerr
 	}

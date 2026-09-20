@@ -105,6 +105,14 @@ type Registry struct {
 	// It must not call back into the registry.
 	OnRepair func(Fix)
 
+	// OnMutationPrepared is called after a mutation record is fully prepared
+	// but before the project file is published. Production wires it to the
+	// loop's durable mutation-intent event.
+	OnMutationPrepared func(*agent.EditRecord) error
+
+	// OnMutationAborted is called when a mutation fails before publication.
+	OnMutationAborted func(*agent.EditRecord, error) error
+
 	// pathGate is the policy's path rule (see SetPathGate). Set once at startup,
 	// before any tool runs, and never swapped afterwards.
 	pathGate PathGate

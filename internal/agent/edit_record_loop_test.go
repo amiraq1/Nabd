@@ -147,6 +147,62 @@ func TestLoopEmitsEditRecordEvent(t *testing.T) {
 	}
 }
 
+func TestMutationIntentPrecedesEditRecord(t *testing.T) {
+	dir := t.TempDir()
+	root, err := tools.NewRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := snap.New(root.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(root, sh)
+
+	l := &agent.Loop{
+		Provider: &writeOnceProvider{},
+		Tools:    loopTools{reg},
+		Budget:   agent.NewBudget(),
+		Gate:     loopTools{reg},
+		Human:    loopTools{reg},
+	}
+	reg.OnMutationPrepared = l.PrepareMutation
+	reg.OnMutationAborted = l.AbortMutation
+
+	var events []agent.Event
+	l.Sink = sinkFunc(func(e agent.Event) error {
+		events = append(events, e)
+		return nil
+	})
+	if err := l.Run(context.Background(), "اكتب out.md"); err != nil {
+		t.Fatal(err)
+	}
+
+	intentIdx, toolEndIdx, editIdx := -1, -1, -1
+	for i, e := range events {
+		switch e.Type {
+		case agent.EventEditIntent:
+			intentIdx = i
+		case agent.ToolEnd:
+			toolEndIdx = i
+		case agent.EventEdit:
+			editIdx = i
+		}
+	}
+	if intentIdx < 0 {
+		t.Fatal("no edit_intent event emitted")
+	}
+	if toolEndIdx < 0 || intentIdx > toolEndIdx {
+		t.Fatalf("edit_intent index=%d must precede ToolEnd index=%d", intentIdx, toolEndIdx)
+	}
+	if editIdx < 0 || editIdx < toolEndIdx {
+		t.Fatalf("edit_record index=%d must follow ToolEnd index=%d", editIdx, toolEndIdx)
+	}
+	if events[intentIdx].Edit == nil || events[editIdx].Edit == nil {
+		t.Fatal("mutation events must carry an EditRecord")
+	}
+}
+
 // sinkFunc adapts a func to the agent.Sink interface.
 type sinkFunc func(agent.Event) error
 
