@@ -6,6 +6,7 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+- **Replay output ordering:** fixed a race condition where replay printed lines out of order in roughly one run in eight due to concurrent command batching; sequenced execution (`tea.Sequence`) now structurally guarantees print delivery before the next event tick.
 - **Event rendering:** Completed file reads (`EventRead`) no longer fall through to produce a spurious unknown-event marker (`· read_record`); truncated reads continue to display their standard warning.
 - **Event rendering (A2):** The remaining five known event types (`TextDelta`, `EventProviderUsage`, `EventSkillBody`, `EventSkills`, `Rewind`) now have explicit rendering cases. `EventProviderUsage` is emitted once per successful request, so the spurious `· provider_usage` line was visible in essentially every session. Rewind events now display `── rewind` (or `── rewind to #N`) and skill-load events display a count summary (`⚑ N skills · M project`). The hand-written guard test is replaced by a source-derived coverage guard that parses `internal/agent/event.go` at test time, so future event types cannot silently fall through.
 - **Feed Ctrl-C hint:** Clearing non-empty composer input via Ctrl-C now displays the status hint "input cleared · press ctrl+c again to quit" to guide exiting.

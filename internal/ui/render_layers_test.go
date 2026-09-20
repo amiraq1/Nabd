@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"sort"
 	"strings"
 	"testing"
@@ -215,6 +216,62 @@ func TestRenderEventLayerImportsAgent(t *testing.T) {
 			if imp == banned {
 				t.Errorf("render_event.go imports %q which belongs only in test files", banned)
 			}
+		}
+	}
+}
+
+// TestNoBatchWithPrintlnInUI enforces that no file under internal/ui references
+// both tea.Batch and tea.Println. Batching a print with a command that can cause
+// a later print makes output order depend on scheduling.
+func TestNoBatchWithPrintlnInUI(t *testing.T) {
+	// chat.go is temporarily allowlisted; will be removed in the Chat-deletion PR.
+	allowlist := map[string]bool{
+		"chat.go": true,
+	}
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("reading directory: %v", err)
+	}
+
+	fset := token.NewFileSet()
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+
+		node, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", name, err)
+		}
+
+		hasBatch := false
+		hasPrintln := false
+
+		ast.Inspect(node, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			x, ok := sel.X.(*ast.Ident)
+			if !ok || x.Name != "tea" {
+				return true
+			}
+			switch sel.Sel.Name {
+			case "Batch":
+				hasBatch = true
+			case "Println":
+				hasPrintln = true
+			}
+			return true
+		})
+
+		if hasBatch && hasPrintln {
+			if allowlist[name] {
+				continue
+			}
+			t.Errorf("file %q references both tea.Batch and tea.Println: batching a print with a command that can cause a later print makes output order depend on scheduling", name)
 		}
 	}
 }

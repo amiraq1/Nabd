@@ -1,0 +1,8 @@
+{"seq":1,"t":"2026-09-01T10:00:00Z","type":"run_start","text":"nabd · /corpus"}
+{"seq":2,"parent":1,"t":"2026-09-01T10:00:01Z","type":"user_msg","text":"fix typo"}
+{"seq":3,"parent":2,"t":"2026-09-01T10:00:02Z","type":"turn_start"}
+{"seq":4,"parent":3,"t":"2026-09-01T10:00:03Z","type":"tool_start","call":{"id":"e1","name":"edit_file","args":{"path":"cmd/main.go"}}}
+{"seq":5,"parent":4,"t":"2026-09-01T10:00:04Z","type":"edit_record","edit":{"path":"cmd/main.go","hash_before":"","hash_after":"","patch":"--- a\n+++ b\n@@ -1 +1 @@\n-old\n+new","read_lines":25}}
+{"seq":6,"parent":5,"t":"2026-09-01T10:00:05Z","type":"tool_end","call":{"id":"e1","name":"edit_file","out":"applied patch","ok":true,"ms":110}}
+{"seq":7,"parent":6,"t":"2026-09-01T10:00:06Z","type":"turn_end"}
+{"seq":8,"parent":7,"t":"2026-09-01T10:00:07Z","type":"run_end","text":"1 turn · 1s"}

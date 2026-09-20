@@ -41,7 +41,13 @@ func NewReplay(events []agent.Event, speed float64) Replay {
 	}
 }
 
-func (m Replay) Init() tea.Cmd { return m.step() }
+func (m Replay) Init() tea.Cmd {
+	if len(m.events) == 0 {
+		return tea.Quit // nothing to replay; step() would return nil and
+		// the program would wait for a key forever
+	}
+	return m.step()
+}
 
 // step emits the next event and schedules the one after it.
 func (m Replay) step() tea.Cmd {
@@ -60,7 +66,7 @@ func (m Replay) step() tea.Cmd {
 	cmds = append(cmds, tea.Tick(m.delay(i), func(time.Time) tea.Msg {
 		return tickMsg(i + 1)
 	}))
-	return tea.Batch(cmds...)
+	return tea.Sequence(cmds...)
 }
 
 // delay is the wall gap to the following event, scaled and capped.

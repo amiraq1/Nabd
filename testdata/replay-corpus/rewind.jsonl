@@ -1,0 +1,11 @@
+{"seq":1,"t":"2026-09-01T10:00:00Z","type":"run_start","text":"nabd · /corpus"}
+{"seq":2,"parent":1,"t":"2026-09-01T10:00:01Z","type":"user_msg","text":"first command"}
+{"seq":3,"parent":2,"t":"2026-09-01T10:00:02Z","type":"turn_start"}
+{"seq":4,"parent":3,"t":"2026-09-01T10:00:03Z","type":"text_delta","text":"result 1"}
+{"seq":5,"parent":4,"t":"2026-09-01T10:00:04Z","type":"turn_end"}
+{"seq":6,"parent":1,"t":"2026-09-01T10:00:05Z","type":"rewind","text":"rewound 1 turns (3 events)"}
+{"seq":7,"parent":6,"t":"2026-09-01T10:00:06Z","type":"user_msg","text":"corrected command"}
+{"seq":8,"parent":7,"t":"2026-09-01T10:00:07Z","type":"turn_start"}
+{"seq":9,"parent":8,"t":"2026-09-01T10:00:08Z","type":"text_delta","text":"result 2"}
+{"seq":10,"parent":9,"t":"2026-09-01T10:00:09Z","type":"turn_end"}
+{"seq":11,"parent":10,"t":"2026-09-01T10:00:10Z","type":"run_end","text":"1 turn · 2s"}

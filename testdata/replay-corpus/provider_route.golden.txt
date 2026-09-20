@@ -1,0 +1,4 @@
+── nabd · /corpus
+› hello router
+  routed response via groq
+── 1 turn · 1s
