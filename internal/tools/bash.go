@@ -20,6 +20,7 @@ import (
 	"nabd/internal/agent"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
+	"nabd/internal/sandbox"
 )
 
 const (
@@ -104,7 +105,20 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		env = append(env, "TMPDIR="+tmp, "TMP="+tmp, "TEMP="+tmp)
 	}
 
-	cmd := exec.Command("sh", "-c", a.Cmd)
+	cmdArgs := []string{"sh", "-c", a.Cmd}
+	if helper, ok := sandbox.HelperPath(); ok && sandbox.Available() {
+		cmdArgs = []string{
+			helper,
+			sandbox.HelperCommand,
+			b.root.Dir(),
+			home,
+			tmp,
+			"sh",
+			"-c",
+			a.Cmd,
+		}
+	}
+	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
 	cmd.Dir = b.root.Dir()
 	cmd.Env = env
 	cmd.Stdin = null
