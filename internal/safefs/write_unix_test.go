@@ -271,6 +271,9 @@ func TestWriteFileAtomicRenameFailureUnlinksTemporaryFile(t *testing.T) {
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("err=%v, want the synthetic rename error", err)
 	}
+	if WasPublished(err) {
+		t.Fatal("rename failure must be classified as unpublished")
+	}
 
 	got, err := os.ReadFile(target)
 	if err != nil {
@@ -351,6 +354,44 @@ func TestWriteFileAtomicSyncsFileBeforeRenameAndParentAfterRename(t *testing.T) 
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("event order=%v, want %v (file-fsync, renameat, parent-fsync)", events, want)
 	}
+}
+
+// A parent fsync failure happens after renameat has made the new bytes visible.
+// Recovery must retain the mutation intent instead of treating this as a
+// pre-publish failure.
+func TestWriteFileAtomicReportsPublishedWhenParentFsyncFails(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "f.txt")
+
+	realFsync := fsyncFD
+	t.Cleanup(func() { fsyncFD = realFsync })
+
+	sentinel := errors.New("synthetic parent fsync failure")
+	calls := 0
+	fsyncFD = func(fd int) error {
+		calls++
+		if calls == 2 {
+			return sentinel
+		}
+		return realFsync(fd)
+	}
+
+	err := WriteFileAtomic(root, "f.txt", []byte("published\n"), 0o644)
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("err=%v, want the synthetic parent fsync error", err)
+	}
+	if !WasPublished(err) {
+		t.Fatal("parent fsync failure must be classified as published")
+	}
+
+	got, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read published target: %v", readErr)
+	}
+	if string(got) != "published\n" {
+		t.Fatalf("target=%q, want published bytes", got)
+	}
+	assertDirNames(t, root, "f.txt")
 }
 
 // 12: invalid paths are rejected, including "." and a trailing separator,
