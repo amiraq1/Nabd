@@ -150,7 +150,8 @@ func (m *Feed) writeOSC52(w io.Writer, sanitized, notice string) (tea.Model, tea
 // dispatchCopy routes clipboard content according to the environment:
 //  1. Custom test clipboard writer (m.clipboardWriter != nil) -> synchronous OSC 52
 //  2. Remote SSH connection (SSH_CONNECTION != "") -> synchronous OSC 52 to stdout
-//  3. Termux environment (isTermux) -> asynchronous termux-clipboard-set command
+//  3. Termux environment (isTermux) -> asynchronous OSC 52, or termux-clipboard-set
+//     when a command is injected or NABD_CLIPBOARD=exec
 //  4. Unavailable otherwise
 func (m *Feed) dispatchCopy(body redactedText, notice string) (tea.Model, tea.Cmd) {
 	sanitized := string(body)
@@ -169,7 +170,7 @@ func (m *Feed) dispatchCopy(body redactedText, notice string) (tea.Model, tea.Cm
 		if name == "" {
 			name = defaultClipboardCommand
 		}
-		return m, copyCmd(name, body, notice)
+		return m, m.termuxClipboardCmd(name, body, notice)
 	}
 
 	m.setStatus(copyUnavailableNotice, rankResult)

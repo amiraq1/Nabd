@@ -200,3 +200,44 @@ func TestCopyTermuxPathKeepsMarkerAtWidth63(t *testing.T) {
 		t.Fatalf("marker broken on the termux transport:\n%q", string(got))
 	}
 }
+
+// Default Termux transport is OSC 52: no subprocess, no termux-api dependency.
+func TestTermuxTransportPrefersOSC52(t *testing.T) {
+	t.Setenv("NABD_CLIPBOARD", "")
+	m := feedWithCustomTexts(t, []string{"x"}, 40)
+	var buf bytes.Buffer
+	m.clipboardWriter = &buf
+	m.clipboardCommand = ""
+
+	cmd := m.termuxClipboardCmd(defaultClipboardCommand, redactForExport("hello-osc"), copySuccessNotice)
+	res, ok := cmd().(clipboardResultMsg)
+	if !ok {
+		t.Fatal("transport did not return clipboardResultMsg")
+	}
+	if res.err != nil {
+		t.Fatalf("osc transport failed: %v", res.err)
+	}
+	payload := strings.TrimSuffix(strings.TrimPrefix(buf.String(), "\x1b]52;c;"), "\x1b\\")
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil || !strings.Contains(string(decoded), "hello-osc") {
+		t.Fatalf("osc payload wrong: %q (err %v)", buf.String(), err)
+	}
+}
+
+// NABD_CLIPBOARD=exec forces the verifiable subprocess transport and must not
+// emit any escape sequence.
+func TestTermuxTransportHonoursExecOverride(t *testing.T) {
+	t.Setenv("NABD_CLIPBOARD", "exec")
+	m := feedWithCustomTexts(t, []string{"x"}, 40)
+	var buf bytes.Buffer
+	m.clipboardWriter = &buf
+	m.clipboardCommand = ""
+
+	cmd := m.termuxClipboardCmd("cat", redactForExport("hello-exec"), copySuccessNotice)
+	if _, ok := cmd().(clipboardResultMsg); !ok {
+		t.Fatal("exec transport did not return clipboardResultMsg")
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("exec override still wrote an escape sequence: %q", buf.String())
+	}
+}
