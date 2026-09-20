@@ -2,6 +2,7 @@ package ui
 
 import (
 	"bytes"
+	"encoding/base64"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -129,5 +130,34 @@ func TestCopyHonoursPerCardExpansion(t *testing.T) {
 	expanded := m.cardTextForCopyUnwrapped(0)
 	if expanded == collapsed {
 		t.Fatal("copy ignored the per-card expansion override")
+	}
+}
+
+// End-to-end lock for the wrap bug at the real device width: the marker must
+// survive projection, rendering, redaction, sanitization, base64 and the OSC 52
+// frame as one unbroken token. Unit coverage of cardTextForCopyUnwrapped alone
+// cannot catch a regression introduced later in the pipeline.
+func TestCopyEndToEndKeepsMarkerAtWidth63(t *testing.T) {
+	mark := "ZQ7X/" + strings.Repeat("seg/", 18) + "end.go"
+	m := feedWithCustomTexts(t, []string{mark}, 63)
+	m.enterNavigation()
+	m.selectItem(0)
+	m.toolsExpanded = true
+
+	var buf bytes.Buffer
+	m.SetClipboardWriter(&buf)
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+
+	raw := buf.String()
+	if raw == "" {
+		t.Fatal("no OSC 52 sequence was written")
+	}
+	payload := strings.TrimSuffix(strings.TrimPrefix(raw, "\x1b]52;c;"), "\x1b\\")
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		t.Fatalf("clipboard payload is not valid base64: %v", err)
+	}
+	if !strings.Contains(string(decoded), mark) {
+		t.Fatalf("marker was broken by the copy pipeline at width 63:\n%q", string(decoded))
 	}
 }
