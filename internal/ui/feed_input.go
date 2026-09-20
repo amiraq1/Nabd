@@ -949,6 +949,39 @@ func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Motion while the pointer is down is a drag: scroll the viewport by the
+	// vertical delta since the last motion report. It is handled BEFORE the
+	// hit-test so a drag keeps scrolling after the finger leaves the viewport
+	// band, instead of stopping dead at the edge.
+	if msg.Action == tea.MouseActionMotion {
+		if !m.pointerDown {
+			return m, nil
+		}
+		dy := msg.Y - m.pointerLastY
+		m.pointerLastY = msg.Y
+		if msg.Y != m.pointerStartY || abs(msg.X-m.pointerStartX) > 1 {
+			m.pointerDragged = true
+		}
+		if dy != 0 {
+			// Any real scroll is unambiguously a drag, so the release can
+			// never resolve as a tap.
+			m.pointerDragged = true
+			bs := m.bottomStart(lm.ViewportRows)
+			if dy > 0 {
+				// Finger down reveals older content.
+				m.follow = false
+				m.scrollTop = max(0, m.scrollTop-dy)
+			} else {
+				m.scrollTop = min(bs, m.scrollTop-dy)
+				if m.scrollTop == bs {
+					m.follow = true
+					m.unseen = 0
+				}
+			}
+		}
+		return m, nil
+	}
+
 	// Hit-test: coordinates must fall strictly within the conversation viewport.
 	vpTop := lm.viewportTop()
 	vpBottom := vpTop + lm.ViewportRows
@@ -963,17 +996,8 @@ func (m *Feed) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		m.pointerDown = true
 		m.pointerStartX = msg.X
 		m.pointerStartY = msg.Y
+		m.pointerLastY = msg.Y
 		m.pointerDragged = false
-		return m, nil
-	}
-
-	// Pointer motion tracking:
-	if msg.Action == tea.MouseActionMotion {
-		if m.pointerDown {
-			if msg.Y != m.pointerStartY || abs(msg.X-m.pointerStartX) > 1 {
-				m.pointerDragged = true
-			}
-		}
 		return m, nil
 	}
 

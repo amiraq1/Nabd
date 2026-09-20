@@ -101,6 +101,17 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case tea.KeyDown:
 		m.moveCard(1)
 		return m, nil, true
+	case tea.KeyHome:
+		// Home/End are navigation keys: while the composer owns focus they
+		// scroll the viewport (viewportKey), and only in navigation mode do
+		// they jump the card selection. Esc is therefore required first.
+		m.selectItem(0)
+		return m, nil, true
+	case tea.KeyEnd:
+		m.selectItem(len(m.navigationItems()) - 1)
+		m.follow = true
+		m.scrollToEnd()
+		return m, nil, true
 	case tea.KeyEsc:
 		m.navigationMode = false
 		m.clearStatus()

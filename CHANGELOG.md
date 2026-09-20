@@ -23,6 +23,8 @@ Published changes and downloadable artifacts are available on the
 - **The dialect is a fact a model may declare (stage 6):** `Provider.API` is renamed `Provider.DefaultAPI` because its meaning changed — `api` can now be declared per model in `providers.json` (`"models": {"claude-sonnet-5": {"api": "anthropic"}}`), and the model wins. One providers.json entry can now serve an OpenAI-dialect and an Anthropic-dialect catalog on one base URL and one key; `nabd provider add --model` is repeatable and accepts `"key=anthropic"`. Load-time rules apply to the set of declared dialects: the base URL must be legal for all of them, a declared `options.auth` must be accepted by all of them (an absent one resolves per model), and `compat` is judged against the model's resolved dialect. `nabd models` still asks with the provider's default dialect — documented in TECH_DEBT as `CATALOG_FOLLOWS_DEFAULT_API`, not an oversight.
 
 
+- **Touch drag-scroll and navigation keys:** Pointer drag now scrolls the feed viewport by vertical motion delta; Home and End keys scroll the viewport or jump card selection in navigation mode; viewport top padding on short content remains stable when clearing follow.
+
 ## v1.5.0
 
 Descriptor-relative file access on Android/Termux (Phase 3).

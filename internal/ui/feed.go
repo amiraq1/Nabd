@@ -171,9 +171,12 @@ type Feed struct {
 	input        io.Reader
 
 	// Pointer drag-tracking state.
-	pointerDown    bool
-	pointerStartX  int
-	pointerStartY  int
+	pointerDown   bool
+	pointerStartX int
+	pointerStartY int
+	// pointerLastY is the Y of the most recent motion event while the pointer
+	// is down. handleMouse diffs it to turn a touch drag into viewport scroll.
+	pointerLastY   int
 	pointerDragged bool
 
 	// Search state.
