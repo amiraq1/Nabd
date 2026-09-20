@@ -6,6 +6,9 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+- **Event rendering:** Completed file reads (`EventRead`) no longer fall through to produce a spurious unknown-event marker (`· read_record`); truncated reads continue to display their standard warning.
+- **Event rendering (A2):** The remaining five known event types (`TextDelta`, `EventProviderUsage`, `EventSkillBody`, `EventSkills`, `Rewind`) now have explicit rendering cases. `EventProviderUsage` is emitted once per successful request, so the spurious `· provider_usage` line was visible in essentially every session. Rewind events now display `── rewind` (or `── rewind to #N`) and skill-load events display a count summary (`⚑ N skills · M project`). The hand-written guard test is replaced by a source-derived coverage guard that parses `internal/agent/event.go` at test time, so future event types cannot silently fall through.
+- **Feed Ctrl-C hint:** Clearing non-empty composer input via Ctrl-C now displays the status hint "input cleared · press ctrl+c again to quit" to guide exiting.
 - `--permission-mode` now applies to the interactive TUI as well as headless runs, and
   accepts a new `plan` mode: strict read-only that denies every write and command even when
   a session grant or YOLO would allow it. The interactive default stays `ask` and the headless
@@ -15,6 +18,8 @@ Published changes and downloadable artifacts are available on the
   removing the duplicated wiring in `cmd/ag/main.go`. `Chat` and `Feed` share a single
   `ui.SessionCallbacks` contract, so `/rewind` has one signature on both paths.
 - **Groq catalog updated:** the default model is now `openai/gpt-oss-120b` (replacing `qwen-2.5-32b`), and `llama-3.3-70b-versatile` was dropped from the builtin catalog; users with `NABD_MODEL` set to dropped models should update to `openai/gpt-oss-120b` or run `nabd models groq` to select an available alternative.
+- **OpenAI wire compatibility (`compat`):** `compat.temperature` is now a tri-state type supporting numbers in `[0, 2]`, `"omit"` (omits the `temperature` field from the wire payload for `o1`/`o3`-class reasoning models that reject explicit values), or absent (preserving the `0.2` baseline). Existing `"temperature": null` values now silently degrade to absent (sending `0.2`) rather than causing a decode error. Setting `compat.includeUsage: false` now completely omits the `stream_options` object from the request.
+- **The dialect is a fact a model may declare (stage 6):** `Provider.API` is renamed `Provider.DefaultAPI` because its meaning changed — `api` can now be declared per model in `providers.json` (`"models": {"claude-sonnet-5": {"api": "anthropic"}}`), and the model wins. One providers.json entry can now serve an OpenAI-dialect and an Anthropic-dialect catalog on one base URL and one key; `nabd provider add --model` is repeatable and accepts `"key=anthropic"`. Load-time rules apply to the set of declared dialects: the base URL must be legal for all of them, a declared `options.auth` must be accepted by all of them (an absent one resolves per model), and `compat` is judged against the model's resolved dialect. `nabd models` still asks with the provider's default dialect — documented in TECH_DEBT as `CATALOG_FOLLOWS_DEFAULT_API`, not an oversight.
 
 
 ## v1.5.0
