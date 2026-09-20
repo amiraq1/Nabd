@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
