@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
-	"nabd/internal/provider"
 )
 
 // A failed durable intent must stop the mutation before writeFromRoot can
