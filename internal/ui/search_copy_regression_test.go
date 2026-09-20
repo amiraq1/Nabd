@@ -3,6 +3,8 @@ package ui
 import (
 	"bytes"
 	"encoding/base64"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -159,5 +161,42 @@ func TestCopyEndToEndKeepsMarkerAtWidth63(t *testing.T) {
 	}
 	if !strings.Contains(string(decoded), mark) {
 		t.Fatalf("marker was broken by the copy pipeline at width 63:\n%q", string(decoded))
+	}
+}
+
+// The device path is not the OSC 52 path: on Termux, dispatchCopy hands the
+// payload to termux-clipboard-set over stdin. The unwrap fix lives in the
+// shared source, but only this test proves the marker survives the transport
+// the device actually uses.
+func TestCopyTermuxPathKeepsMarkerAtWidth63(t *testing.T) {
+	dir := t.TempDir()
+	out := filepath.Join(dir, "captured.txt")
+	script := filepath.Join(dir, "fake-clip")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ncat > \""+out+"\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TERMUX_VERSION", "0.119.0")
+	t.Setenv("SSH_CONNECTION", "")
+
+	mark := "ZQ7X/" + strings.Repeat("seg/", 18) + "end.go"
+	m := feedWithCustomTexts(t, []string{mark}, 63)
+	m.enterNavigation()
+	m.selectItem(0)
+	m.toolsExpanded = true
+	m.clipboardWriter = nil
+	m.clipboardCommand = script
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if cmd == nil {
+		t.Fatal("termux path returned no command")
+	}
+	cmd()
+
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("clipboard command received nothing: %v", err)
+	}
+	if !strings.Contains(string(got), mark) {
+		t.Fatalf("marker broken on the termux transport:\n%q", string(got))
 	}
 }
