@@ -26,7 +26,8 @@ const (
 )
 
 type rulesetAttr struct {
-	HandledAccess uint64
+	HandledAccessFS  uint64
+	HandledAccessNet uint64
 }
 
 type pathBeneath struct {
@@ -36,6 +37,7 @@ type pathBeneath struct {
 }
 
 var ErrUnavailable = errors.New("landlock sandbox is unavailable on this kernel")
+var ErrNetworkUnavailable = errors.New("landlock network restrictions are unavailable on this kernel")
 
 func landlockCall(number uintptr, args ...uintptr) (uintptr, error) {
 	var a [6]uintptr
@@ -65,6 +67,12 @@ func kernelABI() (int, error) {
 func Available() bool {
 	abi, err := kernelABI()
 	return err == nil && abi >= 1
+}
+
+// SupportsNetwork reports whether the kernel supports Landlock TCP rules.
+func SupportsNetwork() bool {
+	abi, err := kernelABI()
+	return err == nil && abi >= 4
 }
 
 func handledAccess(abi int) uint64 {
@@ -98,6 +106,10 @@ func readOnlyAccess() uint64 {
 			unix.LANDLOCK_ACCESS_FS_READ_FILE |
 			unix.LANDLOCK_ACCESS_FS_READ_DIR,
 	)
+}
+
+func networkAccess() uint64 {
+	return uint64(unix.LANDLOCK_ACCESS_NET_BIND_TCP | unix.LANDLOCK_ACCESS_NET_CONNECT_TCP)
 }
 
 func openPath(path string) (int, error) {
@@ -136,9 +148,9 @@ func setNoNewPrivs() error {
 	return nil
 }
 
-// Apply installs a filesystem-only Landlock boundary in the current process.
-// It must be called in the child immediately before exec. Network access is
-// intentionally not handled here; approved Bash remains network-capable.
+// Apply installs a Landlock boundary in the current process. It must be
+// called in the child immediately before exec. Filesystem access is always
+// restricted; TCP bind/connect are restricted only when DenyNetwork is true.
 func Apply(cfg Config) error {
 	if !Available() {
 		return ErrUnavailable
@@ -158,12 +170,20 @@ func Apply(cfg Config) error {
 	if err != nil {
 		return ErrUnavailable
 	}
+	if cfg.DenyNetwork && abi < 4 {
+		return ErrNetworkUnavailable
+	}
 	handled := handledAccess(abi)
-	attr := rulesetAttr{HandledAccess: handled}
+	attr := rulesetAttr{HandledAccessFS: handled}
+	attrSize := unsafe.Sizeof(attr.HandledAccessFS)
+	if cfg.DenyNetwork {
+		attr.HandledAccessNet = networkAccess()
+		attrSize = unsafe.Sizeof(attr)
+	}
 	rulesetFD, err := landlockCall(
 		landlockCreateRuleset,
 		uintptr(unsafe.Pointer(&attr)),
-		unsafe.Sizeof(attr),
+		attrSize,
 		0,
 	)
 	if err != nil {
@@ -213,13 +233,17 @@ func Apply(cfg Config) error {
 }
 
 // Run is the internal helper entry point used by cmd/ag. args are:
-// root, home, temp, executable, and the executable's arguments.
+// root, home, temp, network mode, executable, and the executable's arguments.
 func Run(args []string) int {
-	if len(args) < 4 {
+	if len(args) < 5 {
 		fmt.Fprintln(os.Stderr, "nabd: invalid sandbox helper arguments")
 		return 2
 	}
-	root, home, temp, executable := args[0], args[1], args[2], args[3]
+	root, home, temp, networkMode, executable := args[0], args[1], args[2], args[3], args[4]
+	if networkMode != "allow" && networkMode != "deny" {
+		fmt.Fprintln(os.Stderr, "nabd: invalid sandbox network mode")
+		return 2
+	}
 	if err := os.Chdir(root); err != nil {
 		fmt.Fprintf(os.Stderr, "nabd: sandbox chdir: %v\n", err)
 		return 126
@@ -239,11 +263,16 @@ func Run(args []string) int {
 		"/etc",
 		"/dev/null", "/dev/urandom", "/dev/random",
 	}
-	if err := Apply(Config{Root: root, Writable: writable, ReadOnly: readOnly}); err != nil {
+	if err := Apply(Config{
+		Root:        root,
+		Writable:    writable,
+		ReadOnly:    readOnly,
+		DenyNetwork: networkMode == "deny",
+	}); err != nil {
 		fmt.Fprintf(os.Stderr, "nabd: Bash sandbox unavailable: %v\n", err)
 		return 126
 	}
-	if err := syscall.Exec(executable, args[3:], os.Environ()); err != nil {
+	if err := syscall.Exec(executable, args[4:], os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "nabd: sandbox exec: %v\n", err)
 		return 126
 	}

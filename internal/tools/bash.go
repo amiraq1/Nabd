@@ -72,9 +72,14 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	if err != nil {
 		return agent.Outcome{}, err
 	}
+	network, err := sandbox.ParseNetworkMode(config.Get("NABD_BASH_NETWORK"))
+	if err != nil {
+		return agent.Outcome{}, err
+	}
 	helper, helperOK := sandbox.HelperPath()
 	landlockOK := mode != sandbox.ModeOff && sandbox.Available()
-	useHelper, err := sandbox.UseHelper(mode, helperOK, landlockOK)
+	networkOK := network == sandbox.NetworkDeny && mode != sandbox.ModeOff && sandbox.SupportsNetwork()
+	useHelper, err := sandbox.Select(mode, network, helperOK, landlockOK, networkOK)
 	if err != nil {
 		return agent.Outcome{}, err
 	}
@@ -118,12 +123,17 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 
 	cmdArgs := []string{"sh", "-c", a.Cmd}
 	if useHelper {
+		networkArg := "allow"
+		if network == sandbox.NetworkDeny {
+			networkArg = "deny"
+		}
 		cmdArgs = []string{
 			helper,
 			sandbox.HelperCommand,
 			b.root.Dir(),
 			home,
 			tmp,
+			networkArg,
 			"sh",
 			"-c",
 			a.Cmd,

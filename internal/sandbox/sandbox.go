@@ -22,6 +22,9 @@ type Config struct {
 	Root     string
 	Writable []string
 	ReadOnly []string
+	// DenyNetwork handles TCP bind/connect as denied-by-default when the
+	// running kernel supports Landlock network rules.
+	DenyNetwork bool
 }
 
 // HelperPath returns the current executable when it can serve as the
