@@ -197,7 +197,7 @@ func Apply(cfg Config) error {
 		if seenWritable[abs] || seenReadOnly[abs] {
 			continue
 		}
-		if err := addPathRule(rulesetFD, abs, readOnlyAccess(), false); err != nil {
+		if err := addPathRule(int(rulesetFD), abs, readOnlyAccess(), false); err != nil {
 			return err
 		}
 		seenReadOnly[abs] = true
