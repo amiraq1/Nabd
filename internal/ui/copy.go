@@ -229,7 +229,7 @@ func (m *Feed) copySelectedCard() (tea.Model, tea.Cmd) {
 	}
 
 	// 1. Projected card text (from m.lines, not raw journal)
-	rawText := m.cardTextForCopy(m.selectedItem)
+	rawText := m.cardTextForCopyUnwrapped(m.selectedItem)
 	if strings.TrimSpace(rawText) == "" {
 		m.setStatus(copyUnavailableNotice, rankResult)
 		return m, nil

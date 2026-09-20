@@ -65,12 +65,15 @@ func TestCopyDoesNotCorruptIndentedArabic(t *testing.T) {
 	}
 }
 
+// Oversized content is now built at the item level instead of being injected
+// into m.lines, because copy reads the projection, not the rendered viewport.
+// The guarantee under test is unchanged: no OSC 52 write, no tea.Cmd, and the
+// too-large notice rather than a sensitive-content label.
 func TestOversizedCopyUsesTooLargeNotice(t *testing.T) {
-	m := feedWithCustomTexts(t, []string{"small"}, 80)
+	huge := strings.Repeat("A", defaultMaxCopyBytes+1)
+	m := feedWithCustomTexts(t, []string{huge}, 80)
 	m.enterNavigation()
 	m.selectItem(0)
-	m.lines = []string{"> " + strings.Repeat("A", defaultMaxCopyBytes+1)}
-	m.offsets = []int{0}
 
 	var buf bytes.Buffer
 	m.SetClipboardWriter(&buf)
@@ -86,5 +89,19 @@ func TestOversizedCopyUsesTooLargeNotice(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(m.status), "sensitive") {
 		t.Fatalf("oversized copy was mislabeled as sensitive content: %q", m.status)
+	}
+}
+
+// Regression lock for the wrap bug: a path longer than the viewport must
+// survive the copy pipeline as one unbroken line.
+func TestCopyKeepsLongPathUnwrapped(t *testing.T) {
+	long := "/data/data/com.termux/files/home/" + strings.Repeat("segment/", 20) + "file.go"
+	m := feedWithCustomTexts(t, []string{long}, 40)
+	m.enterNavigation()
+	m.selectItem(0)
+
+	got := m.cardTextForCopyUnwrapped(0)
+	if !strings.Contains(got, long) {
+		t.Fatalf("long path was wrapped by the copy path: %q", got)
 	}
 }

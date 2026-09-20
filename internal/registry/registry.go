@@ -329,32 +329,6 @@ func ParseProvidersData(data []byte) (map[string]ProviderConfig, error) {
 	return pf.Provider, nil
 }
 
-// checkNoLiteralKeys scans JSON tokens to ensure no credential field names exist.
-func checkNoLiteralKeys(data []byte) error {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	for {
-		t, err := dec.Token()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return fmt.Errorf("providers.json syntax: %w", err)
-		}
-		if str, ok := t.(string); ok {
-			lower := strings.ToLower(str)
-			switch lower {
-			case "apikey", "api_key", "key", "token", "secret", "password", "bearer", "authorization":
-				return fmt.Errorf("providers.json: literal key or credential field %q is forbidden; secrets belong in auth.json", str)
-			}
-			// Also reject credential-like values if any appears
-			if strings.HasPrefix(str, "sk-") || strings.HasPrefix(str, "gsk_") || strings.HasPrefix(str, "nvapi-") {
-				return errors.New("providers.json: literal API key detected; secrets belong exclusively in auth.json")
-			}
-		}
-	}
-	return nil
-}
-
 // ValidProviderID reports whether id is a legal provider identifier: 1..32
 // bytes matching [a-z0-9-_]. Callers outside this package use it to validate a
 // provider name before it reaches the registry.
