@@ -25,6 +25,8 @@ Published changes and downloadable artifacts are available on the
 
 
 - **Touch drag-scroll and navigation keys:** Pointer drag now scrolls the feed viewport by vertical motion delta; Home and End keys scroll the viewport or jump card selection in navigation mode; viewport top padding on short content remains stable when clearing follow.
+- **Clipboard transport in the feed is environment-gated (documented behaviour, review item N1):** OSC 52 is written to stdout only in remote sessions (`SSH_CONNECTION` set) or to an explicitly supplied writer (tests); on Termux the redacted payload is piped to `termux-clipboard-set` asynchronously with a 10s deadline; every other environment reports `copy unavailable` rather than emitting an escape sequence into a local terminal. Credential redaction and display sanitization always run before any transport. See `docs/reports/ui-parity.md` §8.
+- **Clipboard export rescue and error classification (N2, N3, F12):** Failed clipboard deliveries rescue redacted text to private files reporting "report saved: <path>" or explicitly flag unrescuable failures with "export failed; text not saved" rather than staying silent; unexpected clipboard command failures are classified as "termux-clipboard-set failed; check the termux-api install".
 
 ## v1.5.0
 

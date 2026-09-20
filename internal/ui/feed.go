@@ -185,6 +185,11 @@ type Feed struct {
 	// Clipboard output writer (OSC 52). Defaults to os.Stdout.
 	clipboardWriter io.Writer
 
+	// clipboardCommand is the external clipboard-set binary used on Termux.
+	// Empty means defaultClipboardCommand. Tests set a harmless command
+	// (e.g. "cat") so they never execute the real binary.
+	clipboardCommand string
+
 	// Per-item line cache: key is FeedItem.ID.
 	lineCache   map[string]cacheEntry
 	cacheWidth  int // width at which cache was populated; invalid on change
@@ -384,6 +389,32 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			b.WriteString(msg.disclaimer)
 		}
 		m.addNotice(presentation.ItemNotice, strings.TrimRight(b.String(), "\n"))
+		return m, nil
+	case clipboardResultMsg:
+		if msg.err != nil {
+			// A classified detail names the broken dependency; the raw exec
+			// error ("signal: killed") would name neither tool nor fix.
+			detail := msg.err.Error()
+			if msg.detail != "" {
+				detail = msg.detail
+			}
+			status := "copy failed: " + detail
+			// The clipboard is best-effort; the user's text is not. Whatever
+			// the clipboard command did, the already-redacted body is rescued
+			// to a private file so a failed copy never loses it.
+			if suffix, exportFailed := reportSavedSuffix(msg.body); suffix != "" {
+				status += "; " + suffix
+			} else if exportFailed {
+				status += "; " + copyRescueFailedNotice
+			}
+			m.setStatus(status, rankResult)
+		} else {
+			notice := msg.notice
+			if notice == "" {
+				notice = copySuccessNotice
+			}
+			m.setStatus(notice, rankResult)
+		}
 		return m, nil
 	}
 	return m, nil
