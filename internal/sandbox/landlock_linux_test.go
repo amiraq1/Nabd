@@ -5,7 +5,6 @@ package sandbox
 import (
 	"errors"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,15 +37,21 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
-		ln, err := net.Listen("tcp", "127.0.0.1:0")
-		if err == nil {
-			ln.Close()
-			fmt.Fprintln(os.Stderr, "network bind unexpectedly allowed")
+		fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "network socket error=%v\n", err)
 			os.Exit(3)
+		}
+		defer syscall.Close(fd)
+		sa := &syscall.SockaddrInet4{Port: 34567, Addr: [4]byte{127, 0, 0, 1}}
+		err = syscall.Bind(fd, sa)
+		if err == nil {
+			fmt.Fprintln(os.Stderr, "network bind unexpectedly allowed")
+			os.Exit(4)
 		}
 		if !errors.Is(err, syscall.EACCES) && !errors.Is(err, syscall.EPERM) {
 			fmt.Fprintf(os.Stderr, "network bind error=%v, want permission denial\n", err)
-			os.Exit(4)
+			os.Exit(5)
 		}
 		os.Exit(0)
 	}
