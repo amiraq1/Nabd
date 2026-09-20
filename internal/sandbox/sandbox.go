@@ -25,6 +25,9 @@ type Config struct {
 	// DenyNetwork handles TCP bind/connect as denied-by-default when the
 	// running kernel supports Landlock network rules.
 	DenyNetwork bool
+	// LimitResources applies conservative CPU, address-space, process-count,
+	// and open-file limits inherited by the executed child.
+	LimitResources bool
 }
 
 // HelperPath returns the current executable when it can serve as the
