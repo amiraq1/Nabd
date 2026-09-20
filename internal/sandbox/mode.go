@@ -27,6 +27,14 @@ const (
 	NetworkDeny
 )
 
+// ResourceMode controls inherited POSIX resource limits for a Bash child.
+type ResourceMode uint8
+
+const (
+	ResourcesAllow ResourceMode = iota
+	ResourcesLimit
+)
+
 // ParseMode parses NABD_BASH_SANDBOX. Empty is the safe compatibility default.
 func ParseMode(raw string) (Mode, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
@@ -54,20 +62,37 @@ func ParseNetworkMode(raw string) (NetworkMode, error) {
 	}
 }
 
+// ParseResourceMode parses NABD_BASH_RESOURCES. Empty keeps the compatibility
+// default because existing builds may legitimately need more memory or files.
+func ParseResourceMode(raw string) (ResourceMode, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "allow":
+		return ResourcesAllow, nil
+	case "limit":
+		return ResourcesLimit, nil
+	default:
+		return ResourcesAllow, fmt.Errorf("NABD_BASH_RESOURCES must be one of: allow, limit")
+	}
+}
+
 // UseHelper decides whether Bash may be launched through the sandbox helper.
 // In auto mode, unavailable isolation retains the documented compatibility
 // fallback. In on mode, the same condition is a hard refusal.
 func UseHelper(mode Mode, helperAvailable, landlockAvailable bool) (bool, error) {
-	return Select(mode, NetworkAllow, helperAvailable, landlockAvailable, false)
+	return Select(mode, NetworkAllow, ResourcesAllow, helperAvailable, landlockAvailable, false, false)
 }
 
 // Select decides whether Bash may use the helper for the requested policies.
-// Network denial is fail-closed even when filesystem mode is auto or off:
-// silently allowing a requested network boundary would be misleading.
-func Select(mode Mode, network NetworkMode, helperAvailable, landlockAvailable, networkAvailable bool) (bool, error) {
+// Network denial and resource limits are fail-closed even when filesystem mode
+// is auto or off: silently allowing a requested boundary would be misleading.
+func Select(mode Mode, network NetworkMode, resources ResourceMode, helperAvailable, landlockAvailable, networkAvailable, resourcesAvailable bool) (bool, error) {
 	if network == NetworkDeny &&
 		(mode == ModeOff || !helperAvailable || !networkAvailable) {
 		return false, fmt.Errorf("bash network denial requires Landlock network support: %w", ErrNetworkUnavailable)
+	}
+	if resources == ResourcesLimit &&
+		(mode == ModeOff || !helperAvailable || !resourcesAvailable) {
+		return false, fmt.Errorf("bash resource limits require the sandbox helper and Linux support: %w", ErrResourcesUnavailable)
 	}
 	if mode == ModeOff {
 		return false, nil
@@ -80,6 +105,9 @@ func Select(mode Mode, network NetworkMode, helperAvailable, landlockAvailable, 
 	}
 	if network == NetworkDeny {
 		return false, fmt.Errorf("bash network denial requires filesystem sandbox support: %w", ErrUnavailable)
+	}
+	if resources == ResourcesLimit {
+		return false, fmt.Errorf("bash resource limits require filesystem sandbox support: %w", ErrUnavailable)
 	}
 	return false, nil
 }

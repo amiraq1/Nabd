@@ -38,6 +38,14 @@ type pathBeneath struct {
 
 var ErrUnavailable = errors.New("landlock sandbox is unavailable on this kernel")
 var ErrNetworkUnavailable = errors.New("landlock network restrictions are unavailable on this kernel")
+var ErrResourcesUnavailable = errors.New("bash resource limits are unavailable on this platform")
+
+const (
+	resourceCPUSeconds       = uint64(600)
+	resourceAddressSpaceByte = uint64(4 << 30)
+	resourceProcessCount     = uint64(256)
+	resourceOpenFileCount    = uint64(1024)
+)
 
 func landlockCall(number uintptr, args ...uintptr) (uintptr, error) {
 	var a [6]uintptr
@@ -74,6 +82,10 @@ func SupportsNetwork() bool {
 	abi, err := kernelABI()
 	return err == nil && abi >= 4
 }
+
+// ResourcesAvailable reports whether this Linux helper can install the
+// resource limits used by the opt-in Bash policy.
+func ResourcesAvailable() bool { return true }
 
 func handledAccess(abi int) uint64 {
 	access := uint64(
@@ -144,6 +156,26 @@ func setNoNewPrivs() error {
 	_, err := landlockCall(unix.SYS_PRCTL, prSetNoNewPrivs, 1)
 	if err != nil {
 		return fmt.Errorf("set no-new-privileges: %w", err)
+	}
+	return nil
+}
+
+func applyResourceLimits() error {
+	limits := []struct {
+		name     string
+		resource int
+		value    uint64
+	}{
+		{"cpu", unix.RLIMIT_CPU, resourceCPUSeconds},
+		{"address space", unix.RLIMIT_AS, resourceAddressSpaceByte},
+		{"processes", unix.RLIMIT_NPROC, resourceProcessCount},
+		{"open files", unix.RLIMIT_NOFILE, resourceOpenFileCount},
+	}
+	for _, limit := range limits {
+		rlim := unix.Rlimit{Cur: limit.value, Max: limit.value}
+		if err := unix.Setrlimit(limit.resource, &rlim); err != nil {
+			return fmt.Errorf("set %s limit: %w", limit.name, err)
+		}
 	}
 	return nil
 }
@@ -229,19 +261,28 @@ func Apply(cfg Config) error {
 	if _, err := landlockCall(landlockRestrictSelf, rulesetFD, 0); err != nil {
 		return fmt.Errorf("restrict process with Landlock: %w", err)
 	}
+	if cfg.LimitResources {
+		if err := applyResourceLimits(); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 // Run is the internal helper entry point used by cmd/ag. args are:
-// root, home, temp, network mode, executable, and the executable's arguments.
+// root, home, temp, network mode, resource mode, executable, and arguments.
 func Run(args []string) int {
-	if len(args) < 5 {
+	if len(args) < 6 {
 		fmt.Fprintln(os.Stderr, "nabd: invalid sandbox helper arguments")
 		return 2
 	}
-	root, home, temp, networkMode, executable := args[0], args[1], args[2], args[3], args[4]
+	root, home, temp, networkMode, resourcesMode, executable := args[0], args[1], args[2], args[3], args[4], args[5]
 	if networkMode != "allow" && networkMode != "deny" {
 		fmt.Fprintln(os.Stderr, "nabd: invalid sandbox network mode")
+		return 2
+	}
+	if resourcesMode != "allow" && resourcesMode != "limit" {
+		fmt.Fprintln(os.Stderr, "nabd: invalid sandbox resource mode")
 		return 2
 	}
 	if err := os.Chdir(root); err != nil {
@@ -264,15 +305,16 @@ func Run(args []string) int {
 		"/dev/null", "/dev/urandom", "/dev/random",
 	}
 	if err := Apply(Config{
-		Root:        root,
-		Writable:    writable,
-		ReadOnly:    readOnly,
-		DenyNetwork: networkMode == "deny",
+		Root:           root,
+		Writable:       writable,
+		ReadOnly:       readOnly,
+		DenyNetwork:    networkMode == "deny",
+		LimitResources: resourcesMode == "limit",
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "nabd: Bash sandbox unavailable: %v\n", err)
 		return 126
 	}
-	if err := syscall.Exec(executable, args[4:], os.Environ()); err != nil {
+	if err := syscall.Exec(executable, args[5:], os.Environ()); err != nil {
 		fmt.Fprintf(os.Stderr, "nabd: sandbox exec: %v\n", err)
 		return 126
 	}

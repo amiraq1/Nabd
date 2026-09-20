@@ -64,6 +64,35 @@ func TestParseNetworkModeRejectsUnknown(t *testing.T) {
 	}
 }
 
+func TestParseResourceMode(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want ResourceMode
+	}{
+		{"", ResourcesAllow},
+		{" allow ", ResourcesAllow},
+		{"LIMIT", ResourcesLimit},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			got, err := ParseResourceMode(tt.raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.want {
+				t.Fatalf("ParseResourceMode(%q) = %d, want %d", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseResourceModeRejectsUnknown(t *testing.T) {
+	_, err := ParseResourceMode("maybe")
+	if err == nil || !strings.Contains(err.Error(), "allow, limit") {
+		t.Fatalf("ParseResourceMode(maybe) error = %v, want allowed-values error", err)
+	}
+}
+
 func TestUseHelperModes(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -111,7 +140,36 @@ func TestSelectNetworkDenyFailsClosed(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Select(tt.mode, NetworkDeny, tt.helper, tt.fs, tt.network)
+			got, err := Select(tt.mode, NetworkDeny, ResourcesAllow, tt.helper, tt.fs, tt.network, false)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Select() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Fatalf("Select() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSelectResourceLimitsFailsClosed(t *testing.T) {
+	tests := []struct {
+		name      string
+		mode      Mode
+		helper    bool
+		fs        bool
+		resources bool
+		want      bool
+		wantErr   bool
+	}{
+		{"all capabilities", ModeAuto, true, true, true, true, false},
+		{"off cannot limit", ModeOff, true, true, true, false, true},
+		{"no resource support", ModeAuto, true, true, false, false, true},
+		{"no helper", ModeAuto, false, true, true, false, true},
+		{"no filesystem support", ModeAuto, true, false, true, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Select(tt.mode, NetworkAllow, ResourcesLimit, tt.helper, tt.fs, false, tt.resources)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Select() error = %v, wantErr %v", err, tt.wantErr)
 			}

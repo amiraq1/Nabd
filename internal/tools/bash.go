@@ -76,10 +76,15 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	if err != nil {
 		return agent.Outcome{}, err
 	}
+	resources, err := sandbox.ParseResourceMode(config.Get("NABD_BASH_RESOURCES"))
+	if err != nil {
+		return agent.Outcome{}, err
+	}
 	helper, helperOK := sandbox.HelperPath()
 	landlockOK := mode != sandbox.ModeOff && sandbox.Available()
 	networkOK := network == sandbox.NetworkDeny && mode != sandbox.ModeOff && sandbox.SupportsNetwork()
-	useHelper, err := sandbox.Select(mode, network, helperOK, landlockOK, networkOK)
+	resourcesOK := resources == sandbox.ResourcesLimit && mode != sandbox.ModeOff && sandbox.ResourcesAvailable()
+	useHelper, err := sandbox.Select(mode, network, resources, helperOK, landlockOK, networkOK, resourcesOK)
 	if err != nil {
 		return agent.Outcome{}, err
 	}
@@ -127,6 +132,10 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		if network == sandbox.NetworkDeny {
 			networkArg = "deny"
 		}
+		resourcesArg := "allow"
+		if resources == sandbox.ResourcesLimit {
+			resourcesArg = "limit"
+		}
 		cmdArgs = []string{
 			helper,
 			sandbox.HelperCommand,
@@ -134,6 +143,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 			home,
 			tmp,
 			networkArg,
+			resourcesArg,
 			"sh",
 			"-c",
 			a.Cmd,

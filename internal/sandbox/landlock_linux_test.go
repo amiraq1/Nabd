@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestMain(m *testing.M) {
@@ -55,6 +57,31 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	if os.Getenv("NABD_LANDLOCK_RESOURCE_HELPER") == "1" {
+		root := os.Getenv("NABD_LANDLOCK_TEST_ROOT")
+		if err := Apply(Config{Root: root, Writable: []string{root}, LimitResources: true}); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		var cpu, files unix.Rlimit
+		if err := unix.Getrlimit(unix.RLIMIT_CPU, &cpu); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(3)
+		}
+		if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &files); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(4)
+		}
+		if cpu.Cur != resourceCPUSeconds || cpu.Max != resourceCPUSeconds {
+			fmt.Fprintf(os.Stderr, "cpu limit=%+v, want %d\n", cpu, resourceCPUSeconds)
+			os.Exit(5)
+		}
+		if files.Cur != resourceOpenFileCount || files.Max != resourceOpenFileCount {
+			fmt.Fprintf(os.Stderr, "open-file limit=%+v, want %d\n", files, resourceOpenFileCount)
+			os.Exit(6)
+		}
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 
@@ -93,5 +120,20 @@ func TestLandlockDeniesNetwork(t *testing.T) {
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("Landlock network helper failed: %v\n%s", err, out)
+	}
+}
+
+func TestLandlockAppliesResourceLimits(t *testing.T) {
+	if !Available() {
+		t.Skip("Landlock is unavailable on this kernel")
+	}
+	root := t.TempDir()
+	cmd := exec.Command(os.Args[0], "-test.run=TestLandlockResourceHelper")
+	cmd.Env = append(os.Environ(),
+		"NABD_LANDLOCK_RESOURCE_HELPER=1",
+		"NABD_LANDLOCK_TEST_ROOT="+root,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("Landlock resource helper failed: %v\n%s", err, out)
 	}
 }
