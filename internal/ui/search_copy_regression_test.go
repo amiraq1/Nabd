@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"nabd/internal/agent"
 )
 
 func TestStripCardGutterPreservesSingleSpaceArabic(t *testing.T) {
@@ -71,7 +72,12 @@ func TestCopyDoesNotCorruptIndentedArabic(t *testing.T) {
 // too-large notice rather than a sensitive-content label.
 func TestOversizedCopyUsesTooLargeNotice(t *testing.T) {
 	huge := strings.Repeat("A", defaultMaxCopyBytes+1)
-	m := feedWithCustomTexts(t, []string{huge}, 80)
+	m := NewFeed()
+	m.width = 80
+	m.height = 20
+	m.applyBatch([]agent.Event{
+		{Seq: 1, Type: agent.UserMsg, Text: huge},
+	})
 	m.enterNavigation()
 	m.selectItem(0)
 
@@ -103,5 +109,25 @@ func TestCopyKeepsLongPathUnwrapped(t *testing.T) {
 	got := m.cardTextForCopyUnwrapped(0)
 	if !strings.Contains(got, long) {
 		t.Fatalf("long path was wrapped by the copy path: %q", got)
+	}
+}
+
+// Copy must honour the per-card expansion override, not the global flag:
+// renderItemsCached ignores its variadic argument and calls expansionOf per
+// card, so the copy path has to do the same or it copies a view the user is
+// not looking at.
+func TestCopyHonoursPerCardExpansion(t *testing.T) {
+	m := feedWithCustomTexts(t, []string{"alpha"}, 40)
+	m.enterNavigation()
+	m.selectItem(0)
+	m.toolsExpanded = false
+
+	collapsed := m.cardTextForCopyUnwrapped(0)
+	if !m.toggleCard(0) {
+		t.Skip("selected card is not expandable in this fixture")
+	}
+	expanded := m.cardTextForCopyUnwrapped(0)
+	if expanded == collapsed {
+		t.Fatal("copy ignored the per-card expansion override")
 	}
 }
