@@ -63,7 +63,7 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
-		var cpu, files unix.Rlimit
+		var cpu, files, fileSize unix.Rlimit
 		if err := unix.Getrlimit(unix.RLIMIT_CPU, &cpu); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(3)
@@ -72,13 +72,21 @@ func TestMain(m *testing.M) {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(4)
 		}
+		if err := unix.Getrlimit(unix.RLIMIT_FSIZE, &fileSize); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(5)
+		}
 		if cpu.Cur != resourceCPUSeconds || cpu.Max != resourceCPUSeconds {
 			fmt.Fprintf(os.Stderr, "cpu limit=%+v, want %d\n", cpu, resourceCPUSeconds)
-			os.Exit(5)
+			os.Exit(6)
 		}
 		if files.Cur != resourceOpenFileCount || files.Max != resourceOpenFileCount {
 			fmt.Fprintf(os.Stderr, "open-file limit=%+v, want %d\n", files, resourceOpenFileCount)
-			os.Exit(6)
+			os.Exit(7)
+		}
+		if fileSize.Cur != resourceFileSizeByte || fileSize.Max != resourceFileSizeByte {
+			fmt.Fprintf(os.Stderr, "file-size limit=%+v, want %d\n", fileSize, resourceFileSizeByte)
+			os.Exit(8)
 		}
 		os.Exit(0)
 	}

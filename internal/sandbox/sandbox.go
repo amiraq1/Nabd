@@ -26,7 +26,7 @@ type Config struct {
 	// running kernel supports Landlock network rules.
 	DenyNetwork bool
 	// LimitResources applies conservative CPU, address-space, process-count,
-	// and open-file limits inherited by the executed child.
+	// open-file, and per-file-size limits inherited by the executed child.
 	LimitResources bool
 }
 

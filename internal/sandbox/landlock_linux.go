@@ -45,6 +45,7 @@ const (
 	resourceAddressSpaceByte = uint64(4 << 30)
 	resourceProcessCount     = uint64(256)
 	resourceOpenFileCount    = uint64(1024)
+	resourceFileSizeByte     = uint64(256 << 20)
 )
 
 func landlockCall(number uintptr, args ...uintptr) (uintptr, error) {
@@ -170,6 +171,7 @@ func applyResourceLimits() error {
 		{"address space", unix.RLIMIT_AS, resourceAddressSpaceByte},
 		{"processes", unix.RLIMIT_NPROC, resourceProcessCount},
 		{"open files", unix.RLIMIT_NOFILE, resourceOpenFileCount},
+		{"file size", unix.RLIMIT_FSIZE, resourceFileSizeByte},
 	}
 	for _, limit := range limits {
 		rlim := unix.Rlimit{Cur: limit.value, Max: limit.value}
