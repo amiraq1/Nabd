@@ -35,6 +35,11 @@ type bashTool struct{ root *Root }
 
 var _ Classified = bashTool{}
 
+// killGroupFn is kept as a narrow seam for the process-lifecycle contract
+// test. Production uses killGroup; cancellation and timeout remain the only
+// paths that invoke it.
+var killGroupFn = killGroup
+
 func (bashTool) Class() perm.Class { return perm.Executing }
 
 func (bashTool) Name() string { return "bash" }
@@ -130,11 +135,11 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	case werr = <-wait:
 	case <-timer.C:
 		note = fmt.Sprintf("killed after %s", to)
-		killGroup(pgid)
+		killGroupFn(pgid)
 		werr = <-wait
 	case <-ctx.Done():
 		note = "cancelled"
-		killGroup(pgid)
+		killGroupFn(pgid)
 		werr = <-wait
 	}
 

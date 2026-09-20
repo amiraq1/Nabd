@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -120,6 +121,34 @@ func TestBashCapturesExitCode(t *testing.T) {
 	}
 	if o.Exit != 3 {
 		t.Fatalf("رمز الخروج المتوقع 3، حصلت على %d", o.Exit)
+	}
+}
+
+// TestBashCleanExitDoesNotKillProcessGroup guards the recycled-PGID boundary:
+// a successful command must never signal its process group after Wait has
+// reaped the leader. Only timeout and cancellation paths may call killGroup.
+func TestBashCleanExitDoesNotKillProcessGroup(t *testing.T) {
+	r, _ := newReg(t)
+	realKillGroup := killGroupFn
+	t.Cleanup(func() { killGroupFn = realKillGroup })
+
+	var calls atomic.Int32
+	killGroupFn = func(int) {
+		calls.Add(1)
+	}
+
+	raw, _ := json.Marshal(map[string]any{
+		"cmd": "printf clean",
+	})
+	o, err := r.RunDetailed(context.Background(), "bash", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !o.OK {
+		t.Fatalf("clean command failed: %s", o.Text)
+	}
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("clean exit called killGroup %d time(s), want 0", got)
 	}
 }
 
