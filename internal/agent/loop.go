@@ -22,6 +22,13 @@ type Sink interface {
 	Emit(Event) error
 }
 
+// DurableSink flushes an already-emitted event to durable storage. The loop
+// uses it only for safety-critical events; ordinary display and telemetry
+// events remain on the sink's normal buffered path.
+type DurableSink interface {
+	Sync() error
+}
+
 // Repairing is implemented by a tool layer that can correct malformed calls.
 // The loop asks before it classifies, so the gate, the permission prompt and
 // every journal event name the call that will actually run rather than the one
@@ -1045,6 +1052,40 @@ func (l *Loop) End(text string) error {
 	return l.emit(Event{Type: RunEnd, Text: text})
 }
 
+// PrepareMutation journals the recovery intent before a mutating tool
+// publishes bytes. A prepared intent is useful on its own: after a crash,
+// /undo can verify the target hash and either recover the mutation or refuse it
+// without guessing.
+func (l *Loop) PrepareMutation(rec *EditRecord) error {
+	if rec == nil {
+		return errors.New("nil mutation record")
+	}
+	return l.emit(Event{Type: EventEditIntent, Edit: rec})
+}
+
+// AbortMutation records that a mutation did not publish. It is kept separate
+// from edit_record so recovery never treats a failed pre-publish attempt as a
+// committed edit.
+func (l *Loop) AbortMutation(rec *EditRecord, cause error) error {
+	if rec == nil {
+		return errors.New("nil mutation record")
+	}
+	e := Event{Type: EventEditAbort, Edit: rec}
+	if cause != nil {
+		e.Err = cause.Error()
+	}
+	return l.emit(e)
+}
+
+func eventRequiresSync(e Event) bool {
+	switch e.Type {
+	case PermAsk, PermReply, EventEditIntent, EventEditAbort, EventEdit:
+		return true
+	default:
+		return false
+	}
+}
+
 // Fanout sends each event to several sinks, stopping at the first error:
 // if the journal cannot be written, the UI should not pretend otherwise.
 type Fanout []Sink
@@ -1056,6 +1097,19 @@ func (f Fanout) Emit(e Event) error {
 		}
 		if err := s.Emit(e); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// Sync makes every durable child sink durable. Non-durable presentation sinks
+// are intentionally ignored.
+func (f Fanout) Sync() error {
+	for _, s := range f {
+		if durable, ok := s.(DurableSink); ok {
+			if err := durable.Sync(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

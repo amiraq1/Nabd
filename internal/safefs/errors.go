@@ -1,6 +1,36 @@
 package safefs
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
+
+// PublishError reports whether an atomic write had already replaced the
+// destination when an error was returned. Callers must retain recovery intent
+// when Published is true because the filesystem may contain the new bytes.
+type PublishError struct {
+	Published bool
+	Err       error
+}
+
+func (e *PublishError) Error() string {
+	if e == nil || e.Err == nil {
+		return "safefs: publish failed"
+	}
+	return fmt.Sprintf("safefs: publish failed: %v", e.Err)
+}
+
+func (e *PublishError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
+func WasPublished(err error) bool {
+	var pe *PublishError
+	return errors.As(err, &pe) && pe.Published
+}
 
 // OpenRead's error sentinels are declared here, without a build tag, so every
 // platform sees the same error contract — including the fail-closed platforms

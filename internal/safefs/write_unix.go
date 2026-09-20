@@ -124,7 +124,10 @@ func WriteFileAtomic(rootPath, relativeFile string, data []byte, mode os.FileMod
 	// still published; only crash durability is lost, so this is reported as a
 	// durability error and the target is never rolled back.
 	if err := fsyncFD(parentFd); err != nil {
-		return fmt.Errorf("safefs: publish succeeded but parent directory fsync failed: %w", err)
+		return &PublishError{
+			Published: true,
+			Err:       fmt.Errorf("parent directory fsync failed: %w", err),
+		}
 	}
 	return nil
 }

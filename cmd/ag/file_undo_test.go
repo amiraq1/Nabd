@@ -150,3 +150,36 @@ func TestFileUndoNilGuard(t *testing.T) {
 		t.Fatal("nil guard must return a visible message")
 	}
 }
+
+func TestEditRecordsRecoversPreparedIntent(t *testing.T) {
+	rec := &agent.EditRecord{
+		MutationID: "m1",
+		Path:       "doc.md",
+		HashBefore: "before",
+		HashAfter:  "after",
+		BlobAfter:  "s256:after",
+	}
+	got := editRecords([]agent.Event{
+		{Seq: 1, Type: agent.EventEditIntent, Edit: rec},
+	})
+	if len(got) != 1 || got[0].MutationID != "m1" {
+		t.Fatalf("editRecords(intent) = %+v, want one recoverable record", got)
+	}
+}
+
+func TestEditRecordsSkipsAbortedIntent(t *testing.T) {
+	rec := &agent.EditRecord{
+		MutationID: "m2",
+		Path:       "doc.md",
+		HashBefore: "before",
+		HashAfter:  "after",
+		BlobAfter:  "s256:after",
+	}
+	got := editRecords([]agent.Event{
+		{Seq: 1, Type: agent.EventEditIntent, Edit: rec},
+		{Seq: 2, Type: agent.EventEditAbort, Edit: rec},
+	})
+	if len(got) != 0 {
+		t.Fatalf("editRecords(aborted intent) = %+v, want empty", got)
+	}
+}

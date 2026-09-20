@@ -32,6 +32,8 @@ const (
 	TurnEnd            EventType = "turn_end"
 	Compact            EventType = "compact"
 	Rewind             EventType = "rewind"
+	EventEditIntent    EventType = "edit_intent"
+	EventEditAbort     EventType = "edit_abort"
 	EventEdit          EventType = "edit_record"
 	EventRead          EventType = "read_record"
 	EventCalib         EventType = "calibration"
@@ -267,6 +269,7 @@ func NoticeAllowedForModel(c NoticeCategory) bool {
 // untouched before restoring, and the patch is the human-readable proof.
 // Full file copies are never stored here — the shadow holds content.
 type EditRecord struct {
+	MutationID string `json:"mutation_id,omitempty"`
 	Path       string `json:"path"`
 	HashBefore string `json:"hash_before"`
 	HashAfter  string `json:"hash_after"`

@@ -80,6 +80,8 @@ func newSessionLoop(prov provider.Provider, reg *tools.Registry, g agent.Gate, h
 	// (see TestSessionLoopPromptHasNoDivergentPaths).
 	if reg != nil {
 		reg.OnRepair = func(f tools.Fix) { loop.Note(f.Notice()) }
+		reg.OnMutationPrepared = loop.PrepareMutation
+		reg.OnMutationAborted = loop.AbortMutation
 	}
 	return loop
 }
@@ -767,9 +769,34 @@ func latestSession(dir, projectRoot string) (string, error) {
 
 func editRecords(evs []agent.Event) []*agent.EditRecord {
 	var out []*agent.EditRecord
+	seen := map[string]bool{}
+	aborted := map[string]bool{}
+	key := func(rec *agent.EditRecord) string {
+		if rec == nil {
+			return ""
+		}
+		if rec.MutationID != "" {
+			return rec.MutationID
+		}
+		return rec.Path + "\x00" + rec.HashBefore + "\x00" + rec.HashAfter + "\x00" + rec.BlobAfter
+	}
 	for i := len(evs) - 1; i >= 0; i-- {
-		if evs[i].Type == agent.EventEdit && evs[i].Edit != nil {
-			out = append(out, evs[i].Edit)
+		rec := evs[i].Edit
+		switch evs[i].Type {
+		case agent.EventEditAbort:
+			if rec != nil {
+				aborted[key(rec)] = true
+			}
+		case agent.EventEdit, agent.EventEditIntent:
+			if rec == nil {
+				continue
+			}
+			k := key(rec)
+			if aborted[k] || seen[k] {
+				continue
+			}
+			seen[k] = true
+			out = append(out, rec)
 		}
 	}
 	return out

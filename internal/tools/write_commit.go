@@ -6,6 +6,7 @@ package tools
 
 import (
 	"context"
+	crand "crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"nabd/internal/agent"
 	"nabd/internal/safefs"
@@ -25,6 +27,16 @@ import (
 // survives within budget. 4 MB embeds the 1 MB patch with JSON overhead.
 // It is a var (not const) so tests can inject a small budget.
 var maxEventBytes = 1 << 22
+
+var mutationCounter atomic.Uint64
+
+func mutationID() string {
+	var raw [16]byte
+	if _, err := crand.Read(raw[:]); err == nil {
+		return hex.EncodeToString(raw[:])
+	}
+	return fmt.Sprintf("local-%d", mutationCounter.Add(1))
+}
 
 // --- NBD-011 event-size estimation constants ---------------------------------
 //
@@ -191,7 +203,20 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 		_ = sh.Discard(after.Blob)
 		return before, after, rerr
 	}
+	prepared := false
+	if reg != nil && reg.OnMutationPrepared != nil {
+		if err := reg.OnMutationPrepared(rec); err != nil {
+			_ = sh.Discard(after.Blob)
+			return before, after, err
+		}
+		prepared = true
+	}
 	if err := writeFromRoot(root, relative, absPath, data, mode); err != nil {
+		if prepared && !safefs.WasPublished(err) && reg != nil && reg.OnMutationAborted != nil {
+			if abortErr := reg.OnMutationAborted(rec, err); abortErr != nil {
+				return before, after, errors.Join(err, abortErr)
+			}
+		}
 		return before, after, err
 	}
 	// From here the disk has already changed. Every exit below must leave a
@@ -221,6 +246,7 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 // returned so commit() can abort before WriteAtomic.
 func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*agent.EditRecord, error) {
 	rec := &agent.EditRecord{
+		MutationID: mutationID(),
 		Path:       after.Rel,
 		HashAfter:  sha256hex(data),
 		ReadLines:  readLines,
@@ -250,6 +276,7 @@ func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, befor
 // while retaining shadow blobs and hashes so /undo reversibility remains guaranteed.
 func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*agent.EditRecord, error) {
 	rec := &agent.EditRecord{
+		MutationID: mutationID(),
 		Path:       after.Rel,
 		HashAfter:  sha256hex(data),
 		ReadLines:  readLines,
