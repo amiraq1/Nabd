@@ -31,27 +31,32 @@ func feedWithBlockingRunner(t *testing.T) (*Feed, *runnerRecorder) {
 	f.height = 24
 	r := newBlockingRunner()
 	f.SetRunner(r)
+	f.SetApprover(&Approver{reply: r.decisionCh})
 	return f, r
 }
 
 // runnerRecorder records runs and can block until released or cancelled.
 type runnerRecorder struct {
-	mu       sync.Mutex
-	texts    []string
-	ctxs     []context.Context
-	start    chan struct{} // closed once the first run starts
-	release  chan struct{} // close to let a blocked run finish
-	returned chan struct{} // closed once Run has returned
-	blocking bool
-	released bool
+	mu         sync.Mutex
+	texts      []string
+	ctxs       []context.Context
+	start      chan struct{} // closed once the first run starts
+	release    chan struct{} // close to let a blocked run finish
+	returned   chan struct{} // closed once Run has returned
+	blocking   bool
+	released   bool
+	done       bool
+	msgs       []tea.Msg
+	decisionCh chan agent.Decision
 }
 
 func newBlockingRunner() *runnerRecorder {
 	return &runnerRecorder{
-		start:    make(chan struct{}),
-		release:  make(chan struct{}),
-		returned: make(chan struct{}),
-		blocking: true,
+		start:      make(chan struct{}),
+		release:    make(chan struct{}),
+		returned:   make(chan struct{}),
+		blocking:   true,
+		decisionCh: make(chan agent.Decision, 10),
 	}
 }
 
@@ -97,6 +102,33 @@ func (r *runnerRecorder) waitReturned(t *testing.T) {
 	case <-timeoutChan(t):
 		t.Fatal("runner did not return")
 	}
+}
+
+// finished reports whether the launched run goroutine has returned.
+func (r *runnerRecorder) finished() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.done
+}
+
+// takeMsg pops the next message the run emitted, oldest first.
+func (r *runnerRecorder) takeMsg() (tea.Msg, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.msgs) == 0 {
+		return nil, false
+	}
+	m := r.msgs[0]
+	r.msgs = r.msgs[1:]
+	return m, true
+}
+
+// decisions exposes the channel the permission gate reads from.
+func (r *runnerRecorder) decisions() <-chan agent.Decision { return r.decisionCh }
+
+// decisionIsAllow adapts to the real decision type.
+func decisionIsAllow(d agent.Decision) bool {
+	return d == agent.AllowOnce || d == agent.AllowSession
 }
 
 // sendAndRun accepts a message through the real key path and executes the
@@ -339,7 +371,19 @@ func startBlockingRun(t *testing.T, f *Feed, r *runnerRecorder, text string) {
 	if cmd == nil {
 		t.Fatal("send must produce a command")
 	}
-	go func() { cmd() }()
+	go func() {
+		defer func() {
+			r.mu.Lock()
+			r.done = true
+			r.mu.Unlock()
+		}()
+		msg := cmd()
+		if msg != nil {
+			r.mu.Lock()
+			r.msgs = append(r.msgs, msg)
+			r.mu.Unlock()
+		}
+	}()
 	select {
 	case <-r.start:
 	case <-timeoutChan(t):
