@@ -1,0 +1,8 @@
+── nabd · /corpus
+› cleanup
+⚙ bash rm -rf cache
+? bash rm -rf cache — allow?
+✓ once
+✓ bash · 120ms
+  cache removed
+── 1 turn · 1s

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 // Replay must coalesce text deltas exactly as Chat does: one block per run
@@ -63,5 +65,17 @@ func TestPartialTail(t *testing.T) {
 	}
 	if partialTail("   ", 3, 20) != "" {
 		t.Error("whitespace should be empty")
+	}
+}
+
+func TestReplayInitEmptyEventsQuitsImmediately(t *testing.T) {
+	r := NewReplay([]agent.Event{}, 0)
+	cmd := r.Init()
+	if cmd == nil {
+		t.Fatal("Init() returned nil for empty events; program would hang forever waiting for input")
+	}
+	msg := cmd()
+	if _, ok := msg.(tea.QuitMsg); !ok {
+		t.Fatalf("Init() command produced %T (%v), want tea.QuitMsg", msg, msg)
 	}
 }

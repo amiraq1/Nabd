@@ -1,0 +1,6 @@
+{"seq":1,"t":"2026-09-01T10:00:00Z","type":"run_start","text":"nabd · /corpus"}
+{"seq":2,"parent":1,"t":"2026-09-01T10:00:01Z","type":"user_msg","text":"invalid op"}
+{"seq":3,"parent":2,"t":"2026-09-01T10:00:02Z","type":"turn_start"}
+{"seq":4,"parent":3,"t":"2026-09-01T10:00:03Z","type":"run_error","err":"dial tcp: connection refused","error_code":"network_err"}
+{"seq":5,"parent":4,"t":"2026-09-01T10:00:04Z","type":"interrupted","text":"stopped"}
+{"seq":6,"parent":5,"t":"2026-09-01T10:00:05Z","type":"run_end","text":"0 turns · error"}

@@ -1,0 +1,5 @@
+── nabd · /corpus
+› explain loop
+  The loop processes incoming streaming tokens
+  until turn completes.
+── 1 turn · 3s

@@ -1,0 +1,5 @@
+── nabd · /corpus
+› burst query
+⚑ rate limit 429 · retry in 1.5s (attempt 1)
+  recovered after backoff
+── 1 turn · 2s

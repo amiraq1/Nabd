@@ -1,0 +1,7 @@
+── nabd · /corpus
+› read big file
+⚙ read_file internal/large.go
+✂ internal/large.go · partially read
+✓ read_file · 250ms · ✂ 4096 bytes cut
+  head of file
+── 1 turn · 1s

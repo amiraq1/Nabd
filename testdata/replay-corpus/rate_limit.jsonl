@@ -1,0 +1,7 @@
+{"seq":1,"t":"2026-09-01T10:00:00Z","type":"run_start","text":"nabd · /corpus"}
+{"seq":2,"parent":1,"t":"2026-09-01T10:00:01Z","type":"user_msg","text":"burst query"}
+{"seq":3,"parent":2,"t":"2026-09-01T10:00:02Z","type":"turn_start"}
+{"seq":4,"parent":3,"t":"2026-09-01T10:00:03Z","type":"rate_limit","code":429,"wait_s":1.5,"attempt":1}
+{"seq":5,"parent":4,"t":"2026-09-01T10:00:04Z","type":"text_delta","text":"recovered after backoff"}
+{"seq":6,"parent":5,"t":"2026-09-01T10:00:05Z","type":"turn_end"}
+{"seq":7,"parent":6,"t":"2026-09-01T10:00:06Z","type":"run_end","text":"1 turn · 2s"}

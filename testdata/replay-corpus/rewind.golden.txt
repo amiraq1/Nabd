@@ -1,0 +1,5 @@
+── nabd · /corpus
+── rewind to #1
+› corrected command
+  result 2
+── 1 turn · 2s
