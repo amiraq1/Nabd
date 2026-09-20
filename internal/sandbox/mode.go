@@ -44,7 +44,7 @@ func UseHelper(mode Mode, helperAvailable, landlockAvailable bool) (bool, error)
 		return true, nil
 	}
 	if mode == ModeOn {
-		return false, fmt.Errorf("Bash sandbox is required but unavailable: %w", ErrUnavailable)
+		return false, fmt.Errorf("bash sandbox is required but unavailable: %w", ErrUnavailable)
 	}
 	return false, nil
 }
