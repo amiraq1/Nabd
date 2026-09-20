@@ -4,6 +4,55 @@ import (
 	"testing"
 )
 
+type syncTrackingSink struct {
+	emits int
+	syncs int
+}
+
+func (s *syncTrackingSink) Emit(Event) error {
+	s.emits++
+	return nil
+}
+
+func (s *syncTrackingSink) Sync() error {
+	s.syncs++
+	return nil
+}
+
+// Critical recovery events must reach durable storage before the loop exposes
+// the event as committed, while ordinary events stay on the buffered path.
+func TestCriticalEventsSyncDurableSink(t *testing.T) {
+	sink := &syncTrackingSink{}
+	l := &Loop{Sink: sink}
+
+	if err := l.emit(Event{
+		Type: EventEditIntent,
+		Edit: &EditRecord{MutationID: "mutation-test"},
+	}); err != nil {
+		t.Fatalf("emit edit intent: %v", err)
+	}
+	if sink.emits != 1 || sink.syncs != 1 {
+		t.Fatalf("after edit intent emits=%d syncs=%d, want 1/1", sink.emits, sink.syncs)
+	}
+
+	if err := l.emit(Event{Type: Notice, Text: "ordinary"}); err != nil {
+		t.Fatalf("emit ordinary event: %v", err)
+	}
+	if sink.emits != 2 || sink.syncs != 1 {
+		t.Fatalf("after ordinary event emits=%d syncs=%d, want 2/1", sink.emits, sink.syncs)
+	}
+
+	if err := l.emit(Event{
+		Type: EventEdit,
+		Edit: &EditRecord{MutationID: "mutation-test"},
+	}); err != nil {
+		t.Fatalf("emit edit record: %v", err)
+	}
+	if sink.emits != 3 || sink.syncs != 2 {
+		t.Fatalf("after edit record emits=%d syncs=%d, want 3/2", sink.emits, sink.syncs)
+	}
+}
+
 // TestJournalIntegrity enforces the event contract invariants on a live
 // journal produced by real runs:
 //   - Seq is contiguous (no gaps, starts at 1, strictly increasing)
