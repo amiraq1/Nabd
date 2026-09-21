@@ -19,13 +19,13 @@
 package endpoint
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"os"
 	"strings"
 	"syscall"
 	"time"
@@ -105,11 +105,11 @@ func CheckBaseURL(baseURL string, pol Policy) error {
 }
 
 // Dialer returns a copy of d configured with a Control hook that validates the
-// resolved literal IP and port immediately before socket connection establishment.
+// resolved literal IP address immediately before socket connection establishment.
 // This closes the DNS-rebinding window with zero TOCTOU: no second DNS resolution
 // occurs, and the address evaluated is the exact IP being dialed on the socket.
 // Under PolicyStrict, connections to private, loopback, link-local, CGNAT, ULA,
-// or cloud-metadata addresses are refused with ErrEndpointRefused.
+// 6to4, or cloud-metadata addresses are refused with ErrEndpointRefused.
 // Under PolicyOpen or PolicyLoopback, d is returned without modification.
 func (pol Policy) Dialer(d net.Dialer) *net.Dialer {
 	if pol != PolicyStrict {
@@ -138,21 +138,28 @@ func (pol Policy) Dialer(d net.Dialer) *net.Dialer {
 	return &d
 }
 
-// DialControl returns a DialContext function wrapping a net.Dialer that enforces pol.
-// Deprecated: use pol.Dialer, endpoint.Transport, or endpoint.Client instead.
-func DialControl(base func(ctx context.Context, network, addr string) (net.Conn, error), pol Policy) func(ctx context.Context, network, addr string) (net.Conn, error) {
-	d := pol.Dialer(net.Dialer{})
-	return d.DialContext
-}
-
 // Transport returns an *http.Transport using a net.Dialer configured with pol.
+// When an HTTP/HTTPS proxy is configured in the environment, it is validated
+// against the endpoint policy at request time. Under PolicyStrict, proxies on
+// plaintext http or non-public addresses are refused.
 func Transport(pol Policy) *http.Transport {
 	d := pol.Dialer(net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
 	})
 	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
+		Proxy: func(r *http.Request) (*url.URL, error) {
+			u, err := proxyFromEnv(r)
+			if err != nil || u == nil {
+				return u, err
+			}
+			if pol == PolicyStrict {
+				if err := CheckBaseURL(u.String(), pol); err != nil {
+					return nil, fmt.Errorf("%w: proxy %s", ErrEndpointRefused, err)
+				}
+			}
+			return u, nil
+		},
 		DialContext:           d.DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
@@ -160,6 +167,51 @@ func Transport(pol Policy) *http.Transport {
 		TLSHandshakeTimeout:   10 * time.Second,
 		ExpectContinueTimeout: 1 * time.Second,
 	}
+}
+
+// proxyFromEnv inspects environment proxy variables (HTTPS_PROXY, HTTP_PROXY,
+// NO_PROXY and their lowercase equivalents) dynamically for each request.
+func proxyFromEnv(req *http.Request) (*url.URL, error) {
+	if req == nil || req.URL == nil {
+		return nil, nil
+	}
+	host := req.URL.Hostname()
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" {
+		return nil, nil
+	}
+	noProxy := os.Getenv("NO_PROXY")
+	if noProxy == "" {
+		noProxy = os.Getenv("no_proxy")
+	}
+	if noProxy != "" {
+		for _, p := range strings.Split(noProxy, ",") {
+			p = strings.TrimSpace(p)
+			if p == "*" || p == host || strings.HasSuffix(host, "."+strings.TrimPrefix(p, ".")) {
+				return nil, nil
+			}
+		}
+	}
+	var raw string
+	if req.URL.Scheme == "https" {
+		raw = os.Getenv("HTTPS_PROXY")
+		if raw == "" {
+			raw = os.Getenv("https_proxy")
+		}
+	}
+	if raw == "" {
+		raw = os.Getenv("HTTP_PROXY")
+		if raw == "" {
+			raw = os.Getenv("http_proxy")
+		}
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	raw = strings.TrimSpace(raw)
+	if !strings.Contains(raw, "://") {
+		raw = "http://" + raw
+	}
+	return url.Parse(raw)
 }
 
 // Client returns an *http.Client configured with the active NABD_ENDPOINT_POLICY
@@ -186,6 +238,7 @@ var blockedPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("198.18.0.0/15"), // Benchmarking (RFC 2544)
 	netip.MustParsePrefix("240.0.0.0/4"),   // Reserved (RFC 1112)
 	netip.MustParsePrefix("64:ff9b::/96"),  // Local NAT64 (RFC 6052)
+	netip.MustParsePrefix("2002::/16"),     // 6to4 encapsulation (RFC 3056)
 }
 
 func blockedAddr(ip netip.Addr) bool {

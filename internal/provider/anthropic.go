@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"nabd/internal/endpoint"
 )
 
 const (
@@ -52,7 +54,7 @@ func NewAnthropicDialect(name, baseURL, model, key string, readCap int) (*Anthro
 		BaseURL:      baseURL,
 		Key:          key,
 		Model:        model,
-		Client:       &http.Client{},
+		Client:       endpoint.Client(0),
 		retryPolicy:  RetrySingleAttempt,
 		readCapBytes: readCap,
 	}, nil

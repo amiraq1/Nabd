@@ -213,3 +213,21 @@ func TestCustomEndpointIsAcceptedByDesign(t *testing.T) {
 		}
 	})
 }
+
+func TestConstructorsDefaultToGuardedClient(t *testing.T) {
+	op, err := NewOpenAIDialect("custom", "https://api.example.com/v1", "model", "key", 0)
+	if err != nil {
+		t.Fatalf("NewOpenAIDialect: %v", err)
+	}
+	if op.Client == nil || op.Client.Transport == nil {
+		t.Fatal("NewOpenAIDialect did not default to a guarded client with transport")
+	}
+
+	ap, err := NewAnthropicDialect("custom", "https://api.example.com/v1", "model", "key", 0)
+	if err != nil {
+		t.Fatalf("NewAnthropicDialect: %v", err)
+	}
+	if ap.Client == nil || ap.Client.Transport == nil {
+		t.Fatal("NewAnthropicDialect did not default to a guarded client with transport")
+	}
+}
