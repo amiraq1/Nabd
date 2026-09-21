@@ -5,9 +5,7 @@
 | SKILLS_PROMPT_SECTION_FINGERPRINT | `agent.Fingerprint` and `agent.Diff` exist in `internal/agent/prompt.go` and are unit-tested, but the session never records the fingerprint of the ordered prompt sections at start, nor diffs them within a session. The skill index is journaled (the `skills` event), so the skill contribution is covered by body hash; the general prompt-section identity is not. | Follow-up, deliberately out of the session-wiring PR: wire `Fingerprint` at `Loop.Start` and emit the per-turn `Diff` when sections change. Until then, a prompt-section change mid-session is not journaled. |
 | BUILTIN_CATALOG_STALENESS | The embedded catalog is a static list in source, while providers decommission models without notice; staleness is therefore a permanent condition, not a one-off incident. CI cannot guard it: the build has no network and no credentials, and querying a real provider from tests is forbidden. The only structural protection is that a default must be manually verified at edit time; `nabd models` is the live source of truth. The current Anthropic default `claude-sonnet-5` is unverified because no Anthropic key was available for measurement; it is recorded as unmeasured and is not changed by this PR. | Keep defaults declared in `Models`, verify them manually when editing the catalog, and direct users to `nabd models <provider>`. |
 | SKILL_WALK_BOUND_IS_POST_HOC | Directory listing in skill discovery (`internal/skill/skill.go`) reads entries via `f.ReadDir(64)` and bounds traversal post-hoc via `seen >= maxWalkEntries` after opening and reading batches, loading entries into memory before capping. | Bounding is applied post-hoc during batch iteration; follow-up should bound directory traversal queues upfront before descriptor allocation. |
-| READ_SINGLE_PASS_HASH_RENDER_EQUIVALENCE | The single `io.ReadAll` in `read.go` (PR #139, fix #4) ensures the hash covers exactly the bytes the model sees, but no test asserts this equivalence. A refactor re-introducing seek-based splitting could silently break hash-render correspondence. | Add a test that verifies `ReadCredit.Hash == sha256(model-visible-text-source)` end-to-end, or a source-shape test asserting a single read call. See `docs/reports/pr139_audit.md` fix #4. |
 | ALLOWED_NOTICE_TEXT_PROVENANCE | While #137 introduced an allowlist (`noticeReachesModel`) restricting which notice categories reach the model context (`NoticeCategoryUndoResult`, `NoticeCategoryPermissionDenied`, `NoticeCategoryLoopLimit`), the text payload of allowed notices (`ev.Text`) has unrestricted provenance, no formatting validation, and no length bounding before being projected into user messages. | Any subsystem emitting an allowed category can inject arbitrary unstructured strings into the model's context. Guard: Define structured templates or schema-checked renderers for allowed notice categories instead of passing raw string payloads. |
-| NOTICE_QUEUE_BLOCKED_CATEGORY_UNTESTED | `maxPendingNotices = 32` is tested by `TestPendingNoticesBoundedCap`, but all notices in that test use `NoticeCategoryUndoResult` (an allowed category). No regression test verifies that notices with blocked or unclassified categories (`NoticeCategoryCalibration`, `NoticeCategoryDisplay`, `NoticeCategoryUnknown`) are dropped when tool calls are pending (`len(open) > 0 || len(calls) > 0`). | A regression in `messages.go:125-135` could cause blocked notices to be queued in `pendingNotices` and flushed to the model. Guard: Add a unit test in `messages_test.go` confirming blocked categories are dropped while tool calls are pending. |
 | UNREPRODUCIBLE_PERFORMANCE_METRICS | Historical performance claims frequently cited in PR descriptions and reports ("187 allocations", "44ms/46x" speedup from #120, and timing walls under `-race` in CI) lack committed benchmark harnesses or recorded execution environments. | Unverifiable performance figures risk being treated as canonical baselines without reproducible test code or known environmental specifications. Guard: Any future performance claims must be accompanied by committed benchmark functions (e.g. `Benchmark*`) with recorded hardware/OS baselines, matching the rigor of Section G1 in this file. |
 | SOURCE_INSPECTION_TESTS_FRAGILE | Multiple contract tests (`TestBuiltinDefaultsAreDeclaredNotGuessed`, `TestToolPathAuthorityDoesNotCallResolveDirectly`, `TestOpenReadOtherIsCompatibilityOnly`, `TestReadFileUsesDescriptorStat`) inspect raw Go source code via `os.ReadFile` and string matching rather than exercising API contracts. | Fragile tests that break on innocent refactoring, formatting changes, or variable renames without any actual behavioural regression, while failing to catch semantic regressions that avoid the searched tokens. Guard: Replace or supplement lexical AST/text scrapers with behavioural contract tests and architectural linting. |
 | THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | `docs/THREAT_MODEL.md` has grown to over 81 KB and 215 backtick-quoted test citations. It is edited via full-file rewrites, making concurrent edits, review diffs, and manual editing increasingly error-prone. | High risk of merge conflicts, accidental citation breakage, and review fatigue on every security-touching PR. Guard: Decompose `THREAT_MODEL.md` into modular per-domain specification files (e.g. paths, permissions, tools, providers) aggregated by CI scripts, while preserving the unified test citation check. |
@@ -803,3 +801,25 @@ before. The unified behaviour is pinned by
 `TestStandaloneProviderReadsEnvEdge` (case C). The widening was incidental to a
 refactor PR whose stated goal was deleting constructors, not an independently
 announced change, which is exactly why it is recorded here.
+
+## READ_SINGLE_PASS_HASH_RENDER_EQUIVALENCE — RESOLVED by paired guards
+
+The correspondence between the `ReadCredit` hash and the model-visible bytes is
+now pinned from both directions, as the original entry allowed. The
+source-shape half, `TestReadSinglePassSourceShape`, fails if `read.go` gains a
+second `io.ReadAll` or any `Seek`/`ReadAt` positional read, so a refactor
+re-introducing seek-based splitting cannot compile green. The end-to-end half,
+`TestReadCreditHashMatchesModelVisibleSource`, asserts
+`ReadCredit.Hash == sha256(file bytes)` for a real `read_file` run and that
+every rendered numbered line is drawn from those hashed bytes.
+
+## NOTICE_QUEUE_BLOCKED_CATEGORY_UNTESTED — RESOLVED by category matrix tests
+
+`TestBlockedNoticeCategoriesDroppedWhileToolCallsPending` walks every category
+outside the `noticeReachesModel` allowlist (`Unknown`, `Calibration`,
+`ContextPressure`, `RateLimit`, `LengthLimit`, `TPM`, `Display`) in two
+scenarios — tool calls pending and idle — and asserts the notice text never
+reaches the message projection. `TestAllowedNoticeCategoriesFlushedAfterToolCallsPending`
+is the contrast case: the three allowed categories must survive the pending
+queue and be flushed as `«notice»` user messages, so the drop behaviour is
+pinned as category-driven rather than a blanket discard.
