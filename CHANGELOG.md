@@ -4,6 +4,12 @@ Release notes are generated from conventional commit history by GoReleaser.
 Published changes and downloadable artifacts are available on the
 [GitHub Releases](https://github.com/amiraq1/Nabd/releases) page.
 
+## Unreleased
+
+### Fixed
+
+- **Guarded provider HTTP client by default (`fix(provider)`):** `NewOpenAIDialect` and `NewAnthropicDialect` now construct providers with `Client: endpoint.Client(0)` by default instead of an unguarded `http.Client`. Redundant `controlledHTTPClient()` calls and manual `p.Client` assignments in `newroute.go` have been removed. Enforced in CI by `scripts/check-security-invariants.sh` and verified by `TestConstructorDefaultsToGuardedClient`. This is not a breaking change for end users (effective runtime behavior for active routes and standalone providers is unchanged), but is a breaking change for external callers of the exported constructors who relied on an unshielded HTTP client without endpoint policy controls.
+
 ## v1.6.1
 
 Checksum signing restored in the release pipeline.

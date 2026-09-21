@@ -1,9 +1,12 @@
 package provider
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"nabd/internal/endpoint"
 	"nabd/internal/registry"
 )
 
@@ -214,8 +217,13 @@ func TestCustomEndpointIsAcceptedByDesign(t *testing.T) {
 	})
 }
 
-func TestConstructorsDefaultToGuardedClient(t *testing.T) {
-	op, err := NewOpenAIDialect("custom", "https://api.example.com/v1", "model", "key", 0)
+func TestConstructorDefaultsToGuardedClient(t *testing.T) {
+	t.Setenv("NABD_ENDPOINT_POLICY", "strict")
+	t.Setenv("NABD_ENDPOINT_ALLOW", "")
+
+	// 1. OpenAI dialect without injection defaults to a guarded client that
+	// refuses connections to private addresses with ErrEndpointRefused.
+	op, err := NewOpenAIDialect("custom", "https://127.0.0.1:65432/v1", "model", "key", 0)
 	if err != nil {
 		t.Fatalf("NewOpenAIDialect: %v", err)
 	}
@@ -223,11 +231,57 @@ func TestConstructorsDefaultToGuardedClient(t *testing.T) {
 		t.Fatal("NewOpenAIDialect did not default to a guarded client with transport")
 	}
 
-	ap, err := NewAnthropicDialect("custom", "https://api.example.com/v1", "model", "key", 0)
+	ch, err := op.Stream(context.Background(), Request{
+		Messages: []Message{{Role: User, Text: "ping"}},
+	})
+	if err != nil {
+		if !errors.Is(err, endpoint.ErrEndpointRefused) {
+			t.Fatalf("NewOpenAIDialect Stream immediate err = %v, want ErrEndpointRefused", err)
+		}
+	} else {
+		var refused bool
+		for chunk := range ch {
+			if chunk.Kind == ChunkError && errors.Is(chunk.Err, endpoint.ErrEndpointRefused) {
+				refused = true
+				break
+			}
+		}
+		if !refused {
+			t.Fatal("NewOpenAIDialect Stream did not return ErrEndpointRefused when connecting to private address")
+		}
+	}
+
+	// 2. Anthropic dialect without injection defaults to a guarded client that
+	// refuses connections to private addresses with ErrEndpointRefused.
+	ap, err := NewAnthropicDialect("custom", "https://127.0.0.1:65432/v1", "model", "key", 0)
 	if err != nil {
 		t.Fatalf("NewAnthropicDialect: %v", err)
 	}
 	if ap.Client == nil || ap.Client.Transport == nil {
 		t.Fatal("NewAnthropicDialect did not default to a guarded client with transport")
 	}
+
+	ach, err := ap.Stream(context.Background(), Request{
+		Messages: []Message{{Role: User, Text: "ping"}},
+	})
+	if err != nil {
+		if !errors.Is(err, endpoint.ErrEndpointRefused) {
+			t.Fatalf("NewAnthropicDialect Stream immediate err = %v, want ErrEndpointRefused", err)
+		}
+	} else {
+		var refused bool
+		for chunk := range ach {
+			if chunk.Kind == ChunkError && errors.Is(chunk.Err, endpoint.ErrEndpointRefused) {
+				refused = true
+				break
+			}
+		}
+		if !refused {
+			t.Fatal("NewAnthropicDialect Stream did not return ErrEndpointRefused when connecting to private address")
+		}
+	}
+}
+
+func TestConstructorsDefaultToGuardedClient(t *testing.T) {
+	TestConstructorDefaultsToGuardedClient(t)
 }

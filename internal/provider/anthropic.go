@@ -50,10 +50,12 @@ func NewAnthropicDialect(name, baseURL, model, key string, readCap int) (*Anthro
 		readCap = DefaultReadCapBytes
 	}
 	return &Anthropic{
-		name:         name,
-		BaseURL:      baseURL,
-		Key:          key,
-		Model:        model,
+		name:    name,
+		BaseURL: baseURL,
+		Key:     key,
+		Model:   model,
+		// العميل الافتراضي محكوم بسياسة النقطة الطرفية: نسيان الحقن آمن.
+		// يستبدله المستدعي صراحةً عند الحاجة (اختبارات httptest).
 		Client:       endpoint.Client(0),
 		retryPolicy:  RetrySingleAttempt,
 		readCapBytes: readCap,

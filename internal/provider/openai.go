@@ -107,6 +107,8 @@ func NewOpenAIDialect(name, baseURL, model, key string, readCap int) (*OpenAICom
 		Key:          key,
 		Model:        model,
 		BaseURL:      baseURL,
+		// العميل الافتراضي محكوم بسياسة النقطة الطرفية: نسيان الحقن آمن.
+		// يستبدله المستدعي صراحةً عند الحاجة (اختبارات httptest).
 		Client:       endpoint.Client(0),
 		retryPolicy:  RetrySingleAttempt,
 		readCapBytes: readCap,

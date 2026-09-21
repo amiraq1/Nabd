@@ -105,6 +105,8 @@ jobs:
         if-no-files-found: warn
     - name: Exec.Cmd.Env static audit
       run: bash scripts/check-exec-env.sh
+    - name: Security invariants static audit
+      run: bash scripts/check-security-invariants.sh
     - name: Git diff check
       run: git diff --check
     - name: Clean local clone verification

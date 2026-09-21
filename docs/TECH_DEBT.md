@@ -902,3 +902,21 @@ probe stays comment-based, the same known weakest link the read-side guards
 carry. No claim was dropped, and the test names are unchanged, so the new
 `THREAT_MODEL.md` citations resolve.
 
+## MANUAL_PROVIDER_CLIENT_INJECTION — RESOLVED by default guarded client constructor
+
+Previously, `NewOpenAIDialect` and `NewAnthropicDialect` in `internal/provider`
+relied on caller discipline (`BuildRouteProviderWithRegistry` and
+`BuildStandaloneProviderWithRegistry`) to replace an unconfigured HTTP client with
+`controlledHTTPClient()`. Any new call site or direct caller of exported
+constructors (`NewOpenAICompatForRoute`, `NewAnthropicForRoute`) was unguarded by
+default, creating an SSRF/DNS rebinding loophole.
+
+Constructors now initialize `Client: endpoint.Client(0)` by default, flipping the
+boundary from fail-open to fail-closed: it is impossible to construct an unguarded
+provider without explicit client override (e.g. in `httptest` unit tests). The
+redundant `controlledHTTPClient()` and post-construction client assignments in
+`newroute.go` are removed, and the invariant is enforced in CI by
+`scripts/check-security-invariants.sh` and verified by
+`TestConstructorDefaultsToGuardedClient`.
+
+
