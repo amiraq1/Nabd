@@ -6,6 +6,11 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+- **Mutation publish failure matrix:** added regression coverage for file-fsync,
+  rename, and parent-directory-fsync failures, plus the durable
+  `edit_intent` → `edit_abort` path when a filesystem change occurs before
+  publication. Pre-publish failures leave the target unchanged; post-publish
+  durability failures remain classified as published for recovery.
 - **Mutation recovery visibility:** `--continue` now reports unresolved
   mutation intents from the active branch without replaying them automatically;
   the operator must verify the working tree before proceeding.

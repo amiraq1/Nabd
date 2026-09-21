@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -200,6 +201,80 @@ func TestMutationIntentPrecedesEditRecord(t *testing.T) {
 	}
 	if events[intentIdx].Edit == nil || events[editIdx].Edit == nil {
 		t.Fatal("mutation events must carry an EditRecord")
+	}
+}
+
+func TestMutationAbortEventsTrackPrePublishFailure(t *testing.T) {
+	dir := t.TempDir()
+	root, err := tools.NewRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := snap.New(root.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(root, sh)
+
+	outside := t.TempDir()
+	secret := filepath.Join(outside, "secret.txt")
+	if err := os.WriteFile(secret, []byte("must remain\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "sub"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	l := &agent.Loop{
+		Budget: agent.NewBudget(),
+	}
+	var events []agent.Event
+	l.Sink = sinkFunc(func(e agent.Event) error {
+		events = append(events, e)
+		return nil
+	})
+	reg.OnMutationPrepared = func(rec *agent.EditRecord) error {
+		if err := l.PrepareMutation(rec); err != nil {
+			return err
+		}
+		// Simulate a filesystem change after the durable intent and before
+		// publication. The descriptor-relative writer must refuse the new
+		// symlink, and the registry must record edit_abort.
+		sub := filepath.Join(dir, "sub")
+		if err := os.Remove(sub); err != nil {
+			return err
+		}
+		return os.Symlink(outside, sub)
+	}
+	reg.OnMutationAborted = l.AbortMutation
+
+	raw, _ := json.Marshal(map[string]string{
+		"path":    "sub/out.md",
+		"content": "attacker\n",
+	})
+	if _, ok, runErr := reg.Run(context.Background(), provider.ToolCall{
+		ID: "call_abort", Name: "write_file", Input: raw,
+	}); ok || runErr == nil {
+		t.Fatalf("symlink mutation unexpectedly succeeded: ok=%v err=%v", ok, runErr)
+	}
+
+	var types []agent.EventType
+	for _, e := range events {
+		if e.Type == agent.EventEditIntent || e.Type == agent.EventEditAbort || e.Type == agent.EventEdit {
+			types = append(types, e.Type)
+		}
+	}
+	want := []agent.EventType{agent.EventEditIntent, agent.EventEditAbort}
+	if !reflect.DeepEqual(types, want) {
+		t.Fatalf("mutation events=%v, want %v", types, want)
+	}
+
+	got, err := os.ReadFile(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "must remain\n" {
+		t.Fatalf("outside target changed: %q", got)
 	}
 }
 
