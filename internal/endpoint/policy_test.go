@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -147,6 +148,21 @@ func TestStrictRefusesIPv6ULA(t *testing.T) {
 		err := endpoint.CheckBaseURL(u, endpoint.PolicyStrict)
 		if err == nil {
 			t.Errorf("CheckBaseURL(%q, Strict): expected error for IPv6 ULA address", u)
+		}
+		if !errors.Is(err, endpoint.ErrEndpointRefused) {
+			t.Errorf("error %v does not wrap ErrEndpointRefused", err)
+		}
+	}
+}
+
+func TestStrictRefuses6to4Literal(t *testing.T) {
+	for _, u := range []string{
+		"https://[2002:0a00:0001::]/v1", // 10.0.0.1 encapsulated
+		"https://[2002:7f00:0001::]/v1", // 127.0.0.1 encapsulated
+	} {
+		err := endpoint.CheckBaseURL(u, endpoint.PolicyStrict)
+		if err == nil {
+			t.Errorf("CheckBaseURL(%q, Strict): expected error for 6to4 address", u)
 		}
 		if !errors.Is(err, endpoint.ErrEndpointRefused) {
 			t.Errorf("error %v does not wrap ErrEndpointRefused", err)
@@ -489,6 +505,95 @@ func TestControlRefusesUnspecifiedAddress(t *testing.T) {
 	if !errors.Is(err, endpoint.ErrEndpointRefused) {
 		t.Errorf("expected ErrEndpointRefused, got %v", err)
 	}
+}
+
+func TestControlRefuses6to4Address(t *testing.T) {
+	d := endpoint.PolicyStrict.Dialer(net.Dialer{
+		Timeout: 2 * time.Second,
+	})
+	_, err := d.DialContext(context.Background(), "tcp", "[2002:0a00:0001::]:443")
+	if err == nil {
+		t.Fatal("expected Control to refuse 6to4 address")
+	}
+	if !errors.Is(err, endpoint.ErrEndpointRefused) {
+		t.Errorf("expected ErrEndpointRefused, got %v", err)
+	}
+}
+
+func TestTransportProxyValidation(t *testing.T) {
+	req, err := http.NewRequest("GET", "https://api.openai.com/v1/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clearProxyEnv := func(t *testing.T) {
+		t.Setenv("HTTP_PROXY", "")
+		t.Setenv("http_proxy", "")
+		t.Setenv("HTTPS_PROXY", "")
+		t.Setenv("https_proxy", "")
+		t.Setenv("NO_PROXY", "")
+		t.Setenv("no_proxy", "")
+	}
+
+	// 1. Under PolicyStrict, plaintext http proxy must be refused
+	t.Run("strict_refuses_plaintext_proxy", func(t *testing.T) {
+		clearProxyEnv(t)
+		t.Setenv("HTTPS_PROXY", "http://127.0.0.1:8080")
+		t.Setenv("https_proxy", "http://127.0.0.1:8080")
+		tr := endpoint.Transport(endpoint.PolicyStrict)
+		_, err := tr.Proxy(req)
+		if err == nil {
+			t.Fatal("expected error for plaintext proxy under PolicyStrict")
+		}
+		if !errors.Is(err, endpoint.ErrEndpointRefused) {
+			t.Errorf("expected ErrEndpointRefused, got %v", err)
+		}
+	})
+
+	// 2. Under PolicyStrict, private https proxy must be refused
+	t.Run("strict_refuses_private_proxy", func(t *testing.T) {
+		clearProxyEnv(t)
+		t.Setenv("HTTPS_PROXY", "https://10.0.0.1:8443")
+		t.Setenv("https_proxy", "https://10.0.0.1:8443")
+		tr := endpoint.Transport(endpoint.PolicyStrict)
+		_, err := tr.Proxy(req)
+		if err == nil {
+			t.Fatal("expected error for private https proxy under PolicyStrict")
+		}
+		if !errors.Is(err, endpoint.ErrEndpointRefused) {
+			t.Errorf("expected ErrEndpointRefused, got %v", err)
+		}
+	})
+
+	// 3. Under PolicyStrict, public https proxy is accepted
+	t.Run("strict_accepts_public_https_proxy", func(t *testing.T) {
+		clearProxyEnv(t)
+		t.Setenv("HTTPS_PROXY", "https://proxy.example.com:8443")
+		t.Setenv("https_proxy", "https://proxy.example.com:8443")
+		tr := endpoint.Transport(endpoint.PolicyStrict)
+		u, err := tr.Proxy(req)
+		if err != nil {
+			t.Fatalf("unexpected error for public https proxy: %v", err)
+		}
+		if u == nil || u.Host != "proxy.example.com:8443" {
+			t.Errorf("unexpected proxy URL: %v", u)
+		}
+	})
+
+	// 4. Under PolicyOpen, any proxy is accepted
+	t.Run("open_accepts_any_proxy", func(t *testing.T) {
+		clearProxyEnv(t)
+		t.Setenv("HTTPS_PROXY", "http://127.0.0.1:8080")
+		t.Setenv("https_proxy", "http://127.0.0.1:8080")
+		tr := endpoint.Transport(endpoint.PolicyOpen)
+		u, err := tr.Proxy(req)
+		if err != nil {
+			t.Fatalf("unexpected error for proxy under PolicyOpen: %v", err)
+		}
+		if u == nil || u.Host != "127.0.0.1:8080" {
+			t.Errorf("unexpected proxy URL: %v", u)
+		}
+	})
 }
 
 func TestClientConstructors(t *testing.T) {

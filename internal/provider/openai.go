@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"nabd/internal/endpoint"
 )
 
 // OpenAICompat speaks the OpenAI chat-completions dialect, which NVIDIA
@@ -105,7 +107,7 @@ func NewOpenAIDialect(name, baseURL, model, key string, readCap int) (*OpenAICom
 		Key:          key,
 		Model:        model,
 		BaseURL:      baseURL,
-		Client:       &http.Client{},
+		Client:       endpoint.Client(0),
 		retryPolicy:  RetrySingleAttempt,
 		readCapBytes: readCap,
 	}, nil
