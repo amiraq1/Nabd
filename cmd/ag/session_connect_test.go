@@ -209,6 +209,7 @@ func TestSessionProviderAndModelsCommands(t *testing.T) {
 	providersPath := filepath.Join(tmpDir, "providers.json")
 	t.Setenv("NABD_AUTH_FILE", authPath)
 	t.Setenv("NABD_PROVIDERS_FILE", providersPath)
+	t.Setenv("NABD_ENDPOINT_POLICY", "open") // httptest uses http://127.0.0.1; disable the policy gate for this unit test
 
 	provJSON := fmt.Sprintf(`{
 		"provider": {
