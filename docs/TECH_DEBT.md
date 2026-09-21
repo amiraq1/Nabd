@@ -8,7 +8,6 @@
 | ALLOWED_NOTICE_TEXT_PROVENANCE | While #137 introduced an allowlist (`noticeReachesModel`) restricting which notice categories reach the model context (`NoticeCategoryUndoResult`, `NoticeCategoryPermissionDenied`, `NoticeCategoryLoopLimit`), the text payload of allowed notices (`ev.Text`) has unrestricted provenance, no formatting validation, and no length bounding before being projected into user messages. | Any subsystem emitting an allowed category can inject arbitrary unstructured strings into the model's context. Guard: Define structured templates or schema-checked renderers for allowed notice categories instead of passing raw string payloads. |
 | UNREPRODUCIBLE_PERFORMANCE_METRICS | Historical performance claims frequently cited in PR descriptions and reports ("187 allocations", "44ms/46x" speedup from #120, and timing walls under `-race` in CI) lack committed benchmark harnesses or recorded execution environments. | Unverifiable performance figures risk being treated as canonical baselines without reproducible test code or known environmental specifications. Guard: Any future performance claims must be accompanied by committed benchmark functions (e.g. `Benchmark*`) with recorded hardware/OS baselines, matching the rigor of Section G1 in this file. |
 | THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | `docs/THREAT_MODEL.md` has grown to over 81 KB and 215 backtick-quoted test citations. It is edited via full-file rewrites, making concurrent edits, review diffs, and manual editing increasingly error-prone. | High risk of merge conflicts, accidental citation breakage, and review fatigue on every security-touching PR. Guard: Decompose `THREAT_MODEL.md` into modular per-domain specification files (e.g. paths, permissions, tools, providers) aggregated by CI scripts, while preserving the unified test citation check. |
-| WRITE_COMMIT_SOURCE_SCRAPERS_FRAGILE | The three contract tests in `internal/tools/write_commit_source_test.go` (`TestWriteCommitDelegatesToAdapters`, `TestWriteCommitUnixAdapterIsDescriptorOnly`, `TestWriteCommitOtherIsCompatibilityPath`) inspect raw Go source through `readCommitSource` (`os.ReadFile` + `strings.Contains`) rather than the AST. They are the remainder of the class closed by the `SOURCE_INSPECTION_TESTS_FRAGILE` resolution in #179, which converted the three scrapers in `open_read_source_test.go` and deliberately left these in place. | Fragile tests that break on innocent refactoring, formatting changes, and variable renames without any actual behavioural regression, while failing to catch semantic regressions that avoid the searched tokens. Guard: Convert them with the AST helpers already committed in `open_read_source_test.go` (`parseToolSource`, `pkgCalls`, `methodCalls`, `identCalls`, `declaresFunc`, `hasComment`, `hasBuildConstraint`); `pkgCalls` already covers the receiver-named probes (`sh.Capture`, `snap.WriteAtomic`) these guards need. Test names stay unchanged. |
 
 ## G1: write.go diff/output/event baseline (NBD-011 limit selection)
 
@@ -878,4 +877,27 @@ inspected source — it exercises `BuiltinCatalog()` directly. And the same
 lexical pattern still exists in `internal/tools/write_commit_source_test.go`
 (three guards); it is out of this change's scope and remains a candidate for
 its own entry.
+
+
+## WRITE_COMMIT_SOURCE_SCRAPERS_FRAGILE — RESOLVED by AST structural guards
+
+The three guards in `internal/tools/write_commit_source_test.go` —
+`TestWriteCommitDelegatesToAdapters`,
+`TestWriteCommitUnixAdapterIsDescriptorOnly`, and
+`TestWriteCommitOtherIsCompatibilityPath` — now parse their target files with
+`go/parser` and assert on the AST, using the helpers committed with the
+`SOURCE_INSPECTION_TESTS_FRAGILE` resolution: required calls must exist, banned
+calls are matched as calls with the call positions in every failure message,
+and every guard first fails loudly when its target file or target functions
+disappear. `readCommitSource` is deleted; these three tests were its last
+consumers.
+
+Three sharpenings were deliberately kept: the argument-specific bans
+(`sh.Capture(abs)`, `snap.WriteAtomic(abs`, `mkdirParentDirs(abs)`) became
+any-call bans, which is the contract the guards state and matches a file with
+zero such calls; the lexical probe `os.Open` also matched `os.OpenFile`, so
+both are banned explicitly to keep the old coverage; and the `compatibility`
+probe stays comment-based, the same known weakest link the read-side guards
+carry. No claim was dropped, and the test names are unchanged, so the new
+`THREAT_MODEL.md` citations resolve.
 
