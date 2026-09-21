@@ -416,10 +416,16 @@ func fileUndo(loop *agent.Loop, reg *tools.Registry, n int) string {
 		return "no edits to undo"
 	}
 	var b strings.Builder
+	var reverted, failed []string
 	for _, r := range reg.PersistedUndo(recs, n) {
 		mark := "x"
 		if r.OK {
 			mark = "ok"
+			if r.Rel != "" {
+				reverted = append(reverted, r.Rel)
+			}
+		} else if r.Rel != "" {
+			failed = append(failed, r.Rel)
 		}
 		if r.Rel == "" {
 			fmt.Fprintf(&b, "%s %s\n", mark, r.Note)
@@ -428,7 +434,7 @@ func fileUndo(loop *agent.Loop, reg *tools.Registry, n int) string {
 		fmt.Fprintf(&b, "%s %s - %s\n", mark, r.Rel, r.Note)
 	}
 	s := strings.TrimRight(b.String(), "\n")
-	loop.NoteUndo(fmt.Sprintf("/undo %d - %s", n, s))
+	loop.NoteUndo(fmt.Sprintf("/undo %d - %s", n, s), reverted, failed)
 	return ""
 }
 
