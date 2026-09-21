@@ -4,6 +4,28 @@ Release notes are generated from conventional commit history by GoReleaser.
 Published changes and downloadable artifacts are available on the
 [GitHub Releases](https://github.com/amiraq1/Nabd/releases) page.
 
+## v1.6.1
+
+Checksum signing restored in the release pipeline.
+
+- **Release signing fixed (`fix(release)`):** `release.yml` now pins the cosign
+  major (`cosign-release: v2.6.5`) that the `signs` block in `.goreleaser.yaml`
+  targets. The cosign-installer bump to v4 had silently moved the runner to
+  cosign v3, whose bundle format ignores `--output-signature` and
+  `--output-certificate`, so `v1.6.0`'s release aborted with
+  `create bundle file: open : no such file or directory` and `checksums.txt`
+  was never signed. `TestReleasePipelineContracts` now fails if the workflow and
+  the sign config drift apart on the cosign major again.
+- **`v1.6.0` has no published release.** The tag exists but its signing step
+  failed, so no release and no assets were ever created for it; do not expect
+  `v1.6.0` assets. `v1.6.1` is the first published release after `v1.5.0`, so
+  the BREAKING provider-endpoint policy documented under `v1.6.0` applies in
+  full to anyone arriving from `v1.5.0`.
+- **Release-dryrun signing gap recorded:** `release-dryrun` runs with
+  `--skip=publish,sign,announce`, so the signing path is never exercised before
+  a tag is cut. Recorded in `docs/TECH_DEBT.md` as `RELEASE_DRYRUN_SKIPS_SIGN`,
+  with the reason the gap is accepted and the static guard that replaces it.
+
 ## v1.6.0
 
 Provider endpoint policy, journal redaction, and crash-recovery hardening.
