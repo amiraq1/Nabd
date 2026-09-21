@@ -72,3 +72,20 @@ func TestReleasePipelineContracts(t *testing.T) {
 		}
 	}
 }
+
+func TestGitattributesContracts(t *testing.T) {
+	root := filepath.Join("..", "..")
+	data, err := os.ReadFile(filepath.Join(root, ".gitattributes"))
+	if err != nil {
+		t.Fatalf("read .gitattributes: %v", err)
+	}
+	content := string(data)
+	for _, required := range []string{
+		"*.go text eol=lf",
+		"*.sh text eol=lf",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf(".gitattributes missing %q", required)
+		}
+	}
+}
