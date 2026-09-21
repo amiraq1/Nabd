@@ -7,7 +7,6 @@
 | SKILL_WALK_BOUND_IS_POST_HOC | Directory listing in skill discovery (`internal/skill/skill.go`) reads entries via `f.ReadDir(64)` and bounds traversal post-hoc via `seen >= maxWalkEntries` after opening and reading batches, loading entries into memory before capping. | Bounding is applied post-hoc during batch iteration; follow-up should bound directory traversal queues upfront before descriptor allocation. |
 | ALLOWED_NOTICE_TEXT_PROVENANCE | While #137 introduced an allowlist (`noticeReachesModel`) restricting which notice categories reach the model context (`NoticeCategoryUndoResult`, `NoticeCategoryPermissionDenied`, `NoticeCategoryLoopLimit`), the text payload of allowed notices (`ev.Text`) has unrestricted provenance, no formatting validation, and no length bounding before being projected into user messages. | Any subsystem emitting an allowed category can inject arbitrary unstructured strings into the model's context. Guard: Define structured templates or schema-checked renderers for allowed notice categories instead of passing raw string payloads. |
 | UNREPRODUCIBLE_PERFORMANCE_METRICS | Historical performance claims frequently cited in PR descriptions and reports ("187 allocations", "44ms/46x" speedup from #120, and timing walls under `-race` in CI) lack committed benchmark harnesses or recorded execution environments. | Unverifiable performance figures risk being treated as canonical baselines without reproducible test code or known environmental specifications. Guard: Any future performance claims must be accompanied by committed benchmark functions (e.g. `Benchmark*`) with recorded hardware/OS baselines, matching the rigor of Section G1 in this file. |
-| SOURCE_INSPECTION_TESTS_FRAGILE | Multiple contract tests (`TestBuiltinDefaultsAreDeclaredNotGuessed`, `TestToolPathAuthorityDoesNotCallResolveDirectly`, `TestOpenReadOtherIsCompatibilityOnly`, `TestReadFileUsesDescriptorStat`) inspect raw Go source code via `os.ReadFile` and string matching rather than exercising API contracts. | Fragile tests that break on innocent refactoring, formatting changes, or variable renames without any actual behavioural regression, while failing to catch semantic regressions that avoid the searched tokens. Guard: Replace or supplement lexical AST/text scrapers with behavioural contract tests and architectural linting. |
 | THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | `docs/THREAT_MODEL.md` has grown to over 81 KB and 215 backtick-quoted test citations. It is edited via full-file rewrites, making concurrent edits, review diffs, and manual editing increasingly error-prone. | High risk of merge conflicts, accidental citation breakage, and review fatigue on every security-touching PR. Guard: Decompose `THREAT_MODEL.md` into modular per-domain specification files (e.g. paths, permissions, tools, providers) aggregated by CI scripts, while preserving the unified test citation check. |
 
 ## G1: write.go diff/output/event baseline (NBD-011 limit selection)
@@ -853,4 +852,29 @@ not a terminal, and a key can never be piped in by accident. The CI
 `module-tidiness` job (`go mod tidy -diff`) keeps the manifest and the sums
 honest against any future change that would re-introduce the direct
 dependency.
+
+## SOURCE_INSPECTION_TESTS_FRAGILE — RESOLVED by AST structural guards
+
+The three lexical scrapers in `internal/tools/open_read_source_test.go` —
+`TestReadFileUsesDescriptorStat`,
+`TestToolPathAuthorityDoesNotCallResolveDirectly`, and
+`TestOpenReadOtherIsCompatibilityOnly` — now parse their target files with
+`go/parser` and assert on the AST: banned calls are matched as calls (with the
+call positions in every failure message), required calls must exist, and each
+guard fails loudly if its file stops declaring code — the compatibility guard
+also requires that `open_read_other.go` still declares `openReadFromRoot`
+itself. Formatting, comments, and renames can no longer break them.
+
+Test names are unchanged, so the `THREAT_MODEL.md` citations and
+`scripts/check-threat-model-tests.sh` keep resolving, and the claims they pin
+are exactly the structural ones that no API contract can observe; their
+behavioural complements (per-tool safefs tests and the read-credit pair)
+remain in place.
+
+Two corrections to the entry's inventory were verified against the code. The
+fourth test it named, `TestBuiltinDefaultsAreDeclaredNotGuessed`, never
+inspected source — it exercises `BuiltinCatalog()` directly. And the same
+lexical pattern still exists in `internal/tools/write_commit_source_test.go`
+(three guards); it is out of this change's scope and remains a candidate for
+its own entry.
 
