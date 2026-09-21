@@ -6,6 +6,9 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+- **Mutation recovery visibility:** `--continue` now reports unresolved
+  mutation intents from the active branch without replaying them automatically;
+  the operator must verify the working tree before proceeding.
 - **Default journal redaction:** recognized credentials are now redacted from
   newly written journal events by default. `NABD_REDACT_JOURNAL=0` is the
   explicit diagnostic opt-out, and the setting can be stored in Config v1
