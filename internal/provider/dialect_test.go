@@ -56,10 +56,10 @@ func TestStandaloneProviderReadsEnvEdge(t *testing.T) {
 
 	t.Run("C: NABD_BASE_URL overrides the catalog endpoint, groq included", func(t *testing.T) {
 		t.Setenv("NABD_MODEL", "")
-		t.Setenv("NABD_BASE_URL", "http://127.0.0.1:9999/v1")
+		t.Setenv("NABD_BASE_URL", "https://override.example.com/v1")
 
 		o := standaloneOpenAI(t, "groq")
-		if o.BaseURL != "http://127.0.0.1:9999/v1" {
+		if o.BaseURL != "https://override.example.com/v1" {
 			t.Errorf("groq BaseURL = %q, want the override", o.BaseURL)
 		}
 		if o.retryPolicy != RetryStandalone {
@@ -70,7 +70,7 @@ func TestStandaloneProviderReadsEnvEdge(t *testing.T) {
 		if !ok {
 			t.Fatal("anthropic did not build an *Anthropic")
 		}
-		if a.BaseURL != "http://127.0.0.1:9999/v1" {
+		if a.BaseURL != "https://override.example.com/v1" {
 			t.Errorf("anthropic BaseURL = %q, want the override", a.BaseURL)
 		}
 		if a.retryPolicy != RetryStandalone {

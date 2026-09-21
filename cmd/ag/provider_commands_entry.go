@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"golang.org/x/term"
+
+	"nabd/internal/endpoint"
 )
 
 // Provider commands must run before the legacy flag parser sees the
@@ -18,7 +20,7 @@ func init() {
 	case "connect":
 		os.Exit(runConnectCommand(os.Args[2:], os.Stdout, os.Stderr, termReadKey))
 	case "models":
-		os.Exit(runModelsCommand(os.Args[2:], os.Stdout, os.Stderr, nil))
+		os.Exit(runModelsCommand(os.Args[2:], os.Stdout, os.Stderr, endpoint.Client(0)))
 	case "provider":
 		os.Exit(runProviderCommand(os.Args[2:], os.Stdout, os.Stderr))
 	}

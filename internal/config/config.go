@@ -32,6 +32,7 @@ var knownV1Keys = map[string]struct{}{
 	"NABD_ROUTER_RETRY_AFTER_WAIT": {}, "NABD_SKILLS_PROJECT": {},
 	"NABD_CTX": {}, "NABD_MAX_TOKENS": {}, "NABD_MAX_TOKENS_PER_RUN": {}, "NABD_MAX_READ": {},
 	"NABD_BASH_SANDBOX": {}, "NABD_BASH_NETWORK": {}, "NABD_BASH_RESOURCES": {},
+	"NABD_ENDPOINT_POLICY": {},
 }
 
 var (

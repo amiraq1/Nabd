@@ -12,7 +12,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 
@@ -21,17 +20,10 @@ import (
 	"nabd/internal/registry"
 )
 
-// controlledHTTPClient builds an *http.Client whose DialContext enforces the
-// endpoint policy after DNS resolution, preventing DNS-rebinding attacks.
-// Under PolicyOpen or PolicyLoopback the dial is a plain pass-through.
+// controlledHTTPClient returns an *http.Client whose DialContext enforces the
+// endpoint policy via Dialer.Control, closing the DNS-rebinding window.
 func controlledHTTPClient() *http.Client {
-	pol, _ := endpoint.ParsePolicy(config.Get("NABD_ENDPOINT_POLICY"))
-	base := (&net.Dialer{}).DialContext
-	return &http.Client{
-		Transport: &http.Transport{
-			DialContext: endpoint.DialControl(base, pol),
-		},
-	}
+	return endpoint.Client(0)
 }
 
 // BuildRouteProvider constructs the concrete Provider for a single RouteEntry
@@ -61,6 +53,14 @@ func BuildRouteProviderWithRegistry(reg *registry.Registry, entry RouteEntry) (P
 	}
 	if prov.Key == "" {
 		return nil, missingKeyError(reg, prov.ID)
+	}
+
+	epol, err := endpoint.ParsePolicy(config.Get("NABD_ENDPOINT_POLICY"))
+	if err != nil {
+		return nil, err
+	}
+	if err := endpoint.CheckBaseURL(prov.BaseURL, epol); err != nil {
+		return nil, fmt.Errorf("provider %q: %w", prov.ID, err)
 	}
 
 	client := controlledHTTPClient()
@@ -151,6 +151,14 @@ func BuildStandaloneProviderWithRegistry(reg *registry.Registry, id, modelOverri
 	baseURL := prov.BaseURL
 	if b := strings.TrimSpace(baseOverride); b != "" {
 		baseURL = b
+	}
+
+	epol, err := endpoint.ParsePolicy(config.Get("NABD_ENDPOINT_POLICY"))
+	if err != nil {
+		return nil, err
+	}
+	if err := endpoint.CheckBaseURL(baseURL, epol); err != nil {
+		return nil, fmt.Errorf("provider %q: %w", prov.ID, err)
 	}
 
 	client := controlledHTTPClient()

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 
+	"nabd/internal/endpoint"
 	"nabd/internal/provider"
 	"nabd/internal/redact"
 )
@@ -58,7 +59,7 @@ func ParseModelsResponse(body []byte) ([]string, error) {
 // error is classified like the runtime provider errors; see KindOf.
 func FetchModels(ctx context.Context, dialect, baseURL, key string, client *http.Client) ([]string, error) {
 	if client == nil {
-		client = http.DefaultClient
+		client = endpoint.Client(0)
 	}
 	url := strings.TrimRight(baseURL, "/") + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
