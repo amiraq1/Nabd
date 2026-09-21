@@ -394,6 +394,87 @@ func TestWriteFileAtomicReportsPublishedWhenParentFsyncFails(t *testing.T) {
 	assertDirNames(t, root, "f.txt")
 }
 
+// TestWriteFileAtomicFailureMatrix keeps the three failure boundaries
+// explicit: errors before rename must leave the old target in place, while an
+// error after rename must be reported as published so recovery does not guess.
+func TestWriteFileAtomicFailureMatrix(t *testing.T) {
+	sentinel := errors.New("synthetic failure")
+
+	tests := []struct {
+		name          string
+		fsyncCallFail int
+		renameFail    bool
+		wantContent   string
+		wantPublished bool
+	}{
+		{
+			name:          "file fsync before publish",
+			fsyncCallFail: 1,
+			wantContent:   "old\n",
+		},
+		{
+			name:        "rename before publish",
+			renameFail:  true,
+			wantContent: "old\n",
+		},
+		{
+			name:          "parent fsync after publish",
+			fsyncCallFail: 2,
+			wantContent:   "new\n",
+			wantPublished: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			target := filepath.Join(root, "f.txt")
+			if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			realFsync := fsyncFD
+			realRename := renameat
+			t.Cleanup(func() {
+				fsyncFD = realFsync
+				renameat = realRename
+			})
+
+			fsyncCalls := 0
+			fsyncFD = func(fd int) error {
+				fsyncCalls++
+				if tc.fsyncCallFail != 0 && fsyncCalls == tc.fsyncCallFail {
+					return sentinel
+				}
+				return realFsync(fd)
+			}
+			renameat = func(od int, op string, nd int, np string) error {
+				if tc.renameFail {
+					return sentinel
+				}
+				return realRename(od, op, nd, np)
+			}
+
+			err := WriteFileAtomic(root, "f.txt", []byte("new\n"), 0o644)
+			if !errors.Is(err, sentinel) {
+				t.Fatalf("err=%v, want synthetic failure", err)
+			}
+			if got := WasPublished(err); got != tc.wantPublished {
+				t.Fatalf("WasPublished=%v, want %v", got, tc.wantPublished)
+			}
+
+			got, readErr := os.ReadFile(target)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if string(got) != tc.wantContent {
+				t.Fatalf("target=%q, want %q", got, tc.wantContent)
+			}
+			assertDirNames(t, root, "f.txt")
+		})
+	}
+}
+
 // 12: invalid paths are rejected, including "." and a trailing separator,
 // which name a directory rather than a file.
 func TestWriteFileAtomicRejectsInvalidPaths(t *testing.T) {
