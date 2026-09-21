@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"golang.org/x/term"
+	"github.com/charmbracelet/x/term"
 
 	"nabd/internal/endpoint"
 )
@@ -31,7 +31,7 @@ func init() {
 // by accident either.
 func termReadKey() (string, error) {
 	fmt.Fprint(os.Stderr, "API key (input hidden): ")
-	b, err := term.ReadPassword(int(os.Stdin.Fd()))
+	b, err := term.ReadPassword(os.Stdin.Fd())
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return "", err

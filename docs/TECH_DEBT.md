@@ -7,10 +7,7 @@
 | SKILL_WALK_BOUND_IS_POST_HOC | Directory listing in skill discovery (`internal/skill/skill.go`) reads entries via `f.ReadDir(64)` and bounds traversal post-hoc via `seen >= maxWalkEntries` after opening and reading batches, loading entries into memory before capping. | Bounding is applied post-hoc during batch iteration; follow-up should bound directory traversal queues upfront before descriptor allocation. |
 | ALLOWED_NOTICE_TEXT_PROVENANCE | While #137 introduced an allowlist (`noticeReachesModel`) restricting which notice categories reach the model context (`NoticeCategoryUndoResult`, `NoticeCategoryPermissionDenied`, `NoticeCategoryLoopLimit`), the text payload of allowed notices (`ev.Text`) has unrestricted provenance, no formatting validation, and no length bounding before being projected into user messages. | Any subsystem emitting an allowed category can inject arbitrary unstructured strings into the model's context. Guard: Define structured templates or schema-checked renderers for allowed notice categories instead of passing raw string payloads. |
 | UNREPRODUCIBLE_PERFORMANCE_METRICS | Historical performance claims frequently cited in PR descriptions and reports ("187 allocations", "44ms/46x" speedup from #120, and timing walls under `-race` in CI) lack committed benchmark harnesses or recorded execution environments. | Unverifiable performance figures risk being treated as canonical baselines without reproducible test code or known environmental specifications. Guard: Any future performance claims must be accompanied by committed benchmark functions (e.g. `Benchmark*`) with recorded hardware/OS baselines, matching the rigor of Section G1 in this file. |
-| SOURCE_INSPECTION_TESTS_FRAGILE | Multiple contract tests (`TestBuiltinDefaultsAreDeclaredNotGuessed`, `TestToolPathAuthorityDoesNotCallResolveDirectly`, `TestOpenReadOtherIsCompatibilityOnly`, `TestReadFileUsesDescriptorStat`) inspect raw Go source code via `os.ReadFile` and string matching rather than exercising API contracts. | Fragile tests that break on innocent refactoring, formatting changes, or variable renames without any actual behavioural regression, while failing to catch semantic regressions that avoid the searched tokens. Guard: Replace or supplement lexical AST/text scrapers with behavioural contract tests and architectural linting. |
 | THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | `docs/THREAT_MODEL.md` has grown to over 81 KB and 215 backtick-quoted test citations. It is edited via full-file rewrites, making concurrent edits, review diffs, and manual editing increasingly error-prone. | High risk of merge conflicts, accidental citation breakage, and review fatigue on every security-touching PR. Guard: Decompose `THREAT_MODEL.md` into modular per-domain specification files (e.g. paths, permissions, tools, providers) aggregated by CI scripts, while preserving the unified test citation check. |
-| X_TERM_DIRECT_DEPENDENCY | `golang.org/x/term` is included as a direct dependency in `go.mod` solely for `term.ReadPassword` in `cmd/ag/provider_commands_entry.go`, even though `github.com/charmbracelet/x/term` is already transitively present in the dependency tree. | Unnecessary direct supply-chain dependency. Guard: Consolidate terminal password reading on an existing internal/transitive package or standard syscalls to drop the direct dependency. |
-| DEFAULT_MODEL_SCHEMA_UNDOCUMENTED | `defaultModel` is a valid top-level configuration key in provider registry entries (`internal/registry/registry.go:55`) used as the fallback when `NABD_MODEL` is unset, but this field is not documented in `docs/` or user configuration guides. | Operators configuring custom providers in `~/.ag/providers.json` cannot discover how to configure a default model without reading Go source code. Guard: Document the provider schema and `defaultModel` key in user documentation. |
 
 ## G1: write.go diff/output/event baseline (NBD-011 limit selection)
 
@@ -823,3 +820,61 @@ reaches the message projection. `TestAllowedNoticeCategoriesFlushedAfterToolCall
 is the contrast case: the three allowed categories must survive the pending
 queue and be flushed as `«notice»` user messages, so the drop behaviour is
 pinned as category-driven rather than a blanket discard.
+
+## DEFAULT_MODEL_SCHEMA_UNDOCUMENTED — RESOLVED by the providers.json schema section
+
+`docs/CONFIG.md` section 8 now documents the complete `~/.ag/providers.json`
+schema — `api`, `name`, `options.baseURL`, `models.<key>.{name,id}`, `readCap`,
+and `defaultModel` — together with the rules enforced when the file is loaded
+(strict JSON, dialect allowlist, 0600/owner check, 256 KB cap, load-time
+endpoint policy) and the documented precedence, and `README.md` points at it.
+
+The semantics were read from the code rather than from this entry's line
+numbers. `ProviderConfig` in `internal/registry/registry.go` is the shape, and
+`defaultModel` is consumed only by the standalone path in
+`internal/provider/newroute.go`: an explicit `NABD_MODEL` wins over it, the
+provider's `defaultModel` is the fallback, and neither being set is an error
+that names the key and the file to edit. The router path resolves each route's
+model through `models` and never reads `defaultModel`.
+
+## X_TERM_DIRECT_DEPENDENCY — RESOLVED by the in-tree terminal package
+
+`cmd/ag/provider_commands_entry.go` now reads the hidden API-key prompt
+through `github.com/charmbracelet/x/term`, which the TUI stack already
+carried as an indirect dependency, and calls its `ReadPassword(fd uintptr)`
+signature directly. `go mod tidy` drops `golang.org/x/term` from `go.mod`
+and `go.sum` entirely: the module graph had a single edge, from `nabd`
+itself, and no other module was holding it in.
+
+The non-TTY behaviour is unchanged. The charmbracelet fork carries the same
+ioctl-based terminal handling, so `ReadPassword` still fails when stdin is
+not a terminal, and a key can never be piped in by accident. The CI
+`module-tidiness` job (`go mod tidy -diff`) keeps the manifest and the sums
+honest against any future change that would re-introduce the direct
+dependency.
+
+## SOURCE_INSPECTION_TESTS_FRAGILE — RESOLVED by AST structural guards
+
+The three lexical scrapers in `internal/tools/open_read_source_test.go` —
+`TestReadFileUsesDescriptorStat`,
+`TestToolPathAuthorityDoesNotCallResolveDirectly`, and
+`TestOpenReadOtherIsCompatibilityOnly` — now parse their target files with
+`go/parser` and assert on the AST: banned calls are matched as calls (with the
+call positions in every failure message), required calls must exist, and each
+guard fails loudly if its file stops declaring code — the compatibility guard
+also requires that `open_read_other.go` still declares `openReadFromRoot`
+itself. Formatting, comments, and renames can no longer break them.
+
+Test names are unchanged, so the `THREAT_MODEL.md` citations and
+`scripts/check-threat-model-tests.sh` keep resolving, and the claims they pin
+are exactly the structural ones that no API contract can observe; their
+behavioural complements (per-tool safefs tests and the read-credit pair)
+remain in place.
+
+Two corrections to the entry's inventory were verified against the code. The
+fourth test it named, `TestBuiltinDefaultsAreDeclaredNotGuessed`, never
+inspected source — it exercises `BuiltinCatalog()` directly. And the same
+lexical pattern still exists in `internal/tools/write_commit_source_test.go`
+(three guards); it is out of this change's scope and remains a candidate for
+its own entry.
+

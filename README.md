@@ -100,7 +100,7 @@ EOF
 
 Config v2 uses `NABD_CONFIG_V2` or `~/.ag/config.v2.json`. It is strict JSON, rejects unknown fields and trailing documents, requires explicit credential sources (`env` or an absolute secure file), rejects command credentials, and cannot be enabled together with v1. Custom `base_url` is deliberately unsupported by the minimal v2 schema.
 
-The OpenCode registry stores provider definitions in `~/.ag/providers.json` and API credentials in `~/.ag/auth.json` (mode 0600). Builtin catalog providers default to modern endpoints (e.g. Groq defaults to `openai/gpt-oss-120b`). Providers and keys can be inspected and enrolled using `nabd provider`, `nabd models`, and `nabd connect` or their corresponding slash commands.
+The OpenCode registry stores provider definitions in `~/.ag/providers.json` and API credentials in `~/.ag/auth.json` (mode 0600). Builtin catalog providers default to modern endpoints (e.g. Groq defaults to `openai/gpt-oss-120b`). Providers and keys can be inspected and enrolled using `nabd provider`, `nabd models`, and `nabd connect` or their corresponding slash commands. The full `~/.ag/providers.json` schema, including `readCap` and `defaultModel`, is documented in [docs/CONFIG.md](docs/CONFIG.md) (section 8).
 
 Do not put credentials in project files. See [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for exact guarantees and residual risks. Report suspected escapes through [SECURITY.md](SECURITY.md), not a public issue.
 
