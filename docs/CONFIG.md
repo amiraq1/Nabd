@@ -303,3 +303,61 @@ nabd --export SESSION.jsonl --redact    # recognized credentials redacted
 mode (`-p`, `--continue`, `--replay`, `--feed`, `--feed-touch`, `--json`,
 `--dir`, `--version`, `--max-turns`, `--permission-mode`, `--speed`) or with
 positional arguments. Diagnostics go to stderr; stdout is JSONL only.
+
+## 8. Provider registry (`~/.ag/providers.json`)
+
+User-defined providers live in `~/.ag/providers.json`; the path can be
+overridden with `NABD_PROVIDERS_FILE`. API keys are not stored here — they live
+in `~/.ag/auth.json` (override `NABD_AUTH_FILE`) and are enrolled with
+`nabd connect` or `nabd provider add`. The file is optional, and its document is
+a single object keyed by `provider`, whose keys are your provider IDs:
+
+```json
+{
+  "provider": {
+    "acme": {
+      "api": "openai",
+      "name": "Acme Cloud",
+      "options": { "baseURL": "https://api.acme.example.com/v1" },
+      "readCap": 65536,
+      "models": {
+        "acme-large": { "name": "Acme Large", "id": "acme-large-2026-01" },
+        "acme-small": { "name": "Acme Small" }
+      },
+      "defaultModel": "acme-large"
+    }
+  }
+}
+```
+
+An entry whose ID matches a builtin provider (`anthropic`, `groq`,
+`openrouter`, `nvidia`) replaces that builtin definition entirely.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `api` | `string` | Yes | Wire dialect: `"openai"` or `"anthropic"`. Any other value is rejected when the file is parsed. |
+| `name` | `string` | No | Human-readable provider label. |
+| `options.baseURL` | `string` | No | Endpoint for every request to this provider. Checked at load time and again at connect time under the endpoint policy (see below). |
+| `readCap` | `int` | No | Per-provider read ceiling in bytes. Omission or a non-positive value means the built-in default, `DefaultReadCapBytes` (16384). An explicit `NABD_MAX_READ` still outranks it at runtime. |
+| `models` | `object` | No | Declared model names. Router routes resolve their `model` through this map, and the optional `id` is the wire model ID actually sent (defaults to the map key). The standalone path (`NABD_PROVIDER` with `NABD_MODEL`/`defaultModel`) sends its model name as given. |
+| `defaultModel` | `string` | No | The model used when nothing else names one. On the standalone path an explicit `NABD_MODEL` wins over it; when neither is set the run fails with an error naming this key and the file to edit. Router routes always name their own model, so `defaultModel` is not consulted there. |
+
+Rules enforced when the file is loaded:
+
+- strict JSON: unknown fields and trailing documents are rejected;
+- provider IDs match `[a-z0-9-_]` and are at most 32 bytes; model keys are
+  1-256 bytes;
+- literal API keys are rejected — keys belong in `~/.ag/auth.json`;
+- the file must be a regular file, owned by the user on Unix, with no group or
+  other permission bits (`0600`), and at most 256 KB;
+- every `options.baseURL` must satisfy the endpoint policy: HTTPS by default,
+  with loopback, private, link-local, CGNAT, ULA, 6to4, cloud-metadata, and
+  `.internal`/`.local`/`localhost` targets refused unless
+  `NABD_ENDPOINT_POLICY=loopback` permits a local runtime or
+  `NABD_ENDPOINT_ALLOW` names the endpoint. See
+  [THREAT_MODEL.md](THREAT_MODEL.md) for the exact guarantee.
+
+Precedence: provider definitions come from `providers.json` before the builtin
+catalog, and credentials from `auth.json` before legacy environment variables
+and v1 config (`PrecedenceDocumentation` in `internal/registry/registry.go`).
+

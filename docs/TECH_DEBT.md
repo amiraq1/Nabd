@@ -10,7 +10,6 @@
 | SOURCE_INSPECTION_TESTS_FRAGILE | Multiple contract tests (`TestBuiltinDefaultsAreDeclaredNotGuessed`, `TestToolPathAuthorityDoesNotCallResolveDirectly`, `TestOpenReadOtherIsCompatibilityOnly`, `TestReadFileUsesDescriptorStat`) inspect raw Go source code via `os.ReadFile` and string matching rather than exercising API contracts. | Fragile tests that break on innocent refactoring, formatting changes, or variable renames without any actual behavioural regression, while failing to catch semantic regressions that avoid the searched tokens. Guard: Replace or supplement lexical AST/text scrapers with behavioural contract tests and architectural linting. |
 | THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | `docs/THREAT_MODEL.md` has grown to over 81 KB and 215 backtick-quoted test citations. It is edited via full-file rewrites, making concurrent edits, review diffs, and manual editing increasingly error-prone. | High risk of merge conflicts, accidental citation breakage, and review fatigue on every security-touching PR. Guard: Decompose `THREAT_MODEL.md` into modular per-domain specification files (e.g. paths, permissions, tools, providers) aggregated by CI scripts, while preserving the unified test citation check. |
 | X_TERM_DIRECT_DEPENDENCY | `golang.org/x/term` is included as a direct dependency in `go.mod` solely for `term.ReadPassword` in `cmd/ag/provider_commands_entry.go`, even though `github.com/charmbracelet/x/term` is already transitively present in the dependency tree. | Unnecessary direct supply-chain dependency. Guard: Consolidate terminal password reading on an existing internal/transitive package or standard syscalls to drop the direct dependency. |
-| DEFAULT_MODEL_SCHEMA_UNDOCUMENTED | `defaultModel` is a valid top-level configuration key in provider registry entries (`internal/registry/registry.go:55`) used as the fallback when `NABD_MODEL` is unset, but this field is not documented in `docs/` or user configuration guides. | Operators configuring custom providers in `~/.ag/providers.json` cannot discover how to configure a default model without reading Go source code. Guard: Document the provider schema and `defaultModel` key in user documentation. |
 
 ## G1: write.go diff/output/event baseline (NBD-011 limit selection)
 
@@ -823,3 +822,20 @@ reaches the message projection. `TestAllowedNoticeCategoriesFlushedAfterToolCall
 is the contrast case: the three allowed categories must survive the pending
 queue and be flushed as `«notice»` user messages, so the drop behaviour is
 pinned as category-driven rather than a blanket discard.
+
+## DEFAULT_MODEL_SCHEMA_UNDOCUMENTED — RESOLVED by the providers.json schema section
+
+`docs/CONFIG.md` section 8 now documents the complete `~/.ag/providers.json`
+schema — `api`, `name`, `options.baseURL`, `models.<key>.{name,id}`, `readCap`,
+and `defaultModel` — together with the rules enforced when the file is loaded
+(strict JSON, dialect allowlist, 0600/owner check, 256 KB cap, load-time
+endpoint policy) and the documented precedence, and `README.md` points at it.
+
+The semantics were read from the code rather than from this entry's line
+numbers. `ProviderConfig` in `internal/registry/registry.go` is the shape, and
+`defaultModel` is consumed only by the standalone path in
+`internal/provider/newroute.go`: an explicit `NABD_MODEL` wins over it, the
+provider's `defaultModel` is the fallback, and neither being set is an error
+that names the key and the file to edit. The router path resolves each route's
+model through `models` and never reads `defaultModel`.
+
