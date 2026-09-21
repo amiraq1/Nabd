@@ -98,6 +98,7 @@ type Event struct {
 	Edit             *EditRecord    `json:"edit,omitempty"`
 	Read             *ReadRecord    `json:"read,omitempty"`
 	NoticeCategory   NoticeCategory `json:"notice_category,omitempty"`
+	Notice           *NoticeData    `json:"notice,omitempty"`
 	Calib            *Calibration   `json:"calib,omitempty"`
 	// Skills is the session-start skill inventory (see skill.EventSkills). It is
 	// recorded once, before the first turn, because the prompt it describes is
@@ -262,6 +263,73 @@ var noticeReachesModel = map[NoticeCategory]bool{
 // is permitted to appear in the provider message projection.
 func NoticeAllowedForModel(c NoticeCategory) bool {
 	return noticeReachesModel[c]
+}
+
+// NoticeData is the structured, model-facing payload of a notice whose
+// category is allowed through noticeReachesModel. The projection renders
+// these fields and never the human Text, so an allowed notice cannot smuggle
+// arbitrary prose into the model's context: each category declares exactly
+// which field it may carry, and a payload that does not match its category is
+// dropped rather than repaired.
+type NoticeData struct {
+	Undo             *UndoNotice            `json:"undo,omitempty"`
+	PermissionDenied *PermissionDeniedNotice `json:"permission_denied,omitempty"`
+	LoopLimit        *LoopLimitNotice        `json:"loop_limit,omitempty"`
+}
+
+// validate reports whether n carries exactly the payload its category
+// declares. Fail-closed: a mismatched or missing payload is refused, so an
+// emitter that sets the wrong field loses the notice instead of reaching the
+// model with a rendering built from the wrong shape.
+func (n *NoticeData) validate(cat NoticeCategory) bool {
+	if n == nil {
+		return false
+	}
+	set := 0
+	if n.Undo != nil {
+		if cat != NoticeCategoryUndoResult {
+			return false
+		}
+		set++
+	}
+	if n.PermissionDenied != nil {
+		if cat != NoticeCategoryPermissionDenied {
+			return false
+		}
+		set++
+	}
+	if n.LoopLimit != nil {
+		if cat != NoticeCategoryLoopLimit {
+			return false
+		}
+		set++
+	}
+	return set == 1
+}
+
+// UndoNotice is the model-facing shape of an /undo result: the paths the undo
+// reverted and the paths it refused. The free-form human note for each record
+// stays in Event.Text and never reaches the model.
+type UndoNotice struct {
+	Reverted []string `json:"reverted,omitempty"`
+	Failed   []string `json:"failed,omitempty"`
+}
+
+// PermissionDeniedNotice is the model-facing shape of a refusal by the
+// permission gate. Reason is a fixed phrase chosen by the gate — never text
+// derived from a tool argument, a path, or provider output.
+type PermissionDeniedNotice struct {
+	Tool   string `json:"tool"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// LoopLimitNotice is the model-facing shape of a repetition notice: the tool
+// name, how many identical rounds were recorded, and whether the notice
+// aborted the turn.
+type LoopLimitNotice struct {
+	Tool    string `json:"tool"`
+	Count   int    `json:"count"`
+	Aborted bool   `json:"aborted,omitempty"`
 }
 
 // EditRecord is the persisted fingerprint of one file mutation. It is the
