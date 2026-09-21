@@ -221,10 +221,3 @@ func isPrivateLiteralHost(host string) bool {
 	}
 	return false
 }
-
-func isBlockedIP(ip net.IP) bool {
-	if addr, ok := netip.AddrFromSlice(ip); ok {
-		return blockedAddr(addr)
-	}
-	return true
-}
