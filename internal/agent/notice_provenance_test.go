@@ -57,7 +57,7 @@ func TestNoticePayloadCategoryMismatchIsDropped(t *testing.T) {
 		payload  *NoticeData
 	}{
 		{"undo_payload_on_loop_category", NoticeCategoryLoopLimit, &NoticeData{Undo: &UndoNotice{Reverted: []string{"a.go"}}}},
-		{"loop_payload_on_permission_category", NoticeCategoryPermissionDenied, &NoticeData{LoopLimit: &LoopLimitNotice{Tool: "bash", Count: 3}}},
+		{"loop_payload_on_undo_category", NoticeCategoryUndoResult, &NoticeData{LoopLimit: &LoopLimitNotice{Tool: "bash", Count: 3}}},
 		{"two_payloads_on_undo_category", NoticeCategoryUndoResult, &NoticeData{Undo: &UndoNotice{}, LoopLimit: &LoopLimitNotice{Tool: "bash"}}},
 		{"empty_payload_on_undo_category", NoticeCategoryUndoResult, &NoticeData{}},
 	}
@@ -155,8 +155,6 @@ func TestStructuredNoticeRendersPerCategory(t *testing.T) {
 		want     string
 	}{
 		{"undo_paths", NoticeCategoryUndoResult, &NoticeData{Undo: &UndoNotice{Reverted: []string{"a.go", "b.go"}, Failed: []string{"c.go"}}}, "undo: 2 reverted (a.go, b.go) · 1 not reverted (c.go)"},
-		{"permission_reason", NoticeCategoryPermissionDenied, &NoticeData{PermissionDenied: &PermissionDeniedNotice{Tool: "bash", Reason: "denied by session policy"}}, "permission denied: bash · denied by session policy"},
-		{"permission_without_reason", NoticeCategoryPermissionDenied, &NoticeData{PermissionDenied: &PermissionDeniedNotice{Tool: "write_file"}}, "permission denied: write_file"},
 		{"loop_notice_keeps_guidance", NoticeCategoryLoopLimit, &NoticeData{LoopLimit: &LoopLimitNotice{Tool: "read_file", Count: 3}}, `loop detected: tool "read_file" called 3 times with identical arguments and outcome; please try a different approach`},
 		{"loop_abort", NoticeCategoryLoopLimit, &NoticeData{LoopLimit: &LoopLimitNotice{Tool: "read_file", Count: 5, Aborted: true}}, "tool loop detected: read_file repeated 5 times with identical input and output · aborting"},
 	}

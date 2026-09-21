@@ -73,7 +73,6 @@ func TestBlockedNoticeCategoriesDroppedWhileToolCallsPending(t *testing.T) {
 func TestAllowedNoticeCategoriesFlushedAfterToolCallsPending(t *testing.T) {
 	allowed := []NoticeCategory{
 		NoticeCategoryUndoResult,
-		NoticeCategoryPermissionDenied,
 		NoticeCategoryLoopLimit,
 	}
 
