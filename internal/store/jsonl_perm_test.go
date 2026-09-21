@@ -259,9 +259,9 @@ func TestNewJSONL_ExistingPrivateFileUnchanged(t *testing.T) {
 	}
 }
 
-// TestNewJSONL_TruncatedFinalLineStillTolerated confirms that crash-tolerance
-// is unaffected by the permission change.
-func TestNewJSONL_TruncatedFinalLineStillTolerated(t *testing.T) {
+// TestNewJSONLRepairsTruncatedFinalLine preserves the torn source, repairs the
+// active journal to the valid prefix, and then permits a safe continuation.
+func TestNewJSONLRepairsTruncatedFinalLine(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "torn.jsonl")
 	body := `{"seq":1,"t":"2026-09-01T10:00:00Z","type":"run_start"}` + "\n" +
 		`{"seq":2,"t":"2026-09-01T10:00:01Z","type":"run_e` // truncated
@@ -270,11 +270,78 @@ func TestNewJSONL_TruncatedFinalLineStillTolerated(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	j, err := NewJSONL(path)
+	if err != nil {
+		t.Fatalf("NewJSONL tail recovery: %v", err)
+	}
+	if err := j.Append(agent.Event{Seq: 2, Type: agent.RunEnd}); err != nil {
+		t.Fatalf("Append after tail recovery: %v", err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
 	evs, err := Read(path)
 	if err != nil {
-		t.Fatalf("truncated final line must be tolerated: %v", err)
+		t.Fatalf("Read repaired journal: %v", err)
 	}
-	if len(evs) != 1 {
-		t.Errorf("got %d events, want 1", len(evs))
+	if len(evs) != 2 {
+		t.Errorf("got %d events, want 2", len(evs))
+	}
+	backups, err := filepath.Glob(path + ".recovery-*")
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("recovery copy count=%d err=%v, want 1", len(backups), err)
+	}
+	backup, err := os.ReadFile(backups[0])
+	if err != nil {
+		t.Fatalf("read recovery copy: %v", err)
+	}
+	if string(backup) != body {
+		t.Fatalf("recovery copy changed source bytes: %q", backup)
+	}
+}
+
+func TestNewJSONLSeparatesValidFinalLineWithoutNewline(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "no-final-newline.jsonl")
+	first := `{"seq":1,"t":"2026-09-01T10:00:00Z","type":"run_start"}`
+	if err := os.WriteFile(path, []byte(first), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	j, err := NewJSONL(path)
+	if err != nil {
+		t.Fatalf("NewJSONL: %v", err)
+	}
+	if err := j.Append(agent.Event{Seq: 2, Type: agent.RunEnd}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	evs, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(evs) != 2 {
+		t.Fatalf("got %d events, want 2", len(evs))
+	}
+}
+
+func TestNewJSONLRefusesCorruptMiddleLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "middle-corrupt.jsonl")
+	body := `{"seq":1,"t":"2026-09-01T10:00:00Z","type":"run_start"}` + "\n" +
+		"{not json}" + "\n" +
+		`{"seq":3,"t":"2026-09-01T10:00:02Z","type":"run_end"}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewJSONL(path); err == nil {
+		t.Fatal("corrupt middle line must refuse append")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != body {
+		t.Fatal("corrupt middle line was modified")
 	}
 }

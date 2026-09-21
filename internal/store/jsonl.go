@@ -4,6 +4,7 @@ package store
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"nabd/internal/agent"
 )
@@ -33,6 +35,9 @@ type JSONL struct {
 	f      *os.File
 	w      *bufio.Writer
 	redact EventRedactor
+	// needsSeparator is true when the existing file ended with a valid JSON
+	// value but no newline. The first append must not concatenate two objects.
+	needsSeparator bool
 }
 
 // NewJSONL opens path for appending, creating parents if needed.
@@ -58,6 +63,10 @@ func NewJSONLWithOptions(path string, opts Options) (*JSONL, error) {
 	if err := ensurePrivateParent(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
+	needsSeparator, err := prepareExistingJournal(path)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, err
@@ -70,10 +79,11 @@ func NewJSONLWithOptions(path string, opts Options) (*JSONL, error) {
 		return nil, fmt.Errorf("store: harden journal permissions: %w", err)
 	}
 	return &JSONL{
-		path:   path,
-		f:      f,
-		w:      bufio.NewWriter(f),
-		redact: opts.Redact,
+		path:           path,
+		f:              f,
+		w:              bufio.NewWriter(f),
+		redact:         opts.Redact,
+		needsSeparator: needsSeparator,
 	}, nil
 }
 
@@ -152,10 +162,119 @@ func (j *JSONL) Append(e agent.Event) error {
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	if j.needsSeparator {
+		if _, err := j.w.WriteString("\n"); err != nil {
+			return err
+		}
+		j.needsSeparator = false
+	}
 	if _, err := j.w.Write(b); err != nil {
 		return err
 	}
 	return j.w.Flush()
+}
+
+// prepareExistingJournal validates the existing append target before a
+// continuation can write to it. A malformed final line is a crash-torn tail:
+// preserve the original bytes in a private recovery copy, then truncate only
+// the active file back to the last complete line. A malformed line followed by
+// any later bytes is treated as corruption and refuses the append.
+func prepareExistingJournal(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if len(data) == 0 {
+		return false, nil
+	}
+
+	needsSeparator := data[len(data)-1] != '\n'
+	offset := 0
+	lineNo := 0
+	for offset < len(data) {
+		lineNo++
+		relativeEnd := bytes.IndexByte(data[offset:], '\n')
+		end := len(data)
+		hasNewline := relativeEnd >= 0
+		if hasNewline {
+			end = offset + relativeEnd
+		}
+		raw := bytes.TrimSpace(data[offset:end])
+		if len(raw) != 0 {
+			var event agent.Event
+			if err := json.Unmarshal(raw, &event); err != nil {
+				finalLine := end == len(data) || (hasNewline && end+1 == len(data))
+				if !finalLine {
+					return false, fmt.Errorf("store: invalid journal line %d: %w", lineNo, err)
+				}
+				if err := recoverTornTail(path, data, offset); err != nil {
+					return false, err
+				}
+				return false, nil
+			}
+		}
+		if !hasNewline {
+			break
+		}
+		offset = end + 1
+	}
+	return needsSeparator, nil
+}
+
+func recoverTornTail(path string, data []byte, validBytes int) error {
+	backup, err := writeRecoveryCopy(path, data)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("store: open journal for tail recovery: %w", err)
+	}
+	if err := f.Truncate(int64(validBytes)); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("store: truncate journal tail (backup %s): %w", backup, err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("store: sync journal tail recovery (backup %s): %w", backup, err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("store: close journal after tail recovery (backup %s): %w", backup, err)
+	}
+	return nil
+}
+
+func writeRecoveryCopy(path string, data []byte) (string, error) {
+	for attempt := 0; attempt < 32; attempt++ {
+		// Keep the recovery artifact outside the *.jsonl session namespace so
+		// latest-session discovery and purge never mistake it for a session.
+		backup := fmt.Sprintf("%s.recovery-%d-%02d", path, time.Now().UnixNano(), attempt)
+		f, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", fmt.Errorf("store: create journal recovery copy: %w", err)
+		}
+		_, writeErr := f.Write(data)
+		if writeErr == nil {
+			writeErr = f.Sync()
+		}
+		closeErr := f.Close()
+		if writeErr != nil {
+			_ = os.Remove(backup)
+			return "", fmt.Errorf("store: write journal recovery copy: %w", writeErr)
+		}
+		if closeErr != nil {
+			_ = os.Remove(backup)
+			return "", fmt.Errorf("store: close journal recovery copy: %w", closeErr)
+		}
+		return backup, nil
+	}
+	return "", errors.New("store: could not allocate journal recovery copy")
 }
 
 // Sync flushes buffered bytes and calls fsync without closing the journal.
