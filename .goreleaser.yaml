@@ -32,6 +32,7 @@ checksum:
 signs:
   - cmd: cosign
     certificate: "${artifact}.pem"
+    signature: "${artifact}.sig"
     args:
       - sign-blob
       - --yes
