@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 
 	"nabd/internal/agent"
@@ -274,6 +275,48 @@ func (r *Registry) Edits() []Edit {
 
 type Classified interface {
 	Class() perm.Class
+}
+
+// MutationRecoveryState is the read-only result of comparing the current
+// working-tree bytes with a journaled mutation intent. Reconciliation never
+// writes the project file and never chooses a replay action.
+type MutationRecoveryState string
+
+const (
+	MutationNotPublished MutationRecoveryState = "not_published"
+	MutationPublished    MutationRecoveryState = "published"
+	MutationMissing      MutationRecoveryState = "missing"
+	MutationConflict     MutationRecoveryState = "conflict"
+)
+
+// ReconcileMutation classifies an unresolved edit_intent against the current
+// descriptor-relative file state. The current bytes may be captured into the
+// existing shadow store for hashing, but no project file is changed.
+func (r *Registry) ReconcileMutation(rec *agent.EditRecord) (MutationRecoveryState, error) {
+	if rec == nil {
+		return "", fmt.Errorf("nil mutation record")
+	}
+	relative, absolute, err := writePathFromRoot(r.root, rec.Path)
+	if err != nil {
+		return "", err
+	}
+	current, err := captureFromRoot(r.sh, r.root, relative, absolute)
+	if err != nil {
+		return "", err
+	}
+	if current.Absent {
+		return MutationMissing, nil
+	}
+
+	hash := strings.TrimPrefix(current.Blob, "s256:")
+	switch {
+	case rec.HashBefore != "" && hash == rec.HashBefore:
+		return MutationNotPublished, nil
+	case rec.HashAfter != "" && hash == rec.HashAfter:
+		return MutationPublished, nil
+	default:
+		return MutationConflict, nil
+	}
 }
 
 func (r *Registry) Class(tool string) (perm.Class, bool) {

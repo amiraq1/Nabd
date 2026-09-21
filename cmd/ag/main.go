@@ -241,7 +241,7 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 	}
 
 	if cont {
-		noteUnresolvedMutations(sess.loop, prevEvs)
+		noteMutationRecovery(sess.loop, sess.reg, prevEvs)
 	}
 	if s := conflictLine(config.Conflicts()); s != "" {
 		sess.loop.Note(s)
@@ -364,7 +364,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 	}
 
 	if cont {
-		noteUnresolvedMutations(sess.loop, prevEvs)
+		noteMutationRecovery(sess.loop, sess.reg, prevEvs)
 	}
 	if s := conflictLine(config.Conflicts()); s != "" {
 		sess.loop.Note(s)
