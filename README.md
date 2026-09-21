@@ -40,6 +40,8 @@ go build -o nabd ./cmd/ag
 ./nabd models <provider>          # list live advertised models from provider endpoint
 ./nabd provider                   # list configured providers, sources, and key status
 ./nabd migrate                    # migrate legacy v1 config to ~/.ag/auth.json and providers.json
+./nabd purge --dir <sessions>     # dry-run cleanup of session journals
+./nabd purge --dir <sessions> --yes
 
 ./nabd -p "task text"             # headless answer on stdout
 ./nabd -p - < file                # task from stdin
@@ -53,6 +55,14 @@ go build -o nabd ./cmd/ag
 ```
 
 `--export` writes the journal as JSONL to stdout and exits; diagnostics go to stderr. Without `--redact` the source is copied verbatim (unknown fields, blank lines, and a truncated final line are preserved) and a stderr warning notes the output may be sensitive. With `--redact` the journal is re-encoded through the same redaction and encoding path as the live journal and `--json`: recognized credential patterns become `[REDACTED]`, but unknown JSON fields are dropped, a truncated final line is ignored, and unrecognized sensitive content stays cleartext. The source file is never written. `--redact` requires `--export`, and `--export` cannot be combined with any run mode (`-p`, `--continue`, `--replay`, `--feed`, `--json`, `--dir`, `--version`, and the headless tuning flags).
+
+`nabd purge` lists regular `*.jsonl` session journals directly inside the
+selected directory and performs a dry run by default. Pass `--yes` to delete
+the listed files; `--before <RFC3339>` limits deletion by modification time.
+It never traverses subdirectories or follows symlinks. Stop active nabd
+processes before confirmed cleanup. At session startup nabd also prints a
+notice that approved `bash` commands run with the current user's authority and
+that filesystem sandboxing is host-dependent.
 
 ## Slash commands
 
@@ -142,7 +152,10 @@ The event is the contract: live rendering and replay consume the same append-onl
 - File reads are bounded; provider-specific limits and `NABD_MAX_READ` determine the cap.
 - Compaction may call the model and falls back to a mechanical summary on failure.
 - `bash` runs after explicit permission, outside path containment. Treat approval as access equivalent to the current OS user.
-- Session journals and the shadow store contain cleartext working data and are sensitive even with private filesystem modes.
+- Session journals are redacted by default for recognized credential patterns,
+  but journals and the shadow store still contain sensitive working data even
+  with private filesystem modes. Set `NABD_REDACT_JOURNAL=0` only for a
+  deliberate diagnostic run.
 
 ## License
 

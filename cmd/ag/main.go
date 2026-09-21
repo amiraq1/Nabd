@@ -205,6 +205,9 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 			return err
 		}
 		journal, err = openSessionJournal(journalPath)
+		if err == nil {
+			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions().Redact != nil)
+		}
 	} else {
 		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
 	}
@@ -294,6 +297,9 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 			return err
 		}
 		journal, err = openSessionJournal(journalPath)
+		if err == nil {
+			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions().Redact != nil)
+		}
 	} else {
 		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
 	}

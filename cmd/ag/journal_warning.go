@@ -7,9 +7,9 @@ import (
 )
 
 const (
-	rawJournalWarning = "warning: session journal stores cleartext working data; mode 0600 limits filesystem access but does not redact journal contents\n"
+	rawJournalWarning = "warning: journal credential redaction is disabled by explicit opt-out; session files may contain sensitive cleartext data and mode 0600 only limits filesystem access\n"
 
-	redactedJournalWarning = "warning: journal credential redaction is enabled; unrecognized sensitive content remains cleartext, and mode 0600 only limits filesystem access\n"
+	redactedJournalWarning = "warning: journal credential redaction is enabled by default; unrecognized sensitive content remains cleartext, and mode 0600 only limits filesystem access\n"
 )
 
 // newSessionJournalWithWarning creates a new journal using the process-level
@@ -25,13 +25,19 @@ func newSessionJournalWithWarning(dir string, warnings io.Writer) (*store.JSONL,
 		return nil, "", err
 	}
 
-	warning := rawJournalWarning
-	if opts.Redact != nil {
-		warning = redactedJournalWarning
-	}
-	if warnings != nil {
-		_, _ = io.WriteString(warnings, warning)
-	}
+	writeSessionPolicyWarnings(warnings, opts.Redact != nil)
 
 	return journal, path, nil
+}
+
+func writeSessionPolicyWarnings(w io.Writer, redacted bool) {
+	writeSandboxAuthorityNotice(w)
+	if w == nil {
+		return
+	}
+	warning := rawJournalWarning
+	if redacted {
+		warning = redactedJournalWarning
+	}
+	_, _ = io.WriteString(w, warning)
 }
