@@ -233,10 +233,47 @@ func TestLoopbackAllowsLoopbackAndPrivate(t *testing.T) {
 	}
 }
 
+func TestLoopbackAllowsLoopbackHTTP(t *testing.T) {
+	for _, u := range []string{
+		"http://127.0.0.1:11434/v1",
+		"http://[::1]:11434/v1",
+		"http://localhost:11434/v1",
+	} {
+		if err := endpoint.CheckBaseURL(u, endpoint.PolicyLoopback); err != nil {
+			t.Errorf("CheckBaseURL(%q, Loopback): unexpected error: %v", u, err)
+		}
+	}
+}
+
 func TestLoopbackStillRefusesHTTP(t *testing.T) {
-	err := endpoint.CheckBaseURL("http://127.0.0.1:11434/v1", endpoint.PolicyLoopback)
-	if err == nil {
-		t.Error("expected error: Loopback still requires HTTPS")
+	for _, u := range []string{
+		"http://10.0.0.7:8000/v1",
+		"http://api.openai.com/v1",
+		"http://192.168.1.1/v1",
+	} {
+		err := endpoint.CheckBaseURL(u, endpoint.PolicyLoopback)
+		if err == nil {
+			t.Errorf("CheckBaseURL(%q, Loopback): expected error for non-loopback http", u)
+		}
+		if !errors.Is(err, endpoint.ErrEndpointRefused) {
+			t.Errorf("error %v does not wrap ErrEndpointRefused", err)
+		}
+	}
+}
+
+func TestLoopbackRefusesCloudMetadata(t *testing.T) {
+	for _, u := range []string{
+		"https://169.254.169.254/v1",
+		"https://100.100.100.200/v1",
+		"https://[2002:0a00:0001::]/v1",
+	} {
+		err := endpoint.CheckBaseURL(u, endpoint.PolicyLoopback)
+		if err == nil {
+			t.Errorf("CheckBaseURL(%q, Loopback): expected error for cloud metadata or 6to4", u)
+		}
+		if !errors.Is(err, endpoint.ErrEndpointRefused) {
+			t.Errorf("error %v does not wrap ErrEndpointRefused", err)
+		}
 	}
 }
 
@@ -603,5 +640,163 @@ func TestClientConstructors(t *testing.T) {
 	}
 	if c.Timeout != 5*time.Second {
 		t.Errorf("Client timeout = %v, want 5s", c.Timeout)
+	}
+}
+
+// ─── Control Hook under PolicyLoopback ───────────────────────────────────────
+
+func TestControlUnderLoopback(t *testing.T) {
+	d := endpoint.PolicyLoopback.Dialer(net.Dialer{
+		Timeout: 50 * time.Millisecond,
+	})
+
+	// 1. Loopback is permitted by Control (fails at network layer, not ErrEndpointRefused)
+	_, err := d.DialContext(context.Background(), "tcp", "127.0.0.1:11434")
+	if errors.Is(err, endpoint.ErrEndpointRefused) {
+		t.Fatalf("unexpected ErrEndpointRefused for loopback under PolicyLoopback: %v", err)
+	}
+
+	// 2. Private LAN is permitted by Control
+	_, err = d.DialContext(context.Background(), "tcp", "10.0.0.1:443")
+	if errors.Is(err, endpoint.ErrEndpointRefused) {
+		t.Fatalf("unexpected ErrEndpointRefused for private LAN under PolicyLoopback: %v", err)
+	}
+
+	// 3. Cloud metadata is REFUSED by Control under PolicyLoopback
+	_, err = d.DialContext(context.Background(), "tcp", "169.254.169.254:80")
+	if err == nil {
+		t.Fatal("expected ErrEndpointRefused for cloud metadata under PolicyLoopback")
+	}
+	if !errors.Is(err, endpoint.ErrEndpointRefused) {
+		t.Fatalf("expected ErrEndpointRefused, got %v", err)
+	}
+
+	// 4. CGNAT (Alibaba metadata) is REFUSED by Control under PolicyLoopback
+	_, err = d.DialContext(context.Background(), "tcp", "100.100.100.200:80")
+	if err == nil {
+		t.Fatal("expected ErrEndpointRefused for Alibaba metadata under PolicyLoopback")
+	}
+	if !errors.Is(err, endpoint.ErrEndpointRefused) {
+		t.Fatalf("expected ErrEndpointRefused, got %v", err)
+	}
+
+	// 5. 6to4 is REFUSED by Control under PolicyLoopback
+	_, err = d.DialContext(context.Background(), "tcp", "[2002:0a00:0001::]:443")
+	if err == nil {
+		t.Fatal("expected ErrEndpointRefused for 6to4 under PolicyLoopback")
+	}
+	if !errors.Is(err, endpoint.ErrEndpointRefused) {
+		t.Fatalf("expected ErrEndpointRefused, got %v", err)
+	}
+}
+
+// ─── NABD_ENDPOINT_ALLOW Tests ───────────────────────────────────────────────
+
+func TestAllowListStrictAcceptsAllowedHTTP(t *testing.T) {
+	t.Setenv("NABD_ENDPOINT_ALLOW", "http://127.0.0.1:11434,http://localhost:8080")
+
+	// Allowed endpoint is accepted under PolicyStrict even though it is plaintext HTTP and loopback
+	for _, u := range []string{
+		"http://127.0.0.1:11434/v1",
+		"http://localhost:8080/v1",
+	} {
+		if err := endpoint.CheckBaseURL(u, endpoint.PolicyStrict); err != nil {
+			t.Errorf("CheckBaseURL(%q, Strict with allowlist): unexpected error: %v", u, err)
+		}
+	}
+
+	// Non-allowed plaintext or private endpoint is still refused under PolicyStrict
+	for _, u := range []string{
+		"http://127.0.0.1:9090/v1",
+		"http://10.0.0.1:8000/v1",
+		"https://10.0.0.1:8000/v1",
+	} {
+		if err := endpoint.CheckBaseURL(u, endpoint.PolicyStrict); err == nil {
+			t.Errorf("CheckBaseURL(%q, Strict with allowlist): expected error for unlisted endpoint", u)
+		}
+	}
+}
+
+func TestAllowListStrictAcceptsAllowedPrivate(t *testing.T) {
+	t.Setenv("NABD_ENDPOINT_ALLOW", "https://10.0.0.5:8000")
+
+	if err := endpoint.CheckBaseURL("https://10.0.0.5:8000/v1", endpoint.PolicyStrict); err != nil {
+		t.Fatalf("CheckBaseURL: unexpected error: %v", err)
+	}
+
+	// Different port or host is refused
+	if err := endpoint.CheckBaseURL("https://10.0.0.5:8443/v1", endpoint.PolicyStrict); err == nil {
+		t.Fatal("expected error for unlisted port")
+	}
+	if err := endpoint.CheckBaseURL("https://10.0.0.6:8000/v1", endpoint.PolicyStrict); err == nil {
+		t.Fatal("expected error for unlisted host")
+	}
+}
+
+func TestControlPermitsAllowedAddr(t *testing.T) {
+	al := endpoint.ParseAllowList("http://127.0.0.1:11434,https://10.0.0.5:8000")
+	d := endpoint.PolicyStrict.DialerWithAllow(net.Dialer{
+		Timeout: 50 * time.Millisecond,
+	}, al)
+
+	// 1. Dialing allowed 127.0.0.1:11434 is permitted by Control
+	_, err := d.DialContext(context.Background(), "tcp", "127.0.0.1:11434")
+	if errors.Is(err, endpoint.ErrEndpointRefused) {
+		t.Fatalf("unexpected ErrEndpointRefused for allowed address: %v", err)
+	}
+
+	// 2. Dialing allowed 10.0.0.5:8000 is permitted by Control
+	_, err = d.DialContext(context.Background(), "tcp", "10.0.0.5:8000")
+	if errors.Is(err, endpoint.ErrEndpointRefused) {
+		t.Fatalf("unexpected ErrEndpointRefused for allowed address: %v", err)
+	}
+
+	// 3. Dialing unlisted port on 127.0.0.1 (e.g. port 22) is REFUSED by Control
+	_, err = d.DialContext(context.Background(), "tcp", "127.0.0.1:22")
+	if err == nil {
+		t.Fatal("expected ErrEndpointRefused for unlisted port 22 on 127.0.0.1")
+	}
+	if !errors.Is(err, endpoint.ErrEndpointRefused) {
+		t.Fatalf("expected ErrEndpointRefused, got %v", err)
+	}
+
+	// 4. Dialing cloud metadata is REFUSED by Control
+	_, err = d.DialContext(context.Background(), "tcp", "169.254.169.254:80")
+	if err == nil {
+		t.Fatal("expected ErrEndpointRefused for cloud metadata")
+	}
+	if !errors.Is(err, endpoint.ErrEndpointRefused) {
+		t.Fatalf("expected ErrEndpointRefused, got %v", err)
+	}
+}
+
+func TestTransportProxyAllowedUnderStrict(t *testing.T) {
+	req, err := http.NewRequest("GET", "https://api.openai.com/v1/models", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:8080")
+	t.Setenv("https_proxy", "http://127.0.0.1:8080")
+	t.Setenv("HTTP_PROXY", "")
+	t.Setenv("http_proxy", "")
+	t.Setenv("NO_PROXY", "")
+	t.Setenv("no_proxy", "")
+
+	// Without allowlist: refused under PolicyStrict
+	tr := endpoint.Transport(endpoint.PolicyStrict)
+	if _, err := tr.Proxy(req); err == nil {
+		t.Fatal("expected proxy refusal under PolicyStrict without allowlist")
+	}
+
+	// With allowlist: permitted under PolicyStrict
+	t.Setenv("NABD_ENDPOINT_ALLOW", "http://127.0.0.1:8080")
+	trAllowed := endpoint.Transport(endpoint.PolicyStrict)
+	u, err := trAllowed.Proxy(req)
+	if err != nil {
+		t.Fatalf("unexpected error for allowed proxy: %v", err)
+	}
+	if u == nil || u.Host != "127.0.0.1:8080" {
+		t.Fatalf("unexpected proxy URL: %v", u)
 	}
 }

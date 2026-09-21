@@ -4,17 +4,26 @@
 // Layer 1 — load-time (CheckBaseURL): validates the configured base URL at
 // registry parse time and standalone override time. Under PolicyStrict (default)
 // the URL must use HTTPS and must not resolve to a loopback, RFC 1918, link-local,
-// CGNAT, ULA, or cloud-metadata address based on literal host or suffix.
+// CGNAT, ULA, or cloud-metadata address based on literal host or suffix, unless
+// explicitly permitted by NABD_ENDPOINT_ALLOW.
+// Under PolicyLoopback, plaintext HTTP is permitted strictly for loopback destinations
+// (127.0.0.1, ::1, localhost), and RFC 1918 / ULA private LAN addresses are allowed with HTTPS,
+// but cloud metadata and non-routable addresses remain refused.
 //
 // Layer 2 — connect-time (Dialer / Control hook): a hook on net.Dialer.Control
 // that inspects the literal IP address and port right before connection
 // establishment on the socket, after DNS resolution. This eliminates the TOCTOU
 // window and closes the DNS-rebinding path completely.
+// Under PolicyStrict, connections to non-public addresses are refused unless
+// permitted by NABD_ENDPOINT_ALLOW.
+// Under PolicyLoopback, connections to loopback and private LAN addresses are permitted,
+// but cloud metadata, link-local, CGNAT, and 6to4 addresses are refused.
+// Under PolicyOpen, both layers are disabled.
 //
 // Policy is selected from the NABD_ENDPOINT_POLICY environment variable:
 //
 //	strict   (default) — both layers active; http and non-public addresses refused.
-//	loopback            — HTTPS required, loopback and RFC 1918 allowed (for ollama/local runtimes).
+//	loopback            — plaintext http allowed for loopback; RFC 1918 / ULA allowed; cloud metadata refused.
 //	open                — both layers disabled; declared endpoints are accepted unconditionally.
 package endpoint
 
@@ -26,6 +35,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -38,15 +48,28 @@ type Policy uint8
 
 const (
 	// PolicyStrict is the default: HTTPS required, non-public addresses refused
-	// at load time and connect time.
+	// at load time and connect time unless explicitly listed in NABD_ENDPOINT_ALLOW.
 	PolicyStrict Policy = iota
-	// PolicyLoopback allows loopback and RFC 1918 addresses but still requires HTTPS.
-	// Use for local runtimes such as ollama.
+	// PolicyLoopback allows loopback (with plaintext HTTP) and RFC 1918 / ULA private
+	// LAN addresses (with HTTPS). Cloud metadata, link-local, CGNAT, and 6to4 are refused.
 	PolicyLoopback
 	// PolicyOpen disables both layers. Declared endpoints are accepted
 	// unconditionally. This reduces the security posture for the session.
 	PolicyOpen
 )
+
+func (pol Policy) String() string {
+	switch pol {
+	case PolicyStrict:
+		return "strict"
+	case PolicyLoopback:
+		return "loopback"
+	case PolicyOpen:
+		return "open"
+	default:
+		return fmt.Sprintf("Policy(%d)", pol)
+	}
+}
 
 // ErrEndpointRefused is the sentinel error returned when a URL or dial is refused
 // by the active endpoint policy.
@@ -69,8 +92,14 @@ func ParsePolicy(raw string) (Policy, error) {
 }
 
 // CheckBaseURL validates baseURL according to pol at load time.
+// It consults NABD_ENDPOINT_ALLOW for explicitly allowed endpoints.
 // An empty baseURL is always accepted (the provider will use its default).
 func CheckBaseURL(baseURL string, pol Policy) error {
+	return CheckBaseURLWithAllow(baseURL, pol, CurrentAllowList())
+}
+
+// CheckBaseURLWithAllow validates baseURL according to pol and allowList at load time.
+func CheckBaseURLWithAllow(baseURL string, pol Policy, allowList *AllowList) error {
 	if pol == PolicyOpen {
 		return nil
 	}
@@ -81,24 +110,46 @@ func CheckBaseURL(baseURL string, pol Policy) error {
 	if err != nil {
 		return fmt.Errorf("%w: invalid baseURL %q: %v", ErrEndpointRefused, baseURL, err)
 	}
-	if u.Scheme != "https" {
-		return fmt.Errorf(
-			"%w: baseURL %q uses scheme %q; only https is permitted (set NABD_ENDPOINT_POLICY=loopback for a local runtime)",
-			ErrEndpointRefused, baseURL, u.Scheme)
-	}
 	host := u.Hostname()
 	if host == "" {
 		return fmt.Errorf("%w: baseURL %q has no host", ErrEndpointRefused, baseURL)
 	}
-	if pol == PolicyLoopback {
-		// Loopback allows any host; scheme is already checked.
+
+	// If explicitly permitted by allowList, accept immediately.
+	if allowList != nil && allowList.AllowsBaseURL(u) {
 		return nil
 	}
-	// PolicyStrict: reject private/internal literal hosts.
+
+	if pol == PolicyLoopback {
+		// Under PolicyLoopback:
+		// 1. Plaintext HTTP is permitted strictly for loopback destinations.
+		if u.Scheme != "https" {
+			if u.Scheme != "http" || !isLoopbackHost(host) {
+				return fmt.Errorf(
+					"%w: baseURL %q uses scheme %q; under loopback policy, only https or loopback http is permitted (e.g. http://127.0.0.1:11434)",
+					ErrEndpointRefused, baseURL, u.Scheme)
+			}
+		}
+		// 2. Loopback and RFC 1918 / ULA private LAN addresses are allowed,
+		// but cloud metadata, link-local, CGNAT, and 6to4 remain refused.
+		if isMetadataOrBlockedLiteralHost(host) {
+			return fmt.Errorf(
+				"%w: baseURL %q resolves to a cloud-metadata or non-routable address",
+				ErrEndpointRefused, baseURL)
+		}
+		return nil
+	}
+
+	// PolicyStrict: reject plaintext http and non-public addresses.
+	if u.Scheme != "https" {
+		return fmt.Errorf(
+			"%w: baseURL %q uses scheme %q; only https is permitted (set NABD_ENDPOINT_ALLOW or NABD_ENDPOINT_POLICY=loopback for a local runtime)",
+			ErrEndpointRefused, baseURL, u.Scheme)
+	}
 	if isPrivateLiteralHost(host) {
 		return fmt.Errorf(
 			"%w: baseURL %q resolves to a non-public address; "+
-				"set NABD_ENDPOINT_POLICY=loopback for a local runtime",
+				"set NABD_ENDPOINT_ALLOW or NABD_ENDPOINT_POLICY=loopback for a local runtime",
 			ErrEndpointRefused, baseURL)
 	}
 	return nil
@@ -108,11 +159,19 @@ func CheckBaseURL(baseURL string, pol Policy) error {
 // resolved literal IP address immediately before socket connection establishment.
 // This closes the DNS-rebinding window with zero TOCTOU: no second DNS resolution
 // occurs, and the address evaluated is the exact IP being dialed on the socket.
-// Under PolicyStrict, connections to private, loopback, link-local, CGNAT, ULA,
-// 6to4, or cloud-metadata addresses are refused with ErrEndpointRefused.
-// Under PolicyOpen or PolicyLoopback, d is returned without modification.
+// Under PolicyStrict, connections to non-public addresses are refused unless permitted
+// by NABD_ENDPOINT_ALLOW.
+// Under PolicyLoopback, connections to loopback and private LAN addresses are permitted,
+// but cloud metadata, link-local, CGNAT, and 6to4 addresses are refused.
+// Under PolicyOpen, d is returned without modification.
 func (pol Policy) Dialer(d net.Dialer) *net.Dialer {
-	if pol != PolicyStrict {
+	return pol.DialerWithAllow(d, CurrentAllowList())
+}
+
+// DialerWithAllow returns a copy of d configured with a Control hook that validates
+// addresses according to pol and allowList.
+func (pol Policy) DialerWithAllow(d net.Dialer, allowList *AllowList) *net.Dialer {
+	if pol == PolicyOpen {
 		return &d
 	}
 	prev := d.Control
@@ -122,7 +181,7 @@ func (pol Policy) Dialer(d net.Dialer) *net.Dialer {
 				return err
 			}
 		}
-		host, _, err := net.SplitHostPort(address)
+		host, portStr, err := net.SplitHostPort(address)
 		if err != nil {
 			return fmt.Errorf("%w: invalid dial address %q: %v", ErrEndpointRefused, address, err)
 		}
@@ -130,31 +189,44 @@ func (pol Policy) Dialer(d net.Dialer) *net.Dialer {
 		if err != nil {
 			return fmt.Errorf("%w: non-literal IP address %q at dial time", ErrEndpointRefused, host)
 		}
-		if blockedAddr(ip) {
-			return fmt.Errorf("%w: resolved address %s is not a public address (rebinding prevention); set NABD_ENDPOINT_POLICY=loopback to allow", ErrEndpointRefused, ip)
+		var port uint16
+		if p, err := strconv.ParseUint(portStr, 10, 16); err == nil {
+			port = uint16(p)
+		}
+		if allowList != nil && allowList.AllowsAddr(ip, port) {
+			return nil
+		}
+		if blockedAddrForPolicy(ip, pol) {
+			return fmt.Errorf("%w: resolved address %s is not permitted under %s endpoint policy (rebinding prevention)", ErrEndpointRefused, ip, pol)
 		}
 		return nil
 	}
 	return &d
 }
 
-// Transport returns an *http.Transport using a net.Dialer configured with pol.
+// Transport returns an *http.Transport using a net.Dialer configured with pol
+// and the active NABD_ENDPOINT_ALLOW.
 // When an HTTP/HTTPS proxy is configured in the environment, it is validated
-// against the endpoint policy at request time. Under PolicyStrict, proxies on
-// plaintext http or non-public addresses are refused.
+// against the endpoint policy and allowlist at request time.
 func Transport(pol Policy) *http.Transport {
-	d := pol.Dialer(net.Dialer{
+	return TransportWithAllow(pol, CurrentAllowList())
+}
+
+// TransportWithAllow returns an *http.Transport using a net.Dialer configured
+// with pol and allowList.
+func TransportWithAllow(pol Policy, allowList *AllowList) *http.Transport {
+	d := pol.DialerWithAllow(net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
-	})
+	}, allowList)
 	return &http.Transport{
 		Proxy: func(r *http.Request) (*url.URL, error) {
 			u, err := proxyFromEnv(r)
 			if err != nil || u == nil {
 				return u, err
 			}
-			if pol == PolicyStrict {
-				if err := CheckBaseURL(u.String(), pol); err != nil {
+			if pol != PolicyOpen {
+				if err := CheckBaseURLWithAllow(u.String(), pol, allowList); err != nil {
 					return nil, fmt.Errorf("%w: proxy %s", ErrEndpointRefused, err)
 				}
 			}
@@ -214,18 +286,23 @@ func proxyFromEnv(req *http.Request) (*url.URL, error) {
 	return url.Parse(raw)
 }
 
-// Client returns an *http.Client configured with the active NABD_ENDPOINT_POLICY
-// and the given timeout. A timeout of 0 disables client-level timeout (suitable
-// for streaming requests controlled by context deadlines).
+// Client returns an *http.Client configured with the active NABD_ENDPOINT_POLICY,
+// NABD_ENDPOINT_ALLOW, and the given timeout. A timeout of 0 disables client-level
+// timeout (suitable for streaming requests controlled by context deadlines).
 func Client(timeout time.Duration) *http.Client {
 	pol, _ := ParsePolicy(config.Get("NABD_ENDPOINT_POLICY"))
-	return ClientWithPolicy(pol, timeout)
+	return ClientWithAllow(pol, CurrentAllowList(), timeout)
 }
 
 // ClientWithPolicy returns an *http.Client configured with the specified policy.
 func ClientWithPolicy(pol Policy, timeout time.Duration) *http.Client {
+	return ClientWithAllow(pol, CurrentAllowList(), timeout)
+}
+
+// ClientWithAllow returns an *http.Client configured with the specified policy and allowList.
+func ClientWithAllow(pol Policy, allowList *AllowList, timeout time.Duration) *http.Client {
 	return &http.Client{
-		Transport: Transport(pol),
+		Transport: TransportWithAllow(pol, allowList),
 		Timeout:   timeout,
 	}
 }
@@ -242,10 +319,28 @@ var blockedPrefixes = []netip.Prefix{
 }
 
 func blockedAddr(ip netip.Addr) bool {
+	return blockedAddrForPolicy(ip, PolicyStrict)
+}
+
+func blockedAddrForPolicy(ip netip.Addr, pol Policy) bool {
 	ip = ip.Unmap()
 	if !ip.IsValid() {
 		return true
 	}
+	if pol == PolicyLoopback {
+		// Under PolicyLoopback, loopback and RFC 1918 / ULA private addresses are allowed.
+		// Cloud metadata (link-local, CGNAT), 6to4, unspecified, and multicast remain blocked.
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+			return true
+		}
+		for _, p := range blockedPrefixes {
+			if p.Contains(ip) {
+				return true
+			}
+		}
+		return false
+	}
+	// PolicyStrict: all non-public addresses are blocked.
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
 		return true
 	}
@@ -253,6 +348,38 @@ func blockedAddr(ip netip.Addr) bool {
 		if p.Contains(ip) {
 			return true
 		}
+	}
+	return false
+}
+
+// isLoopbackHost reports whether host is a loopback IP literal (127.0.0.1, ::1, etc.)
+// or localhost / *.localhost hostname.
+func isLoopbackHost(host string) bool {
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap()
+		return ip.IsLoopback()
+	}
+	lower := strings.ToLower(host)
+	return lower == "localhost" || strings.HasSuffix(lower, ".localhost")
+}
+
+// isMetadataOrBlockedLiteralHost reports whether host is a literal IP corresponding
+// to cloud metadata, link-local, CGNAT, 6to4, unspecified, or multicast address.
+// Under PolicyLoopback, loopback and RFC 1918 / ULA private IPs return false.
+func isMetadataOrBlockedLiteralHost(host string) bool {
+	host = strings.TrimPrefix(host, "[")
+	host = strings.TrimSuffix(host, "]")
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap()
+		if !ip.IsValid() {
+			return true
+		}
+		if ip.IsLoopback() || ip.IsPrivate() {
+			return false
+		}
+		return blockedAddrForPolicy(ip, PolicyLoopback)
 	}
 	return false
 }
