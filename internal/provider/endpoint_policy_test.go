@@ -163,4 +163,53 @@ func TestCustomEndpointIsAcceptedByDesign(t *testing.T) {
 			}
 		}
 	})
+
+	// NABD_BASE_URL override in BuildStandaloneProviderWithRegistry must also be validated
+	// against the active endpoint policy.
+	t.Run("standalone_base_override_refuses_plaintext_http", func(t *testing.T) {
+		t.Setenv("NABD_ENDPOINT_POLICY", "strict")
+		dir := t.TempDir()
+		provPath := writeRegistryFile(t, dir, "providers.json", `{
+  "provider": {
+    "pub": {
+      "api": "openai",
+      "name": "Public",
+      "options": { "baseURL": "https://api.example.com/v1" },
+      "defaultModel": "m",
+      "models": { "m": { "name": "M" } }
+    }
+  }
+}`)
+		authPath := writeRegistryFile(t, dir, "auth.json", `{"pub": {"type": "api", "key": "sk-test"}}`)
+		reg, err := registry.LoadFromFiles(provPath, authPath, func(string) string { return "" })
+		if err != nil {
+			t.Fatalf("LoadFromFiles: %v", err)
+		}
+
+		// Plaintext http in baseOverride must fail
+		_, err = BuildStandaloneProviderWithRegistry(reg, "pub", "", "http://attacker.example/v1")
+		if err == nil {
+			t.Fatal("expected error for plaintext http in NABD_BASE_URL override under strict policy")
+		}
+		if !strings.Contains(err.Error(), "https") {
+			t.Errorf("error %q does not name https requirement", err)
+		}
+
+		// Private IP in baseOverride must fail under strict policy
+		_, err = BuildStandaloneProviderWithRegistry(reg, "pub", "", "https://10.0.0.1:8000/v1")
+		if err == nil {
+			t.Fatal("expected error for private address in NABD_BASE_URL override under strict policy")
+		}
+
+		// Public HTTPS in baseOverride succeeds
+		p, err := BuildStandaloneProviderWithRegistry(reg, "pub", "", "https://other.example.com/v1")
+		if err != nil {
+			t.Fatalf("unexpected error for valid public override: %v", err)
+		}
+		if op, ok := p.(*OpenAICompat); ok {
+			if op.BaseURL != "https://other.example.com/v1" {
+				t.Errorf("got BaseURL %q, want https://other.example.com/v1", op.BaseURL)
+			}
+		}
+	})
 }

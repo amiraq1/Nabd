@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"nabd/internal/endpoint"
 	"nabd/internal/providercmd"
 	"nabd/internal/registry"
 )
@@ -76,6 +77,9 @@ func runModelsCommand(args []string, out, errOut io.Writer, client *http.Client)
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
+	if client == nil {
+		client = endpoint.Client(*timeout)
+	}
 	ids, err := providercmd.FetchModels(ctx, prov.API, prov.BaseURL, prov.Key, client)
 	if err != nil {
 		fmt.Fprintf(errOut, "nabd models: provider_%s: %v\n", providercmd.KindOf(err), err)
