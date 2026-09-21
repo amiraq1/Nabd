@@ -24,26 +24,38 @@ import (
 // and the omission is what forces that review.
 var allowedNoticeCategoryNames = []string{
 	"NoticeCategoryUndoResult",
-	"NoticeCategoryPermissionDenied",
 	"NoticeCategoryLoopLimit",
 }
 
-func isAllowedNoticeCategory(name string) bool {
-	for _, allowed := range allowedNoticeCategoryNames {
-		if allowed == name {
-			return true
-		}
-	}
-	return false
-}
+// minExpectedAllowedNoticeSites is the minimum total number of production emit
+// sites expected across the module (currently 3: 1 in NoteUndo, 2 in checkLoop).
+// It is explicitly decoupled from the length of allowedNoticeCategoryNames.
+// While the per-category map check prevents any category from having zero emitters,
+// this aggregate floor catches the loss of one of checkLoop's two distinct emit
+// sites (warning threshold vs hard limit) while the category remains non-empty.
+// NOTE: This constant must be updated deliberately when intentional emitter additions
+// or removals occur, so that it reflects known architecture rather than an arbitrary floor.
+const minExpectedAllowedNoticeSites = 3
 
-// TestAllowedNoticeEmitsCarryStructuredPayload walks every production source in
-// the module and fails when an allowed notice is constructed with raw Text and
-// no Notice payload. The runtime renderer fails closed as well, but only this
-// guard can see an emitter that never set the payload in the first place.
-func TestAllowedNoticeEmitsCarryStructuredPayload(t *testing.T) {
-	files := parseModuleSources(t)
-	sites := 0
+// inspectAllowedNoticeSites scans all parsed module sources for Event composite
+// literals belonging to categories, asserts that each sets a structured Notice
+// payload, and counts emit sites per category.
+func inspectAllowedNoticeSites(t *testing.T, files map[string]*ast.File, categories []string) (map[string]int, []string) {
+	t.Helper()
+	inList := func(name string) bool {
+		for _, cat := range categories {
+			if cat == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	counts := make(map[string]int, len(categories))
+	for _, cat := range categories {
+		counts[cat] = 0
+	}
+
 	for _, name := range sortedSourceNames(files) {
 		ast.Inspect(files[name], func(n ast.Node) bool {
 			lit, ok := n.(*ast.CompositeLit)
@@ -54,18 +66,60 @@ func TestAllowedNoticeEmitsCarryStructuredPayload(t *testing.T) {
 				return true
 			}
 			category := literalIdentValue(lit, "NoticeCategory")
-			if !isAllowedNoticeCategory(category) {
+			if !inList(category) {
 				return true
 			}
-			sites++
+			counts[category]++
 			if !carriesField(lit, "Notice") {
 				t.Errorf("%s: %s notice is built with Text and no structured Notice payload; the model-facing line must come from NoticeData", name, category)
 			}
 			return true
 		})
 	}
-	if sites < len(allowedNoticeCategoryNames) {
-		t.Fatalf("found %d allowed-notice emit sites, want at least %d; the guard would otherwise pass vacuously", sites, len(allowedNoticeCategoryNames))
+
+	var missing []string
+	for _, cat := range categories {
+		if counts[cat] == 0 {
+			missing = append(missing, cat)
+		}
+	}
+	return counts, missing
+}
+
+// TestAllowedNoticeEmitsCarryStructuredPayload walks every production source in
+// the module and fails when an allowed notice is constructed with raw Text and
+// no Notice payload. It also enforces that every allowed category has at least one
+// production emit site; an allowed category with zero emitters is dead schema and
+// must not remain in allowedNoticeCategoryNames.
+func TestAllowedNoticeEmitsCarryStructuredPayload(t *testing.T) {
+	files := parseModuleSources(t)
+	counts, missing := inspectAllowedNoticeSites(t, files, allowedNoticeCategoryNames)
+
+	for _, cat := range missing {
+		t.Errorf("allowed notice category %s has 0 production emit sites; every allowed category must have at least one structured emitter or be removed from the allowlist", cat)
+	}
+
+	totalSites := 0
+	for _, cat := range allowedNoticeCategoryNames {
+		totalSites += counts[cat]
+	}
+	if totalSites < minExpectedAllowedNoticeSites {
+		t.Fatalf("found %d allowed-notice emit sites, want at least %d; the guard would otherwise pass vacuously", totalSites, minExpectedAllowedNoticeSites)
+	}
+}
+
+// TestAllowedNoticeGuardDetectsCategoryWithoutEmitter proves that the AST guard
+// refuses an allowed notice category if no production emitter exists for it.
+// A guard that cannot fail on an un-emitted category cannot protect against dead schema.
+func TestAllowedNoticeGuardDetectsCategoryWithoutEmitter(t *testing.T) {
+	files := parseModuleSources(t)
+	dummyCategories := []string{"NoticeCategorySyntheticUnemittedTarget"}
+	counts, missing := inspectAllowedNoticeSites(t, files, dummyCategories)
+	if counts["NoticeCategorySyntheticUnemittedTarget"] != 0 {
+		t.Fatalf("synthetic category unexpectedly matched %d sites", counts["NoticeCategorySyntheticUnemittedTarget"])
+	}
+	if len(missing) != 1 || missing[0] != "NoticeCategorySyntheticUnemittedTarget" {
+		t.Fatalf("expected guard to flag synthetic category as missing an emitter, got %v", missing)
 	}
 }
 

@@ -209,10 +209,6 @@ const (
 	// state the model was reasoning about.
 	NoticeCategoryUndoResult
 
-	// NoticeCategoryPermissionDenied is emitted when a tool call the model
-	// requested was refused by the permission gate.
-	NoticeCategoryPermissionDenied
-
 	// NoticeCategoryLoopLimit is emitted when a loop or rate limit prevents
 	// the model from executing further steps.
 	NoticeCategoryLoopLimit
@@ -254,9 +250,8 @@ const (
 // Monitoring, calibration, display, and infrastructure notices do not
 // qualify and must not be added without a security review.
 var noticeReachesModel = map[NoticeCategory]bool{
-	NoticeCategoryUndoResult:       true,
-	NoticeCategoryPermissionDenied: true,
-	NoticeCategoryLoopLimit:        true,
+	NoticeCategoryUndoResult: true,
+	NoticeCategoryLoopLimit:  true,
 }
 
 // NoticeAllowedForModel reports whether a notice with the given category
@@ -272,9 +267,8 @@ func NoticeAllowedForModel(c NoticeCategory) bool {
 // which field it may carry, and a payload that does not match its category is
 // dropped rather than repaired.
 type NoticeData struct {
-	Undo             *UndoNotice             `json:"undo,omitempty"`
-	PermissionDenied *PermissionDeniedNotice `json:"permission_denied,omitempty"`
-	LoopLimit        *LoopLimitNotice        `json:"loop_limit,omitempty"`
+	Undo      *UndoNotice      `json:"undo,omitempty"`
+	LoopLimit *LoopLimitNotice `json:"loop_limit,omitempty"`
 }
 
 // validate reports whether n carries exactly the payload its category
@@ -288,12 +282,6 @@ func (n *NoticeData) validate(cat NoticeCategory) bool {
 	set := 0
 	if n.Undo != nil {
 		if cat != NoticeCategoryUndoResult {
-			return false
-		}
-		set++
-	}
-	if n.PermissionDenied != nil {
-		if cat != NoticeCategoryPermissionDenied {
 			return false
 		}
 		set++
@@ -313,14 +301,6 @@ func (n *NoticeData) validate(cat NoticeCategory) bool {
 type UndoNotice struct {
 	Reverted []string `json:"reverted,omitempty"`
 	Failed   []string `json:"failed,omitempty"`
-}
-
-// PermissionDeniedNotice is the model-facing shape of a refusal by the
-// permission gate. Reason is a fixed phrase chosen by the gate — never text
-// derived from a tool argument, a path, or provider output.
-type PermissionDeniedNotice struct {
-	Tool   string `json:"tool"`
-	Reason string `json:"reason,omitempty"`
 }
 
 // LoopLimitNotice is the model-facing shape of a repetition notice: the tool

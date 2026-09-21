@@ -97,8 +97,6 @@ func (n *NoticeData) body() string {
 	switch {
 	case n.Undo != nil:
 		return n.Undo.render()
-	case n.PermissionDenied != nil:
-		return n.PermissionDenied.render()
 	case n.LoopLimit != nil:
 		return n.LoopLimit.render()
 	}
@@ -117,15 +115,6 @@ func (n *UndoNotice) render() string {
 		fmt.Fprintf(&b, " · %d not reverted (%s)", len(n.Failed), strings.Join(n.Failed, ", "))
 	}
 	return b.String()
-}
-
-// render reports a refusal in the shape the model needs: which tool was
-// refused, and the gate's fixed reason phrase.
-func (n *PermissionDeniedNotice) render() string {
-	if n.Reason == "" {
-		return fmt.Sprintf("permission denied: %s", n.Tool)
-	}
-	return fmt.Sprintf("permission denied: %s · %s", n.Tool, n.Reason)
 }
 
 // render keeps the loop notice's original wording: the actionable half is the
