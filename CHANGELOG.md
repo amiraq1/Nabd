@@ -6,6 +6,11 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+- **Crash recovery matrix:** added a subprocess-level regression harness that
+  kills a process after a durable `edit_intent` and verifies
+  `--continue`-path reconciliation classifies not-published, published,
+  missing, and conflicting targets without automatic replay or filesystem
+  writes.
 - **Mutation publish failure matrix:** added regression coverage for file-fsync,
   rename, and parent-directory-fsync failures, plus the durable
   `edit_intent` → `edit_abort` path when a filesystem change occurs before
