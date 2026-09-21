@@ -3,31 +3,42 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/config"
 	"nabd/internal/redact"
 	"nabd/internal/store"
 )
 
-func TestJournalRedactionEnabledOnlyForLiteralOne(t *testing.T) {
+func isolateJournalConfig(t *testing.T) {
+	t.Helper()
+	t.Setenv(config.EnvVar, filepath.Join(t.TempDir(), "missing-config"))
+	t.Setenv(config.V2EnvVar, "")
+	config.ResetForTest()
+	t.Cleanup(config.ResetForTest)
+}
+
+func TestJournalRedactionEnabledByDefaultAndDisabledOnlyByExplicitZero(t *testing.T) {
 	tests := []struct {
 		value string
 		want  bool
 	}{
-		{"", false},
+		{"", true},
 		{"0", false},
-		{"true", false},
-		{"TRUE", false},
-		{"yes", false},
-		{" 1 ", false},
+		{"true", true},
+		{"TRUE", true},
+		{"yes", true},
+		{" 1 ", true},
 		{"1", true},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.value, func(t *testing.T) {
+			isolateJournalConfig(t)
 			t.Setenv(journalRedactionEnv, tc.value)
 			if got := journalRedactionEnabled(); got != tc.want {
 				t.Fatalf(
@@ -41,10 +52,28 @@ func TestJournalRedactionEnabledOnlyForLiteralOne(t *testing.T) {
 	}
 }
 
-func TestJournalEventRedactorDisabledByDefault(t *testing.T) {
+func TestJournalRedactionReadsV1Config(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config")
+	if err := os.WriteFile(path, []byte("NABD_REDACT_JOURNAL=0\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv(config.EnvVar, path)
+	t.Setenv(config.V2EnvVar, "")
+	t.Setenv(journalRedactionEnv, "1")
+	config.ResetForTest()
+	t.Cleanup(config.ResetForTest)
+
+	if got := journalRedactionEnabled(); got {
+		t.Fatal("config v1 opt-out must take precedence over the environment")
+	}
+}
+
+func TestJournalEventRedactorEnabledByDefault(t *testing.T) {
+	isolateJournalConfig(t)
 	t.Setenv(journalRedactionEnv, "")
-	if got := journalEventRedactor(); got != nil {
-		t.Fatal("disabled journal redactor must be nil")
+	if got := journalEventRedactor(); got == nil {
+		t.Fatal("default journal redactor must be enabled")
 	}
 }
 
@@ -218,6 +247,7 @@ func TestRedactJournalEventCopiesAndRedactsSensitiveFields(t *testing.T) {
 }
 
 func TestJournalEventRedactorEnabled(t *testing.T) {
+	isolateJournalConfig(t)
 	t.Setenv(journalRedactionEnv, "1")
 
 	fn := journalEventRedactor()
@@ -234,6 +264,7 @@ func TestJournalEventRedactorEnabled(t *testing.T) {
 }
 
 func TestOpenSessionJournalUsesEnabledRedaction(t *testing.T) {
+	isolateJournalConfig(t)
 	t.Setenv(journalRedactionEnv, "1")
 
 	path := filepath.Join(t.TempDir(), "continued.jsonl")
@@ -267,6 +298,7 @@ func TestOpenSessionJournalUsesEnabledRedaction(t *testing.T) {
 }
 
 func TestNewSessionJournalUsesEnabledRedactionAndWarning(t *testing.T) {
+	isolateJournalConfig(t)
 	t.Setenv(journalRedactionEnv, "1")
 
 	var warnings bytes.Buffer
@@ -290,10 +322,11 @@ func TestNewSessionJournalUsesEnabledRedactionAndWarning(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	if warnings.String() != redactedJournalWarning {
+	wantWarning := sandboxAuthorityNotice + redactedJournalWarning
+	if warnings.String() != wantWarning {
 		t.Fatalf("warning=%q, want %q",
 			warnings.String(),
-			redactedJournalWarning,
+			wantWarning,
 		)
 	}
 

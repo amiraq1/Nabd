@@ -10,7 +10,7 @@ This is the only place nabd states security claims. README points here.
 |---|---|
 | Provider API keys | v1: `NABD_CONFIG` or `~/.ag/config`, with process environment fallback. v2: `NABD_CONFIG_V2` or `~/.ag/config.v2.json`, with explicit `env` or secure file credential sources only. OpenCode registry: `~/.ag/auth.json` (mode 0600, owner checked) with legacy environment fallback, and `~/.ag/providers.json` (mode 0600) with builtin catalog fallback. |
 | Working tree | The resolved project directory used to construct `tools.Root`. |
-| Session journal | `~/.ag/sessions/*.jsonl` by default. Append-only events can include file contents and command output in cleartext; directory mode 0700 and file mode 0600 limit cross-user reads. `NABD_REDACT_JOURNAL=1` optionally removes recognized credential patterns from new events before write. |
+| Session journal | `~/.ag/sessions/*.jsonl` by default. Append-only events can include file contents and command output in cleartext; directory mode 0700 and file mode 0600 limit cross-user reads. Journal redaction is enabled by default and removes recognized credential patterns from new events before write; `NABD_REDACT_JOURNAL=0` is an explicit diagnostic opt-out. |
 | Shadow store | `<root>/.ag/shadow`, content-addressed `s256:` blobs containing full pre/post-edit content. `.ag` and `.ag/shadow` are tightened to 0700 and `/shadow/` is added to `.ag/.gitignore`. |
 
 The journal and shadow store are high-sensitivity assets. Filesystem modes
@@ -77,8 +77,8 @@ filesystem sandbox.
 | Traversal tools never surface symlinked entries and skip the shadow store | GUARANTEED | `glob` and `grep` list and search regular files only, and `skipDir` excludes `.ag`, so the content-addressed shadow history is never read back. Evidence: `TestGrepNeverSurfacesSymlinkedEntry`, `TestGrepSingleFileRefusesSymlinkEscape`, `TestGlobOmitsSymlinkedEntries`, `TestTraversalToolsNeverSurfaceShadowStore` |
 | Release SBOM coverage and threat-model evidence citations are mechanically checked before merge | GUARANTEED | `TestReleasePipelineContracts` and `scripts/check-threat-model-tests.sh` |
 | Path opening after `Resolve` outside the descriptor layer | REDUCED | `!unix` builds keep the resolve-then-open compatibility paths with no descriptor guarantee; `bash` is not contained; `snap.Restore` / `snap.RestoreAt` are a path-based publish path, now test-only (`docs/TECH_DEBT.md`); configuration reading still traverses parent-directory symlinks. Residual: a same-uid attacker on a `!unix` build, or through those paths |
-| Journal is raw by default | REDUCED | journal content is written unredacted unless `NABD_REDACT_JOURNAL=1`; file mode 0600 and directory mode 0700 limit cross-user reads, but same-uid readers and deliberately printed secrets remain exposed. Shadow store is always raw |
-| Opt-in redaction of new journal events | REDUCED | `NABD_REDACT_JOURNAL=1` removes recognized credential patterns (Anthropic, OpenRouter, Groq, NVIDIA, GitHub, GitLab, Slack, `Bearer`/`authorization`) before `Event.ForStore()` and output truncation, via copy-on-write that leaves the live in-memory event untouched. Unrecognized sensitive content, structural fields (paths, tool names, call IDs, hashes, blob addresses, error codes), and the shadow store are unchanged. `--json` applies the same policy so it cannot diverge |
+| Journal redaction is enabled by default | REDUCED | recognized credential patterns (Anthropic, OpenRouter, Groq, NVIDIA, GitHub, GitLab, Slack, `Bearer`/`authorization`) are removed from new events before `Event.ForStore()` and output truncation. `NABD_REDACT_JOURNAL=0` is an explicit diagnostic opt-out; Config v1 in `~/.ag/config` takes precedence over the environment. Copy-on-write leaves the live in-memory event untouched. Unrecognized sensitive content, structural fields (paths, tool names, call IDs, hashes, blob addresses, error codes), and the shadow store are unchanged. `--json` applies the same policy so it cannot diverge. Evidence: `TestJournalRedactionEnabledByDefaultAndDisabledOnlyByExplicitZero`, `TestJournalRedactionReadsV1Config`, `TestOpenSessionJournalUsesEnabledRedaction` |
+| Session purge is bounded and opt-in | GUARANTEED | `nabd purge` is a dry run unless `--yes` is supplied, considers only regular `*.jsonl` files directly inside the selected directory, and supports an RFC3339 modification-time cutoff. It does not traverse subdirectories or follow symlinks. This does not provide race-free deletion against a same-user concurrent attacker; stop active nabd processes before cleanup. Evidence: `TestPurgeIsDryRunUnlessConfirmed`, `TestPurgeDeletesOnlyEligibleRegularJournals`, `TestPurgeRejectsInvalidCutoff` |
 | Redacted export leaves the source intact | GUARANTEED | `--export --redact` decodes and re-encodes to stdout; the source is opened read-only and never written. Raw `--export` copies source bytes verbatim. Evidence: `TestExportLeavesSourceUntouched`, `TestExportRawIsByteIdentical` |
 | Pointer input can select and expand cards, but never answers permissions or executes tools | GUARANTEED | Evidence: `TestPointerNeverAnswersPermission`, `TestPointerNeverExecutesATool` |
 | Git status header inspects only the granted root and never traverses to a parent repository | GUARANTEED | `isGitRepo` checks `.git` strictly at the root; parent repos are out of bounds. Evidence: `TestIsGitRepoDetection` |
@@ -317,11 +317,11 @@ history mutations; compact boundary staleness has dedicated regression
 coverage. The shadow store keeps complete file bytes for undo and verifies
 content digests.
 
-By default the journal is written raw. With `NABD_REDACT_JOURNAL=1`, recognized
-credential patterns are removed from each event before `Event.ForStore()` and
-before output truncation; the operation is copy-on-write, so the live event in
-the in-memory history is unchanged. The shadow store is **not** redacted, and
-unrecognized sensitive content remains cleartext.
+By default recognized credential patterns are removed from each event before
+`Event.ForStore()` and before output truncation; the operation is copy-on-write,
+so the live event in the in-memory history is unchanged. Set
+`NABD_REDACT_JOURNAL=0` only for an explicit diagnostic run. The shadow store is
+**not** redacted, and unrecognized sensitive content remains cleartext.
 
 ### Journal export
 
@@ -344,9 +344,10 @@ run mode. Diagnostics go to stderr; stdout is JSONL only.
 3. Use a disposable clone rather than a tree containing production secrets.
 4. Treat every `bash` approval as authority equivalent to the current user.
 5. Assume `session.jsonl` and `.ag/shadow` contain sensitive cleartext.
-   `NABD_REDACT_JOURNAL=1` reduces recognized credentials but does not make the
-   journal safe: it does not redact the shadow store, structural fields, or
-   unrecognized sensitive content.
+   Default journal redaction reduces recognized credentials but does not make
+   the journal safe: it does not redact the shadow store, structural fields, or
+   unrecognized sensitive content. Avoid `NABD_REDACT_JOURNAL=0` except for a
+   deliberate diagnostic run.
 6. Do not attach raw journals to public issues.
 7. Redact before sharing: `nabd --export <file.jsonl> --redact`. Raw
    `--export` is a deliberate, byte-for-byte copy and warns on stderr.

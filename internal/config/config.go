@@ -33,6 +33,7 @@ var knownV1Keys = map[string]struct{}{
 	"NABD_CTX": {}, "NABD_MAX_TOKENS": {}, "NABD_MAX_TOKENS_PER_RUN": {}, "NABD_MAX_READ": {},
 	"NABD_BASH_SANDBOX": {}, "NABD_BASH_NETWORK": {}, "NABD_BASH_RESOURCES": {},
 	"NABD_ENDPOINT_POLICY": {}, "NABD_ENDPOINT_ALLOW": {},
+	"NABD_REDACT_JOURNAL": {},
 }
 
 var (

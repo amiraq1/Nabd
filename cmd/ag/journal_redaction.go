@@ -2,23 +2,25 @@ package main
 
 import (
 	"encoding/json"
-	"os"
 
 	"nabd/internal/agent"
+	"nabd/internal/config"
 	"nabd/internal/redact"
 	"nabd/internal/store"
 )
 
 const journalRedactionEnv = "NABD_REDACT_JOURNAL"
 
-// journalRedactionEnabled deliberately accepts only the documented literal 1.
-// Empty values and other spellings preserve the raw-journal default.
+// journalRedactionEnabled is fail-closed: journal redaction is on unless the
+// operator explicitly opts out with the documented literal 0. Config v1 is
+// resolved before the process environment, matching the other runtime
+// settings. Config errors also keep the safer default.
 func journalRedactionEnabled() bool {
-	return os.Getenv(journalRedactionEnv) == "1"
+	return config.Get(journalRedactionEnv) != "0"
 }
 
-// journalEventRedactor returns nil when journal redaction is disabled.
-// A nil function lets storage retain its existing raw behavior without an
+// journalEventRedactor returns nil only for an explicit opt-out. A nil
+// function lets storage retain its existing raw behavior without an
 // unnecessary event copy.
 func journalEventRedactor() func(agent.Event) agent.Event {
 	if !journalRedactionEnabled() {

@@ -224,21 +224,23 @@ In this example:
 
 ## 7. Journal Redaction and Export (operational)
 
-`NABD_REDACT_JOURNAL` is a process-level **runtime environment variable**. It is
-**not** a Config v1 key and **not** a Config v2 field: it is never read from
-`~/.ag/config` or `~/.ag/config.v2.json`, and setting it in either file has no
-effect.
+`NABD_REDACT_JOURNAL` is a user-scoped Config v1 key in `~/.ag/config` (or the
+absolute path selected by `NABD_CONFIG`). The environment variable remains
+supported as a compatibility override when Config v1 is selected. Config v2
+does not currently expose this setting; its default is the safe redacted mode.
 
-### Activation
+### Default and opt-out
 
-Redaction is enabled only by the exact literal value `1`:
+Redaction is enabled by default. To explicitly opt out for a diagnostic run,
+set the exact literal value `0`:
 
 ```sh
-NABD_REDACT_JOURNAL=1 nabd
+NABD_REDACT_JOURNAL=0 nabd
 ```
 
-Every other spelling leaves the default raw-journal behavior in place,
-including `true`, `yes`, `on`, and `" 1 "` (with surrounding whitespace).
+Every other value, including empty, `1`, `true`, `yes`, `on`, and `" 1 "`,
+keeps redaction enabled. Config v1 takes precedence over the environment,
+consistent with the other user-scoped settings.
 
 ### What it does
 
