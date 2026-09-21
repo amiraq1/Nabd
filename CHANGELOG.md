@@ -4,7 +4,9 @@ Release notes are generated from conventional commit history by GoReleaser.
 Published changes and downloadable artifacts are available on the
 [GitHub Releases](https://github.com/amiraq1/Nabd/releases) page.
 
-## Unreleased
+## v1.6.0
+
+Provider endpoint policy, journal redaction, and crash-recovery hardening.
 
 - **Crash recovery matrix:** added a subprocess-level regression harness that
   kills a process after a durable `edit_intent` and verifies
