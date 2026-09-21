@@ -37,6 +37,14 @@ func TestReleasePipelineContracts(t *testing.T) {
 			t.Errorf(".goreleaser.yaml contains obsolete or duplicate contract %q", forbidden)
 		}
 	}
+	if !strings.Contains(goreleaser, "--output-signature=") {
+		t.Errorf(".goreleaser.yaml no longer signs through cosign's legacy --output-signature/--output-certificate flags")
+	}
+
+	release := read(".github/workflows/release.yml")
+	if !strings.Contains(release, `cosign-release: "v2.`) {
+		t.Errorf("release.yml must pin cosign to a v2 major: cosign v3 ignores --output-signature/--output-certificate in favour of --bundle, so the checksum manifest would go unsigned and the release would abort at the signing step")
+	}
 
 	ci := read(".github/workflows/ci.yml")
 	for _, required := range []string{
