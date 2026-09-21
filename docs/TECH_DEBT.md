@@ -9,7 +9,6 @@
 | UNREPRODUCIBLE_PERFORMANCE_METRICS | Historical performance claims frequently cited in PR descriptions and reports ("187 allocations", "44ms/46x" speedup from #120, and timing walls under `-race` in CI) lack committed benchmark harnesses or recorded execution environments. | Unverifiable performance figures risk being treated as canonical baselines without reproducible test code or known environmental specifications. Guard: Any future performance claims must be accompanied by committed benchmark functions (e.g. `Benchmark*`) with recorded hardware/OS baselines, matching the rigor of Section G1 in this file. |
 | SOURCE_INSPECTION_TESTS_FRAGILE | Multiple contract tests (`TestBuiltinDefaultsAreDeclaredNotGuessed`, `TestToolPathAuthorityDoesNotCallResolveDirectly`, `TestOpenReadOtherIsCompatibilityOnly`, `TestReadFileUsesDescriptorStat`) inspect raw Go source code via `os.ReadFile` and string matching rather than exercising API contracts. | Fragile tests that break on innocent refactoring, formatting changes, or variable renames without any actual behavioural regression, while failing to catch semantic regressions that avoid the searched tokens. Guard: Replace or supplement lexical AST/text scrapers with behavioural contract tests and architectural linting. |
 | THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | `docs/THREAT_MODEL.md` has grown to over 81 KB and 215 backtick-quoted test citations. It is edited via full-file rewrites, making concurrent edits, review diffs, and manual editing increasingly error-prone. | High risk of merge conflicts, accidental citation breakage, and review fatigue on every security-touching PR. Guard: Decompose `THREAT_MODEL.md` into modular per-domain specification files (e.g. paths, permissions, tools, providers) aggregated by CI scripts, while preserving the unified test citation check. |
-| X_TERM_DIRECT_DEPENDENCY | `golang.org/x/term` is included as a direct dependency in `go.mod` solely for `term.ReadPassword` in `cmd/ag/provider_commands_entry.go`, even though `github.com/charmbracelet/x/term` is already transitively present in the dependency tree. | Unnecessary direct supply-chain dependency. Guard: Consolidate terminal password reading on an existing internal/transitive package or standard syscalls to drop the direct dependency. |
 
 ## G1: write.go diff/output/event baseline (NBD-011 limit selection)
 
@@ -838,4 +837,20 @@ numbers. `ProviderConfig` in `internal/registry/registry.go` is the shape, and
 provider's `defaultModel` is the fallback, and neither being set is an error
 that names the key and the file to edit. The router path resolves each route's
 model through `models` and never reads `defaultModel`.
+
+## X_TERM_DIRECT_DEPENDENCY — RESOLVED by the in-tree terminal package
+
+`cmd/ag/provider_commands_entry.go` now reads the hidden API-key prompt
+through `github.com/charmbracelet/x/term`, which the TUI stack already
+carried as an indirect dependency, and calls its `ReadPassword(fd uintptr)`
+signature directly. `go mod tidy` drops `golang.org/x/term` from `go.mod`
+and `go.sum` entirely: the module graph had a single edge, from `nabd`
+itself, and no other module was holding it in.
+
+The non-TTY behaviour is unchanged. The charmbracelet fork carries the same
+ioctl-based terminal handling, so `ReadPassword` still fails when stdin is
+not a terminal, and a key can never be piped in by accident. The CI
+`module-tidiness` job (`go mod tidy -diff`) keeps the manifest and the sums
+honest against any future change that would re-introduce the direct
+dependency.
 
