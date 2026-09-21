@@ -272,7 +272,7 @@ func NoticeAllowedForModel(c NoticeCategory) bool {
 // which field it may carry, and a payload that does not match its category is
 // dropped rather than repaired.
 type NoticeData struct {
-	Undo             *UndoNotice            `json:"undo,omitempty"`
+	Undo             *UndoNotice             `json:"undo,omitempty"`
 	PermissionDenied *PermissionDeniedNotice `json:"permission_denied,omitempty"`
 	LoopLimit        *LoopLimitNotice        `json:"loop_limit,omitempty"`
 }

@@ -78,7 +78,7 @@ func TestNoticeLineIsBoundedSingleLineAndControlFree(t *testing.T) {
 	long := strings.Repeat("d/", 400)
 	ev := Event{
 		NoticeCategory: NoticeCategoryUndoResult,
-		Notice:         &NoticeData{Undo: &UndoNotice{
+		Notice: &NoticeData{Undo: &UndoNotice{
 			Reverted: []string{"a.go\nb.go\t" + string(rune(7)) + "c.go", long},
 		}},
 	}
