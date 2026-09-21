@@ -31,6 +31,7 @@ import (
 	"unicode/utf8"
 
 	"nabd/internal/config"
+	"nabd/internal/endpoint"
 )
 
 // PrecedenceDocumentation documents the authoritative loading precedence rules.
@@ -303,6 +304,12 @@ func ParseProvidersData(data []byte) (map[string]ProviderConfig, error) {
 		return nil, errors.New("providers.json: trailing JSON content")
 	}
 
+	// Resolve endpoint policy once for all providers in this parse.
+	epol, err := endpoint.ParsePolicy(config.Get("NABD_ENDPOINT_POLICY"))
+	if err != nil {
+		return nil, err
+	}
+
 	for id, cfg := range pf.Provider {
 		if err := validateProviderID(id); err != nil {
 			return nil, err
@@ -310,6 +317,12 @@ func ParseProvidersData(data []byte) (map[string]ProviderConfig, error) {
 		// Rule 4: api must be "openai" or "anthropic" exclusively.
 		if cfg.API != "openai" && cfg.API != "anthropic" {
 			return nil, fmt.Errorf("provider %q: unsupported api dialect %q; must be 'openai' or 'anthropic'", id, cfg.API)
+		}
+		// Endpoint policy: validate baseURL at load time.
+		if baseURL := cfg.Options.BaseURL; baseURL != "" {
+			if err := endpoint.CheckBaseURL(baseURL, epol); err != nil {
+				return nil, fmt.Errorf("provider %q: %w", id, err)
+			}
 		}
 		for mKey, mCfg := range cfg.Models {
 			if err := rejectBadBytes(mKey); err != nil {

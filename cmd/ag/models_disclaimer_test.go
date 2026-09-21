@@ -52,6 +52,7 @@ func TestModelsSuccessDoesNotImplyValidKey(t *testing.T) {
 	t.Setenv("NABD_CONFIG", filepath.Join(dir, "config-absent"))
 	t.Setenv("NABD_PROVIDERS_FILE", provPath)
 	t.Setenv("NABD_AUTH_FILE", authPath)
+	t.Setenv("NABD_ENDPOINT_POLICY", "open") // httptest uses http://127.0.0.1; disable the policy gate for this unit test
 	config.ResetForTest()
 	t.Cleanup(config.ResetForTest)
 

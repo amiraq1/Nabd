@@ -81,7 +81,7 @@ func TestRegistryFileOverridesBuiltin(t *testing.T) {
     "groq": {
       "api": "openai",
       "name": "Custom Groq",
-      "options": { "baseURL": "https://custom.groq.internal/openai/v1" },
+      "options": { "baseURL": "https://custom.groq.example.com/openai/v1" },
       "readCap": 5000,
       "models": {
         "custom-qwen": { "name": "Custom Qwen", "id": "qwen-custom-wire" }
@@ -110,9 +110,10 @@ func TestRegistryFileOverridesBuiltin(t *testing.T) {
 	if groq.Source != "providers.json" {
 		t.Errorf("groq Source = %q, want 'providers.json'", groq.Source)
 	}
-	if groq.BaseURL != "https://custom.groq.internal/openai/v1" {
+	if groq.BaseURL != "https://custom.groq.example.com/openai/v1" {
 		t.Errorf("groq BaseURL = %q, want custom URL", groq.BaseURL)
 	}
+
 	if groq.ReadCap != 5000 {
 		t.Errorf("groq ReadCap = %d, want 5000", groq.ReadCap)
 	}
