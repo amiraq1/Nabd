@@ -40,12 +40,19 @@ func TestReplayCoalescesDeltasLikeChat(t *testing.T) {
 	}
 }
 
-func TestFlushJoinSameForChatAndReplay(t *testing.T) {
+// TestFlushJoinDeterministic asserts referential transparency: identical
+// buffer contents, event, and width produce identical joined output.
+func TestFlushJoinDeterministic(t *testing.T) {
 	e := agent.Event{Type: agent.Notice, Text: "n"}
 	a, b := "نص", "نص"
 	if flushJoin(&a, e, 50) != flushJoin(&b, e, 50) {
 		t.Fatal("flushJoin is not deterministic")
 	}
+}
+
+// TestFlushJoinEmptyBuffer asserts that an empty delta buffer produces
+// empty output when the terminating event has no printable representation.
+func TestFlushJoinEmptyBuffer(t *testing.T) {
 	empty := ""
 	if flushJoin(&empty, agent.Event{Type: agent.TurnEnd}, 50) != "" {
 		t.Fatal("nothing to print should be empty")
