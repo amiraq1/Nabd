@@ -110,44 +110,6 @@ func TestConnectSecretNeverEntersTheJournal(t *testing.T) {
 	}
 
 	// -------------------------------------------------------------------------
-	// 3. Chat frontend path
-	// -------------------------------------------------------------------------
-	chatEvents := make(chan agent.Event, 10)
-	chat := ui.NewChat(sess.loop, chatEvents)
-	chat.SetCallbacks(cb)
-
-	for _, r := range "/connect testprov" {
-		chat.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-	}
-	chat.Update(tea.KeyMsg{Type: tea.KeyEnter})
-
-	for _, r := range canarySecret {
-		chat.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-	}
-	if strings.Contains(chat.View(), canarySecret) {
-		t.Fatalf("Chat.View() leaked secret during typing: %q", chat.View())
-	}
-	chat.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if strings.Contains(chat.View(), canarySecret) {
-		t.Fatalf("Chat.View() leaked secret after submission: %q", chat.View())
-	}
-
-	// Chat rejection of a key passed as an argument, driven by keypresses so
-	// the test exercises the KeyEnter handler that clears m.input. Calling
-	// Command() directly skipped that path, so the canary never entered the
-	// model and the old no-leak assertion was vacuous.
-	for _, r := range "/connect testprov " + canarySecret {
-		chat.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
-	}
-	chat.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if chat.Status() != providercmd.ErrKeyAsArgument.Error() {
-		t.Fatalf("Chat status = %q, want ErrKeyAsArgument", chat.Status())
-	}
-	if strings.Contains(chat.View(), canarySecret) {
-		t.Fatalf("Chat.View() leaked the refused secret argument: %q", chat.View())
-	}
-
-	// -------------------------------------------------------------------------
 	// 4. Invariant: ZERO secret bytes ever reached events, journal, or model history
 	// -------------------------------------------------------------------------
 	for _, ev := range sink.evs {
@@ -185,7 +147,9 @@ func TestConnectSecretNeverEntersTheJournal(t *testing.T) {
 }
 
 // TestSessionProviderAndModelsCommands verifies the behavior of /provider and /models
-// in both Feed and Chat, verifying live model fetch, disclaimer note, and error card rendering.
+// in Feed, verifying live model fetch, disclaimer note, and error card rendering.
+// The Chat surface was retired by ADR-0001, so the slash-command contract is
+// exercised through the one remaining interactive surface.
 func TestSessionProviderAndModelsCommands(t *testing.T) {
 	// Mock endpoint for /models
 	var failWithAuth bool
@@ -244,14 +208,6 @@ func TestSessionProviderAndModelsCommands(t *testing.T) {
 	}
 	cb := sess.callbacks()
 
-	// 1. Test /provider in Chat and Feed
-	chat := ui.NewChat(sess.loop, make(chan agent.Event, 1))
-	chat.SetCallbacks(cb)
-	chatProvRes := chat.Command("/provider")
-	if !strings.Contains(chatProvRes, "mockserver") || !strings.Contains(chatProvRes, "openai") {
-		t.Fatalf("Chat /provider output = %q, want mockserver listing", chatProvRes)
-	}
-
 	feed := ui.NewFeed()
 	feed.SetCallbacks(cb)
 	feed.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -262,15 +218,6 @@ func TestSessionProviderAndModelsCommands(t *testing.T) {
 	feed.Update(tea.KeyMsg{Type: tea.KeyEnter}) // executes command
 	if !strings.Contains(feed.View(), "mockserver") {
 		t.Fatalf("Feed /provider view missing mockserver:\n%s", feed.View())
-	}
-
-	// 2. Test /models in Chat
-	chatModelsRes := chat.Command("/models mockserver")
-	if !strings.Contains(chatModelsRes, "mock-gpt-4o") || !strings.Contains(chatModelsRes, "mock-claude-3") {
-		t.Fatalf("Chat /models missing models: %s", chatModelsRes)
-	}
-	if !strings.Contains(chatModelsRes, providercmd.CatalogIsNotACredentialCheck) {
-		t.Fatalf("Chat /models missing credential disclaimer note: %s", chatModelsRes)
 	}
 
 	// 3. Test /models in Feed (success path)

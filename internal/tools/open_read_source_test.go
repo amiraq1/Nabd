@@ -160,28 +160,3 @@ func TestToolPathAuthorityDoesNotCallResolveDirectly(t *testing.T) {
 		}
 	}
 }
-
-// TestOpenReadOtherIsCompatibilityOnly: the non-unix adapter is a documented
-// compatibility path and must not reach into the safe-open API. The claims are
-// structural by nature (the file is excluded on unix), so the guard inspects
-// the AST, the compatibility comment, and the file's own build constraint.
-func TestOpenReadOtherIsCompatibilityOnly(t *testing.T) {
-	fset, f := parseToolSource(t, "open_read_other.go")
-
-	if !declaresFunc(f, "openReadFromRoot") {
-		t.Fatal("open_read_other.go no longer declares openReadFromRoot; the compatibility path moved and this guard would inspect nothing")
-	}
-	if hits := pkgCalls(fset, f, "safefs", "OpenRead"); len(hits) > 0 {
-		t.Errorf("open_read_other.go calls safefs.OpenRead at %s; it is the compatibility path",
-			strings.Join(hits, ", "))
-	}
-	if !hasComment(f, "compatibility") {
-		t.Error("open_read_other.go must document itself as a compatibility path")
-	}
-	if hits := methodCalls(fset, f, "Resolve"); len(hits) == 0 {
-		t.Error("open_read_other.go is expected to call Root.Resolve as the compatibility path")
-	}
-	if !hasBuildConstraint(f, "!unix") {
-		t.Error("open_read_other.go must carry the //go:build !unix constraint")
-	}
-}

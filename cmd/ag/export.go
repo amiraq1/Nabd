@@ -19,7 +19,9 @@ const rawExportWarning = "warning: exported journal may contain sensitive cleart
 // --export. The comparison is by flag name as registered on the command line.
 var exportConflictFlags = []string{
 	"replay", "speed", "dir", "continue", "version",
-	"feed", "feed-touch", "p", "json", "max-turns", "permission-mode",
+	// "ui" is the ADR-0001 replacement for "feed"; both are interactive-only
+	// and both are refused beside --export.
+	"feed", "ui", "feed-touch", "p", "json", "max-turns", "permission-mode",
 }
 
 // checkExportFlags validates an --export invocation before any run mode is

@@ -39,27 +39,41 @@ const (
 	// maxEventBatchSize forces a flush when this many events accumulate
 	// within one interval.
 	maxEventBatchSize = 128
-	// uiEventBuffer is the buffer of the live UI event channel. A burst of
-	// tool output must fit without dropping, and when it does not the sink
-	// drops the event instead of stalling the agent loop (see chanSink).
-	uiEventBuffer = 1024
 )
 
-// newSessionLoop builds the Loop the three entry points share: the same
+// The interactive UI surfaces named by --ui and NABD_UI (ADR-0001). Chat was
+// retired when the v1.6.0 and v1.7.0 stages were collapsed, so feed is the
+// only surface that can run; uiChat is still named here so a request for it
+// gets a migration message rather than an unknown-value error.
+const (
+	uiFeed = "feed"
+	uiChat = "chat"
+)
+
+// exitUsage is the shell's conventional code for a rejected command line.
+// ADR-0001's flag rules reject with it, so a mistyped flag stays
+// distinguishable from a failed run (exitError).
+const exitUsage = 2
+
+// newSessionLoop builds the Loop the two entry points share: the same
 // model-facing system prompt, the same permission gate, the same context
 // budget. Callers set only what differs — the provider, the sinks, and any
 // turn ceiling.
 //
 // This exists because the prompt is a security-relevant contract, not a
-// string: three literals that happen to agree today are three places to
-// diverge tomorrow. TestSessionLoopPromptHasNoDivergentPaths pins it, and the
-// prompt itself lives in internal/payload because its size is a budgeted cost
-// term (see NBD-403).
+// string: two literals that happen to agree today are two places to diverge
+// tomorrow. TestSessionLoopPromptHasNoDivergentPaths pins it, and the prompt
+// itself lives in internal/payload because its size is a budgeted cost term
+// (see NBD-403).
+//
+// The entry points are Feed (interactive) and headless (-p). The third
+// interactive surface, Chat, was retired by ADR-0001; replay is a read-only
+// projector over an existing journal and builds no session.
 func newSessionLoop(prov provider.Provider, reg *tools.Registry, g agent.Gate, human agent.Asker) *agent.Loop {
 	// The read ceiling follows the provider's own declaration (NBD-404). This
-	// constructor is the single point all three entry points pass through, so
-	// the cap cannot differ between Chat, Feed and headless. An explicit
-	// NABD_MAX_READ still wins — SetReadCap decides that, not this call.
+	// constructor is the single point both entry points pass through, so the
+	// cap cannot differ between Feed and headless. An explicit NABD_MAX_READ
+	// still wins — SetReadCap decides that, not this call.
 	if prov != nil {
 		if rc, ok := prov.(provider.ReadCapper); ok {
 			tools.SetReadCap(rc.ReadCapBytes())
@@ -76,7 +90,7 @@ func newSessionLoop(prov provider.Provider, reg *tools.Registry, g agent.Gate, h
 	}
 	// A repaired tool call is announced in the journal before it runs: a repair
 	// the user never sees is one that did not happen. Wiring it here rather
-	// than at each entry point is what keeps Chat, Feed and headless identical
+	// than at each entry point is what keeps Feed and headless identical
 	// (see TestSessionLoopPromptHasNoDivergentPaths).
 	if reg != nil {
 		reg.OnRepair = func(f tools.Fix) { loop.Note(f.Notice()) }
@@ -97,7 +111,8 @@ func main() {
 	sessDir := flag.String("dir", "", "session directory (default ~/.ag/sessions)")
 	cont := flag.Bool("continue", false, "resume the latest session")
 	showVer := flag.Bool("version", false, "print version and exit")
-	useFeed := flag.Bool("feed", true, "use the projected feed UI (set --feed=false for the legacy chat UI)")
+	uiFlag := flag.String("ui", "", "interactive UI: feed (the only surface; the chat UI was retired per ADR-0001)")
+	useFeed := flag.Bool("feed", true, "deprecated: use --ui=feed")
 	feedTouch := flag.Bool("feed-touch", false, "enable finger-swipe touch scrolling for feed UI")
 	prompt := flag.String("p", "", "headless one-shot task; \"-\" reads stdin")
 	jsonOut := flag.Bool("json", false, "headless: emit journal JSONL on stdout")
@@ -109,6 +124,10 @@ func main() {
 
 	provided := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { provided[f.Name] = true })
+	// ADR-0001: --ui and --feed select the interactive surface, so they have no
+	// meaning beside a non-interactive mode. Reject the combination instead of
+	// accepting a flag that then does nothing.
+	rejectUIFlagWith(*replay, *prompt, *exportPath, provided)
 	if err := checkExportFlags(*exportPath, *exportRedact, flag.NArg(), provided); err != nil {
 		die(err)
 	}
@@ -155,21 +174,93 @@ func main() {
 		}
 		return
 	}
-	if *useFeed {
-		if provided["feed-touch"] && !touchAllowed(os.Getenv("TERMUX_VERSION"), os.Getenv("NABD_FORCE_TOUCH")) {
-			die(fmt.Errorf("-feed-touch captures touch events as mouse input on Termux, " +
-				"which prevents the on-screen keyboard from opening. Keyboard navigation " +
-				"(Esc browse, Up/Down, Enter expand) works without it. " +
-				"Set NABD_FORCE_TOUCH=1 to override"))
-		}
-		if err := doChatWithFeed(interactiveMode, *sessDir, *cont, *feedTouch); err != nil {
-			die(err)
-		}
-		return
+	// Resolve the interactive surface before any UI work: ADR-0001 makes the
+	// flag rules explicit, and a conflict must be refused rather than settled
+	// by accident. Chat was retired, so feed is the surface that runs.
+	surface, err := checkUISurface(*uiFlag, *useFeed, provided)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "nabd:", err)
+		os.Exit(exitUsage)
 	}
-	if err := doChat(interactiveMode, *sessDir, *cont); err != nil {
+	if surface != uiFeed {
+		// Unreachable while feed is the only surface. It stays so that adding
+		// a surface later cannot silently run the wrong one.
+		fmt.Fprintf(os.Stderr, "nabd: unknown interactive surface %q\n", surface)
+		os.Exit(exitUsage)
+	}
+	if provided["feed-touch"] && !touchAllowed(os.Getenv("TERMUX_VERSION"), os.Getenv("NABD_FORCE_TOUCH")) {
+		die(fmt.Errorf("-feed-touch captures touch events as mouse input on Termux, " +
+			"which prevents the on-screen keyboard from opening. Keyboard navigation " +
+			"(Esc browse, Up/Down, Enter expand) works without it. " +
+			"Set NABD_FORCE_TOUCH=1 to override"))
+	}
+	if err := doChatWithFeed(interactiveMode, *sessDir, *cont, *feedTouch); err != nil {
 		die(err)
 	}
+}
+
+// checkUISurface applies the ADR-0001 flag table for the collapsed
+// v1.6.0+v1.7.0 landing: --ui always beats NABD_UI, the deprecated --feed
+// alias maps onto --ui, an explicit conflict is refused, and the retired chat
+// surface gets a migration message instead of a silent fall-through. It
+// returns the surface to run, or an error the caller turns into exitUsage.
+func checkUISurface(uiFlag string, useFeed bool, provided map[string]bool) (string, error) {
+	uiGiven, feedGiven := provided["ui"], provided["feed"]
+
+	if uiGiven {
+		switch strings.ToLower(strings.TrimSpace(uiFlag)) {
+		case uiFeed:
+			// --feed=false asks for the retired surface, so it conflicts with
+			// an explicit --ui=feed rather than being ignored.
+			if feedGiven && !useFeed {
+				return "", errors.New("--ui=feed conflicts with --feed=false; --feed is deprecated, use --ui=feed")
+			}
+			return uiFeed, nil
+		case uiChat:
+			return "", errors.New("--ui=chat is not available: the chat UI was retired (ADR-0001); use --ui=feed")
+		default:
+			return "", fmt.Errorf("--ui=%q is not a recognized surface; use --ui=feed", uiFlag)
+		}
+	}
+
+	// No --ui: the deprecated alias decides what the operator asked for.
+	if feedGiven {
+		if !useFeed {
+			return "", errors.New("--feed=false selected the chat UI, which was retired (ADR-0001); use --ui=feed")
+		}
+		fmt.Fprintln(os.Stderr, "nabd: --feed is deprecated; use --ui=feed")
+		return uiFeed, nil
+	}
+
+	// Environment surface. An unknown or retired value warns and falls back to
+	// the default instead of failing, so a stale .bashrc or wrapper script
+	// cannot lock the operator out of the agent.
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("NABD_UI"))); v != "" && v != uiFeed {
+		fmt.Fprintf(os.Stderr, "nabd: NABD_UI=%q is not a usable surface (feed is the only interactive UI); using feed\n", v)
+	}
+	return uiFeed, nil
+}
+
+// rejectUIFlagWith refuses --ui/--feed beside a non-interactive mode. ADR-0001
+// asks for a rejected command line (exitUsage) rather than a flag that appears
+// accepted and is then ignored.
+func rejectUIFlagWith(replay, prompt, exportPath string, provided map[string]bool) {
+	if !provided["ui"] && !provided["feed"] {
+		return
+	}
+	var mode string
+	switch {
+	case replay != "":
+		mode = "--replay"
+	case prompt != "":
+		mode = "-p"
+	case exportPath != "":
+		mode = "--export"
+	default:
+		return
+	}
+	fmt.Fprintf(os.Stderr, "nabd: --ui/--feed has no effect with %s; set NABD_UI for a persistent preference\n", mode)
+	os.Exit(exitUsage)
 }
 
 func doReplay(path string, speed float64) error {
@@ -182,91 +273,6 @@ func doReplay(path string, speed float64) error {
 	}
 	_, err = tea.NewProgram(ui.NewReplay(events, speed)).Run()
 	return err
-}
-
-func doChat(mode perm.Mode, dir string, cont bool) error {
-	prov, err := pickProvider()
-	if err != nil {
-		return err
-	}
-
-	sess, err := newInteractiveSession(prov)
-	if err != nil {
-		return err
-	}
-	sess.SetMode(mode)
-	root := sess.root
-
-	var journalPath string
-	var journal *store.JSONL
-	if cont {
-		journalPath, err = latestSession(dir, root.Dir())
-		if err != nil {
-			return err
-		}
-		journal, err = openSessionJournal(journalPath)
-		if err == nil {
-			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions().Redact != nil)
-		}
-	} else {
-		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
-	}
-	if err != nil {
-		return err
-	}
-
-	var prevEvs []agent.Event
-	if cont {
-		evs, err := store.Read(journalPath)
-		if err != nil {
-			journal.Close()
-			return err
-		}
-		prevEvs = agent.Live(evs)
-		fmt.Printf("resumed %s · %d live events of %d\n",
-			filepath.Base(journalPath), len(prevEvs), len(evs))
-	}
-
-	uiSink := newUISink()
-	sess.loop.Sink = agent.Fanout{journal, uiSink}
-	if cont {
-		sess.loop.Seed(prevEvs)
-	}
-
-	cwd, _ := os.Getwd()
-	if err := sess.loop.Start(fmt.Sprintf("%s · %s · %s",
-		build.BannerPrefix(), prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
-		journal.Close()
-		return err
-	}
-
-	if cont {
-		noteMutationRecovery(sess.loop, sess.reg, prevEvs)
-	}
-	if s := conflictLine(config.Conflicts()); s != "" {
-		sess.loop.Note(s)
-	}
-
-	chat := ui.NewChat(sess.loop, uiSink.ch)
-	chat.Approve = sess.ap
-	chat.SetCallbacks(sess.callbacks())
-
-	_, err = tea.NewProgram(chat).Run()
-	if err != nil {
-		journal.Close()
-		return err
-	}
-
-	// Shutdown order: surface any UI drops as a journal Notice, then mark the
-	// session ended in the journal (durability), then close the journal.
-	// Either step can fail independently; surface both without masking the
-	// original. The "session:" line is printed by reportSession regardless of
-	// whether the durable close succeeded.
-	uiSink.noteDrops(sess.loop)
-	endErr := sess.loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
-	closeErr := journal.Close()
-	reportSession(os.Stdout, os.Stderr, journalPath, closeErr)
-	return errors.Join(endErr, closeErr)
 }
 
 func touchAllowed(termuxVersion, force string) bool {
@@ -450,24 +456,6 @@ func chatOnCompact(loop *agent.Loop) string {
 	return statusCompacting
 }
 
-// chanSink delivers the live event stream to the interactive UI. The UI
-// channel is a best-effort view — the journal is the durable source of
-// truth — so a full channel must never stall the agent loop or kill the
-// session. Emit drops the event instantly, counts the loss, and always
-// returns nil, which keeps a UI hiccup from propagating through Fanout as
-// a fatal loop error. The drop count is surfaced as a journal Notice just
-// before RunEnd (see noteDrops).
-type chanSink struct {
-	ch      chan agent.Event
-	dropped atomic.Int64
-}
-
-// newUISink builds the interactive UI sink. Its buffer is the contract value
-// (uiEventBuffer); when it overflows, Emit drops instead of blocking.
-func newUISink() *chanSink {
-	return &chanSink{ch: make(chan agent.Event, uiEventBuffer)}
-}
-
 // reportSession prints the authoritative session path and routes a close
 // failure to the error stream beside it. The path is printed unconditionally,
 // so a failed close never hides where the full transcript was written, and
@@ -476,28 +464,6 @@ func reportSession(out, errOut io.Writer, path string, closeErr error) {
 	fmt.Fprintln(out, "session:", path)
 	if closeErr != nil {
 		fmt.Fprintln(errOut, "nabd: session close:", closeErr)
-	}
-}
-
-func (s *chanSink) Emit(e agent.Event) error {
-	select {
-	case s.ch <- e:
-	default:
-		s.dropped.Add(1)
-	}
-	return nil
-}
-
-// Dropped reports how many events never reached the UI.
-func (s *chanSink) Dropped() int64 { return s.dropped.Load() }
-
-// noteDrops records the dropped-event count as a Notice, once, just before
-// the session's RunEnd event. It must be called from the session-end path,
-// never from inside Emit: loop.emit holds l.mu while sinks run, so calling
-// back into the loop from a sink would deadlock (see NOTES.md P0-1.5).
-func (s *chanSink) noteDrops(loop *agent.Loop) {
-	if n := s.Dropped(); n > 0 {
-		loop.Note(fmt.Sprintf("ui/display dropped %d event(s) · full session transcript is in the journal", n))
 	}
 }
 

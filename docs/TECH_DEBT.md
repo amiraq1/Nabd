@@ -358,20 +358,27 @@ sets the variable the feed separators degrade to ASCII while the command menu
 stays Unicode. Unverified and untested; fixing it touches production code and
 needs its own red case, so it is out of scope for the current test batch.
 
-## TWO_INTERACTIVE_UIS - the layout work targets the experimental path
+## TWO_INTERACTIVE_UIS - CLOSED (superseded by ADR-0001, retired 2026-09-22)
 
-cmd/ag/main.go carries two interactive TUIs and a third replay model:
-doChat (line 111) runs ui.Chat, doChatWithFeed (line 237) runs ui.Feed, and
---replay runs ui.NewReplay. The -feed flag defaults to false, so the default
-interactive path is Chat, not Feed.
+**Closed.** ADR-0001 (`docs/DECISIONS/0001-single-interactive-ui.md`) retired
+the Chat surface; its `v1.6.0` and `v1.7.0` stages were collapsed into one
+landing because `v1.6.0` was never published and no released binary ever
+exposed `--ui`/`NABD_UI`.
 
-Everything measured and fixed in this batch - computeLayout, the slash menu
-floor, visualRowsOf, the frame contract, separator width - lives in the Feed
-path. Users on the default path do not see it. This is the right order for
-promoting Feed to default, but it must not be described as a production fix.
+The condition this debt described no longer exists: `cmd/ag/main.go` carries
+one interactive surface (Feed) plus the read-only Replay projector. There is no
+`doChat`, no `ui.Chat`, and no `internal/ui/chat.go`, so the "layout work
+targets the experimental path" split is gone — every layout fix now reaches the
+default path by construction.
 
-Chat (internal/ui/chat.go) has no computeLayout, no frame contract and no
-layout tests at all, while Feed (feed.go) now has both.
+The deletion is kept honest by `internal/archtest/chat_removed_test.go`, which
+fails the suite if `NewChat`, `Chat`, `doChat`, `chanSink`, `newUISink`, or
+`uiEventBuffer` reappear in code or tests. That guard is the static protection
+that replaces this row; it is why the closure is recorded rather than the row
+simply deleted.
+
+Residual follow-up, tracked in ADR-0001, not here: remove the deprecated
+`--feed` migration stub in `v1.8.0`.
 
 The interactive session (root, registry, policy, approver, loop) and the five
 slash-command callbacks are now built once by `newInteractiveSession` in
@@ -904,4 +911,20 @@ both are banned explicitly to keep the old coverage; and the `compatibility`
 probe stays comment-based, the same known weakest link the read-side guards
 carry. No claim was dropped, and the test names are unchanged, so the new
 `THREAT_MODEL.md` citations resolve.
+
+
+## NON_UNIX_COMPATIBILITY_SHIMS — RESOLVED by ADR-0002 (Track F Closed)
+
+The `!unix` compatibility shims (`open_read_other.go`, `open_regular_other.go`,
+`read_source_other.go`, `remove_other.go`, `write_commit_other.go`, and
+`internal/safefs/*_other.go`) and the Windows stubs (`config/open_windows.go`,
+`config/owner_other.go`, `registry/open_windows.go`, `registry/owner_other.go`,
+`snap/sync_windows.go`, `snap/rename_windows.go`) have been excised under
+ADR-0002 (`docs/DECISIONS/0002-unix-only-forever.md`).
+
+Pre-step audit proved that 5 of the 6 Windows guards were lenient stubs that
+returned `nil` without performing ownership or atomicity checks (e.g.
+`auth.json` was readable regardless of permissions on Windows). Nabd is now
+Unix-only by construction, enforced by `internal/archtest/unix_only_test.go`
+(`TestUnixOnlyPlatformBoundary`).
 

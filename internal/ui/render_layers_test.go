@@ -224,11 +224,6 @@ func TestRenderEventLayerImportsAgent(t *testing.T) {
 // both tea.Batch and tea.Println. Batching a print with a command that can cause
 // a later print makes output order depend on scheduling.
 func TestNoBatchWithPrintlnInUI(t *testing.T) {
-	// chat.go is temporarily allowlisted; will be removed in the Chat-deletion PR.
-	allowlist := map[string]bool{
-		"chat.go": true,
-	}
-
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatalf("reading directory: %v", err)
@@ -268,9 +263,6 @@ func TestNoBatchWithPrintlnInUI(t *testing.T) {
 		})
 
 		if hasBatch && hasPrintln {
-			if allowlist[name] {
-				continue
-			}
 			t.Errorf("file %q references both tea.Batch and tea.Println: batching a print with a command that can cause a later print makes output order depend on scheduling", name)
 		}
 	}

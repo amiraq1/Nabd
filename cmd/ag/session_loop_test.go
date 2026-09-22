@@ -14,8 +14,9 @@ import (
 )
 
 // TestSessionLoopPromptHasNoDivergentPaths pins the NBD-400 acceptance
-// condition that Chat, Feed and headless all send the same model-facing
-// contract. It checks the property structurally rather than trusting three
+// condition that Feed and headless send the same model-facing contract. The
+// third interactive surface, Chat, was retired by ADR-0001, so two entry
+// points remain. It checks the property structurally rather than trusting two
 // literals that happen to agree:
 //
 //  1. newSessionLoop is the only place in non-test source that assigns a

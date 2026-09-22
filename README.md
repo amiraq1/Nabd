@@ -4,6 +4,8 @@
 
 **A terminal coding agent built on a phone.** One Go binary, an append-only event journal, default-deny permissions, and git-independent undo.
 
+Unix-only (Linux / macOS / Android-Termux); Windows via WSL2.
+
 > Security and containment claims live in [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md), not in this README.
 
 The installable binary is `nabd`; the package path remains `./cmd/ag`.
@@ -130,7 +132,7 @@ stdout contains only the final assistant text, or JSONL with `--json`. Notices a
 | darwin/amd64 | supported |
 | windows/* | **not supported** |
 
-Windows is not a release target. Some platform helper files compile there, but the agent's shell execution contract is Unix-oriented.
+Unix-only (Linux / macOS / Android-Termux); Windows via WSL2.
 
 ## Core architecture
 

@@ -4,6 +4,44 @@ Release notes are generated from conventional commit history by GoReleaser.
 Published changes and downloadable artifacts are available on the
 [GitHub Releases](https://github.com/amiraq1/Nabd/releases) page.
 
+## Unreleased (targets v1.7.0)
+
+Retiring the Chat interactive UI and landing the ADR-0001 flag surface.
+
+- **BREAKING: the Chat UI is retired (`feat(ui)!`):** the second interactive
+  surface is gone. `nabd` has one interactive surface, Feed. ADR-0001's
+  `v1.6.0` and `v1.7.0` stages were collapsed into this single landing because
+  `v1.6.0` was never published (its signing step failed) and `v1.6.1` shipped
+  only the checksum-signing fix, so **no released binary ever exposed `--ui`
+  or `NABD_UI`** and no shipped contract is broken by the collapse.
+- **`--ui` / `NABD_UI` (resolves review finding F2):** `--ui=feed` selects the
+  interactive surface and `NABD_UI` is its persistent form. `--ui` always beats
+  `NABD_UI`. A `--ui` value other than `feed` is rejected with exit code 2;
+  `chat` is rejected with a message naming `--ui=feed`. An unusable `NABD_UI`
+  (for example `NABD_UI=bogus`, or `NABD_UI=chat` from an old profile) is
+  **not** a hard error: it warns and falls back to `feed`, so a stale
+  `.bashrc` cannot lock the operator out.
+- **`--feed` is deprecated:** it survives as an alias for `--ui=feed` and prints
+  a migration hint naming `--ui`. `--feed=false` no longer selects anything —
+  it is rejected with exit code 2 because the surface it named is retired.
+  The stub itself is removed in `v1.8.0`.
+- **Flag conflicts are refused:** `--ui=feed` together with `--feed=false` is
+  rejected with exit code 2, and so is `--ui`/`--feed` combined with a
+  non-interactive mode (`--replay`, `-p`, `--export`), which previously was
+  silently ignored. Exit code 2 (`exitUsage`) is now distinct from a failed
+  run (1).
+- **Behavioural change for former Chat users:** Chat scrolled the session in
+  the terminal's own scrollback. Feed uses the alt-screen, so session text no
+  longer remains in terminal scrollback after exit. Use `--replay <journal>`
+  to review a session; it is a read-only projector over the journal.
+- **Shared primitives detached before deletion:** `Runner`, `doneMsg`, and
+  `errSummary` moved out of `internal/ui/chat.go` into `internal/ui/runner.go`
+  because Feed depends on them, so removing the Chat file could not break
+  Feed. The Replay text layer (`render_text.go`) was already independent.
+- **Architecture guard added:** `internal/archtest/chat_removed_test.go` fails
+  the suite if `NewChat`, `Chat`, `doChat`, `chanSink`, `newUISink`, or
+  `uiEventBuffer` reappear in code or tests.
+
 ## v1.6.1
 
 Checksum signing restored in the release pipeline.

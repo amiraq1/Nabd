@@ -27,24 +27,3 @@ func TestRemoveUnixUsesDescriptorOnlyOperations(t *testing.T) {
 		}
 	}
 }
-
-// The non-unix implementation is fail-closed: it must not delete anything.
-func TestRemoveOtherIsFailClosed(t *testing.T) {
-	src, err := os.ReadFile("remove_other.go")
-	if err != nil {
-		t.Fatalf("remove_other.go: %v", err)
-	}
-	body := string(src)
-
-	if !strings.Contains(body, "//go:build !unix") {
-		t.Error("remove_other.go must carry the //go:build !unix constraint")
-	}
-	if !strings.Contains(body, "ErrUnsupportedPlatform") {
-		t.Error("remove_other.go must be fail-closed with ErrUnsupportedPlatform")
-	}
-	for _, tok := range []string{"os.Remove(", "golang.org/x/sys/unix", "unix.Unlinkat"} {
-		if strings.Contains(body, tok) {
-			t.Errorf("remove_other.go must not use %s", tok)
-		}
-	}
-}
