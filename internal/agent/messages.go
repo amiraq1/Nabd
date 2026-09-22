@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"nabd/internal/provider"
 	"nabd/internal/skill"
@@ -18,6 +20,22 @@ import (
 // never the raw file: the raw file contains abandoned branches.
 const maxPendingNotices = 32
 
+const (
+	// noticeFrame prefixes a notice line on its way to the model. It is added
+	// by the projection and nowhere else, and boundNoticeLine strips it from
+	// notice text so a payload cannot spoof or double the frame.
+	noticeFrame = "«notice»"
+
+	// maxNoticeBytes bounds one model-facing notice line. Notice text is
+	// derived from file paths, tool names, and human summaries, so this bound
+	// is what keeps a single notice from becoming unbounded context.
+	maxNoticeBytes = 256
+
+	// noticeTruncatedMarker ends a line the byte bound cut short, so the model
+	// can tell a short notice from a shortened one.
+	noticeTruncatedMarker = "…[notice truncated]"
+)
+
 // toolResultItem is a result still waiting to be flushed with its pairing
 // metadata. name lets the consumer reconstruct an unknown tool's identity
 // from an orphan ToolEnd; there is deliberately no path field — read
@@ -26,6 +44,86 @@ const maxPendingNotices = 32
 type toolResultItem struct {
 	result provider.ToolResult
 	name   string
+}
+
+// renderNotice is the single translation from a notice event to the line the
+// model reads, and the choke point the notice-provenance guard exists to keep
+// real. A structured payload is authoritative: when it is present the human
+// Text is never consulted, so an emitter that also carries hostile text cannot
+// smuggle it into the context. Events written before the payload existed still
+// render from Text — sanitized and bounded — so replaying an old journal is
+// unchanged. A payload that does not match its category is dropped.
+func renderNotice(ev Event) (string, bool) {
+	if ev.Notice == nil {
+		return boundNoticeLine(ev.Text), true
+	}
+	if !ev.Notice.validate(ev.NoticeCategory) {
+		return "", false
+	}
+	return boundNoticeLine(ev.Notice.body()), true
+}
+
+// boundNoticeLine makes one notice safe for the model's context: credentials
+// are redacted, every control rune (CR, LF, and TAB included) collapses to a
+// single space so a notice is always exactly one logical line, a leading frame
+// is stripped so payload text cannot spoof the projection's marker, and the
+// result is capped at maxNoticeBytes on a rune boundary.
+func boundNoticeLine(s string) string {
+	s = provider.SanitizeBody(s, nil)
+	s = strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' || unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	for strings.HasPrefix(s, noticeFrame) {
+		s = strings.TrimSpace(strings.TrimPrefix(s, noticeFrame))
+	}
+	s = strings.TrimSpace(strings.TrimPrefix(s, "«"))
+	if len(s) > maxNoticeBytes {
+		cut := maxNoticeBytes
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = strings.TrimRight(s[:cut], " ") + noticeTruncatedMarker
+	}
+	return s
+}
+
+// body renders the structured payload. Callers reach it only after validate,
+// so exactly one field is set.
+func (n *NoticeData) body() string {
+	switch {
+	case n.Undo != nil:
+		return n.Undo.render()
+	case n.LoopLimit != nil:
+		return n.LoopLimit.render()
+	}
+	return ""
+}
+
+// render reports an /undo as paths only — which files came back and which
+// refused. The per-record human notes stay in Text.
+func (n *UndoNotice) render() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "undo: %d reverted", len(n.Reverted))
+	if len(n.Reverted) > 0 {
+		fmt.Fprintf(&b, " (%s)", strings.Join(n.Reverted, ", "))
+	}
+	if len(n.Failed) > 0 {
+		fmt.Fprintf(&b, " · %d not reverted (%s)", len(n.Failed), strings.Join(n.Failed, ", "))
+	}
+	return b.String()
+}
+
+// render keeps the loop notice's original wording: the actionable half is the
+// instruction to change approach, so the structured form must not lose it.
+func (n *LoopLimitNotice) render() string {
+	if n.Aborted {
+		return fmt.Sprintf("tool loop detected: %s repeated %d times with identical input and output · aborting", n.Tool, n.Count)
+	}
+	return fmt.Sprintf("loop detected: tool %q called %d times with identical arguments and outcome; please try a different approach", n.Tool, n.Count)
 }
 
 func Messages(evs []Event) []provider.Message {
@@ -125,16 +223,23 @@ func Messages(evs []Event) []provider.Message {
 			if !NoticeAllowedForModel(ev.NoticeCategory) {
 				continue
 			}
+			// The line is rendered, never copied: a structured payload is the
+			// authoritative source, legacy Text is sanitized and bounded, and a
+			// payload that does not match its category is dropped.
+			line, ok := renderNotice(ev)
+			if !ok {
+				continue
+			}
 			if len(open) > 0 || len(calls) > 0 {
 				if len(pendingNotices) < maxPendingNotices {
-					pendingNotices = append(pendingNotices, ev.Text)
+					pendingNotices = append(pendingNotices, line)
 				} else {
 					pendingNotices[maxPendingNotices-1] = "(notices truncated: cap reached)"
 				}
 				continue
 			}
 			flush()
-			out = append(out, provider.Message{Role: provider.User, Text: "«notice» " + ev.Text})
+			out = append(out, provider.Message{Role: provider.User, Text: noticeFrame + " " + line})
 
 		case TextDelta:
 			if len(toolResults) > 0 { // results closed the previous round

@@ -760,12 +760,14 @@ func (l *Loop) checkLoop(tool string, input []byte, ok bool, output string) erro
 			Type:           Notice,
 			NoticeCategory: NoticeCategoryLoopLimit,
 			Text:           fmt.Sprintf("loop detected: tool %q called %d times with identical arguments and outcome; please try a different approach", tool, count),
+			Notice:         &NoticeData{LoopLimit: &LoopLimitNotice{Tool: tool, Count: count}},
 		})
 	} else if count >= LoopAbortThreshold {
 		_ = l.emit(Event{
 			Type:           Notice,
 			NoticeCategory: NoticeCategoryLoopLimit,
 			Text:           fmt.Sprintf("tool loop detected: %s repeated %d times with identical input and output · aborting", tool, count),
+			Notice:         &NoticeData{LoopLimit: &LoopLimitNotice{Tool: tool, Count: count, Aborted: true}},
 		})
 		return ErrToolLoop
 	}
@@ -1033,9 +1035,16 @@ func (l *Loop) Note(text string) {
 }
 
 // NoteUndo emits an /undo result notice that reaches the model, because
-// the undo changed working-tree state the model was reasoning about.
-func (l *Loop) NoteUndo(text string) {
-	_ = l.emit(Event{Type: Notice, Text: text, NoticeCategory: NoticeCategoryUndoResult})
+// the undo changed working-tree state the model was reasoning about. text is
+// the human rendering and stays verbatim for display; reverted and failed are
+// the paths the undo touched, and they — not text — are what the model sees.
+func (l *Loop) NoteUndo(text string, reverted, failed []string) {
+	_ = l.emit(Event{
+		Type:           Notice,
+		Text:           text,
+		NoticeCategory: NoticeCategoryUndoResult,
+		Notice:         &NoticeData{Undo: &UndoNotice{Reverted: reverted, Failed: failed}},
+	})
 }
 
 // End marks the session as finished. It emits exactly one RunEnd event and
