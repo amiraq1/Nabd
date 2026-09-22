@@ -12,19 +12,12 @@ package provider
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"nabd/internal/config"
 	"nabd/internal/endpoint"
 	"nabd/internal/registry"
 )
-
-// controlledHTTPClient returns an *http.Client whose DialContext enforces the
-// endpoint policy via Dialer.Control, closing the DNS-rebinding window.
-func controlledHTTPClient() *http.Client {
-	return endpoint.Client(0)
-}
 
 // BuildRouteProvider constructs the concrete Provider for a single RouteEntry
 // using the registry loaded from the default user paths.
@@ -63,23 +56,12 @@ func BuildRouteProviderWithRegistry(reg *registry.Registry, entry RouteEntry) (P
 		return nil, fmt.Errorf("provider %q: %w", prov.ID, err)
 	}
 
-	client := controlledHTTPClient()
 	model := prov.ResolveModelID(entry.Model)
 	switch prov.API {
 	case "anthropic":
-		p, err := NewAnthropicDialect(prov.ID, prov.BaseURL, model, prov.Key, prov.ReadCap)
-		if err != nil {
-			return nil, err
-		}
-		p.Client = client
-		return p, nil
+		return NewAnthropicDialect(prov.ID, prov.BaseURL, model, prov.Key, prov.ReadCap)
 	case "openai":
-		p, err := NewOpenAIDialect(prov.ID, prov.BaseURL, model, prov.Key, prov.ReadCap)
-		if err != nil {
-			return nil, err
-		}
-		p.Client = client
-		return p, nil
+		return NewOpenAIDialect(prov.ID, prov.BaseURL, model, prov.Key, prov.ReadCap)
 	default:
 		return nil, fmt.Errorf(
 			"provider %q: unsupported api dialect %q; must be 'openai' or 'anthropic'",
@@ -161,7 +143,6 @@ func BuildStandaloneProviderWithRegistry(reg *registry.Registry, id, modelOverri
 		return nil, fmt.Errorf("provider %q: %w", prov.ID, err)
 	}
 
-	client := controlledHTTPClient()
 	switch prov.API {
 	case "anthropic":
 		p, err := NewAnthropicDialect(prov.ID, baseURL, model, prov.Key, prov.ReadCap)
@@ -169,7 +150,6 @@ func BuildStandaloneProviderWithRegistry(reg *registry.Registry, id, modelOverri
 			return nil, err
 		}
 		p.retryPolicy = RetryStandalone
-		p.Client = client
 		return p, nil
 	case "openai":
 		p, err := NewOpenAIDialect(prov.ID, baseURL, model, prov.Key, prov.ReadCap)
@@ -177,7 +157,6 @@ func BuildStandaloneProviderWithRegistry(reg *registry.Registry, id, modelOverri
 			return nil, err
 		}
 		p.retryPolicy = RetryStandalone
-		p.Client = client
 		return p, nil
 	default:
 		return nil, fmt.Errorf(
