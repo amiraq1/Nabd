@@ -923,4 +923,79 @@ redundant `controlledHTTPClient()` and post-construction client assignments in
 `scripts/check-security-invariants.sh` and verified by
 `TestConstructorDefaultsToGuardedClient`.
 
+## BEHAVIOUR_FREE_DIFF_SEMANTIC_GAP
 
+`behaviour_free_diff()` in `scripts/check-pr-security-checklist.sh` exempts a PR
+from the regression-test requirement when every changed file is either Markdown,
+lives under `docs/`, or is a Go file whose added and removed lines are all blank
+or `//` comments. The escape is granted mechanically by inspecting the diff, not
+by wording in the PR body, which is correct.
+
+The structural gap is that the gate can verify that a line is syntactically a
+comment (`//*`), but it cannot verify that the comment is factually correct. A
+comment change that silently diverges from the code it describes will pass the
+gate without any test evidence. This is an inherent limitation: a tool that
+checks syntax cannot make semantic claims.
+
+**Historical evidence.** During the `refactor/remove-unemitted-permission-denied-notice`
+campaign, comments in `internal/safefs/open_unix.go`, `remove_unix.go`,
+`write_unix.go`, and `open_dir_unix.go` were updated to reference ADR-0002
+(unix-only). The change described those files as the surviving unix-only adapters
+of a Windows/other elimination. Because the diff was comment-only, it satisfied
+`behaviour_free_diff` without a corresponding test. At the time the comments were
+written, the `_other.go` counterpart files were still present in the working tree
+and still cited by `docs/THREAT_MODEL.md`. The discrepancy was discovered by the
+test-citation guard (`scripts/check-threat-model-tests.sh`), not by any
+automated check on the comments themselves. Without the citation guard, the
+semantic divergence between the comments and the file tree would have been
+invisible to CI.
+
+**Residual risk.** Any comment-only PR that describes a structural property of
+the codebase (e.g. "this is now the only path for X") can pass CI with the
+property unverified. Human review is the only remaining barrier against this
+class of semantic drift. The gate cannot be strengthened without either (a)
+requiring a test for every comment change (which would make documentation PRs
+impossible) or (b) adding a semantic layer that understands what comments claim
+(which is not tractable in a shell script).
+
+**Guard.** `TestPRChecklistGateExemptsOnlyBehaviourFreeDiffs` in
+`internal/build/pr_checklist_gate_test.go` verifies that the escape is narrow and
+mechanically inspects the diff rather than the body. It does not and cannot
+verify semantic correctness.
+
+## NOTES_CITATION_GUARD_DEFERRED
+
+`scripts/check-threat-model-tests.sh` guards backtick-quoted `Test*` citations in
+`docs/THREAT_MODEL.md` and `docs/TECH_DEBT.md`. `NOTES.md` is intentionally
+excluded.
+
+**Reason.** `NOTES.md` is a forensic engineering log that contains historical
+citations: names of tests that existed at a documented point in time and were
+later deleted or renamed. Two such citations are known at the time of this entry:
+
+1. `TestDedupReads` (line 253) — the same line explicitly states the test "was
+   deleted" as part of the test-count accounting. The backtick form is a
+   historical record, not a contract claim.
+2. `TestFlushJoinSameForChatAndReplay` (line 285) — retained as a text-search
+   anchor after the test was split into `TestFlushJoinDeterministic` and
+   `TestFlushJoinEmptyBuffer` in PR #191. The old name is cited in NOTES.md as
+   a navigation reference to the original design decision.
+
+Applying the strict guard to NOTES.md without distinguishing past-tense records
+from present-tense claims would produce two known false positives and require
+continuous maintenance of an allowlist.
+
+**Prerequisite for activation.** Before the guard can be extended to NOTES.md,
+an annotation convention must be established and applied. Viable options:
+
+- A `(historical)` suffix inline: `` `TestOldName` (historical) `` — the guard
+  strips names with this suffix before checking.
+- A dedicated `## Historical test names` section that acts as an explicit
+  allowlist; the guard skips names listed there.
+
+Until one of these conventions is adopted and the two known citations are
+annotated, all citations in NOTES.md remain unguarded by CI. An engineer
+renaming or deleting a test must still run
+`grep -rn TestName docs/ README.md CHANGELOG.md NOTES.md` manually before
+the operation (see the pre-delete protocol established after the NARROW_OVR_12
+incident).
