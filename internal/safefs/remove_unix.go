@@ -20,8 +20,7 @@ var unlinkat = unix.Unlinkat
 // library's removal semantics. A symlink target is removed as a link (unlinkat
 // does not follow it), never its referent.
 //
-// This implementation is unix-only; other platforms return
-// ErrUnsupportedPlatform (remove_other.go).
+// This implementation is unix-only by construction (ADR-0002).
 func RemoveFile(rootPath, relativeFile string) error {
 	rel, parent, base, err := splitFileTarget(relativeFile)
 	if err != nil {

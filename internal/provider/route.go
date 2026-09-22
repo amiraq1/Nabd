@@ -48,7 +48,6 @@ const (
 	maxRoutes        = 16
 	maxProviderBytes = 32
 	maxModelBytes    = 256
-	routeCommaNote   = "Note: the comma ',' is the route separator and cannot appear inside a model name in v1.2.0."
 )
 
 // ParseRouteErrors collects every validation error found during parsing.

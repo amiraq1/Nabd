@@ -59,7 +59,7 @@ func (m Replay) step() tea.Cmd {
 
 	var cmds []tea.Cmd
 	if e.Type == agent.TextDelta {
-		*m.buf += e.Text // same coalescing as Chat: one block, not one line per delta
+		*m.buf += e.Text // coalesce text deltas: one block, not one line per delta
 	} else if s := flushJoin(m.buf, e, m.width); s != "" {
 		cmds = append(cmds, tea.Println(s))
 	}

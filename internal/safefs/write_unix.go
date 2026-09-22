@@ -65,8 +65,7 @@ func splitFileTarget(relativeFile string) (rel, parent, base string, err error) 
 // the rename durable. The target path is never opened or renamed by name, so a
 // concurrent swap cannot redirect the write.
 //
-// This implementation is unix-only; other platforms return
-// ErrUnsupportedPlatform (write_other.go).
+// This implementation is unix-only by construction (ADR-0002).
 func WriteFileAtomic(rootPath, relativeFile string, data []byte, mode os.FileMode) error {
 	_, parent, base, err := splitFileTarget(relativeFile)
 	if err != nil {

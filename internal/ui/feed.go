@@ -211,10 +211,8 @@ type cacheEntry struct {
 	lines    []string
 }
 
-// SessionCallbacks holds the hooks a view uses to talk back to the loop.
-// It is shared by Chat and Feed so the same slash command cannot mean two
-// different things depending on which TUI is running: one contract, one
-// implementation, wired once by the CLI.
+// SessionCallbacks holds the hooks a view uses to talk back to the loop:
+// one contract, one implementation, wired once by the CLI for slash command callbacks.
 type SessionCallbacks struct {
 	OnUndo    func(n int) string
 	OnCompact func() string

@@ -216,8 +216,8 @@ func toolEnd(c *agent.ToolCall, width int) string {
 	return out
 }
 
-// flushJoin is the one place text-delta buffers turn into scrollback. Both
-// Chat and Replay call it, so a session replays exactly as it was seen:
+// flushJoin is the one place text-delta buffers turn into scrollback. Replay
+// calls it so a session replays with coalesced text blocks:
 // the buffered text block first, then the event that ended it, joined into
 // a single string because two tea.Println in one Batch race for the
 // terminal (P0-1.6). Returns "" when there is nothing to print.

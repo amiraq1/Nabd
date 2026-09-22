@@ -50,8 +50,7 @@ func classifyDirOpenError(err error, path string) error {
 // is opened with openFlagsDir (O_NOFOLLOW|O_DIRECTORY), so a symlink or a
 // non-directory component is refused as ErrNotDirectory.
 //
-// This implementation is unix-only; other platforms return
-// ErrUnsupportedPlatform (open_dir_other.go).
+// This implementation is unix-only by construction (ADR-0002).
 func OpenDir(rootPath, relativeDir string) (*os.File, error) {
 	rel, err := Normalize(relativeDir)
 	if err != nil {
@@ -104,8 +103,7 @@ func walkDirFd(rootFd int, rel string) (*os.File, error) {
 // it. Directories created before a later failure are left in place, matching
 // the existing MkdirAll behaviour.
 //
-// This implementation is unix-only; other platforms return
-// ErrUnsupportedPlatform (open_dir_other.go).
+// This implementation is unix-only by construction (ADR-0002).
 func OpenOrCreateDir(rootPath, relativeDir string, fallbackMode os.FileMode) (*os.File, error) {
 	rel, err := Normalize(relativeDir)
 	if err != nil {

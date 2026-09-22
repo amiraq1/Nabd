@@ -9,10 +9,9 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Replay must coalesce text deltas exactly as Chat does: one block per run
-// of text, flushed by the next non-text event. README promises the live and
-// replayed views go through the same render path; this pins it.
-func TestReplayCoalescesDeltasLikeChat(t *testing.T) {
+// Replay must coalesce text deltas into one block per run
+// of text, flushed by the next non-text event.
+func TestReplayCoalescesDeltas(t *testing.T) {
 	evs := []agent.Event{
 		{Seq: 1, Type: agent.RunStart, Text: "x"},
 		{Seq: 2, Parent: 1, Type: agent.TextDelta, Text: "أقرأ "},
@@ -40,7 +39,7 @@ func TestReplayCoalescesDeltasLikeChat(t *testing.T) {
 	}
 }
 
-func TestFlushJoinSameForChatAndReplay(t *testing.T) {
+func TestFlushJoinSameInputSameOutput(t *testing.T) {
 	e := agent.Event{Type: agent.Notice, Text: "n"}
 	a, b := "نص", "نص"
 	if flushJoin(&a, e, 50) != flushJoin(&b, e, 50) {
