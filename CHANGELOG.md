@@ -6,9 +6,17 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
-### Fixed
+## v2.0.0
 
-- **Guarded provider HTTP client by default (`fix(provider)`):** `NewOpenAIDialect` and `NewAnthropicDialect` now construct providers with `Client: endpoint.Client(0)` by default instead of an unguarded `http.Client`. Redundant `controlledHTTPClient()` calls and manual `p.Client` assignments in `newroute.go` have been removed. Enforced in CI by `scripts/check-security-invariants.sh` and verified by `TestConstructorDefaultsToGuardedClient`. This is not a breaking change for end users (effective runtime behavior for active routes and standalone providers is unchanged), but is a breaking change for external callers of the exported constructors who relied on an unshielded HTTP client without endpoint policy controls.
+Scoped exclusively to Termux (`android/arm64`).
+
+> **Notice:** Linux and macOS desktop users should stay on `v1.5.0`. `v2.0.0` removes the desktop targets and the Landlock sandbox in order to scope Nabd strictly to Termux on Android.
+
+- **BREAKING: Scope restricted to Termux (`android/arm64`)**: Dropped desktop Linux and macOS build targets. All builds now target `android/arm64`.
+- **BREAKING: Landlock bash sandbox removed**: Termux runs as an unprivileged Android application user where Landlock sandbox is unavailable. The Landlock sandbox implementation in `internal/sandbox` has been removed. Approved bash commands run with the full authority of the Termux app user.
+- **Fail-closed on removed bash sandbox settings (`fix(config)`)**: Configuration keys `NABD_BASH_SANDBOX=on`, `NABD_BASH_NETWORK=deny`, and `NABD_BASH_RESOURCES=limit` (in v1 config, v2 config, or process environment) now fail closed immediately at startup across all interactive and headless entry points before any provider call or tool execution, with an actionable error. Neutral/permissive values (`auto`, `off`, `allow`, empty) emit a one-line warning on stderr.
+- **Pure-Go DNS resolver for Termux (`fix(net)`)**: When compiled with upstream Go (`CGO_ENABLED=0`), Nabd now parses nameservers from `$PREFIX/etc/resolv.conf` (default `/data/data/com.termux/files/usr/etc/resolv.conf`) on Android, preventing DNS resolution failure. Public DNS fallback (`1.1.1.1`, `8.8.8.8`) is disabled by default and requires explicit opt-in via `NABD_PUBLIC_DNS=1`.
+- **Guarded provider HTTP client by default (`fix(provider)`)**: `NewOpenAIDialect` and `NewAnthropicDialect` now construct providers with `Client: endpoint.Client(0)` by default instead of an unguarded `http.Client`. Redundant `controlledHTTPClient()` calls and manual `p.Client` assignments in `newroute.go` have been removed. Enforced in CI by `scripts/check-security-invariants.sh` and verified by `TestConstructorDefaultsToGuardedClient`.
 
 ## v1.6.1
 
