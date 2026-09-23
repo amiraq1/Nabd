@@ -13,7 +13,8 @@ The installable binary is `nabd`; the package path remains `./cmd/ag`.
 | Release | Status | Notes |
 |---|---|---|
 | `v2.0.0` | Published with signed `android/arm64` binary and Syft SBOM | Scoped exclusively to Termux (`android/arm64`) |
-| `v1.5.0` | Published with binaries and `checksums.txt` | Last release supporting Linux & macOS desktop |
+| `v1.6.1` | Published with binaries and `checksums.txt` | Last release supporting Linux & macOS desktop |
+| `v1.5.0` | Published with binaries and `checksums.txt` | |
 | `v1.4.0` | Published with binaries and `checksums.txt` | |
 | `v1.3.0` | Published with binaries and `checksums.txt` | |
 
