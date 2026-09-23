@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"nabd/internal/endpoint"
 	"nabd/internal/provider"
 )
 
@@ -14,15 +13,27 @@ import (
 type ErrorCode string
 
 const (
-	ErrProviderTemporary   ErrorCode = "provider_temporary"
-	ErrCodeProviderAuth    ErrorCode = "provider_auth"
-	ErrCodePersist         ErrorCode = "persist"
-	ErrCodeBudget          ErrorCode = "budget"
-	ErrMaxTurnsCode        ErrorCode = "max_turns"
-	ErrCodeCanceled        ErrorCode = "canceled"
-	ErrLoopDetected        ErrorCode = "loop_detected"
-	ErrCodeEndpointRefused ErrorCode = "endpoint_refused"
-	ErrCodeUnknown         ErrorCode = "unknown"
+	ErrCodeProviderTemporary ErrorCode = "provider_temporary"
+	ErrCodeProviderAuth      ErrorCode = "provider_auth"
+	ErrCodePersist           ErrorCode = "persist"
+	ErrCodeBudget            ErrorCode = "budget"
+	ErrCodeMaxTurns          ErrorCode = "max_turns"
+	ErrCodeCanceled          ErrorCode = "canceled"
+	ErrCodeLoopDetected      ErrorCode = "loop_detected"
+	ErrCodeEndpointRefused   ErrorCode = "endpoint_refused"
+	ErrCodeUnknown           ErrorCode = "unknown"
+)
+
+// Legacy aliases for backward compatibility
+const (
+	ErrProviderTemporary = ErrCodeProviderTemporary
+	ErrProviderAuth      = ErrCodeProviderAuth
+	ErrPersist           = ErrCodePersist
+	ErrBudget            = ErrCodeBudget
+	ErrMaxTurnsCode      = ErrCodeMaxTurns
+	ErrCanceled          = ErrCodeCanceled
+	ErrLoopDetected      = ErrCodeLoopDetected
+	ErrUnknown           = ErrCodeUnknown
 )
 
 // RemedyEndpointRefused is the canonical guidance string when an endpoint is refused by policy.
@@ -87,21 +98,21 @@ func ErrorCodeOf(err error) ErrorCode {
 	case errors.Is(err, ErrSpendBudget):
 		return ErrCodeBudget
 	case errors.Is(err, ErrMaxTurns):
-		return ErrMaxTurnsCode
+		return ErrCodeMaxTurns
 	case errors.Is(err, ErrToolLoop):
-		return ErrLoopDetected
+		return ErrCodeLoopDetected
 	case errors.Is(err, context.Canceled):
 		return ErrCodeCanceled
 	case errors.Is(err, ErrRateLimitBudget):
-		return ErrProviderTemporary
-	case errors.Is(err, endpoint.ErrEndpointRefused):
-		return ErrCodeEndpointRefused
+		return ErrCodeProviderTemporary
 	}
 	switch provider.ErrorKindOf(err) {
 	case provider.ErrorKindAuth:
 		return ErrCodeProviderAuth
 	case provider.ErrorKindTemporary:
-		return ErrProviderTemporary
+		return ErrCodeProviderTemporary
+	case provider.ErrorKindEndpointRefused:
+		return ErrCodeEndpointRefused
 	default:
 		return ErrCodeUnknown
 	}

@@ -273,9 +273,12 @@ func runHeadlessErr(cfg headlessConfig) error {
 
 	// End the session in the journal first, then close. Surface both errors
 	// without masking the original run error. The text reflects the actual
-	// outcome: a session that hit run_error is marked failed, not ended.
+	// outcome: interrupted sessions are marked stopped, genuine failures are
+	// marked failed, and clean runs or normal max-turn stops are marked ended.
 	endFmt := statusSessionEnded
-	if err != nil || interrupted {
+	if interrupted || errors.Is(err, errInterrupted) {
+		endFmt = statusSessionStopped
+	} else if err != nil && !errors.Is(err, agent.ErrMaxTurns) {
 		endFmt = statusSessionFailed
 	}
 	endErr := loop.End(fmt.Sprintf(endFmt, filepath.Base(journalPath)))
@@ -283,7 +286,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 	reportSession(cfg.stderr, cfg.stderr, journalPath, closeErr)
 
 	if interrupted {
-		return errors.Join(errors.New("interrupted"), endErr, closeErr)
+		return errors.Join(errInterrupted, endErr, closeErr)
 	}
 	if err != nil {
 		return errors.Join(err, endErr, closeErr)

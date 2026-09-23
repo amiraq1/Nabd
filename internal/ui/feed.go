@@ -373,7 +373,7 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			case provider.ErrorKindAuth:
 				code = agent.ErrCodeProviderAuth
 			case provider.ErrorKindTemporary:
-				code = agent.ErrProviderTemporary
+				code = agent.ErrCodeProviderTemporary
 			default:
 				code = agent.ErrCodeUnknown
 			}

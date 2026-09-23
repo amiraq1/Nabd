@@ -24,7 +24,7 @@ func acceptanceEvents() []agent.Event {
 		{Seq: 6, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: failed.ID, Name: failed.Name, Args: failed.Args, OK: false, Exit: 1, Output: "tests failed"}},
 		{Seq: 7, Type: agent.PermAsk, Call: permission},
 		{Seq: 8, Type: agent.PermReply, Call: permission, Decision: agent.Deny, RawDecision: agent.Deny},
-		{Seq: 9, Type: agent.RunError, Err: "provider unavailable", ErrorCode: string(agent.ErrProviderTemporary)},
+		{Seq: 9, Type: agent.RunError, Err: "provider unavailable", ErrorCode: string(agent.ErrCodeProviderTemporary)},
 	}
 }
 

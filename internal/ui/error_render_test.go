@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
 	"nabd/internal/provider"
@@ -194,29 +197,65 @@ func TestErrorCardRemedyShowsAtAllWidths(t *testing.T) {
 func TestErrorCardRemedyRespectsNoColorAndAsciiOnly(t *testing.T) {
 	card := presentation.NewErrorCard(agent.ErrCodeEndpointRefused, "proxy endpoint refused", "")
 
-	t.Run("NO_COLOR", func(t *testing.T) {
-		t.Setenv("NO_COLOR", "1")
+	t.Run("ColorProfile_Suppression", func(t *testing.T) {
+		orig := lipgloss.ColorProfile()
+		t.Cleanup(func() { lipgloss.SetColorProfile(orig) })
+
+		// When TrueColor profile is active, lipgloss styles emit ANSI escapes
+		lipgloss.SetColorProfile(termenv.TrueColor)
+		linesColored := renderErrorCard(card, 50)
+		hasANSI := false
+		for _, l := range linesColored {
+			if strings.Contains(l, "\x1b") {
+				hasANSI = true
+				break
+			}
+		}
+		if !hasANSI {
+			t.Fatalf("expected TrueColor profile to emit ANSI escapes in rendered error card")
+		}
+
+		// When Ascii profile is active (such as when NO_COLOR is configured), ANSI escapes are suppressed
+		lipgloss.SetColorProfile(termenv.Ascii)
 		for _, width := range []int{20, 40, 66} {
 			lines := renderErrorCard(card, width)
 			for _, l := range lines {
 				if strings.Contains(l, "\x1b") {
-					t.Fatalf("width %d: line contains ANSI escape with NO_COLOR=1: %q", width, l)
+					t.Fatalf("width %d: line contains ANSI escape with Ascii profile: %q", width, l)
 				}
 			}
 		}
 	})
 
-	t.Run("NABD_ASCII_ONLY", func(t *testing.T) {
+	t.Run("NABD_ASCII_ONLY_DecorativeGlyphs", func(t *testing.T) {
+		// Without NABD_ASCII_ONLY: error marker is ✗ and truncation tail is …
+		t.Setenv("NABD_ASCII_ONLY", "")
+		linesDefault := renderErrorCard(card, 66)
+		joinedDefault := strings.Join(linesDefault, "\n")
+		if !strings.Contains(joinedDefault, "✗ ") {
+			t.Errorf("default error card missing decorative marker '✗ ': %s", joinedDefault)
+		}
+
+		// With NABD_ASCII_ONLY: marker becomes x and tail becomes ...
 		t.Setenv("NABD_ASCII_ONLY", "1")
-		for _, width := range []int{20, 40, 66} {
-			lines := renderErrorCard(card, width)
-			for _, l := range lines {
-				for _, r := range l {
-					if r > 127 {
-						t.Fatalf("width %d: line contains non-ASCII rune %q (%U) with NABD_ASCII_ONLY=1: %q", width, r, r, l)
-					}
-				}
-			}
+		linesASCII := renderErrorCard(card, 66)
+		joinedASCII := strings.Join(linesASCII, "\n")
+		if strings.Contains(joinedASCII, "✗ ") {
+			t.Errorf("NABD_ASCII_ONLY error card still contains decorative marker '✗ ': %s", joinedASCII)
+		}
+		if !strings.Contains(joinedASCII, "x ") {
+			t.Errorf("NABD_ASCII_ONLY error card missing ASCII replacement marker 'x ': %s", joinedASCII)
+		}
+
+		// Verify that Arabic text in the error message is preserved (non-ASCII text not mangled)
+		cardArabic := presentation.NewErrorCard(agent.ErrCodeEndpointRefused, "فشل الاتصال بالخادم", "")
+		linesArabic := renderErrorCard(cardArabic, 66)
+		joinedArabic := strings.Join(linesArabic, "\n")
+		if !strings.Contains(joinedArabic, "فشل الاتصال بالخادم") {
+			t.Errorf("NABD_ASCII_ONLY mangled Arabic error text: %s", joinedArabic)
+		}
+		if strings.Contains(joinedArabic, "✗") || strings.Contains(joinedArabic, "…") {
+			t.Errorf("NABD_ASCII_ONLY error card with Arabic text contains decorative non-ASCII glyphs: %s", joinedArabic)
 		}
 	})
 }

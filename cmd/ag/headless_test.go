@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -460,4 +461,117 @@ func TestHeadlessRunEndReflectsFailureAfterRunError(t *testing.T) {
 	if !strings.Contains(runEndEvent.Text, "فشلت الجلسة") {
 		t.Errorf("run_end missing failure indicator 'فشلت الجلسة': %q", runEndEvent.Text)
 	}
+}
+
+type interruptingProvider struct{}
+
+func (p *interruptingProvider) Name() string { return "interrupter" }
+
+func (p *interruptingProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Chunk, error) {
+	ch := make(chan provider.Chunk, 1)
+	// Raise SIGINT to process; signal.NotifyContext in runHeadlessErr intercepts it and cancels ctx.
+	_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+	<-ctx.Done()
+	ch <- provider.Chunk{Kind: provider.ChunkError, Err: ctx.Err()}
+	close(ch)
+	return ch, nil
+}
+
+func TestHeadlessRunEndReflectsStoppedAfterInterruption(t *testing.T) {
+	code, out, _ := runHL(t, headlessConfig{
+		prompt:   "stop-me",
+		json:     true,
+		provider: &interruptingProvider{},
+	})
+	if code != exitInterrupted {
+		t.Fatalf("exit %d, want %d", code, exitInterrupted)
+	}
+
+	var runEndEvent *agent.Event
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var ev agent.Event
+		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+			runEndEvent = &ev
+			break
+		}
+	}
+
+	if runEndEvent == nil {
+		t.Fatalf("run_end event was not emitted")
+	}
+
+	// Must reflect stopped ("أوقفت الجلسة")
+	if !strings.Contains(runEndEvent.Text, "أوقفت الجلسة") {
+		t.Errorf("run_end missing stopped indicator 'أوقفت الجلسة': %q", runEndEvent.Text)
+	}
+	// Must NOT declare success ("جلسة منتهية") or failure ("فشلت الجلسة")
+	if strings.Contains(runEndEvent.Text, "جلسة منتهية") {
+		t.Errorf("run_end declared normal ending despite interruption: %q", runEndEvent.Text)
+	}
+	if strings.Contains(runEndEvent.Text, "فشلت الجلسة") {
+		t.Errorf("run_end declared failure despite interruption: %q", runEndEvent.Text)
+	}
+}
+
+func TestHeadlessRunEndNormalOnSuccessAndMaxTurns(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		code, out, _ := runHL(t, headlessConfig{
+			prompt:   "hi",
+			json:     true,
+			provider: &scriptedProvider{turns: []scriptTurn{{text: "hello"}}},
+		})
+		if code != exitSettled {
+			t.Fatalf("exit %d, want %d", code, exitSettled)
+		}
+
+		var runEndEvent *agent.Event
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			var ev agent.Event
+			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+				runEndEvent = &ev
+				break
+			}
+		}
+		if runEndEvent == nil {
+			t.Fatalf("run_end event was not emitted")
+		}
+		if !strings.Contains(runEndEvent.Text, "جلسة منتهية") {
+			t.Errorf("run_end missing normal ending indicator 'جلسة منتهية': %q", runEndEvent.Text)
+		}
+		if strings.Contains(runEndEvent.Text, "فشلت الجلسة") || strings.Contains(runEndEvent.Text, "أوقفت الجلسة") {
+			t.Errorf("run_end declared failure or stopped on success: %q", runEndEvent.Text)
+		}
+	})
+
+	t.Run("max_turns", func(t *testing.T) {
+		code, out, _ := runHL(t, headlessConfig{
+			prompt:   "loop",
+			json:     true,
+			maxTurns: 1,
+			provider: &scriptedProvider{turns: []scriptTurn{
+				{call: writeCall("x.txt", "nope")},
+			}},
+		})
+		if code != exitMaxTurns {
+			t.Fatalf("exit %d, want %d", code, exitMaxTurns)
+		}
+
+		var runEndEvent *agent.Event
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			var ev agent.Event
+			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+				runEndEvent = &ev
+				break
+			}
+		}
+		if runEndEvent == nil {
+			t.Fatalf("run_end event was not emitted")
+		}
+		if !strings.Contains(runEndEvent.Text, "جلسة منتهية") {
+			t.Errorf("run_end missing normal ending indicator 'جلسة منتهية' on max turns: %q", runEndEvent.Text)
+		}
+		if strings.Contains(runEndEvent.Text, "فشلت الجلسة") || strings.Contains(runEndEvent.Text, "أوقفت الجلسة") {
+			t.Errorf("run_end declared failure or stopped on max turns: %q", runEndEvent.Text)
+		}
+	})
 }

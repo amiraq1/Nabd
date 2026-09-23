@@ -11,8 +11,8 @@ func TestRunErrorEventCarriesTypedCode(t *testing.T) {
 	if got := RunErrorEvent(ErrSpendBudget); got.ErrorCode != string(ErrCodeBudget) {
 		t.Fatalf("code = %q, want %q", got.ErrorCode, ErrCodeBudget)
 	}
-	if got := RunErrorEvent(ErrMaxTurns); got.ErrorCode != string(ErrMaxTurnsCode) {
-		t.Fatalf("code = %q, want %q", got.ErrorCode, ErrMaxTurnsCode)
+	if got := RunErrorEvent(ErrMaxTurns); got.ErrorCode != string(ErrCodeMaxTurns) {
+		t.Fatalf("code = %q, want %q", got.ErrorCode, ErrCodeMaxTurns)
 	}
 }
 
