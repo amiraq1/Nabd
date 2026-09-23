@@ -182,8 +182,8 @@ func TestToolLoopHardCutAtFiveRepeats(t *testing.T) {
 	if runErrorEvent == nil {
 		t.Fatalf("expected RunError event in journal, got none")
 	}
-	if runErrorEvent.ErrorCode != string(ErrLoopDetected) {
-		t.Errorf("RunError ErrorCode = %q, want %q", runErrorEvent.ErrorCode, ErrLoopDetected)
+	if runErrorEvent.ErrorCode != string(ErrCodeLoopDetected) {
+		t.Errorf("RunError ErrorCode = %q, want %q", runErrorEvent.ErrorCode, ErrCodeLoopDetected)
 	}
 }
 

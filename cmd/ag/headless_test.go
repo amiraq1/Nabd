@@ -10,11 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"nabd/internal/agent"
 	"nabd/internal/config"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
+	"nabd/internal/snap"
+	"nabd/internal/tools"
 )
 
 type scriptTurn struct {
@@ -314,4 +317,278 @@ func TestRemovedBashKeysFailBeforeProviderOrTool(t *testing.T) {
 			}
 		})
 	}
+}
+
+// yoloSink records every event so the test can inspect the permission reply.
+type yoloSink func(agent.Event) error
+
+func (s yoloSink) Emit(e agent.Event) error { return s(e) }
+
+// TestHeadlessYOLOBashDoesNotHang is the headless counterpart to the enforce
+// decision. Headless has no TTY: silentAsker is the Human and it answers Deny
+// without blocking. Entering the loop in ModeAsk (the only mode where a Check
+// can return Ask) with YOLO on and a provider that requests bash must
+// therefore complete, not wait for an answer that can never come.
+func TestHeadlessYOLOBashDoesNotHang(t *testing.T) {
+	root, err := tools.NewRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := snap.New(root.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(root, sh)
+
+	pol := perm.New(reg)
+	pol.SetMode(perm.ModeAsk)
+	pol.SetYOLO(true)
+
+	prov := &scriptedProvider{turns: []scriptTurn{
+		{call: &provider.ToolCall{ID: "b1", Name: "bash", Input: []byte(`{"cmd":"echo hi"}`)}},
+		{text: "done"},
+	}}
+	loop := newSessionLoop(prov, reg, gate{pol}, silentAsker{})
+
+	var events []agent.Event
+	loop.Sink = yoloSink(func(e agent.Event) error {
+		events = append(events, e)
+		return nil
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- loop.Run(context.Background(), "run bash") }()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("headless YOLO + ModeAsk + bash hung: the silent asker must answer without blocking")
+	}
+
+	var denied bool
+	for _, e := range events {
+		if e.Type == agent.PermReply && e.Call != nil && e.Call.Name == "bash" && e.Decision == agent.Deny {
+			denied = true
+		}
+	}
+	if !denied {
+		t.Fatal("headless YOLO did not deny bash; expected a PermReply with Decision=Deny")
+	}
+}
+
+func TestHeadlessJSONAllLinesValidJSON(t *testing.T) {
+	code, out, errOut := runHL(t, headlessConfig{
+		prompt:   "fail",
+		json:     true,
+		provider: &scriptedProvider{turns: []scriptTurn{{err: errors.New("provider failure")}}},
+	})
+	if code != exitError {
+		t.Fatalf("exit %d, want %d", code, exitError)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+		t.Fatalf("expected JSONL output, got empty stdout")
+	}
+
+	var sawRunError, sawRunEnd bool
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			t.Fatalf("line %d on stdout is not valid JSON: %q (err: %v)", i, line, err)
+		}
+		var ev agent.Event
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("line %d on stdout cannot unmarshal into agent.Event: %q (err: %v)", i, line, err)
+		}
+		if ev.Type == agent.RunError {
+			sawRunError = true
+		}
+		if ev.Type == agent.RunEnd {
+			sawRunEnd = true
+		}
+	}
+
+	if !sawRunError {
+		t.Fatalf("expected run_error event on stdout JSONL")
+	}
+	if !sawRunEnd {
+		t.Fatalf("expected run_end event on stdout JSONL")
+	}
+
+	// Verify all notes, error text, and session path went to stderr
+	if !strings.Contains(errOut, "provider failure") {
+		t.Errorf("stderr missing error text: %q", errOut)
+	}
+	if !strings.Contains(errOut, "session:") {
+		t.Errorf("stderr missing 'session:' line: %q", errOut)
+	}
+}
+
+func TestHeadlessRunEndReflectsFailureAfterRunError(t *testing.T) {
+	code, out, _ := runHL(t, headlessConfig{
+		prompt:   "fail",
+		json:     true,
+		provider: &scriptedProvider{turns: []scriptTurn{{err: errors.New("critical failure")}}},
+	})
+	if code != exitError {
+		t.Fatalf("exit %d, want %d", code, exitError)
+	}
+
+	var runEndEvent *agent.Event
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var ev agent.Event
+		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+			runEndEvent = &ev
+			break
+		}
+	}
+
+	if runEndEvent == nil {
+		t.Fatalf("run_end event was not emitted")
+	}
+
+	// Must NOT declare success ("جلسة منتهية")
+	if strings.Contains(runEndEvent.Text, "جلسة منتهية") {
+		t.Errorf("run_end declared normal ending despite failure: %q", runEndEvent.Text)
+	}
+
+	// Must reflect failure ("فشلت الجلسة")
+	if !strings.Contains(runEndEvent.Text, "فشلت الجلسة") {
+		t.Errorf("run_end missing failure indicator 'فشلت الجلسة': %q", runEndEvent.Text)
+	}
+}
+
+// interruptingProvider streams once and asks the run to cancel, modeling the
+// moment a SIGINT would arrive. It carries the test's interrupt channel so the
+// cancellation is driven through headlessInterruptContext instead of a real
+// process signal.
+type interruptingProvider struct{ interrupt chan struct{} }
+
+func (p *interruptingProvider) Name() string { return "interrupter" }
+
+func (p *interruptingProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Chunk, error) {
+	ch := make(chan provider.Chunk, 1)
+	close(p.interrupt) // deliver the interrupt, as a SIGINT would
+	<-ctx.Done()
+	ch <- provider.Chunk{Kind: provider.ChunkError, Err: ctx.Err()}
+	close(ch)
+	return ch, nil
+}
+
+func TestHeadlessRunEndReflectsStoppedAfterInterruption(t *testing.T) {
+	// Interrupt through the headlessInterruptContext seam: the run's context is
+	// cancelled deterministically, with no real SIGINT raised against the test
+	// process.
+	interrupt := make(chan struct{})
+	restore := headlessInterruptContext
+	headlessInterruptContext = func() (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			<-interrupt
+			cancel()
+		}()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { headlessInterruptContext = restore })
+
+	code, out, _ := runHL(t, headlessConfig{
+		prompt:   "stop-me",
+		json:     true,
+		provider: &interruptingProvider{interrupt: interrupt},
+	})
+	if code != exitInterrupted {
+		t.Fatalf("exit %d, want %d", code, exitInterrupted)
+	}
+
+	var runEndEvent *agent.Event
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var ev agent.Event
+		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+			runEndEvent = &ev
+			break
+		}
+	}
+
+	if runEndEvent == nil {
+		t.Fatalf("run_end event was not emitted")
+	}
+
+	// Must reflect stopped ("أوقفت الجلسة")
+	if !strings.Contains(runEndEvent.Text, "أوقفت الجلسة") {
+		t.Errorf("run_end missing stopped indicator 'أوقفت الجلسة': %q", runEndEvent.Text)
+	}
+	// Must NOT declare success ("جلسة منتهية") or failure ("فشلت الجلسة")
+	if strings.Contains(runEndEvent.Text, "جلسة منتهية") {
+		t.Errorf("run_end declared normal ending despite interruption: %q", runEndEvent.Text)
+	}
+	if strings.Contains(runEndEvent.Text, "فشلت الجلسة") {
+		t.Errorf("run_end declared failure despite interruption: %q", runEndEvent.Text)
+	}
+}
+
+func TestHeadlessRunEndNormalOnSuccessAndMaxTurns(t *testing.T) {
+	t.Run("success", func(t *testing.T) {
+		code, out, _ := runHL(t, headlessConfig{
+			prompt:   "hi",
+			json:     true,
+			provider: &scriptedProvider{turns: []scriptTurn{{text: "hello"}}},
+		})
+		if code != exitSettled {
+			t.Fatalf("exit %d, want %d", code, exitSettled)
+		}
+
+		var runEndEvent *agent.Event
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			var ev agent.Event
+			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+				runEndEvent = &ev
+				break
+			}
+		}
+		if runEndEvent == nil {
+			t.Fatalf("run_end event was not emitted")
+		}
+		if !strings.Contains(runEndEvent.Text, "جلسة منتهية") {
+			t.Errorf("run_end missing normal ending indicator 'جلسة منتهية': %q", runEndEvent.Text)
+		}
+		if strings.Contains(runEndEvent.Text, "فشلت الجلسة") || strings.Contains(runEndEvent.Text, "أوقفت الجلسة") {
+			t.Errorf("run_end declared failure or stopped on success: %q", runEndEvent.Text)
+		}
+	})
+
+	t.Run("max_turns", func(t *testing.T) {
+		code, out, _ := runHL(t, headlessConfig{
+			prompt:   "loop",
+			json:     true,
+			maxTurns: 1,
+			provider: &scriptedProvider{turns: []scriptTurn{
+				{call: writeCall("x.txt", "nope")},
+			}},
+		})
+		if code != exitMaxTurns {
+			t.Fatalf("exit %d, want %d", code, exitMaxTurns)
+		}
+
+		var runEndEvent *agent.Event
+		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+			var ev agent.Event
+			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+				runEndEvent = &ev
+				break
+			}
+		}
+		if runEndEvent == nil {
+			t.Fatalf("run_end event was not emitted")
+		}
+		if !strings.Contains(runEndEvent.Text, "جلسة منتهية") {
+			t.Errorf("run_end missing normal ending indicator 'جلسة منتهية' on max turns: %q", runEndEvent.Text)
+		}
+		if strings.Contains(runEndEvent.Text, "فشلت الجلسة") || strings.Contains(runEndEvent.Text, "أوقفت الجلسة") {
+			t.Errorf("run_end declared failure or stopped on max turns: %q", runEndEvent.Text)
+		}
+	})
 }

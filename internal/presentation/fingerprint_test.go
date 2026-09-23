@@ -141,7 +141,7 @@ func TestFingerprintPermSensitivity(t *testing.T) {
 func TestFingerprintErrorWaitSensitivity(t *testing.T) {
 	base := FeedItem{
 		Type:  ItemError,
-		Error: &ErrorCard{Code: agent.ErrProviderTemporary, Message: "exhausted"},
+		Error: &ErrorCard{Code: agent.ErrCodeProviderTemporary, Message: "exhausted"},
 	}
 	changed := base
 	cardCopy := *base.Error

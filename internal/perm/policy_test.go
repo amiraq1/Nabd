@@ -1,6 +1,7 @@
 package perm
 
 import (
+	"fmt"
 	"testing"
 
 	"nabd/internal/agent"
@@ -99,13 +100,14 @@ func TestResetRevokes(t *testing.T) {
 	}
 }
 
-func TestYOLOIsTotalButNotEternal(t *testing.T) {
+func TestYOLOIsBoundedButNotEternal(t *testing.T) {
 	p := New(testCls())
 	p.SetYOLO(true)
-	for _, tool := range []string{"write_file", "bash"} {
-		if v, _ := p.Check(tool); v != Allow {
-			t.Errorf("yolo %s = %v, want Allow", tool, v)
-		}
+	if v, _ := p.Check("write_file"); v != Allow {
+		t.Errorf("yolo write_file = %v, want Allow", v)
+	}
+	if v, why := p.Check("bash"); v != Ask {
+		t.Errorf("yolo bash = %v (%q), want Ask (executing is never auto-approved)", v, why)
 	}
 	if v, _ := p.Check("nope"); v != Deny {
 		t.Error("yolo allowed an unknown tool")
@@ -113,6 +115,93 @@ func TestYOLOIsTotalButNotEternal(t *testing.T) {
 	p.SetYOLO(false)
 	if v, _ := p.Check("bash"); v != Ask {
 		t.Error("yolo outlived its switch")
+	}
+}
+
+// TestYOLOVerdictMatrix is the full cross-product of class, YOLO and mode
+// (no standing grants). It is the table the ladder comment describes, and it
+// pins that YOLO only ever widens the verdict for Mutating calls.
+func TestYOLOVerdictMatrix(t *testing.T) {
+	tools := []struct {
+		name string
+		cls  Class
+	}{
+		{"read_file", ReadOnly},
+		{"write_file", Mutating},
+		{"bash", Executing},
+	}
+	modes := []struct {
+		name string
+		mode Mode
+	}{
+		{"ModeAsk", ModeAsk},
+		{"ModeDeny", ModeDeny},
+		{"ModePlan", ModePlan},
+	}
+	want := func(class Class, yolo bool, mode Mode) Verdict {
+		if class == ReadOnly {
+			return Allow
+		}
+		if mode == ModePlan {
+			return Deny
+		}
+		if yolo && class == Mutating {
+			return Allow
+		}
+		if mode == ModeDeny || mode == ModeAllowReads {
+			return Deny
+		}
+		return Ask
+	}
+
+	for _, tl := range tools {
+		for _, yolo := range []bool{false, true} {
+			for _, mm := range modes {
+				t.Run(fmt.Sprintf("%s/yolo=%v/%s", tl.name, yolo, mm.name), func(t *testing.T) {
+					p := New(testCls())
+					p.SetMode(mm.mode)
+					p.SetYOLO(yolo)
+					got, why := p.Check(tl.name)
+					if got != want(tl.cls, yolo, mm.mode) {
+						t.Fatalf("Check(%s) = %v (%q), want %v", tl.name, got, why, want(tl.cls, yolo, mm.mode))
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestYOLODoesNotBypassExecuting is the load-bearing property of the enforce
+// decision: YOLO is consent to change the world, not to run arbitrary code.
+// Under ModeAsk the shell still stops to ask; under ModeDeny it is denied.
+func TestYOLODoesNotBypassExecuting(t *testing.T) {
+	p := New(testCls())
+	p.SetYOLO(true)
+
+	p.SetMode(ModeAsk)
+	if v, why := p.Check("bash"); v != Ask {
+		t.Fatalf("YOLO + ModeAsk bash = %v (%q), want Ask", v, why)
+	}
+	p.SetMode(ModeDeny)
+	if v, why := p.Check("bash"); v != Deny {
+		t.Fatalf("YOLO + ModeDeny bash = %v (%q), want Deny", v, why)
+	}
+	p.SetMode(ModePlan)
+	if v, why := p.Check("bash"); v != Deny {
+		t.Fatalf("YOLO + ModePlan bash = %v (%q), want Deny", v, why)
+	}
+}
+
+// TestYOLOStillAllowsMutating pins that the enforce change did not remove the
+// convenience YOLO exists for: writes still run without a prompt.
+func TestYOLOStillAllowsMutating(t *testing.T) {
+	p := New(testCls())
+	p.SetYOLO(true)
+	p.SetMode(ModeAsk)
+	for _, tool := range []string{"write_file", "edit_file"} {
+		if v, why := p.Check(tool); v != Allow {
+			t.Fatalf("YOLO %s = %v (%q), want Allow", tool, v, why)
+		}
 	}
 }
 

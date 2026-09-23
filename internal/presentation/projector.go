@@ -315,7 +315,7 @@ func (p *Projector) appendInterrupted(e agent.Event) error {
 	if text == "" {
 		text = "stopped"
 	}
-	return p.append(FeedItem{Type: ItemError, ID: "intr_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: text, Error: NewErrorCard(agent.ErrCanceled, text, "")})
+	return p.append(FeedItem{Type: ItemError, ID: "intr_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: text, Error: NewErrorCard(agent.ErrCodeCanceled, text, "")})
 }
 func (p *Projector) append(it FeedItem) error {
 	p.byID[it.key()] = len(p.items)

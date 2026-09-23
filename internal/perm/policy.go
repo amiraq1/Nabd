@@ -113,9 +113,10 @@ func (p *Policy) Mode() Mode {
 	return p.mode
 }
 
-// SetYOLO disables asking. It exists because it will be demanded; it is
-// never persisted, never the default, and every grant it implies dies
-// with the process.
+// SetYOLO auto-approves Mutating calls without asking. It exists because it
+// will be demanded; it is never persisted, never the default, and every grant
+// it implies dies with the process. It never approves an Executing tool: a
+// session-wide yes to a shell is not consent to run arbitrary code.
 func (p *Policy) SetYOLO(on bool) {
 	p.mu.Lock()
 	p.yolo = on
@@ -133,10 +134,12 @@ func (p *Policy) YOLO() bool {
 // The ladder, highest priority first:
 //  1. No name, unknown tool → Deny.
 //  2. ReadOnly → Allow in every mode, including plan.
-//  3. ModePlan → Deny for Mutating/Execuring, ignoring YOLO and standing
+//  3. ModePlan → Deny for Mutating/Executing, ignoring YOLO and standing
 //     grants. Plan mode is read-only, full stop.
-//  4. YOLO → Allow (plan already returned).
-//  5. Standing session grant → Allow.
+//  4. YOLO and Mutating → Allow. YOLO is consent to change the world; it is
+//     not consent to run arbitrary code, so Executing tools are never
+//     auto-approved and fall through to the ordinary path below.
+//  5. Mutating and a standing session grant → Allow.
 //  6. ModeDeny / ModeAllowReads → Deny (never wait).
 //  7. Otherwise → Ask.
 func (p *Policy) Check(tool string) (Verdict, string) {
@@ -161,7 +164,7 @@ func (p *Policy) Check(tool string) (Verdict, string) {
 	if mode == ModePlan {
 		return Deny, "plan mode: read-only"
 	}
-	if yolo {
+	if yolo && class == Mutating {
 		return Allow, ""
 	}
 	if class == Mutating && granted {

@@ -1,9 +1,11 @@
 package presentation
 
 import (
+	"fmt"
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/endpoint"
 )
 
 func TestLegacyRunErrorProjectsAsUnknown(t *testing.T) {
@@ -12,20 +14,20 @@ func TestLegacyRunErrorProjectsAsUnknown(t *testing.T) {
 		t.Fatalf("projection failed: items=%#v err=%v", items, err)
 	}
 	card := items[0].Error
-	if card.Code != agent.ErrUnknown || card.Retryable || card.RetryScope != RetryNone {
+	if card.Code != agent.ErrCodeUnknown || card.Retryable || card.RetryScope != RetryNone {
 		t.Fatalf("legacy card = %#v", card)
 	}
 }
 
 func TestProviderTemporaryRetryScope(t *testing.T) {
-	card := NewErrorCard(agent.ErrProviderTemporary, "temporary", "")
+	card := NewErrorCard(agent.ErrCodeProviderTemporary, "temporary", "")
 	if !card.Retryable || card.RetryScope != RetryProviderTurn {
 		t.Fatalf("card = %#v", card)
 	}
 }
 
 func TestProviderAuthDoesNotBlindRetry(t *testing.T) {
-	card := NewErrorCard(agent.ErrProviderAuth, "unauthorized", "")
+	card := NewErrorCard(agent.ErrCodeProviderAuth, "unauthorized", "")
 	if card.Retryable || card.RetryScope != RetryNone {
 		t.Fatalf("card = %#v", card)
 	}
@@ -56,5 +58,42 @@ func TestErrorCardCarriesWaitSeconds(t *testing.T) {
 	}
 	if got := items[0].Error.WaitSeconds; got != 0 {
 		t.Fatalf("WaitSeconds = %v, want 0", got)
+	}
+}
+
+// TestCrossPackageEndpointRefusedRemedyFlow exercises the complete path across package
+// boundaries: an error wrapping endpoint.ErrEndpointRefused is classified by agent into
+// agent.RunErrorEvent, projected/converted into presentation.ErrorCard, and verifies
+// that card.Remedy is populated and specifies NABD_ENDPOINT_POLICY.
+// If the error code string diverges between agent and presentation, this test fails.
+func TestCrossPackageEndpointRefusedRemedyFlow(t *testing.T) {
+	// 1. Create a wrapped endpoint error (2 layers of %w wrapping)
+	baseErr := fmt.Errorf("baseURL http://127.0.0.1:8118 uses scheme http: %w", endpoint.ErrEndpointRefused)
+	fullErr := fmt.Errorf("Post https://api.groq.com/openai/v1/chat/completions: proxy endpoint refused: %w", baseErr)
+
+	// 2. Classify in agent package via RunErrorEvent (simulating what the agent Loop does on error)
+	ev := agent.RunErrorEvent(fullErr)
+	if ev.ErrorCode != "endpoint_refused" {
+		t.Fatalf("agent.RunErrorEvent classified code = %q, want %q", ev.ErrorCode, "endpoint_refused")
+	}
+
+	// 3. Convert to presentation.ErrorCard
+	cardFromEvent := ErrorCardFromEvent(ev)
+	if cardFromEvent.Remedy != RemedyEndpointRefused {
+		t.Fatalf("cardFromEvent.Remedy = %q, want %q", cardFromEvent.Remedy, RemedyEndpointRefused)
+	}
+
+	cardFromErr := ErrorCardFromError(fullErr)
+	if cardFromErr.Remedy != RemedyEndpointRefused {
+		t.Fatalf("cardFromErr.Remedy = %q, want %q", cardFromErr.Remedy, RemedyEndpointRefused)
+	}
+
+	// 4. Verify Projector translates the event into an item with remedy intact
+	items, err := NewProjector().Build([]agent.Event{ev})
+	if err != nil || len(items) != 1 || items[0].Error == nil {
+		t.Fatalf("projector failed to project error item: items=%#v err=%v", items, err)
+	}
+	if items[0].Error.Remedy != cardFromEvent.Remedy {
+		t.Fatalf("projected ErrorCard.Remedy = %q, want %q", items[0].Error.Remedy, cardFromEvent.Remedy)
 	}
 }
