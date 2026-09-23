@@ -6,10 +6,17 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+## v2.1.0
+
 - **Streamed-chunk redaction:** Secrets split across streamed chunks are now redacted in the journal, `--json` output, and the interactive feed. Streamed `text_delta` events are joined through a bounded hold-back (`internal/redact.Stream`) before they reach a sink, so a credential or PEM block split across two deltas is redacted as one value instead of surviving piecewise.
 - Token runs longer than 4096 characters are replaced with `[REDACTED]` in the journal, `--json` output, and the interactive feed.
 - Plain headless stdout is still printed verbatim.
 - Journals written before this release may contain secrets split across chunks. Delete them or rotate the keys.
+- Extended credential redaction (fix(redact)): Recognizes OpenAI keys (sk-proj-… and legacy sk-…), AWS access key IDs (AKIA/ASIA), PEM private-key blocks, and bare JWTs. Redaction remains best effort.
+- Error cards with remedy guidance (feat(ui)): Provider errors, including endpoint_refused, show a remedy line in the interactive feed. Headless run_end distinguishes a stopped session (exit 130), a failed session, and a normal end.
+- NABD_ASCII_ONLY: Environment variable that replaces decorative UI glyphs with ASCII (see docs/CONFIG.md).
+- Desktop pointer corrected: Linux and macOS users should stay on v1.6.1, the last desktop release.
+- YOLO no longer auto-approves executing tools. YOLO is not exposed through any flag or setting, so users see no change.
 
 ## v2.0.0
 

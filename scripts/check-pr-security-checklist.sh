@@ -77,7 +77,7 @@ behaviour_free_diff() {
     case "$file" in
     *.md | docs/*) continue ;;
     *.go)
-      hunk=$(git diff -U0 "$base" HEAD -- "$file" | grep -E '^[+-]' | grep -Ev '^(\+\+\+|---)' || true)
+      hunk=$(git diff -U0 "$base" HEAD -- "$file" | grep -E '^[+-]' | grep -Ev '^(\\+\\+\\+|---)' || true)
       while IFS= read -r line; do
         [[ -n "$line" ]] || continue
         content=${line:1}
@@ -91,11 +91,26 @@ behaviour_free_diff() {
   return 0
 }
 
+# A checked test item may also carry an explicit N/A explanation for a
+# documentation, changelog, workflow-pin, or dependency-only change. This is
+# deliberately narrow: the checklist still requires the human explanation, and
+# executable source changes continue to require a *_test.go file.
+no_test_explanation() {
+  local go_files
+  go_files=$(grep -E '\.go$' <<<"$changed" || true)
+  if [[ -n "$go_files" ]]; then
+    behaviour_free_diff || return 1
+  fi
+  grep -Eiq -- 'N/A:[[:space:]]*(dependency|documentation|docs?|changelog|workflow|pin|release)' <<<"$body"
+}
+
 # If the PR body claims a regression test was added/updated, a *_test.go file must be in the diff.
 if grep -Fq -- "- [x] I added or updated a regression test" <<<"$body"; then
   if ! grep -Eq "_test\.go$" <<<"$changed"; then
     if behaviour_free_diff; then
       echo "Regression-test cross-check skipped: the diff changes only comments and documentation."
+    elif no_test_explanation; then
+      echo "Regression-test cross-check skipped: the PR documents why no test applies."
     else
       echo "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff." >&2
       exit 1
