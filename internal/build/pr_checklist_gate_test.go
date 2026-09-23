@@ -191,6 +191,7 @@ func TestPRChecklistGateNoTestExemption(t *testing.T) {
 	type testCase struct {
 		name       string
 		body       string
+		baseFiles  map[string]string
 		files      map[string]string
 		wantExit   int
 		wantStdout string
@@ -296,12 +297,58 @@ func TestPRChecklistGateNoTestExemption(t *testing.T) {
 			wantExit:   1,
 			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
 		},
+		{
+			// Removing a Go line whose text begins with "--" yields a diff line
+			// "---<text>", which the old header filter `^---` mistook for a file
+			// header and dropped. That made a removal-only change to a file that
+			// also carries executable code read as comment-only. The anchored
+			// filter keeps the line, so the escape is refused.
+			name: "Negative_RemovedDoubleDashLineInGoDiff_IsBehaviour",
+			body: validPRBody,
+			baseFiles: map[string]string{
+				"cmd/ag/dummy.go": "package main\n\nvar ExecutableCode = 42\n\n--removed\n",
+			},
+			files: map[string]string{
+				"cmd/ag/dummy.go": "package main\n\nvar ExecutableCode = 42\n",
+			},
+			wantExit:   1,
+			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
+		},
+		{
+			// Symmetrically, an added Go line whose text begins with "++" yields
+			// a diff line "+++<text>", which the old `^[+]{3}` filter dropped.
+			name: "Negative_AddedTriplePlusLineInGoDiff_IsBehaviour",
+			body: validPRBody,
+			baseFiles: map[string]string{
+				"cmd/ag/dummy.go": "package main\n",
+			},
+			files: map[string]string{
+				"cmd/ag/dummy.go": "package main\n++added\n",
+			},
+			wantExit:   1,
+			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
+		},
 	}
 
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			repoDir, base := initTestRepo(t)
+			if len(tc.baseFiles) > 0 {
+				for relPath, content := range tc.baseFiles {
+					fullPath := filepath.Join(repoDir, relPath)
+					if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+						t.Fatalf("mkdir base: %v", err)
+					}
+					if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+						t.Fatalf("write base file: %v", err)
+					}
+				}
+				runGit(t, repoDir, "add", ".")
+				runGit(t, repoDir, "commit", "-qm", "base files for "+tc.name)
+				base = runGitOut(t, repoDir, "rev-parse", "HEAD")
+				runGit(t, repoDir, "update-ref", "refs/remotes/origin/master", base)
+			}
 			runGit(t, repoDir, "checkout", "-B", "branch-"+tc.name, base)
 			for relPath, content := range tc.files {
 				fullPath := filepath.Join(repoDir, relPath)
