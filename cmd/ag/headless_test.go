@@ -10,11 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"nabd/internal/agent"
 	"nabd/internal/config"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
+	"nabd/internal/snap"
+	"nabd/internal/tools"
 )
 
 type scriptTurn struct {
@@ -313,5 +316,62 @@ func TestRemovedBashKeysFailBeforeProviderOrTool(t *testing.T) {
 				t.Fatalf("stderr = %q, want substring %q", stderr.String(), wantSub)
 			}
 		})
+	}
+}
+
+// yoloSink records every event so the test can inspect the permission reply.
+type yoloSink func(agent.Event) error
+
+func (s yoloSink) Emit(e agent.Event) error { return s(e) }
+
+// TestHeadlessYOLOBashDoesNotHang is the headless counterpart to the enforce
+// decision. Headless has no TTY: silentAsker is the Human and it answers Deny
+// without blocking. Entering the loop in ModeAsk (the only mode where a Check
+// can return Ask) with YOLO on and a provider that requests bash must
+// therefore complete, not wait for an answer that can never come.
+func TestHeadlessYOLOBashDoesNotHang(t *testing.T) {
+	root, err := tools.NewRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := snap.New(root.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(root, sh)
+
+	pol := perm.New(reg)
+	pol.SetMode(perm.ModeAsk)
+	pol.SetYOLO(true)
+
+	prov := &scriptedProvider{turns: []scriptTurn{
+		{call: &provider.ToolCall{ID: "b1", Name: "bash", Input: []byte(`{"cmd":"echo hi"}`)}},
+		{text: "done"},
+	}}
+	loop := newSessionLoop(prov, reg, gate{pol}, silentAsker{})
+
+	var events []agent.Event
+	loop.Sink = yoloSink(func(e agent.Event) error {
+		events = append(events, e)
+		return nil
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- loop.Run(context.Background(), "run bash") }()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("headless YOLO + ModeAsk + bash hung: the silent asker must answer without blocking")
+	}
+
+	var denied bool
+	for _, e := range events {
+		if e.Type == agent.PermReply && e.Call != nil && e.Call.Name == "bash" && e.Decision == agent.Deny {
+			denied = true
+		}
+	}
+	if !denied {
+		t.Fatal("headless YOLO did not deny bash; expected a PermReply with Decision=Deny")
 	}
 }
