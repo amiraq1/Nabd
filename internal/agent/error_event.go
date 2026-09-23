@@ -24,18 +24,6 @@ const (
 	ErrCodeUnknown           ErrorCode = "unknown"
 )
 
-// Legacy aliases for backward compatibility
-const (
-	ErrProviderTemporary = ErrCodeProviderTemporary
-	ErrProviderAuth      = ErrCodeProviderAuth
-	ErrPersist           = ErrCodePersist
-	ErrBudget            = ErrCodeBudget
-	ErrMaxTurnsCode      = ErrCodeMaxTurns
-	ErrCanceled          = ErrCodeCanceled
-	ErrLoopDetected      = ErrCodeLoopDetected
-	ErrUnknown           = ErrCodeUnknown
-)
-
 // RemedyEndpointRefused is the canonical guidance string when an endpoint is refused by policy.
 const RemedyEndpointRefused = "set NABD_ENDPOINT_POLICY=loopback for a local proxy, or use an https endpoint"
 

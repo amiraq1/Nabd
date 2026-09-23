@@ -106,12 +106,13 @@ type classified struct {
 func (c classified) Error() string { return c.err.Error() }
 func (c classified) Unwrap() error { return c.err }
 
+// ErrorKind exposes the out-of-band classification to provider.ErrorKindOf (and
+// therefore agent.ErrorCodeOf), so a caller can classify a provider error with
+// the one canonical classifier instead of a second, local switch.
+func (c classified) ErrorKind() provider.ErrorKind { return c.kind }
+
 // KindOf reports the provider error kind for errors from this package, then
 // falls back to provider.ErrorKindOf for anything it did not classify.
 func KindOf(err error) provider.ErrorKind {
-	var c classified
-	if errors.As(err, &c) {
-		return c.kind
-	}
 	return provider.ErrorKindOf(err)
 }
