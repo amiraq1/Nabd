@@ -10,21 +10,33 @@ The installable binary is `nabd`; the package path remains `./cmd/ag`.
 
 ## Releases
 
-| Release | Status |
-|---|---|
-| `v1.5.0` | Published with binaries and `checksums.txt` |
-| `v1.4.0` | Published with binaries and `checksums.txt` |
-| `v1.3.0` | Published with binaries and `checksums.txt` |
+| Release | Status | Notes |
+|---|---|---|
+| `v2.0.0` | Published with signed `android/arm64` binary and Syft SBOM | Scoped exclusively to Termux (`android/arm64`) |
+| `v1.5.0` | Published with binaries and `checksums.txt` | Last release supporting Linux & macOS desktop |
+| `v1.4.0` | Published with binaries and `checksums.txt` | |
+| `v1.3.0` | Published with binaries and `checksums.txt` | |
 
-Download assets from [GitHub Releases](https://github.com/amiraq1/Nabd/releases). Verify a downloaded release in the directory containing its assets:
-
-```sh
-sha256sum -c checksums.txt
-```
-
-See [docs/RELEASING.md](docs/RELEASING.md) for the release process.
+Download assets from [GitHub Releases](https://github.com/amiraq1/Nabd/releases). See [docs/RELEASING.md](docs/RELEASING.md) for the release process and verification.
 
 ## Installation (Termux)
+
+### Option A: Official signed release (Recommended)
+
+Download and verify the signed release artifact using Cosign:
+
+```sh
+V=2.0.0; B=https://github.com/amiraq1/Nabd/releases/download/v$V
+curl -LO $B/nabd_${V}_android_arm64 -LO $B/checksums.txt \
+     -LO $B/checksums.txt.sig -LO $B/checksums.txt.pem
+cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.sig \
+  --certificate-identity-regexp '^https://github\.com/amiraq1/Nabd/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+sha256sum -c checksums.txt --ignore-missing
+install -m 0755 nabd_${V}_android_arm64 $PREFIX/bin/nabd
+```
+
+### Option B: Build from source
 
 ```sh
 pkg install golang git
