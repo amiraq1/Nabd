@@ -59,8 +59,3 @@ func configureDialerResolver(d *net.Dialer) {
 		d.Resolver = r
 	}
 }
-
-func resetTermuxResolverForTest() {
-	termuxResolverOnce = sync.Once{}
-	termuxResolver = nil
-}
