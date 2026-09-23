@@ -104,8 +104,8 @@ found=${#tests[@]}
 if [[ "$found" -eq 0 ]]; then echo "no citations found" >&2; exit 1; fi
 missing=0
 for test_name in "${tests[@]}"; do
-  if ! grep -R --include='*_test.go' -Eq "func[[:space:]]+${test_name}[[:space:]]*\(" .; then
-    lineno=$(LC_ALL=C grep -n "$PATTERN" "$doc" | grep -m1 "\`+"`"+`${test_name}" | cut -d: -f1)
+  if ! grep -R --exclude-dir=.git --include='*_test.go' -Eq "func[[:space:]]+${test_name}[[:space:]]*\(" .; then
+    lineno=$(LC_ALL=C grep -nE "$PATTERN" "$doc" | grep -m1 "\`+"`"+`${test_name}" | cut -d: -f1 || true)
     echo "missing cited test: ${test_name} (${doc}:${lineno})" >&2
     missing=1
   fi
