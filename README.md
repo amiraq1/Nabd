@@ -69,8 +69,8 @@ selected directory and performs a dry run by default. Pass `--yes` to delete
 the listed files; `--before <RFC3339>` limits deletion by modification time.
 It never traverses subdirectories or follows symlinks. Stop active nabd
 processes before confirmed cleanup. At session startup nabd also prints a
-notice that approved `bash` commands run with the current user's authority and
-that filesystem sandboxing is host-dependent.
+notice that approved bash commands run with the full authority of the
+Termux app user and there is no filesystem sandbox.
 
 ## Slash commands
 

@@ -68,7 +68,6 @@ All configuration and credential files read by Nabd must satisfy strict OS-level
    - **Containers and Root:**
      * If the process runs as `root` (UID 0), files owned by UID 0 are accepted.
      * If the process runs as an unprivileged user (e.g. UID 1000), files owned by root or other users are refused. The container or operator must ensure the mounted file is owned by the process UID (`chown $(id -u) <file>`).
-   - On Windows, numeric UID checks are a documented no-op (`owner_other.go`), with security delegated to NTFS ACLs.
 5. **Size Bounds:**
    Configuration documents cannot exceed 256 KB (`MaxFileBytes`). Credential secret files cannot exceed 64 KB (`MaxValueBytes`).
 

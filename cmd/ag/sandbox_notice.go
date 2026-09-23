@@ -2,10 +2,10 @@ package main
 
 import "io"
 
-// sandboxAuthorityNotice is deliberately conservative. Landlock is
-// host/kernel-dependent and approved bash still runs with the current user's
-// authority on fallback paths; this is a notice, not a security guarantee.
-const sandboxAuthorityNotice = "notice: approved bash commands run with the current user authority; filesystem sandboxing is host-dependent and is not a complete security boundary\n"
+// sandboxAuthorityNotice states plainly that on Termux, approved bash commands
+// run with the full authority of the Termux app user and there is no
+// filesystem sandbox.
+const sandboxAuthorityNotice = "notice: approved bash commands run with the full authority of the Termux app user and there is no filesystem sandbox\n"
 
 func writeSandboxAuthorityNotice(w io.Writer) {
 	if w == nil {
