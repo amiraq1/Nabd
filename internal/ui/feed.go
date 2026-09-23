@@ -371,11 +371,11 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var code agent.ErrorCode
 			switch providercmd.KindOf(msg.err) {
 			case provider.ErrorKindAuth:
-				code = agent.ErrProviderAuth
+				code = agent.ErrCodeProviderAuth
 			case provider.ErrorKindTemporary:
 				code = agent.ErrProviderTemporary
 			default:
-				code = agent.ErrUnknown
+				code = agent.ErrCodeUnknown
 			}
 			card := presentation.NewErrorCard(code, msg.err.Error(), "")
 			m.addErrorNotice(card, msg.err.Error())

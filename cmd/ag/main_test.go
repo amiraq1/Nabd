@@ -259,3 +259,41 @@ func TestStartupNoticeBehavior(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionLinesPolicyNotice(t *testing.T) {
+	config.ResetForTest()
+	t.Cleanup(config.ResetForTest)
+
+	t.Run("strict_or_empty_shows_single_line", func(t *testing.T) {
+		t.Setenv("NABD_ENDPOINT_POLICY", "")
+		config.ResetForTest()
+		lines := versionLines()
+		if len(lines) != 1 {
+			t.Fatalf("versionLines() returned %d lines, want 1: %v", len(lines), lines)
+		}
+	})
+
+	t.Run("loopback_shows_policy_notice", func(t *testing.T) {
+		t.Setenv("NABD_ENDPOINT_POLICY", "loopback")
+		config.ResetForTest()
+		lines := versionLines()
+		if len(lines) != 2 {
+			t.Fatalf("versionLines() returned %d lines, want 2: %v", len(lines), lines)
+		}
+		if !strings.Contains(lines[1], "loopback") {
+			t.Fatalf("expected loopback notice in line 2, got: %q", lines[1])
+		}
+	})
+
+	t.Run("open_shows_policy_notice", func(t *testing.T) {
+		t.Setenv("NABD_ENDPOINT_POLICY", "open")
+		config.ResetForTest()
+		lines := versionLines()
+		if len(lines) != 2 {
+			t.Fatalf("versionLines() returned %d lines, want 2: %v", len(lines), lines)
+		}
+		if !strings.Contains(lines[1], "open") {
+			t.Fatalf("expected open notice in line 2, got: %q", lines[1])
+		}
+	})
+}

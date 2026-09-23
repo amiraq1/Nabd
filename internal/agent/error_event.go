@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"nabd/internal/endpoint"
 	"nabd/internal/provider"
 )
 
@@ -13,15 +14,19 @@ import (
 type ErrorCode string
 
 const (
-	ErrProviderTemporary ErrorCode = "provider_temporary"
-	ErrProviderAuth      ErrorCode = "provider_auth"
-	ErrPersist           ErrorCode = "persist"
-	ErrBudget            ErrorCode = "budget"
-	ErrMaxTurnsCode      ErrorCode = "max_turns"
-	ErrCanceled          ErrorCode = "canceled"
-	ErrLoopDetected      ErrorCode = "loop_detected"
-	ErrUnknown           ErrorCode = "unknown"
+	ErrProviderTemporary   ErrorCode = "provider_temporary"
+	ErrCodeProviderAuth    ErrorCode = "provider_auth"
+	ErrCodePersist         ErrorCode = "persist"
+	ErrCodeBudget          ErrorCode = "budget"
+	ErrMaxTurnsCode        ErrorCode = "max_turns"
+	ErrCodeCanceled        ErrorCode = "canceled"
+	ErrLoopDetected        ErrorCode = "loop_detected"
+	ErrCodeEndpointRefused ErrorCode = "endpoint_refused"
+	ErrCodeUnknown         ErrorCode = "unknown"
 )
+
+// RemedyEndpointRefused is the canonical guidance string when an endpoint is refused by policy.
+const RemedyEndpointRefused = "set NABD_ENDPOINT_POLICY=loopback for a local proxy, or use an https endpoint"
 
 // PersistError marks a journal/sink failure. It is returned without mutating
 // Loop history, so callers can enter safe-stop instead of reporting success.
@@ -76,27 +81,29 @@ func JournalPathOf(err error) string {
 func ErrorCodeOf(err error) ErrorCode {
 	switch {
 	case err == nil:
-		return ErrUnknown
+		return ErrCodeUnknown
 	case errors.As(err, new(*PersistError)):
-		return ErrPersist
+		return ErrCodePersist
 	case errors.Is(err, ErrSpendBudget):
-		return ErrBudget
+		return ErrCodeBudget
 	case errors.Is(err, ErrMaxTurns):
 		return ErrMaxTurnsCode
 	case errors.Is(err, ErrToolLoop):
 		return ErrLoopDetected
 	case errors.Is(err, context.Canceled):
-		return ErrCanceled
+		return ErrCodeCanceled
 	case errors.Is(err, ErrRateLimitBudget):
 		return ErrProviderTemporary
+	case errors.Is(err, endpoint.ErrEndpointRefused):
+		return ErrCodeEndpointRefused
 	}
 	switch provider.ErrorKindOf(err) {
 	case provider.ErrorKindAuth:
-		return ErrProviderAuth
+		return ErrCodeProviderAuth
 	case provider.ErrorKindTemporary:
 		return ErrProviderTemporary
 	default:
-		return ErrUnknown
+		return ErrCodeUnknown
 	}
 }
 

@@ -15,6 +15,7 @@ type ErrorCard struct {
 	Title        string
 	Message      string
 	ActionText   string
+	Remedy       string
 	Retryable    bool
 	RetryScope   RetryScope
 	JournalPath  string
@@ -32,7 +33,7 @@ type ErrorCard struct {
 func ErrorCardFromEvent(e agent.Event) *ErrorCard {
 	code := agent.ErrorCode(e.ErrorCode)
 	if code == "" {
-		code = agent.ErrUnknown
+		code = agent.ErrCodeUnknown
 	}
 	card := NewErrorCard(code, e.Err, e.JournalPath)
 	card.WaitSeconds = e.RetryAfter
@@ -54,13 +55,13 @@ func NewErrorCard(code agent.ErrorCode, message, journalPath string) *ErrorCard 
 		card.ActionText = "retry provider request"
 		card.Retryable = true
 		card.RetryScope = RetryProviderTurn
-	case agent.ErrProviderAuth:
+	case agent.ErrCodeProviderAuth:
 		card.Title = "Provider rejected authentication"
 		card.ActionText = "check provider settings or key"
-	case agent.ErrPersist:
+	case agent.ErrCodePersist:
 		card.Title = "Session event was not saved"
 		card.ActionText = "inspect the journal before continuing"
-	case agent.ErrBudget:
+	case agent.ErrCodeBudget:
 		card.Title = "Run budget reached"
 		card.ActionText = "start a new session or change the limit"
 		card.RetryScope = RetryNewMessage
@@ -69,12 +70,16 @@ func NewErrorCard(code agent.ErrorCode, message, journalPath string) *ErrorCard 
 		card.ActionText = "send a shorter follow-up or rephrase"
 		card.Retryable = true
 		card.RetryScope = RetryNewMessage
-	case agent.ErrCanceled:
+	case agent.ErrCodeCanceled:
 		card.Title = "Run canceled"
 		card.ActionText = "start a new message"
 		card.RetryScope = RetryNewMessage
+	case agent.ErrCodeEndpointRefused:
+		card.Title = "Endpoint refused by policy"
+		card.ActionText = "review endpoint policy or proxy settings"
+		card.Remedy = RemedyEndpointRefused
 	default:
-		card.Code = agent.ErrUnknown
+		card.Code = agent.ErrCodeUnknown
 		card.Title = "Unexpected error"
 		card.ActionText = "review details before continuing"
 	}
