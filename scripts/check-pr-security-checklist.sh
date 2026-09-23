@@ -115,7 +115,7 @@ behaviour_free_diff() {
     case "$file" in
     *.md | docs/*) continue ;;
     *.go)
-      hunk=$(git diff -U0 "$base" HEAD -- "$file" | grep -E '^[+-]' | grep -Ev '^[+]{3}|^---' || true)
+      hunk=$(git diff -U0 "$base" HEAD -- "$file" | grep -E '^[+-]' | grep -Ev '^--- (a/|/dev/null)|^\+\+\+ (b/|/dev/null)' || true)
       while IFS= read -r line; do
         [[ -n "$line" ]] || continue
         content=${line:1}
