@@ -122,6 +122,7 @@ func TestRemovedBashKeysNeutralValuesWarnOnly(t *testing.T) {
 			t.Cleanup(ResetForTest)
 			var buf bytes.Buffer
 			Stderr = &buf
+			t.Cleanup(func() { Stderr = os.Stderr })
 			t.Setenv(EnvVar, filepath.Join(t.TempDir(), "missing-config"))
 			t.Setenv(V2EnvVar, "")
 			t.Setenv(tc.key, tc.val)
@@ -141,6 +142,7 @@ func TestRemovedBashKeysNeutralValuesWarnOnly(t *testing.T) {
 			t.Cleanup(ResetForTest)
 			var buf bytes.Buffer
 			Stderr = &buf
+			t.Cleanup(func() { Stderr = os.Stderr })
 			dir := t.TempDir()
 			cfgPath := filepath.Join(dir, "config")
 			content := fmt.Sprintf("NABD_PROVIDER=groq\n%s=%s\n", tc.key, tc.val)
@@ -166,6 +168,7 @@ func TestRemovedBashKeysNeutralValuesWarnOnly(t *testing.T) {
 			t.Cleanup(ResetForTest)
 			var buf bytes.Buffer
 			Stderr = &buf
+			t.Cleanup(func() { Stderr = os.Stderr })
 			dir := t.TempDir()
 			cfgPath := filepath.Join(dir, "config.v2.json")
 			content := fmt.Sprintf(`{"version":2,"provider":"groq","credentials":{"groq":{"source":"env"}},%q:%q}`, tc.key, tc.val)

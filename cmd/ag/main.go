@@ -139,6 +139,10 @@ func main() {
 		headlessMode = perm.ModeDeny
 	}
 
+	if err := config.Load(); err != nil {
+		die(err)
+	}
+
 	if *prompt != "" {
 		os.Exit(runHeadless(headlessConfig{
 			prompt:   *prompt,

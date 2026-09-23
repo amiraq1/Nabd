@@ -153,6 +153,7 @@ The event is the contract: live rendering and replay consume the same append-onl
 - File reads are bounded; provider-specific limits and `NABD_MAX_READ` determine the cap.
 - Compaction may call the model and falls back to a mechanical summary on failure.
 - `bash` runs after explicit permission, outside path containment. Treat approval as access equivalent to the current OS user.
+- DNS resolution on Termux reads `$PREFIX/etc/resolv.conf` (which defaults to Google Public DNS `8.8.8.8`/`8.8.4.4` in Termux). This bypasses Android Private DNS and VPN-directed DNS. To use custom nameservers, configure `$PREFIX/etc/resolv.conf`. If `$PREFIX/etc/resolv.conf` is missing or empty, public DNS fallback requires explicit opt-in via `NABD_PUBLIC_DNS=1`.
 - Session journals are redacted by default for recognized credential patterns,
   but journals and the shadow store still contain sensitive working data even
   with private filesystem modes. Set `NABD_REDACT_JOURNAL=0` only for a
