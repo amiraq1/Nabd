@@ -24,6 +24,14 @@ sha256sum -c checksums.txt
 
 See [docs/RELEASING.md](docs/RELEASING.md) for the release process.
 
+## Installation (Termux)
+
+```sh
+pkg install golang git
+git clone https://github.com/amiraq1/Nabd && cd Nabd
+./build.sh && mv nabd $PREFIX/bin/
+```
+
 ## Build and run
 
 ```sh
@@ -123,14 +131,7 @@ stdout contains only the final assistant text, or JSONL with `--json`. Notices a
 
 | GOOS/GOARCH | Status |
 |---|---|
-| android/arm64 | reference (Termux) |
-| linux/amd64 | supported |
-| linux/arm64 | supported |
-| darwin/arm64 | supported |
-| darwin/amd64 | supported |
-| windows/* | **not supported** |
-
-Windows is not a release target. Some platform helper files compile there, but the agent's shell execution contract is Unix-oriented.
+| android/arm64 | supported (Termux) |
 
 ## Core architecture
 

@@ -52,7 +52,7 @@ func TestReleasePipelineContracts(t *testing.T) {
 		"bash scripts/check-threat-model-tests.sh",
 		"release-dryrun:",
 		"release --clean --snapshot --skip=publish,sign,announce",
-		"expected 5 SBOMs",
+		"expected 1 SBOM",
 	} {
 		if !strings.Contains(ci, required) {
 			t.Errorf("ci.yml missing %q", required)
