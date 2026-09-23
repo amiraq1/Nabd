@@ -153,3 +153,70 @@ func TestRenderRunErrorShowsWaitAtNarrowWidth(t *testing.T) {
 		}
 	}
 }
+
+func TestErrorCardRemedyShowsAtAllWidths(t *testing.T) {
+	wantRemedy := presentation.RemedyEndpointRefused
+	card := presentation.NewErrorCard(agent.ErrCodeEndpointRefused, "proxy endpoint refused", "")
+	if card.Remedy != wantRemedy {
+		t.Fatalf("card.Remedy = %q, want %q", card.Remedy, wantRemedy)
+	}
+
+	widths := []int{20, 40, 66}
+	for _, width := range widths {
+		lines := renderErrorCard(card, width)
+		out := strings.Join(lines, "\n")
+		// Check that the remedy label is present
+		if !strings.Contains(out, "remedy:") {
+			t.Errorf("width %d: 'remedy:' label missing from output:\n%s", width, out)
+		}
+		// Check that all words of the remedy are present in the output
+		compactOut := strings.ReplaceAll(strings.ReplaceAll(out, "\n", ""), " ", "")
+		compactWant := strings.ReplaceAll(strings.ReplaceAll(wantRemedy, "\n", ""), " ", "")
+		if !strings.Contains(compactOut, compactWant) {
+			t.Errorf("width %d: remedy content missing or truncated in card output:\n%s", width, out)
+		}
+		if width >= 40 {
+			for _, word := range strings.Fields(wantRemedy) {
+				if !strings.Contains(out, word) {
+					t.Errorf("width %d: missing word %q from remedy in card output:\n%s", width, word, out)
+				}
+			}
+		}
+		// Check that no line exceeds the target width
+		for _, l := range lines {
+			if got := lineWidth(l); got > width {
+				t.Fatalf("width %d: line %q is %d cells wide", width, l, got)
+			}
+		}
+	}
+}
+
+func TestErrorCardRemedyRespectsNoColorAndAsciiOnly(t *testing.T) {
+	card := presentation.NewErrorCard(agent.ErrCodeEndpointRefused, "proxy endpoint refused", "")
+
+	t.Run("NO_COLOR", func(t *testing.T) {
+		t.Setenv("NO_COLOR", "1")
+		for _, width := range []int{20, 40, 66} {
+			lines := renderErrorCard(card, width)
+			for _, l := range lines {
+				if strings.Contains(l, "\x1b") {
+					t.Fatalf("width %d: line contains ANSI escape with NO_COLOR=1: %q", width, l)
+				}
+			}
+		}
+	})
+
+	t.Run("NABD_ASCII_ONLY", func(t *testing.T) {
+		t.Setenv("NABD_ASCII_ONLY", "1")
+		for _, width := range []int{20, 40, 66} {
+			lines := renderErrorCard(card, width)
+			for _, l := range lines {
+				for _, r := range l {
+					if r > 127 {
+						t.Fatalf("width %d: line contains non-ASCII rune %q (%U) with NABD_ASCII_ONLY=1: %q", width, r, r, l)
+					}
+				}
+			}
+		}
+	})
+}

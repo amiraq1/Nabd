@@ -90,6 +90,8 @@ func runErrorHint(code ErrorCode) string {
 		return "rate-limit budget spent · wait out the reported delay, or set NABD_ROUTER_RETRY_AFTER_WAIT"
 	case ErrCodePersist:
 		return "the journal could not be written · check free space and permissions on ~/.ag"
+	case ErrCodeEndpointRefused:
+		return RemedyEndpointRefused
 	default:
 		return ""
 	}

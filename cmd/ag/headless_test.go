@@ -375,3 +375,89 @@ func TestHeadlessYOLOBashDoesNotHang(t *testing.T) {
 		t.Fatal("headless YOLO did not deny bash; expected a PermReply with Decision=Deny")
 	}
 }
+
+func TestHeadlessJSONAllLinesValidJSON(t *testing.T) {
+	code, out, errOut := runHL(t, headlessConfig{
+		prompt:   "fail",
+		json:     true,
+		provider: &scriptedProvider{turns: []scriptTurn{{err: errors.New("provider failure")}}},
+	})
+	if code != exitError {
+		t.Fatalf("exit %d, want %d", code, exitError)
+	}
+
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
+		t.Fatalf("expected JSONL output, got empty stdout")
+	}
+
+	var sawRunError, sawRunEnd bool
+	for i, line := range lines {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			t.Fatalf("line %d on stdout is not valid JSON: %q (err: %v)", i, line, err)
+		}
+		var ev agent.Event
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("line %d on stdout cannot unmarshal into agent.Event: %q (err: %v)", i, line, err)
+		}
+		if ev.Type == agent.RunError {
+			sawRunError = true
+		}
+		if ev.Type == agent.RunEnd {
+			sawRunEnd = true
+		}
+	}
+
+	if !sawRunError {
+		t.Fatalf("expected run_error event on stdout JSONL")
+	}
+	if !sawRunEnd {
+		t.Fatalf("expected run_end event on stdout JSONL")
+	}
+
+	// Verify all notes, error text, and session path went to stderr
+	if !strings.Contains(errOut, "provider failure") {
+		t.Errorf("stderr missing error text: %q", errOut)
+	}
+	if !strings.Contains(errOut, "session:") {
+		t.Errorf("stderr missing 'session:' line: %q", errOut)
+	}
+}
+
+func TestHeadlessRunEndReflectsFailureAfterRunError(t *testing.T) {
+	code, out, _ := runHL(t, headlessConfig{
+		prompt:   "fail",
+		json:     true,
+		provider: &scriptedProvider{turns: []scriptTurn{{err: errors.New("critical failure")}}},
+	})
+	if code != exitError {
+		t.Fatalf("exit %d, want %d", code, exitError)
+	}
+
+	var runEndEvent *agent.Event
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var ev agent.Event
+		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+			runEndEvent = &ev
+			break
+		}
+	}
+
+	if runEndEvent == nil {
+		t.Fatalf("run_end event was not emitted")
+	}
+
+	// Must NOT declare success ("جلسة منتهية")
+	if strings.Contains(runEndEvent.Text, "جلسة منتهية") {
+		t.Errorf("run_end declared normal ending despite failure: %q", runEndEvent.Text)
+	}
+
+	// Must reflect failure ("فشلت الجلسة")
+	if !strings.Contains(runEndEvent.Text, "فشلت الجلسة") {
+		t.Errorf("run_end missing failure indicator 'فشلت الجلسة': %q", runEndEvent.Text)
+	}
+}

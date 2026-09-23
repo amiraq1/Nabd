@@ -41,8 +41,8 @@ func TestWrapToolCallErrorStaysTransparent(t *testing.T) {
 	inner := &PersistError{Path: "/tmp/session.jsonl", Err: errors.New("no space left on device")}
 	wrapped := WrapToolCallError(ToolCall{ID: "call-1", Name: "write_file"}, inner)
 
-	if code := ErrorCodeOf(wrapped); code != ErrPersist {
-		t.Fatalf("wrapped persist error classified as %q, want %q", code, ErrPersist)
+	if code := ErrorCodeOf(wrapped); code != ErrCodePersist {
+		t.Fatalf("wrapped persist error classified as %q, want %q", code, ErrCodePersist)
 	}
 	if path := JournalPathOf(wrapped); path != "/tmp/session.jsonl" {
 		t.Fatalf("journal path lost through the wrapper: %q", path)
@@ -89,7 +89,7 @@ func TestRunErrorEventNamesTheFailingCall(t *testing.T) {
 	if e.Call.ID != "call-7" || e.Call.Name != "write_file" {
 		t.Fatalf("wrong call reported: %q/%q", e.Call.ID, e.Call.Name)
 	}
-	if e.ErrorCode != string(ErrPersist) {
+	if e.ErrorCode != string(ErrCodePersist) {
 		t.Fatalf("error code lost: %q", e.ErrorCode)
 	}
 	if e.Err != inner.Error() {

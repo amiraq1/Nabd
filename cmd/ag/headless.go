@@ -272,8 +272,13 @@ func runHeadlessErr(cfg headlessConfig) error {
 	interrupted := ctx.Err() != nil
 
 	// End the session in the journal first, then close. Surface both errors
-	// without masking the original run error.
-	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
+	// without masking the original run error. The text reflects the actual
+	// outcome: a session that hit run_error is marked failed, not ended.
+	endFmt := statusSessionEnded
+	if err != nil || interrupted {
+		endFmt = statusSessionFailed
+	}
+	endErr := loop.End(fmt.Sprintf(endFmt, filepath.Base(journalPath)))
 	closeErr := journal.Close()
 	reportSession(cfg.stderr, cfg.stderr, journalPath, closeErr)
 

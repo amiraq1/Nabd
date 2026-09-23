@@ -21,6 +21,7 @@ import (
 	"nabd/internal/agent"
 	"nabd/internal/build"
 	"nabd/internal/config"
+	"nabd/internal/endpoint"
 	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
@@ -120,7 +121,9 @@ func main() {
 	}
 
 	if *showVer {
-		fmt.Println(build.Line())
+		for _, l := range versionLines() {
+			fmt.Println(l)
+		}
 		return
 	}
 
@@ -609,6 +612,16 @@ func ensureDefaultSessionDir(dir string) error {
 	// MkdirAll does not tighten an existing directory, so chmod explicitly.
 	// This migrates a legacy 0o755 directory to 0o700 on first run.
 	return os.Chmod(dir, 0o700)
+}
+
+func versionLines() []string {
+	lines := []string{build.Line()}
+	_ = config.Load()
+	pol, _ := endpoint.ParsePolicy(config.Get("NABD_ENDPOINT_POLICY"))
+	if pol != endpoint.PolicyStrict {
+		lines = append(lines, fmt.Sprintf("endpoint policy: %s (NABD_ENDPOINT_POLICY)", pol))
+	}
+	return lines
 }
 
 func conflictLine(cs []config.Conflict) string {
