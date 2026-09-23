@@ -163,6 +163,14 @@ func runHeadless(cfg headlessConfig) int {
 	return mapHeadlessExit(err)
 }
 
+// headlessInterruptContext builds the context a headless run cancels on an
+// interrupt. Production installs signal.NotifyContext for SIGINT/SIGTERM; it is
+// a package-level seam so a test can cancel deterministically instead of raising
+// a real process signal, and so later work (stream redaction) can reuse it.
+var headlessInterruptContext = func() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
 func runHeadlessErr(cfg headlessConfig) error {
 	if cfg.stdout == nil {
 		cfg.stdout = os.Stdout
@@ -265,7 +273,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 		loop.Note(s)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := headlessInterruptContext()
 	defer stop()
 
 	err = loop.Run(ctx, prompt)

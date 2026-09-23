@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -463,14 +462,17 @@ func TestHeadlessRunEndReflectsFailureAfterRunError(t *testing.T) {
 	}
 }
 
-type interruptingProvider struct{}
+// interruptingProvider streams once and asks the run to cancel, modeling the
+// moment a SIGINT would arrive. It carries the test's interrupt channel so the
+// cancellation is driven through headlessInterruptContext instead of a real
+// process signal.
+type interruptingProvider struct{ interrupt chan struct{} }
 
 func (p *interruptingProvider) Name() string { return "interrupter" }
 
 func (p *interruptingProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Chunk, error) {
 	ch := make(chan provider.Chunk, 1)
-	// Raise SIGINT to process; signal.NotifyContext in runHeadlessErr intercepts it and cancels ctx.
-	_ = syscall.Kill(os.Getpid(), syscall.SIGINT)
+	close(p.interrupt) // deliver the interrupt, as a SIGINT would
 	<-ctx.Done()
 	ch <- provider.Chunk{Kind: provider.ChunkError, Err: ctx.Err()}
 	close(ch)
@@ -478,10 +480,25 @@ func (p *interruptingProvider) Stream(ctx context.Context, req provider.Request)
 }
 
 func TestHeadlessRunEndReflectsStoppedAfterInterruption(t *testing.T) {
+	// Interrupt through the headlessInterruptContext seam: the run's context is
+	// cancelled deterministically, with no real SIGINT raised against the test
+	// process.
+	interrupt := make(chan struct{})
+	restore := headlessInterruptContext
+	headlessInterruptContext = func() (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			<-interrupt
+			cancel()
+		}()
+		return ctx, cancel
+	}
+	t.Cleanup(func() { headlessInterruptContext = restore })
+
 	code, out, _ := runHL(t, headlessConfig{
 		prompt:   "stop-me",
 		json:     true,
-		provider: &interruptingProvider{},
+		provider: &interruptingProvider{interrupt: interrupt},
 	})
 	if code != exitInterrupted {
 		t.Fatalf("exit %d, want %d", code, exitInterrupted)

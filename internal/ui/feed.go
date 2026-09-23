@@ -12,8 +12,6 @@ import (
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
-	"nabd/internal/provider"
-	"nabd/internal/providercmd"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -368,16 +366,11 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setStatus("canceled", rankResult)
 				return m, nil
 			}
-			var code agent.ErrorCode
-			switch providercmd.KindOf(msg.err) {
-			case provider.ErrorKindAuth:
-				code = agent.ErrCodeProviderAuth
-			case provider.ErrorKindTemporary:
-				code = agent.ErrCodeProviderTemporary
-			default:
-				code = agent.ErrCodeUnknown
-			}
-			card := presentation.NewErrorCard(code, msg.err.Error(), "")
+			// Classify through the single canonical vocabulary so an
+			// endpoint_refused provider error reaches the same card and remedy
+			// as the run-error path, instead of a second local mapping that
+			// would drop it to "unknown".
+			card := presentation.NewErrorCard(agent.ErrorCodeOf(msg.err), msg.err.Error(), "")
 			m.addErrorNotice(card, msg.err.Error())
 			return m, nil
 		}
