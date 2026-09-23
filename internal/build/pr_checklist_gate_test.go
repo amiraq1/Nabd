@@ -184,3 +184,114 @@ func TestPRChecklistGateExemptsOnlyBehaviourFreeDiffs(t *testing.T) {
 		t.Error("the escape must not be grantable by body wording")
 	}
 }
+
+func TestPRChecklistGateNoTestExemption(t *testing.T) {
+	_, checklistScript := gateScripts(t)
+
+	type testCase struct {
+		name       string
+		body       string
+		files      map[string]string
+		wantExit   int
+		wantStdout string
+		wantStderr string
+	}
+
+	tests := []testCase{
+		{
+			name: "Positive_DocsOnly_WithNADocumentation",
+			body: validPRBody + "\nN/A: documentation\n",
+			files: map[string]string{
+				"docs/user_guide.md": "# User Guide\nDocumentation content.\n",
+			},
+			wantExit: 0,
+		},
+		{
+			name: "Positive_WorkflowOnly_WithNAWorkflow",
+			body: validPRBody + "\nN/A: workflow\n",
+			files: map[string]string{
+				".github/workflows/ci.yml": "# CI workflow\nname: CI\n",
+			},
+			wantExit: 0,
+		},
+		{
+			name: "Positive_GoCommentsOnly_WithNADocs",
+			body: validPRBody + "\nN/A: docs\n",
+			files: map[string]string{
+				"cmd/ag/dummy.go": "// Package main dummy comment\n// Another comment\n",
+			},
+			wantExit: 0,
+		},
+		{
+			name: "Negative_NAWithNoKeyword",
+			body: validPRBody + "\nN/A:\n",
+			files: map[string]string{
+				".github/workflows/ci.yml": "# CI workflow\nname: CI\n",
+			},
+			wantExit:   1,
+			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
+		},
+		{
+			name: "Negative_NAWithInvalidKeyword",
+			body: validPRBody + "\nN/A: none\n",
+			files: map[string]string{
+				".github/workflows/ci.yml": "# CI workflow\nname: CI\n",
+			},
+			wantExit:   1,
+			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
+		},
+		{
+			name: "Negative_MissingNAWithoutTestFile",
+			body: validPRBody,
+			files: map[string]string{
+				".github/workflows/ci.yml": "# CI workflow\nname: CI\n",
+			},
+			wantExit:   1,
+			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
+		},
+		{
+			name: "Negative_ExecutableGoDiffWithNADependency",
+			body: validPRBody + "\nN/A: dependency\n",
+			files: map[string]string{
+				"cmd/ag/dummy.go": "package main\n\nvar ExecutableCode = 42\n",
+			},
+			wantExit:   1,
+			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			repoDir, base := initTestRepo(t)
+			runGit(t, repoDir, "checkout", "-B", "branch-"+tc.name, base)
+			for relPath, content := range tc.files {
+				fullPath := filepath.Join(repoDir, relPath)
+				if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+					t.Fatalf("write file: %v", err)
+				}
+			}
+			runGit(t, repoDir, "add", ".")
+			runGit(t, repoDir, "commit", "-qm", "test commit for "+tc.name)
+
+			bodyPath := filepath.Join(repoDir, "live-body.txt")
+			if err := os.WriteFile(bodyPath, []byte(tc.body), 0o600); err != nil {
+				t.Fatalf("write live-body: %v", err)
+			}
+
+			exitCode, stdout, stderr := runCmd(t, repoDir, prGateEnv(bodyPath, "master"), "bash", checklistScript)
+			if exitCode != tc.wantExit {
+				t.Fatalf("expected exit %d, got %d\nstdout: %s\nstderr: %s", tc.wantExit, exitCode, stdout, stderr)
+			}
+			if tc.wantStderr != "" && !strings.Contains(stderr, tc.wantStderr) {
+				t.Errorf("expected stderr to contain %q, got: %s", tc.wantStderr, stderr)
+			}
+			if tc.wantStdout != "" && !strings.Contains(stdout, tc.wantStdout) {
+				t.Errorf("expected stdout to contain %q, got: %s", tc.wantStdout, stdout)
+			}
+		})
+	}
+}
