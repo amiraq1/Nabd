@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+
+	"nabd/internal/endpoint"
 )
 
 // ErrorKind is the provider layer's structured classification. User-facing
@@ -11,9 +13,10 @@ import (
 type ErrorKind string
 
 const (
-	ErrorKindUnknown   ErrorKind = "unknown"
-	ErrorKindTemporary ErrorKind = "temporary"
-	ErrorKindAuth      ErrorKind = "auth"
+	ErrorKindUnknown         ErrorKind = "unknown"
+	ErrorKindTemporary       ErrorKind = "temporary"
+	ErrorKindAuth            ErrorKind = "auth"
+	ErrorKindEndpointRefused ErrorKind = "endpoint_refused"
 )
 
 // ClassifyHTTPStatus maps an HTTP status onto the provider error kind, using
@@ -33,10 +36,25 @@ func ClassifyHTTPStatus(status int) ErrorKind {
 	return ErrorKindUnknown
 }
 
-// ErrorKindOf classifies provider errors using typed/status data only.
+// Kinded is implemented by an error that already carries its provider error
+// kind. Errors raised outside the request path (for example the /models probe
+// in internal/providercmd) implement it so provider.ErrorKindOf — and therefore
+// agent.ErrorCodeOf — classifies them without a second, local switch that can
+// drift and silently drop a kind such as endpoint_refused.
+type Kinded interface{ ErrorKind() ErrorKind }
+
+// ErrorKindOf classifies an error into the provider vocabulary. It is the single
+// classifier for provider errors, consulted by agent.ErrorCodeOf.
 func ErrorKindOf(err error) ErrorKind {
 	if err == nil {
 		return ErrorKindUnknown
+	}
+	if errors.Is(err, endpoint.ErrEndpointRefused) {
+		return ErrorKindEndpointRefused
+	}
+	var kinded Kinded
+	if errors.As(err, &kinded) {
+		return kinded.ErrorKind()
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrRouteCleanupTimeout) || errors.Is(err, ErrRouterExhausted) {
 		return ErrorKindTemporary

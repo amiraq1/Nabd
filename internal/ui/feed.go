@@ -12,8 +12,6 @@ import (
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
-	"nabd/internal/provider"
-	"nabd/internal/providercmd"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -368,16 +366,11 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.setStatus("canceled", rankResult)
 				return m, nil
 			}
-			var code agent.ErrorCode
-			switch providercmd.KindOf(msg.err) {
-			case provider.ErrorKindAuth:
-				code = agent.ErrProviderAuth
-			case provider.ErrorKindTemporary:
-				code = agent.ErrProviderTemporary
-			default:
-				code = agent.ErrUnknown
-			}
-			card := presentation.NewErrorCard(code, msg.err.Error(), "")
+			// Classify through the single canonical vocabulary so an
+			// endpoint_refused provider error reaches the same card and remedy
+			// as the run-error path, instead of a second local mapping that
+			// would drop it to "unknown".
+			card := presentation.NewErrorCard(agent.ErrorCodeOf(msg.err), msg.err.Error(), "")
 			m.addErrorNotice(card, msg.err.Error())
 			return m, nil
 		}
@@ -606,6 +599,14 @@ func (m *Feed) SendBatch(events []agent.Event) {
 	// Nothing is mutated here on purpose: SendBatch runs on the batcher
 	// goroutine, so recording a diagnostic would be a cross-goroutine write
 	// to model state and a genuine data race.
+}
+
+// AgentEventBatch wraps a batch of events as the message Feed.Update consumes.
+// The batcher delivers this same message through a live program; it is exported
+// so a caller outside this package — the CLI's interactive-redaction test — can
+// drive the identical Update path without a running Bubble Tea program.
+func AgentEventBatch(events []agent.Event) tea.Msg {
+	return agentEventBatchMsg{Events: events}
 }
 
 // SetProgram wires the running program so batcher flushes are delivered as

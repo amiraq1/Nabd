@@ -37,15 +37,21 @@ type UsageStatus struct {
 	Complete         bool
 }
 
-type ErrorCode string
+type ErrorCode = agent.ErrorCode
 
 const (
-	ErrCodeProviderAuth ErrorCode = "provider_auth"
-	ErrCodePersist      ErrorCode = "persist"
-	ErrCodeBudget       ErrorCode = "budget"
-	ErrCodeCanceled     ErrorCode = "canceled"
-	ErrCodeUnknown      ErrorCode = "unknown"
+	ErrCodeProviderTemporary = agent.ErrCodeProviderTemporary
+	ErrCodeProviderAuth      = agent.ErrCodeProviderAuth
+	ErrCodePersist           = agent.ErrCodePersist
+	ErrCodeBudget            = agent.ErrCodeBudget
+	ErrCodeMaxTurns          = agent.ErrCodeMaxTurns
+	ErrCodeCanceled          = agent.ErrCodeCanceled
+	ErrCodeLoopDetected      = agent.ErrCodeLoopDetected
+	ErrCodeEndpointRefused   = agent.ErrCodeEndpointRefused
+	ErrCodeUnknown           = agent.ErrCodeUnknown
 )
+
+const RemedyEndpointRefused = agent.RemedyEndpointRefused
 
 type PresentedError struct {
 	Code      ErrorCode

@@ -285,3 +285,13 @@ func TestConstructorDefaultsToGuardedClient(t *testing.T) {
 func TestConstructorsDefaultToGuardedClient(t *testing.T) {
 	TestConstructorDefaultsToGuardedClient(t)
 }
+
+func TestErrorKindEndpointRefused(t *testing.T) {
+	if got := ErrorKindOf(endpoint.ErrEndpointRefused); got != ErrorKindEndpointRefused {
+		t.Fatalf("ErrorKindOf(endpoint.ErrEndpointRefused) = %q, want %q", got, ErrorKindEndpointRefused)
+	}
+	wrapped := errors.Join(errors.New("dial failed"), endpoint.ErrEndpointRefused)
+	if got := ErrorKindOf(wrapped); got != ErrorKindEndpointRefused {
+		t.Fatalf("ErrorKindOf(wrapped) = %q, want %q", got, ErrorKindEndpointRefused)
+	}
+}

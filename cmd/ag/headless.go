@@ -163,6 +163,14 @@ func runHeadless(cfg headlessConfig) int {
 	return mapHeadlessExit(err)
 }
 
+// headlessInterruptContext builds the context a headless run cancels on an
+// interrupt. Production installs signal.NotifyContext for SIGINT/SIGTERM; it is
+// a package-level seam so a test can cancel deterministically instead of raising
+// a real process signal, and so later work (stream redaction) can reuse it.
+var headlessInterruptContext = func() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
 func runHeadlessErr(cfg headlessConfig) error {
 	if cfg.stdout == nil {
 		cfg.stdout = os.Stdout
@@ -252,7 +260,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 		return sections
 	}
 	loop.SkillInventory = skill.JournalRecords(allSkills)
-	loop.Sink = sinks
+	loop.Sink = newStreamRedactSink(sinks)
 	loop.MaxTurns = cfg.maxTurns
 
 	cwd, _ := os.Getwd()
@@ -265,20 +273,28 @@ func runHeadlessErr(cfg headlessConfig) error {
 		loop.Note(s)
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := headlessInterruptContext()
 	defer stop()
 
 	err = loop.Run(ctx, prompt)
 	interrupted := ctx.Err() != nil
 
 	// End the session in the journal first, then close. Surface both errors
-	// without masking the original run error.
-	endErr := loop.End(fmt.Sprintf(statusSessionEnded, filepath.Base(journalPath)))
+	// without masking the original run error. The text reflects the actual
+	// outcome: interrupted sessions are marked stopped, genuine failures are
+	// marked failed, and clean runs or normal max-turn stops are marked ended.
+	endFmt := statusSessionEnded
+	if interrupted || errors.Is(err, errInterrupted) {
+		endFmt = statusSessionStopped
+	} else if err != nil && !errors.Is(err, agent.ErrMaxTurns) {
+		endFmt = statusSessionFailed
+	}
+	endErr := loop.End(fmt.Sprintf(endFmt, filepath.Base(journalPath)))
 	closeErr := journal.Close()
 	reportSession(cfg.stderr, cfg.stderr, journalPath, closeErr)
 
 	if interrupted {
-		return errors.Join(errors.New("interrupted"), endErr, closeErr)
+		return errors.Join(errInterrupted, endErr, closeErr)
 	}
 	if err != nil {
 		return errors.Join(err, endErr, closeErr)

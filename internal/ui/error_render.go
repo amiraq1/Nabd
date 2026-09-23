@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"nabd/internal/presentation"
@@ -14,15 +15,24 @@ func renderErrorCard(card *presentation.ErrorCard, width int) []string {
 	if width <= 0 {
 		width = DefaultWidth
 	}
-	line := func(prefix, value string) string {
-		value = SanitizeForDisplay(value, DisplayPolicy{AllowNewline: false, Redact: true})
-		value = strings.Join(strings.Fields(value), " ")
-		return truncateToWidth(prefix+value, width, "…")
-	}
+	asciiOnly := os.Getenv("NABD_ASCII_ONLY") != ""
+
+	tail := "…"
 	mark := "✗ "
+	if asciiOnly {
+		tail = "..."
+		mark = "x "
+	}
 	if card.Code == "budget" || card.Code == "max_turns" {
 		mark = "! "
 	}
+
+	line := func(prefix, value string) string {
+		value = SanitizeForDisplay(value, DisplayPolicy{AllowNewline: false, Redact: true})
+		value = strings.Join(strings.Fields(value), " ")
+		return truncateToWidth(prefix+value, width, tail)
+	}
+
 	out := []string{bad.Render(line(mark, card.Title)), dim.Render(line("  code: ", string(card.Code)))}
 	mode := widthMode(width)
 	// The wait is the one number the reader acts on, so it is rendered at every
@@ -37,6 +47,27 @@ func renderErrorCard(card *presentation.ErrorCard, width int) []string {
 	}
 	if mode != WidthNarrow && card.Message != "" {
 		out = append(out, line("  details: ", card.Message))
+	}
+	if card.Remedy != "" {
+		remedyText := SanitizeForDisplay(card.Remedy, DisplayPolicy{AllowNewline: false, Redact: true})
+		remedyText = strings.Join(strings.Fields(remedyText), " ")
+		prefix := "  remedy: "
+		indent := "  "
+		if width < 30 {
+			out = append(out, warn.Render(prefix))
+			for _, wLine := range wrap(remedyText, width-len(indent)) {
+				out = append(out, warn.Render(indent+wLine))
+			}
+		} else {
+			avail := width - len(prefix)
+			lines := wrap(remedyText, avail)
+			if len(lines) > 0 {
+				out = append(out, warn.Render(prefix+lines[0]))
+				for _, wLine := range lines[1:] {
+					out = append(out, warn.Render("    "+wLine))
+				}
+			}
+		}
 	}
 	out = append(out, line("  action: ", card.ActionText))
 	if card.RetryScope == presentation.RetryProviderTurn {
