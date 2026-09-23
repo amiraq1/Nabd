@@ -215,10 +215,12 @@ func Transport(pol Policy) *http.Transport {
 // TransportWithAllow returns an *http.Transport using a net.Dialer configured
 // with pol and allowList.
 func TransportWithAllow(pol Policy, allowList *AllowList) *http.Transport {
-	d := pol.DialerWithAllow(net.Dialer{
+	base := net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
-	}, allowList)
+	}
+	configureDialerResolver(&base)
+	d := pol.DialerWithAllow(base, allowList)
 	return &http.Transport{
 		Proxy: func(r *http.Request) (*url.URL, error) {
 			u, err := proxyFromEnv(r)
