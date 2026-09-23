@@ -260,7 +260,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 		return sections
 	}
 	loop.SkillInventory = skill.JournalRecords(allSkills)
-	loop.Sink = sinks
+	loop.Sink = newStreamRedactSink(sinks)
 	loop.MaxTurns = cfg.maxTurns
 
 	cwd, _ := os.Getwd()
