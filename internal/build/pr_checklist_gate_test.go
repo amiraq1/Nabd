@@ -207,14 +207,6 @@ func TestPRChecklistGateNoTestExemption(t *testing.T) {
 			wantExit: 0,
 		},
 		{
-			name: "Positive_WorkflowOnly_WithNAWorkflow",
-			body: validPRBody + "\nN/A: workflow\n",
-			files: map[string]string{
-				".github/workflows/ci.yml": "# CI workflow\nname: CI\n",
-			},
-			wantExit: 0,
-		},
-		{
 			name: "Positive_GoCommentsOnly_WithNADocs",
 			body: validPRBody + "\nN/A: docs\n",
 			files: map[string]string{
@@ -223,10 +215,56 @@ func TestPRChecklistGateNoTestExemption(t *testing.T) {
 			wantExit: 0,
 		},
 		{
+			name: "Positive_DependencyOnly_WithNADependency",
+			body: validPRBody + "\nN/A: dependency\n",
+			files: map[string]string{
+				"go.mod": "module test\n",
+			},
+			wantExit: 0,
+		},
+		{
+			name: "Positive_GateScriptChange_WithTestFile_Succeeds",
+			body: validPRBody,
+			files: map[string]string{
+				"scripts/check-pr-security-checklist.sh": "# modified checklist gate\n",
+				"docs/THREAT_MODEL.md":                   "# Threat Model\nUpdated entry.\n",
+				"internal/build/new_gate_test.go":        "package build\n",
+			},
+			wantExit: 0,
+		},
+		{
+			name: "Negative_WorkflowChange_RefusesNAExemption",
+			body: validPRBody + "\nN/A: workflow\n",
+			files: map[string]string{
+				".github/workflows/ci.yml": "# CI workflow\nname: CI\n",
+			},
+			wantExit:   1,
+			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
+		},
+		{
+			name: "Negative_GateScriptChange_RefusesNAExemption",
+			body: validPRBody + "\nN/A: documentation\n",
+			files: map[string]string{
+				"scripts/check-pr-security-checklist.sh": "# modified checklist gate\n",
+				"docs/THREAT_MODEL.md":                   "# Threat Model\nUpdated entry.\n",
+			},
+			wantExit:   1,
+			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
+		},
+		{
+			name: "Negative_InlineNA_Refused",
+			body: validPRBody + "\nSome prefix text N/A: dependency\n",
+			files: map[string]string{
+				"go.mod": "module test\n",
+			},
+			wantExit:   1,
+			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
+		},
+		{
 			name: "Negative_NAWithNoKeyword",
 			body: validPRBody + "\nN/A:\n",
 			files: map[string]string{
-				".github/workflows/ci.yml": "# CI workflow\nname: CI\n",
+				"go.mod": "module test\n",
 			},
 			wantExit:   1,
 			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
@@ -235,7 +273,7 @@ func TestPRChecklistGateNoTestExemption(t *testing.T) {
 			name: "Negative_NAWithInvalidKeyword",
 			body: validPRBody + "\nN/A: none\n",
 			files: map[string]string{
-				".github/workflows/ci.yml": "# CI workflow\nname: CI\n",
+				"go.mod": "module test\n",
 			},
 			wantExit:   1,
 			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
@@ -244,7 +282,7 @@ func TestPRChecklistGateNoTestExemption(t *testing.T) {
 			name: "Negative_MissingNAWithoutTestFile",
 			body: validPRBody,
 			files: map[string]string{
-				".github/workflows/ci.yml": "# CI workflow\nname: CI\n",
+				"go.mod": "module test\n",
 			},
 			wantExit:   1,
 			wantStderr: "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff.",
