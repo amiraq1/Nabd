@@ -96,6 +96,11 @@ behaviour_free_diff() {
 # deliberately narrow: the checklist still requires the human explanation, and
 # executable source changes continue to require a *_test.go file.
 no_test_explanation() {
+  local go_files
+  go_files=$(grep -E '\.go$' <<<"$changed" || true)
+  if [[ -n "$go_files" ]]; then
+    behaviour_free_diff || return 1
+  fi
   grep -Eiq -- 'N/A:[[:space:]]*(dependency|documentation|docs?|changelog|workflow|pin|release)' <<<"$body"
 }
 
