@@ -35,7 +35,7 @@ curl -LO $B/nabd_${V}_android_arm64 -LO $B/checksums.txt \
 **Verification:**
 
 - **With Cosign (cryptographic signature verification):**
-  Cosign is not in Termux pkg repositories; install it via Go (`go install github.com/sigstore/cosign/v2/cmd/cosign@latest`):
+  Cosign is not in Termux pkg repositories; install it via Go (`go install github.com/sigstore/cosign/v2/cmd/cosign@v2.6.5`). This version matches the release signer pinned in `.github/workflows/release.yml`:
   ```sh
   cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.sig \
     --certificate-identity-regexp '^https://github\.com/amiraq1/Nabd/\.github/workflows/release\.yml@refs/tags/v' \
