@@ -601,6 +601,14 @@ func (m *Feed) SendBatch(events []agent.Event) {
 	// to model state and a genuine data race.
 }
 
+// AgentEventBatch wraps a batch of events as the message Feed.Update consumes.
+// The batcher delivers this same message through a live program; it is exported
+// so a caller outside this package — the CLI's interactive-redaction test — can
+// drive the identical Update path without a running Bubble Tea program.
+func AgentEventBatch(events []agent.Event) tea.Msg {
+	return agentEventBatchMsg{Events: events}
+}
+
 // SetProgram wires the running program so batcher flushes are delivered as
 // messages instead of mutating the model off the event loop.
 func (m *Feed) SetProgram(p *tea.Program) { m.prog = p }
