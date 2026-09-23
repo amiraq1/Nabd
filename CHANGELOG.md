@@ -7,6 +7,8 @@ Published changes and downloadable artifacts are available on the
 ## Unreleased
 
 - **Streamed-chunk redaction:** Secrets split across streamed chunks are now redacted in the journal and `--json` output. Streamed `text_delta` events are joined through a bounded hold-back (`internal/redact.Stream`) before they reach a sink, so a credential or PEM block split across two deltas is redacted as one value instead of surviving piecewise.
+- Token runs longer than 4096 characters are replaced with `[REDACTED]` in the journal and `--json` output.
+- Journals written before this release may contain secrets split across chunks. Delete them or rotate the keys.
 
 ## v2.0.0
 
