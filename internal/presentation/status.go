@@ -40,12 +40,15 @@ type UsageStatus struct {
 type ErrorCode = agent.ErrorCode
 
 const (
-	ErrCodeProviderAuth    = agent.ErrCodeProviderAuth
-	ErrCodePersist         = agent.ErrCodePersist
-	ErrCodeBudget          = agent.ErrCodeBudget
-	ErrCodeCanceled        = agent.ErrCodeCanceled
-	ErrCodeEndpointRefused = agent.ErrCodeEndpointRefused
-	ErrCodeUnknown         = agent.ErrCodeUnknown
+	ErrCodeProviderTemporary = agent.ErrCodeProviderTemporary
+	ErrCodeProviderAuth      = agent.ErrCodeProviderAuth
+	ErrCodePersist           = agent.ErrCodePersist
+	ErrCodeBudget            = agent.ErrCodeBudget
+	ErrCodeMaxTurns          = agent.ErrCodeMaxTurns
+	ErrCodeCanceled          = agent.ErrCodeCanceled
+	ErrCodeLoopDetected      = agent.ErrCodeLoopDetected
+	ErrCodeEndpointRefused   = agent.ErrCodeEndpointRefused
+	ErrCodeUnknown           = agent.ErrCodeUnknown
 )
 
 const RemedyEndpointRefused = agent.RemedyEndpointRefused

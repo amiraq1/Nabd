@@ -50,7 +50,7 @@ func ErrorCardFromError(err error) *ErrorCard {
 func NewErrorCard(code agent.ErrorCode, message, journalPath string) *ErrorCard {
 	card := &ErrorCard{Code: code, Message: message, JournalPath: journalPath, RetryScope: RetryNone}
 	switch code {
-	case agent.ErrProviderTemporary:
+	case agent.ErrCodeProviderTemporary:
 		card.Title = "Could not reach provider"
 		card.ActionText = "retry provider request"
 		card.Retryable = true
@@ -65,7 +65,7 @@ func NewErrorCard(code agent.ErrorCode, message, journalPath string) *ErrorCard 
 		card.Title = "Run budget reached"
 		card.ActionText = "start a new session or change the limit"
 		card.RetryScope = RetryNewMessage
-	case agent.ErrMaxTurnsCode:
+	case agent.ErrCodeMaxTurns:
 		card.Title = "Maximum turns reached"
 		card.ActionText = "send a shorter follow-up or rephrase"
 		card.Retryable = true

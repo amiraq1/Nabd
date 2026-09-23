@@ -20,7 +20,7 @@ func TestLegacyRunErrorProjectsAsUnknown(t *testing.T) {
 }
 
 func TestProviderTemporaryRetryScope(t *testing.T) {
-	card := NewErrorCard(agent.ErrProviderTemporary, "temporary", "")
+	card := NewErrorCard(agent.ErrCodeProviderTemporary, "temporary", "")
 	if !card.Retryable || card.RetryScope != RetryProviderTurn {
 		t.Fatalf("card = %#v", card)
 	}

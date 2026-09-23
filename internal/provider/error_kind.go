@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+
+	"nabd/internal/endpoint"
 )
 
 // ErrorKind is the provider layer's structured classification. User-facing
@@ -11,9 +13,10 @@ import (
 type ErrorKind string
 
 const (
-	ErrorKindUnknown   ErrorKind = "unknown"
-	ErrorKindTemporary ErrorKind = "temporary"
-	ErrorKindAuth      ErrorKind = "auth"
+	ErrorKindUnknown         ErrorKind = "unknown"
+	ErrorKindTemporary       ErrorKind = "temporary"
+	ErrorKindAuth            ErrorKind = "auth"
+	ErrorKindEndpointRefused ErrorKind = "endpoint_refused"
 )
 
 // ClassifyHTTPStatus maps an HTTP status onto the provider error kind, using
@@ -37,6 +40,9 @@ func ClassifyHTTPStatus(status int) ErrorKind {
 func ErrorKindOf(err error) ErrorKind {
 	if err == nil {
 		return ErrorKindUnknown
+	}
+	if errors.Is(err, endpoint.ErrEndpointRefused) {
+		return ErrorKindEndpointRefused
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrRouteCleanupTimeout) || errors.Is(err, ErrRouterExhausted) {
 		return ErrorKindTemporary
