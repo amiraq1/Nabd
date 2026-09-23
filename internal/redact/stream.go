@@ -117,6 +117,23 @@ func (s *Stream) Write(chunk string) (emit string) {
 	return emit
 }
 
+// Pending reports how many bytes are held and not yet emitted.
+func (s *Stream) Pending() int { return len(s.pending) }
+
+// Swallowing reports whether the stream is discarding the tail of an over-cap
+// token run.
+func (s *Stream) Swallowing() bool { return s.swallow }
+
+// PushBack returns previously emitted text to the hold. A caller that decides to
+// withhold a prefix — to keep a sequence number free for a later flush — uses
+// this to preserve byte order.
+func (s *Stream) PushBack(prefix string) {
+	if prefix == "" {
+		return
+	}
+	s.pending = prefix + s.pending
+}
+
 // Flush releases whatever is held, redacted. Call it on every terminal path so
 // held bytes are never dropped and never emitted raw. After Flush the stream is
 // empty and may be reused for the next message.

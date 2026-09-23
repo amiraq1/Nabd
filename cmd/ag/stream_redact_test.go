@@ -13,7 +13,9 @@ import (
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/redact"
+	"nabd/internal/snap"
 	"nabd/internal/store"
+	"nabd/internal/tools"
 )
 
 // chunkProvider streams each string as its own text chunk, then finishes with a
@@ -357,5 +359,97 @@ func TestRewindNewJournalWithHeldDeltas(t *testing.T) {
 	loop.Seed(evs)
 	if _, err := loop.Rewind(1); err != nil {
 		t.Fatalf("rewind on the replayed journal failed: %v", err)
+	}
+}
+
+// TestLiveRewindThenContinueKeepsJournalChain runs a live session, streams a
+// split secret, runs a tool call, rewinds the LIVE loop to the branch point,
+// runs another turn, and then reads the journal. Every Parent must resolve,
+// agent.Live must return the whole post-rewind branch, and the journal and the
+// in-memory history must agree that the branch point is the Rewind event.
+func TestLiveRewindThenContinueKeepsJournalChain(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	root, err := tools.NewRoot("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := snap.New(root.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(root, sh)
+	pol := perm.New(reg)
+	pol.SetMode(perm.ModeDeny)
+
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	journal, err := store.NewJSONLWithOptions(path, journalStoreOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
+	loop := newSessionLoop(&multiChunkProvider{turns: []multiTurn{
+		{chunks: []string{"turn one ", secret[:13], secret[13:26], secret[26:], " end"}, call: writeCall("x.txt", "hi")},
+		{chunks: []string{"turn two"}},
+		{chunks: []string{"turn three"}},
+	}}, reg, gate{pol}, silentAsker{})
+	loop.Sink = newStreamRedactSink(agent.Fanout{journal})
+
+	if err := loop.Start("t", root.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.Run(context.Background(), "one"); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+	if _, err := loop.Rewind(1); err != nil {
+		t.Fatalf("live rewind: %v", err)
+	}
+	if err := loop.Run(context.Background(), "two"); err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	_ = loop.End("done")
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	evs, err := store.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int]bool{}
+	for _, e := range evs {
+		if seen[e.Seq] {
+			t.Fatalf("duplicate seq %d", e.Seq)
+		}
+		seen[e.Seq] = true
+	}
+	for _, e := range evs {
+		if e.Parent != 0 && !seen[e.Parent] {
+			t.Fatalf("seq %d has dangling parent %d", e.Seq, e.Parent)
+		}
+	}
+	branch := agent.Live(evs)
+	if len(branch) == 0 || branch[0].Seq != 1 {
+		t.Fatalf("Live branch does not start at the root: %+v", branch)
+	}
+
+	journalRewinds, histRewinds := 0, 0
+	for _, e := range branch {
+		if e.Type == agent.Rewind {
+			journalRewinds++
+		}
+	}
+	for _, e := range agent.Live(loop.Hist()) {
+		if e.Type == agent.Rewind {
+			histRewinds++
+		}
+	}
+	if journalRewinds != 1 || histRewinds != 1 {
+		t.Fatalf("branch point disagrees: journal rewinds=%d history rewinds=%d, want 1 each", journalRewinds, histRewinds)
 	}
 }

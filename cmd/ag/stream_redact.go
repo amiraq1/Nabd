@@ -46,6 +46,14 @@ func (s *streamRedactSink) Emit(e agent.Event) error {
 
 	if e.Type == agent.TextDelta {
 		out := s.stream.Write(e.Text)
+		// If a suffix is still held, withhold this prefix too: dropping the
+		// event keeps its sequence number free for the boundary flush, and
+		// PushBack preserves byte order. Once the hold reaches the cap, forward
+		// instead so the hold stays bounded.
+		if out != "" && s.stream.Pending() > 0 && !s.stream.Swallowing() && s.stream.Pending() <= redact.StreamHoldCap {
+			s.stream.PushBack(out)
+			out = ""
+		}
 		if out == "" {
 			s.lastDropped = e.Seq
 			s.droppedPrev = true
@@ -53,6 +61,7 @@ func (s *streamRedactSink) Emit(e agent.Event) error {
 		}
 		e.Text = out
 		if s.droppedPrev {
+			// This event's Parent points at a dropped delta; skip the gap.
 			e.Parent = s.lastEmitted
 			s.droppedPrev = false
 		}
@@ -60,10 +69,12 @@ func (s *streamRedactSink) Emit(e agent.Event) error {
 		return s.next.Emit(e)
 	}
 
-	// A non-streamed event ends the current text run. Release anything held as
-	// its own TextDelta first, reusing the last dropped sequence so the chain is
-	// continuous, then fix this event's Parent if it pointed at a dropped delta.
-	if s.droppedPrev {
+	// Any non-TextDelta event ends the current text run. Flush held text first,
+	// redacted, as its own TextDelta so it stays in this turn and in order. The
+	// flush reuses a dropped sequence: it is free and greater than the last
+	// emitted one. If no dropped sequence is available the held bytes stay on
+	// the stream and ride the next delta rather than being dropped.
+	if s.lastDropped > s.lastEmitted {
 		if held := s.stream.Flush(); held != "" {
 			flush := agent.Event{
 				Type:   agent.TextDelta,
@@ -77,9 +88,12 @@ func (s *streamRedactSink) Emit(e agent.Event) error {
 			}
 			s.lastEmitted = flush.Seq
 		}
+	}
+	if s.droppedPrev {
 		e.Parent = s.lastEmitted
 		s.droppedPrev = false
 	}
+	s.lastEmitted = e.Seq
 	return s.next.Emit(e)
 }
 
