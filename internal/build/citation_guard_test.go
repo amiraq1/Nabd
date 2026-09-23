@@ -23,17 +23,6 @@ func citationGuardScript(t *testing.T) string {
 	return script
 }
 
-// writeTempDoc writes content to a named file inside dir, failing the test
-// on any error.
-func writeTempDoc(t *testing.T, dir, name, content string) string {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatalf("write %s: %v", name, err)
-	}
-	return path
-}
-
 // TestCitationGuardPassesOnCleanRepository runs the full citation guard script
 // against the live repository tree and asserts that it exits 0 and emits at
 // least one "OK:" or "TECH_DEBT:" summary line. This proves the guard is wired
