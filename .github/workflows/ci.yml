@@ -148,6 +148,12 @@ jobs:
           unique=$(printf '%s\n' "${sboms[@]}" | sed 's#^.*/##' | sort -u | wc -l)
           test "$unique" -eq 1 || { printf '%s\n' "${sboms[@]}"; echo "expected 1 distinct SBOM name, got $unique"; exit 1; }
           echo "SBOM coverage verified"
+      - name: Upload dryrun binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: nabd-dryrun-android-arm64
+          path: dist/nabd_android_arm64*/nabd
+
 
   termux:
     runs-on: ubuntu-latest
@@ -164,6 +170,13 @@ jobs:
         GOOS: android
         GOARCH: arm64
       run: |
+        go build -o nabd-android-arm64 ./cmd/ag
         go build ./...
         go vet ./...
         go test -c -o /dev/null ./...   # compile tests for android, don't run
+    - name: Upload Termux binary
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: nabd-upstream-android-arm64
+        path: nabd-android-arm64
+
