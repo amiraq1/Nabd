@@ -10,7 +10,7 @@ Published changes and downloadable artifacts are available on the
 
 Scoped exclusively to Termux (`android/arm64`).
 
-> **Notice:** Linux and macOS desktop users should stay on `v1.5.0`. `v2.0.0` removes the desktop targets and the Landlock sandbox in order to scope Nabd strictly to Termux on Android.
+> **Notice:** Linux and macOS desktop users should stay on `v1.6.1`. `v2.0.0` removes the desktop targets and the Landlock sandbox in order to scope Nabd strictly to Termux on Android.
 
 - **BREAKING: Scope restricted to Termux (`android/arm64`)**: Dropped desktop Linux and macOS build targets. All builds now target `android/arm64`.
 - **BREAKING: Landlock bash sandbox removed**: Termux runs as an unprivileged Android application user where Landlock sandbox is unavailable. The Landlock sandbox implementation in `internal/sandbox` has been removed. Approved bash commands run with the full authority of the Termux app user.
