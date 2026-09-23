@@ -24,6 +24,14 @@ sha256sum -c checksums.txt
 
 See [docs/RELEASING.md](docs/RELEASING.md) for the release process.
 
+## Installation (Termux)
+
+```sh
+pkg install golang git
+git clone https://github.com/amiraq1/Nabd && cd Nabd
+./build.sh && mv nabd $PREFIX/bin/
+```
+
 ## Build and run
 
 ```sh
@@ -61,8 +69,8 @@ selected directory and performs a dry run by default. Pass `--yes` to delete
 the listed files; `--before <RFC3339>` limits deletion by modification time.
 It never traverses subdirectories or follows symlinks. Stop active nabd
 processes before confirmed cleanup. At session startup nabd also prints a
-notice that approved `bash` commands run with the current user's authority and
-that filesystem sandboxing is host-dependent.
+notice that approved bash commands run with the full authority of the
+Termux app user and there is no filesystem sandbox.
 
 ## Slash commands
 
@@ -123,14 +131,7 @@ stdout contains only the final assistant text, or JSONL with `--json`. Notices a
 
 | GOOS/GOARCH | Status |
 |---|---|
-| android/arm64 | reference (Termux) |
-| linux/amd64 | supported |
-| linux/arm64 | supported |
-| darwin/arm64 | supported |
-| darwin/amd64 | supported |
-| windows/* | **not supported** |
-
-Windows is not a release target. Some platform helper files compile there, but the agent's shell execution contract is Unix-oriented.
+| android/arm64 | supported (Termux) |
 
 ## Core architecture
 
@@ -152,6 +153,7 @@ The event is the contract: live rendering and replay consume the same append-onl
 - File reads are bounded; provider-specific limits and `NABD_MAX_READ` determine the cap.
 - Compaction may call the model and falls back to a mechanical summary on failure.
 - `bash` runs after explicit permission, outside path containment. Treat approval as access equivalent to the current OS user.
+- DNS resolution on Termux reads `$PREFIX/etc/resolv.conf` (which defaults to Google Public DNS `8.8.8.8`/`8.8.4.4` in Termux). This bypasses Android Private DNS and VPN-directed DNS. To use custom nameservers, configure `$PREFIX/etc/resolv.conf`. If `$PREFIX/etc/resolv.conf` is missing or empty, public DNS fallback requires explicit opt-in via `NABD_PUBLIC_DNS=1`.
 - Session journals are redacted by default for recognized credential patterns,
   but journals and the shadow store still contain sensitive working data even
   with private filesystem modes. Set `NABD_REDACT_JOURNAL=0` only for a

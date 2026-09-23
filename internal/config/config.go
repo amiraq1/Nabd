@@ -31,7 +31,6 @@ var knownV1Keys = map[string]struct{}{
 	"NABD_ROUTER_MODE": {}, "NABD_ROUTER_PRESTREAM_TIMEOUT": {}, "NABD_PROVIDER_TURN_TIMEOUT": {},
 	"NABD_ROUTER_RETRY_AFTER_WAIT": {}, "NABD_SKILLS_PROJECT": {},
 	"NABD_CTX": {}, "NABD_MAX_TOKENS": {}, "NABD_MAX_TOKENS_PER_RUN": {}, "NABD_MAX_READ": {},
-	"NABD_BASH_SANDBOX": {}, "NABD_BASH_NETWORK": {}, "NABD_BASH_RESOURCES": {},
 	"NABD_ENDPOINT_POLICY": {}, "NABD_ENDPOINT_ALLOW": {},
 	"NABD_REDACT_JOURNAL": {},
 }
@@ -41,7 +40,56 @@ var (
 	values        map[string]string
 	loadErr       error
 	activeVersion int
+
+	// Stderr is the destination for configuration warnings. It defaults to
+	// os.Stderr and may be redirected in tests.
+	Stderr io.Writer = os.Stderr
 )
+
+var removedBashBoundaryValues = map[string]string{
+	"NABD_BASH_SANDBOX":   "on",
+	"NABD_BASH_NETWORK":   "deny",
+	"NABD_BASH_RESOURCES": "limit",
+}
+
+func checkRemovedBashKeys(fileVals map[string]string, w io.Writer) error {
+	keys := []string{"NABD_BASH_SANDBOX", "NABD_BASH_NETWORK", "NABD_BASH_RESOURCES"}
+
+	// First pass: check for any boundary requests (fail closed).
+	for _, k := range keys {
+		boundary := removedBashBoundaryValues[k]
+		if fileVals != nil {
+			if fv, ok := fileVals[k]; ok {
+				if strings.ToLower(strings.TrimSpace(fv)) == boundary {
+					return fmt.Errorf("%s=%s is no longer supported: this Termux build has no bash sandbox. Remove the setting to continue", k, strings.TrimSpace(fv))
+				}
+			}
+		}
+		if ev, ok := os.LookupEnv(k); ok {
+			if strings.ToLower(strings.TrimSpace(ev)) == boundary {
+				return fmt.Errorf("%s=%s is no longer supported: this Termux build has no bash sandbox. Remove the setting to continue", k, strings.TrimSpace(ev))
+			}
+		}
+	}
+
+	// Second pass: for neutral or non-boundary values, warn and strip from file values.
+	for _, k := range keys {
+		hasFile := false
+		if fileVals != nil {
+			if _, ok := fileVals[k]; ok {
+				hasFile = true
+				delete(fileVals, k)
+			}
+		}
+		_, hasEnv := os.LookupEnv(k)
+		if hasFile || hasEnv {
+			if w != nil {
+				fmt.Fprintf(w, "warning: %s is ignored: this Termux build has no bash sandbox\n", k)
+			}
+		}
+	}
+	return nil
+}
 
 func Path() (string, error) {
 	if p := strings.TrimSpace(os.Getenv(EnvVar)); p != "" {
@@ -130,6 +178,7 @@ func ResetForTest() {
 	values = nil
 	loadErr = nil
 	activeVersion = 0
+	Stderr = os.Stderr
 }
 
 // ParseFile securely opens and validates a regular user-owned 0600 v1 file.

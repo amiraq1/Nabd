@@ -68,7 +68,6 @@ All configuration and credential files read by Nabd must satisfy strict OS-level
    - **Containers and Root:**
      * If the process runs as `root` (UID 0), files owned by UID 0 are accepted.
      * If the process runs as an unprivileged user (e.g. UID 1000), files owned by root or other users are refused. The container or operator must ensure the mounted file is owned by the process UID (`chown $(id -u) <file>`).
-   - On Windows, numeric UID checks are a documented no-op (`owner_other.go`), with security delegated to NTFS ACLs.
 5. **Size Bounds:**
    Configuration documents cannot exceed 256 KB (`MaxFileBytes`). Credential secret files cannot exceed 64 KB (`MaxValueBytes`).
 
@@ -360,4 +359,17 @@ Rules enforced when the file is loaded:
 Precedence: provider definitions come from `providers.json` before the builtin
 catalog, and credentials from `auth.json` before legacy environment variables
 and v1 config (`PrecedenceDocumentation` in `internal/registry/registry.go`).
+
+---
+
+## 9. Network and DNS Configuration (Environment Only)
+
+### `NABD_PUBLIC_DNS`
+
+On Termux (`android/arm64`), Go's standard library does not use system `libc` resolver functions (like `getaddrinfo`) because Android's bionic libc is not linked without cgo. Instead, the pure-Go resolver reads `$PREFIX/etc/resolv.conf`.
+
+- **Environment-only variable:** `NABD_PUBLIC_DNS` is read strictly from the process environment (`os.Getenv`) during network initialization. It is **not** a configuration file key and cannot be set in `~/.ag/config` or `~/.ag/config.v2.json`. Setting it in a config file will trigger an unknown key warning (in v1) or validation error (in v2).
+- **Purpose:** If `$PREFIX/etc/resolv.conf` is missing or contains no nameservers, Nabd does not silently fallback to public DNS. Setting `NABD_PUBLIC_DNS=1` (or `true`) explicitly permits Nabd to use fallback public DNS resolvers (`1.1.1.1:53`, `8.8.8.8:53`).
+- **Privacy notice:** Resolving DNS via `$PREFIX/etc/resolv.conf` (or public DNS) bypasses Android system Private DNS (DNS-over-TLS) and VPN-directed DNS. To route DNS queries to your preferred nameservers, configure `$PREFIX/etc/resolv.conf`.
+
 

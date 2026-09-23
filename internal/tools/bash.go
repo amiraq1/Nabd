@@ -1,7 +1,7 @@
 // Package tools: bash.go runs a shell command in its own process group.
-// Three guarantees only: it cannot hang on stdin, it cannot leave children
-// behind, and it cannot read the provider keys. Everything else about this
-// tool is the human's eye at the permission prompt.
+// Two guarantees only: it cannot hang on stdin and it cannot read the
+// provider keys. Everything else about this tool is the human's eye at
+// the permission prompt.
 package tools
 
 import (
@@ -18,10 +18,8 @@ import (
 	"time"
 
 	"nabd/internal/agent"
-	"nabd/internal/config"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
-	"nabd/internal/sandbox"
 )
 
 const (
@@ -48,7 +46,7 @@ func (bashTool) Name() string { return "bash" }
 
 func (bashTool) Spec() provider.ToolSpec {
 	return spec("bash",
-		"Run a shell command inside the project directory. No interactive input: any command waiting for input sees EOF immediately, so pass non-interactive flags (-y, --no-input). Commands that keep background processes alive are killed when the command ends.",
+		"Run a shell command inside the project directory. No interactive input: any command waiting for input sees EOF immediately, so pass non-interactive flags (-y, --no-input).",
 		`{"type":"object","properties":{"cmd":{"type":"string","description":"the command as typed in the shell"},"timeout_s":{"type":"integer","description":"timeout in seconds (default 120, max 600)"}},"required":["cmd"]}`)
 }
 
@@ -67,26 +65,6 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	}
 	if strings.TrimSpace(a.Cmd) == "" {
 		return agent.Outcome{}, errors.New("empty command")
-	}
-	mode, err := sandbox.ParseMode(config.Get("NABD_BASH_SANDBOX"))
-	if err != nil {
-		return agent.Outcome{}, err
-	}
-	network, err := sandbox.ParseNetworkMode(config.Get("NABD_BASH_NETWORK"))
-	if err != nil {
-		return agent.Outcome{}, err
-	}
-	resources, err := sandbox.ParseResourceMode(config.Get("NABD_BASH_RESOURCES"))
-	if err != nil {
-		return agent.Outcome{}, err
-	}
-	helper, helperOK := sandbox.HelperPath()
-	landlockOK := mode != sandbox.ModeOff && sandbox.Available()
-	networkOK := network == sandbox.NetworkDeny && mode != sandbox.ModeOff && sandbox.SupportsNetwork()
-	resourcesOK := resources == sandbox.ResourcesLimit && mode != sandbox.ModeOff && sandbox.ResourcesAvailable()
-	useHelper, err := sandbox.Select(mode, network, resources, helperOK, landlockOK, networkOK, resourcesOK)
-	if err != nil {
-		return agent.Outcome{}, err
 	}
 	to := bashDefaultTimeout
 	if a.T > 0 {
@@ -126,34 +104,13 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		env = append(env, "TMPDIR="+tmp, "TMP="+tmp, "TEMP="+tmp)
 	}
 
-	cmdArgs := []string{"sh", "-c", a.Cmd}
-	if useHelper {
-		networkArg := "allow"
-		if network == sandbox.NetworkDeny {
-			networkArg = "deny"
-		}
-		resourcesArg := "allow"
-		if resources == sandbox.ResourcesLimit {
-			resourcesArg = "limit"
-		}
-		cmdArgs = []string{
-			helper,
-			sandbox.HelperCommand,
-			b.root.Dir(),
-			home,
-			tmp,
-			networkArg,
-			resourcesArg,
-			"sh",
-			"-c",
-			a.Cmd,
-		}
-	}
-	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
+	// Termux: no kernel sandbox is available to an Android app process.
+	// The permission prompt is the boundary; see docs/THREAT_MODEL.md.
+	cmd := exec.Command("sh", "-c", a.Cmd)
 	cmd.Dir = b.root.Dir()
 	cmd.Env = env
 	cmd.Stdin = null
-	cmd.Stdout, cmd.Stderr = pw, pw // one stream: interleaving is causality
+	cmd.Stdout, cmd.Stderr = pw, pw
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	started := time.Now()

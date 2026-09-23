@@ -31,6 +31,9 @@ type V2Config struct {
 	Limits                 V2Limits                `json:"limits,omitempty"`
 	Skills                 V2Skills                `json:"skills,omitempty"`
 	Credentials            map[string]V2Credential `json:"credentials"`
+	BashSandbox            *string                 `json:"NABD_BASH_SANDBOX,omitempty"`
+	BashNetwork            *string                 `json:"NABD_BASH_NETWORK,omitempty"`
+	BashResources          *string                 `json:"NABD_BASH_RESOURCES,omitempty"`
 }
 
 type V2Skills struct {
@@ -155,12 +158,19 @@ func loadSelected() (map[string]string, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	var v map[string]string
 	if version == 2 {
-		v, err := ParseV2File(path)
-		return v, 2, err
+		v, err = ParseV2File(path)
+	} else {
+		v, err = ParseFile(path)
 	}
-	v, err := ParseFile(path)
-	return v, 1, err
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := checkRemovedBashKeys(v, Stderr); err != nil {
+		return nil, 0, err
+	}
+	return v, version, nil
 }
 
 // ParseSelectedFile parses the selected file without mutating the process-wide
@@ -170,12 +180,19 @@ func ParseSelectedFile() (map[string]string, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
+	var v map[string]string
 	if version == 2 {
-		v, err := ParseV2File(path)
-		return v, 2, err
+		v, err = ParseV2File(path)
+	} else {
+		v, err = ParseFile(path)
 	}
-	v, err := ParseFile(path)
-	return v, 1, err
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := checkRemovedBashKeys(v, Stderr); err != nil {
+		return nil, 0, err
+	}
+	return v, version, nil
 }
 
 func ParseV2File(path string) (map[string]string, error) {
@@ -246,6 +263,15 @@ func flattenV2(cfg V2Config) (map[string]string, error) {
 	}
 	if cfg.Model != "" {
 		out["NABD_MODEL"] = cfg.Model
+	}
+	if cfg.BashSandbox != nil {
+		out["NABD_BASH_SANDBOX"] = *cfg.BashSandbox
+	}
+	if cfg.BashNetwork != nil {
+		out["NABD_BASH_NETWORK"] = *cfg.BashNetwork
+	}
+	if cfg.BashResources != nil {
+		out["NABD_BASH_RESOURCES"] = *cfg.BashResources
 	}
 	if cfg.RouterMode != "" {
 		if cfg.RouterMode != "fallback" {

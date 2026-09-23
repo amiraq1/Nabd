@@ -152,7 +152,15 @@ func mapHeadlessExit(err error) int {
 }
 
 func runHeadless(cfg headlessConfig) int {
-	return mapHeadlessExit(runHeadlessErr(cfg))
+	err := runHeadlessErr(cfg)
+	if err != nil && mapHeadlessExit(err) == exitError {
+		w := cfg.stderr
+		if w == nil {
+			w = os.Stderr
+		}
+		fmt.Fprintf(w, "nabd: %v\n", err)
+	}
+	return mapHeadlessExit(err)
 }
 
 func runHeadlessErr(cfg headlessConfig) error {
@@ -177,6 +185,10 @@ func runHeadlessErr(cfg headlessConfig) error {
 	prompt = strings.TrimRight(prompt, "\n")
 	if strings.TrimSpace(prompt) == "" {
 		return errors.New("empty prompt")
+	}
+
+	if err := config.Load(); err != nil {
+		return err
 	}
 
 	prov := cfg.provider
