@@ -6,6 +6,8 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+- **Streamed-chunk redaction:** Secrets split across streamed chunks are now redacted in the journal and `--json` output. Streamed `text_delta` events are joined through a bounded hold-back (`internal/redact.Stream`) before they reach a sink, so a credential or PEM block split across two deltas is redacted as one value instead of surviving piecewise.
+
 ## v2.0.0
 
 Scoped exclusively to Termux (`android/arm64`).
