@@ -232,7 +232,7 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 	}
 
 	uiSink := newUISink()
-	sess.loop.Sink = agent.Fanout{journal, uiSink}
+	sess.loop.Sink = newStreamRedactSink(agent.Fanout{journal, uiSink})
 	if cont {
 		sess.loop.Seed(prevEvs)
 	}
@@ -341,7 +341,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 	})
 	batcher.Start()
 
-	sess.loop.Sink = agent.Fanout{journal, feedSink{batcher: batcher}}
+	sess.loop.Sink = newStreamRedactSink(agent.Fanout{journal, feedSink{batcher: batcher}})
 
 	feed.SetRunner(sess.loop)
 	feed.SetApprover(sess.ap)
