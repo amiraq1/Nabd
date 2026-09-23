@@ -62,8 +62,9 @@ func TestRegistryClassificationUsesRealRegistry(t *testing.T) {
 		t.Errorf("unknown tool = %v, want Deny", v)
 	}
 
+	// YOLO does not auto-approve Executing tools; bash still asks.
 	p.SetYOLO(true)
-	if v, _ := p.Check("bash"); v != perm.Allow {
-		t.Errorf("bash under YOLO = %v, want Allow", v)
+	if v, why := p.Check("bash"); v != perm.Ask {
+		t.Errorf("bash under YOLO = %v (%q), want Ask (executing is never auto-approved)", v, why)
 	}
 }
