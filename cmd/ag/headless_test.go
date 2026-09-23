@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/config"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
@@ -256,5 +258,60 @@ func TestMapHeadlessExit(t *testing.T) {
 	}
 	if mapHeadlessExit(errors.New("x")) != 1 {
 		t.Fatal()
+	}
+}
+
+type trackingProvider struct {
+	called bool
+}
+
+func (p *trackingProvider) Name() string { return "tracker" }
+func (p *trackingProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Chunk, error) {
+	p.called = true
+	ch := make(chan provider.Chunk)
+	close(ch)
+	return ch, errors.New("provider called unexpectedly")
+}
+
+func TestRemovedBashKeysFailBeforeProviderOrTool(t *testing.T) {
+	cases := []struct {
+		key string
+		val string
+	}{
+		{"NABD_BASH_SANDBOX", "on"},
+		{"NABD_BASH_NETWORK", "deny"},
+		{"NABD_BASH_RESOURCES", "limit"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			config.ResetForTest()
+			t.Cleanup(config.ResetForTest)
+
+			t.Setenv(config.EnvVar, filepath.Join(t.TempDir(), "missing-config"))
+			t.Setenv(config.V2EnvVar, "")
+			t.Setenv(tc.key, tc.val)
+
+			prov := &trackingProvider{}
+			var stdout, stderr bytes.Buffer
+			code := runHeadless(headlessConfig{
+				prompt:   "echo hi",
+				provider: prov,
+				stdout:   &stdout,
+				stderr:   &stderr,
+				sessDir:  t.TempDir(),
+			})
+
+			if code != exitError {
+				t.Fatalf("expected exit code %d, got %d", exitError, code)
+			}
+			if prov.called {
+				t.Fatal("provider was called; expected early fail-closed abort before provider invocation")
+			}
+			wantSub := fmt.Sprintf("%s=%s is no longer supported: this Termux build has no bash sandbox. Remove the setting to continue", tc.key, tc.val)
+			if !strings.Contains(stderr.String(), wantSub) {
+				t.Fatalf("stderr = %q, want substring %q", stderr.String(), wantSub)
+			}
+		})
 	}
 }
