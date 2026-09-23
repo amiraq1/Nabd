@@ -23,16 +23,33 @@ Download assets from [GitHub Releases](https://github.com/amiraq1/Nabd/releases)
 
 ### Option A: Official signed release (Recommended)
 
-Download and verify the signed release artifact using Cosign:
+Download the release binary and verification materials:
 
 ```sh
 V=2.0.0; B=https://github.com/amiraq1/Nabd/releases/download/v$V
 curl -LO $B/nabd_${V}_android_arm64 -LO $B/checksums.txt \
      -LO $B/checksums.txt.sig -LO $B/checksums.txt.pem
-cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.sig \
-  --certificate-identity-regexp '^https://github\.com/amiraq1/Nabd/\.github/workflows/release\.yml@refs/tags/v' \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
-sha256sum -c checksums.txt --ignore-missing
+```
+
+**Verification:**
+
+- **With Cosign (cryptographic signature verification):**
+  Cosign is not in Termux pkg repositories; install it via Go (`go install github.com/sigstore/cosign/v2/cmd/cosign@latest`):
+  ```sh
+  cosign verify-blob --certificate checksums.txt.pem --signature checksums.txt.sig \
+    --certificate-identity-regexp '^https://github\.com/amiraq1/Nabd/\.github/workflows/release\.yml@refs/tags/v' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt
+  sha256sum -c checksums.txt --ignore-missing
+  ```
+- **Without Cosign (checksum integrity only):**
+  If Cosign is not installed, verify hash integrity directly (note: verifies integrity against the downloaded checksums, but does not prove cryptographic provenance):
+  ```sh
+  sha256sum -c checksums.txt --ignore-missing
+  ```
+
+**Install:**
+
+```sh
 install -m 0755 nabd_${V}_android_arm64 $PREFIX/bin/nabd
 ```
 
