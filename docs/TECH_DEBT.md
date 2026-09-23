@@ -973,12 +973,12 @@ excluded.
 citations: names of tests that existed at a documented point in time and were
 later deleted or renamed. Two such citations are known at the time of this entry:
 
-1. `TestDedupReads` (line 253) — the same line explicitly states the test "was
-   deleted" as part of the test-count accounting. The backtick form is a
-   historical record, not a contract claim.
-2. `TestFlushJoinSameForChatAndReplay` (line 285) — retained as a text-search
-   anchor after the test was split into `TestFlushJoinDeterministic` and
-   `TestFlushJoinEmptyBuffer` in PR #191. The old name is cited in NOTES.md as
+1. TestDedupReads (NOTES.md line 253) — the same line explicitly states the test
+   "was deleted" as part of the test-count accounting. The backtick form in
+   NOTES.md is a historical record, not a contract claim.
+2. TestFlushJoinSameForChatAndReplay (NOTES.md line 285) — retained as a
+   text-search anchor after the test was split into `TestFlushJoinDeterministic`
+   and `TestFlushJoinEmptyBuffer` in PR #191. The old name is cited in NOTES.md as
    a navigation reference to the original design decision.
 
 Applying the strict guard to NOTES.md without distinguishing past-tense records
@@ -988,7 +988,7 @@ continuous maintenance of an allowlist.
 **Prerequisite for activation.** Before the guard can be extended to NOTES.md,
 an annotation convention must be established and applied. Viable options:
 
-- A `(historical)` suffix inline: `` `TestOldName` (historical) `` — the guard
+- A `(historical)` suffix inline: the name followed by `(historical)` — the guard
   strips names with this suffix before checking.
 - A dedicated `## Historical test names` section that acts as an explicit
   allowlist; the guard skips names listed there.

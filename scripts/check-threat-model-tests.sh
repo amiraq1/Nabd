@@ -68,14 +68,17 @@ for doc in "${docs[@]}"; do
     fi
     doc_missing=0
     for test_name in "${tests[@]}"; do
-      if ! grep -R --include='*_test.go' -Eq \
+      if ! grep -R --exclude-dir=.git --include='*_test.go' -Eq \
           "func[[:space:]]+${test_name}[[:space:]]*\(" .; then
         echo "missing cited test: ${test_name}" >&2
         doc_missing=1
       fi
     done
-    [[ "$doc_missing" -eq 0 ]] || overall_missing=1
-    echo "OK: all ${found} tests cited in ${doc} exist."
+    if [[ "$doc_missing" -eq 0 ]]; then
+      echo "OK: all ${found} tests cited in ${doc} exist."
+    else
+      overall_missing=1
+    fi
   else
     # §New document output — one summary line per document; failures include
     # the document name and line number so engineers can locate the citation
@@ -87,13 +90,13 @@ for doc in "${docs[@]}"; do
     fi
     doc_missing=0
     for test_name in "${tests[@]}"; do
-      if ! grep -R --include='*_test.go' -Eq \
+      if ! grep -R --exclude-dir=.git --include='*_test.go' -Eq \
           "func[[:space:]]+${test_name}[[:space:]]*\(" .; then
         # Print document name and line number alongside the missing name so the
         # engineer can find the citation without a second grep.
-        lineno=$(LC_ALL=C grep -n "$PATTERN" "$doc" |
+        lineno=$(LC_ALL=C grep -nE "$PATTERN" "$doc" |
           grep -m1 "\`${test_name}" |
-          cut -d: -f1)
+          cut -d: -f1 || true)
         echo "missing cited test: ${test_name} (${doc}:${lineno})" >&2
         doc_missing=1
       fi

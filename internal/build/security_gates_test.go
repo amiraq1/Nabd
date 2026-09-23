@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -58,6 +59,17 @@ func runGitOut(t *testing.T, dir string, args ...string) string {
 
 func runCmd(t *testing.T, dir string, env []string, name string, args ...string) (int, string, string) {
 	t.Helper()
+	if name == "bash" && runtime.GOOS == "windows" {
+		for _, candidate := range []string{
+			`C:\Program Files\Git\bin\bash.exe`,
+			`C:\Program Files (x86)\Git\bin\bash.exe`,
+		} {
+			if _, err := os.Stat(candidate); err == nil {
+				name = candidate
+				break
+			}
+		}
+	}
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
 	if env != nil {
