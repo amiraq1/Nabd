@@ -333,3 +333,83 @@ func TestPRChecklistGateNoTestExemption(t *testing.T) {
 		})
 	}
 }
+
+// The checklist previously required every item to be ticked, so an item that did
+// not apply had to be ticked falsely or the pull request could not pass. An item
+// may now be marked `- [x] N/A: <reason>` on its own line, with a reason of at
+// least 10 characters. The escape is bounded: the three items that state an
+// invariant which always applies to every pull request (classification,
+// credential hygiene, action pinning) can never be N/A, and an unchecked item
+// still fails.
+func TestPRChecklistGateExplicitNA(t *testing.T) {
+	_, checklistScript := gateScripts(t)
+
+	const (
+		classifyItem = "- [x] I classified whether this changes paths"
+		threatItem   = "- [x] I updated `docs/THREAT_MODEL.md`"
+		credItem     = "- [x] I checked that logs, fixtures, and diffs contain no credentials"
+	)
+
+	tests := []struct {
+		name       string
+		body       string
+		wantExit   int
+		wantStderr string
+	}{
+		{
+			name:     "Positive_ValidNA_OnNonMandatoryItem",
+			body:     strings.Replace(validPRBody, threatItem, "- [x] N/A: no security claim changed here", 1),
+			wantExit: 0,
+		},
+		{
+			name:       "Negative_ShortNAReason",
+			body:       strings.Replace(validPRBody, threatItem, "- [x] N/A: short", 1),
+			wantExit:   1,
+			wantStderr: "N/A reason is shorter than 10 characters",
+		},
+		{
+			name:       "Negative_NAOnMandatoryItem",
+			body:       strings.Replace(validPRBody, classifyItem, "- [x] N/A: it always applies but was marked anyway", 1),
+			wantExit:   1,
+			wantStderr: "always applies and cannot be marked N/A",
+		},
+		{
+			name:       "Negative_UntickedItem",
+			body:       strings.Replace(validPRBody, credItem, "- [ ] "+strings.TrimPrefix(credItem, "- [x] "), 1),
+			wantExit:   1,
+			wantStderr: "PR security checklist is incomplete",
+		},
+		{
+			name:     "Positive_NormalTickedPR",
+			body:     validPRBody,
+			wantExit: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			repoDir, base := initTestRepo(t)
+			runGit(t, repoDir, "checkout", "-B", "branch-"+tc.name, base)
+			docPath := filepath.Join(repoDir, "docs", "user_guide.md")
+			if err := os.WriteFile(docPath, []byte("# Guide\nDocumentation only.\n"), 0o644); err != nil {
+				t.Fatalf("write doc: %v", err)
+			}
+			runGit(t, repoDir, "add", ".")
+			runGit(t, repoDir, "commit", "-qm", "docs-only for "+tc.name)
+
+			bodyPath := filepath.Join(repoDir, "live-body.txt")
+			if err := os.WriteFile(bodyPath, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			exitCode, _, stderr := runCmd(t, repoDir, prGateEnv(bodyPath, "master"), "bash", checklistScript)
+			if exitCode != tc.wantExit {
+				t.Fatalf("expected exit %d, got %d\nstderr: %s", tc.wantExit, exitCode, stderr)
+			}
+			if tc.wantStderr != "" && !strings.Contains(stderr, tc.wantStderr) {
+				t.Errorf("expected stderr to contain %q, got: %s", tc.wantStderr, stderr)
+			}
+		})
+	}
+}
