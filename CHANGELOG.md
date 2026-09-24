@@ -9,7 +9,7 @@ Published changes and downloadable artifacts are available on the
 ## v2.1.1
 
 ### Security
-- Fixed streaming redaction edge cases at hold-back boundaries (GHSA-xxxx-xxxx-xxxx).
+- Fixed streaming redaction edge cases at hold-back boundaries (see GHSA advisory).
 
 ### Fixed
 - Feed session banner shows the project name instead of the journal file name.
