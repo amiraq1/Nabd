@@ -248,6 +248,39 @@ func TestStreamPEMValidBlockMatchesRedact(t *testing.T) {
 	}
 }
 
+func TestStreamSwallowHoldsAcrossDashBoundary(t *testing.T) {
+	s := NewStream(nil)
+	var out strings.Builder
+	out.WriteString(s.Write(strings.Repeat("A", 5000)))
+	out.WriteString(s.Write("AAAA-"))
+	out.WriteString(s.Write("tailsecret more "))
+	out.WriteString(s.Flush())
+	got := out.String()
+
+	if strings.Contains(got, "tailsecret") {
+		t.Fatalf("output contains tailsecret: %q", got)
+	}
+}
+
+func TestStreamPEMSwallowFindsSplitEnd(t *testing.T) {
+	s := NewStream(nil)
+	var out strings.Builder
+	head := "-----BEGIN RSA PRIVATE KEY-----\n"
+	body := "bodysecret" + strings.Repeat("A", 9000-len("bodysecret"))
+	out.WriteString(s.Write(head + body))
+	out.WriteString(s.Write("\n---"))
+	out.WriteString(s.Write("--END RSA PRIVATE KEY-----\nvisible text"))
+	out.WriteString(s.Flush())
+	got := out.String()
+
+	if strings.Contains(got, "bodysecret") {
+		t.Fatalf("output contains bodysecret: %q", got)
+	}
+	if !strings.Contains(got, "visible text") {
+		t.Fatalf("expected visible text in output: %q", got)
+	}
+}
+
 func BenchmarkRedact(b *testing.B) {
 	s := "Bash echo hello world this is a tool summary line with no secrets here"
 	b.ReportAllocs()
