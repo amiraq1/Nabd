@@ -237,9 +237,7 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 		sess.loop.Seed(prevEvs)
 	}
 
-	cwd, _ := os.Getwd()
-	if err := sess.loop.Start(fmt.Sprintf("%s · %s · %s",
-		build.BannerPrefix(), prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
+	if err := sess.loop.Start(sessionBanner(prov, root.Dir()), root.Dir()); err != nil {
 		journal.Close()
 		return err
 	}
@@ -360,8 +358,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 		progDone <- err
 	}()
 
-	if err := sess.loop.Start(fmt.Sprintf("%s · %s · %s",
-		build.BannerPrefix(), prov.Name(), filepath.Base(journalPath)), root.Dir()); err != nil {
+	if err := sess.loop.Start(sessionBanner(prov, root.Dir()), root.Dir()); err != nil {
 		batcher.Stop()
 		journal.Close()
 		return err
@@ -822,4 +819,13 @@ func editRecords(evs []agent.Event) []*agent.EditRecord {
 		}
 	}
 	return out
+}
+
+type providerNamer interface {
+	Name() string
+}
+
+func sessionBanner(prov providerNamer, rootDir string) string {
+	return fmt.Sprintf("%s · %s · %s",
+		build.BannerPrefix(), prov.Name(), filepath.Base(rootDir))
 }
