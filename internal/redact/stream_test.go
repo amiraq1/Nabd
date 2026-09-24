@@ -96,6 +96,46 @@ func FuzzStreamMatchesWhole(f *testing.F) {
 	})
 }
 
+func FuzzStreamSecretsNeverSurface(f *testing.F) {
+	f.Add([]byte{10, 20, 50})
+	f.Add([]byte{1, 2, 3, 4, 5})
+	f.Add([]byte{64, 128})
+	f.Fuzz(func(t *testing.T, cuts []byte) {
+		const (
+			secretToken = "TOPSECRETKEYBODY"
+			secretTail  = "STILLSECRETTAIL"
+		)
+		pem := "-----BEGIN RSA PRIVATE KEY-----\n" + secretToken + "\n" + secretTail + "\n-----END RSA PRIVATE KEY-----\n"
+		input := strings.Repeat("X", StreamHoldCap+500) + pem + strings.Repeat("Y", StreamHoldCap+500)
+
+		s := NewStream(nil)
+		var out strings.Builder
+		pos := 0
+		for _, c := range cuts {
+			step := int(c)%256 + 1
+			if pos+step > len(input) {
+				step = len(input) - pos
+			}
+			if step > 0 {
+				out.WriteString(s.Write(input[pos : pos+step]))
+				pos += step
+			}
+		}
+		if pos < len(input) {
+			out.WriteString(s.Write(input[pos:]))
+		}
+		out.WriteString(s.Flush())
+		got := out.String()
+
+		if strings.Contains(got, secretToken) {
+			t.Fatalf("secret token surfaced: %q", got)
+		}
+		if strings.Contains(got, secretTail) {
+			t.Fatalf("secret tail surfaced: %q", got)
+		}
+	})
+}
+
 // TestStreamEmitsProseImmediately pins that plain prose ending in whitespace is
 // not withheld.
 func TestStreamEmitsProseImmediately(t *testing.T) {
@@ -143,6 +183,27 @@ func TestStreamUnterminatedPEMRedactedOnFlush(t *testing.T) {
 	}
 	if strings.Contains(got, "-----BEGIN OPENSSH PRIVATE KEY-----") || strings.Contains(got, "b3BlbnNzaC1rZXktdjE") {
 		t.Fatalf("PEM leaked: %q", got)
+	}
+}
+
+func TestStreamSwallowPreservesPEMBoundary(t *testing.T) {
+	s := NewStream(nil)
+	var out strings.Builder
+	out.WriteString(s.Write(strings.Repeat("A", 5000)))
+	out.WriteString(s.Write("-----BEGIN RSA PRIVATE KEY-----\nMIIEsecretbody\n"))
+	out.WriteString(s.Write("moresecret\n-----END RSA PRIVATE KEY-----\n"))
+	out.WriteString(s.Flush())
+	got := out.String()
+
+	if strings.Contains(got, "secretbody") {
+		t.Fatalf("output contains secretbody: %q", got)
+	}
+	if strings.Contains(got, "moresecret") {
+		t.Fatalf("output contains moresecret: %q", got)
+	}
+	last := strings.LastIndex(got, Token)
+	if last < 0 || strings.Contains(got[last+len(Token):], "A") || strings.Contains(strings.ReplaceAll(got, Token, ""), "A") {
+		t.Fatalf("output contains 'A' after token: %q", got)
 	}
 }
 

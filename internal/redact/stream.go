@@ -64,6 +64,29 @@ func NewStream(exactKeys []string) *Stream {
 func (s *Stream) Write(chunk string) (emit string) {
 	s.pending += chunk
 
+	// Finish swallowing an over-long token run before looking for new holds.
+	// Swallowing must never cross the start of a PEM boundary.
+	if s.swallow {
+		limit := len(s.pending)
+		if b := strings.Index(s.pending, "-----BEGIN"); b >= 0 && b < limit {
+			limit = b
+		}
+		if l := trailingPrefixOf(s.pending[:limit], "-----BEGIN"); l > 0 {
+			limit -= l
+		}
+		k := 0
+		for k < limit && isTokenByte(s.pending[k]) {
+			k++
+		}
+		s.pending = s.pending[k:]
+		if k < limit || limit < len(s.pending)+k {
+			s.swallow = false
+		}
+		if s.pending == "" {
+			return emit
+		}
+	}
+
 	// An open PEM block is held in full: its interior is arbitrary bytes and the
 	// only safe boundary is the matching END line or Flush. Everything before the
 	// BEGIN is already decidable, so it is emitted now.
@@ -73,19 +96,6 @@ func (s *Stream) Write(chunk string) (emit string) {
 			s.pending = s.pending[b:]
 		}
 		return emit
-	}
-
-	// Finish swallowing an over-long token run before looking for new holds.
-	if s.swallow {
-		k := 0
-		for k < len(s.pending) && isTokenByte(s.pending[k]) {
-			k++
-		}
-		s.pending = s.pending[k:]
-		s.swallow = false
-		if s.pending == "" {
-			return emit
-		}
 	}
 
 	hold := s.holdBackLen()
