@@ -6,6 +6,11 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+## v2.1.2
+
+### Security
+- The streamed redactor no longer cuts inside a complete recognized credential or configured exact key, so a secret split across chunks can no longer survive as an unredacted emitted prefix plus a held suffix. This closes an additional low-impact edge case at hold-back boundaries.
+
 ## v2.1.1
 
 ### Security
