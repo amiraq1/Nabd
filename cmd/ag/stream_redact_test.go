@@ -453,3 +453,182 @@ func TestLiveRewindThenContinueKeepsJournalChain(t *testing.T) {
 		t.Fatalf("branch point disagrees: journal rewinds=%d history rewinds=%d, want 1 each", journalRewinds, histRewinds)
 	}
 }
+
+// reusedFlushSeq returns the Seq of a TextDelta whose Seq is more than one
+// greater than its Parent's Seq. That gap is the signature of a boundary flush
+// reusing a sequence number a dropped delta left free, and it is the only way
+// such an out-of-order TextDelta can appear.
+func reusedFlushSeq(evs []agent.Event) int {
+	by := map[int]agent.Event{}
+	for _, e := range evs {
+		by[e.Seq] = e
+	}
+	for _, e := range evs {
+		if e.Type != agent.TextDelta || e.Parent == 0 {
+			continue
+		}
+		if p, ok := by[e.Parent]; ok && e.Seq > p.Seq+1 {
+			return e.Seq
+		}
+	}
+	return 0
+}
+
+func liveSeqs(evs []agent.Event) []int {
+	out := make([]int, 0, len(evs))
+	for _, e := range agent.Live(evs) {
+		out = append(out, e.Seq)
+	}
+	return out
+}
+
+// TestRewindToReusedParentKeepsChainResolvable covers the state that
+// TECH_DEBT.md §STREAM_REDACT_PARENT_REUSE_REWIND_UNVERIFIED records as the one
+// untested case: a rewind to a branch point whose Parent is a sequence that was
+// dropped (its redacted output was empty, so the delta was withheld) and then
+// reused by a later boundary flush. The reuse is exercised by streaming a secret
+// across enough chunks that at least two deltas are dropped before the flush;
+// the test first proves that state occurred, then rewinds, continues, and checks
+// that every Parent resolves, that the seqs are unique and strictly increasing,
+// that agent.Live returns the whole chain, and that replay (the journal) agrees
+// with the in-memory history on the branch point.
+func TestRewindToReusedParentKeepsChainResolvable(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	root, err := tools.NewRoot("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := snap.New(root.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry(root, sh)
+	pol := perm.New(reg)
+	pol.SetMode(perm.ModeDeny)
+
+	path := filepath.Join(t.TempDir(), "s.jsonl")
+	journal, err := store.NewJSONLWithOptions(path, journalStoreOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const secret = "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789"
+	loop := newSessionLoop(&multiChunkProvider{turns: []multiTurn{
+		{chunks: []string{
+			"one ",
+			secret[:4], secret[4:8], secret[8:13], secret[13:26], secret[26:],
+			" end",
+		}, call: writeCall("x.txt", "hi")},
+		{chunks: []string{"two"}},
+	}}, reg, gate{pol}, silentAsker{})
+	loop.Sink = newStreamRedactSink(agent.Fanout{journal})
+
+	if err := loop.Start("t", root.Dir()); err != nil {
+		t.Fatal(err)
+	}
+	if err := loop.Run(context.Background(), "one"); err != nil {
+		t.Fatalf("run 1: %v", err)
+	}
+
+	mid, err := store.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reused := reusedFlushSeq(mid)
+	if reused == 0 {
+		t.Fatal("no dropped-then-reused sequence was produced; the chunking did not exercise the recorded state")
+	}
+	referenced := false
+	for _, e := range mid {
+		if e.Parent == reused {
+			referenced = true
+		}
+	}
+	if !referenced {
+		t.Fatalf("reused seq %d is not the Parent of any journal event", reused)
+	}
+
+	if _, err := loop.Rewind(1); err != nil {
+		t.Fatalf("live rewind to the reused-parent branch point: %v", err)
+	}
+	if err := loop.Run(context.Background(), "two"); err != nil {
+		t.Fatalf("run 2 after rewind: %v", err)
+	}
+	_ = loop.End("done")
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	evs, err := store.Read(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int]bool{}
+	for i, e := range evs {
+		if seen[e.Seq] {
+			t.Fatalf("duplicate seq %d", e.Seq)
+		}
+		seen[e.Seq] = true
+		if i > 0 && e.Seq <= evs[i-1].Seq {
+			t.Fatalf("seq not strictly increasing: %d then %d", evs[i-1].Seq, e.Seq)
+		}
+	}
+	for _, e := range evs {
+		if e.Parent != 0 && !seen[e.Parent] {
+			t.Fatalf("seq %d has dangling parent %d", e.Seq, e.Parent)
+		}
+	}
+	if !seen[reused] {
+		t.Fatalf("the reused seq %d was lost from the journal", reused)
+	}
+
+	branch := agent.Live(evs)
+	if len(branch) == 0 || branch[0].Type != agent.RunStart {
+		t.Fatalf("Live chain does not start at RunStart: %+v", branch)
+	}
+	last := evs[len(evs)-1]
+	if branch[len(branch)-1].Seq != last.Seq {
+		t.Fatalf("Live ended at seq %d, want the last event %d (chain truncated at a reused parent)", branch[len(branch)-1].Seq, last.Seq)
+	}
+
+	// The rewind's branch point (its Parent) must resolve onto the live chain.
+	rewindParent := 0
+	for _, e := range evs {
+		if e.Type == agent.Rewind {
+			rewindParent = e.Parent
+		}
+	}
+	onChain := false
+	for _, e := range branch {
+		if e.Seq == rewindParent {
+			onChain = true
+		}
+	}
+	if !onChain {
+		t.Fatalf("rewind parent %d is not on the live replay branch", rewindParent)
+	}
+
+	// Replay (the journal) must agree with the in-memory history on the branch
+	// point: each has exactly one Rewind and the same rewind parent.
+	histParent, histRewinds := 0, 0
+	for _, e := range agent.Live(loop.Hist()) {
+		if e.Type == agent.Rewind {
+			histRewinds++
+			histParent = e.Parent
+		}
+	}
+	if histRewinds != 1 {
+		t.Fatalf("in-memory history has %d rewinds, want 1", histRewinds)
+	}
+	if histParent != rewindParent {
+		t.Fatalf("replay branch point %d != in-memory history branch point %d", rewindParent, histParent)
+	}
+	if len(liveSeqs(evs)) == 0 {
+		t.Fatal("replay branch is empty")
+	}
+}
