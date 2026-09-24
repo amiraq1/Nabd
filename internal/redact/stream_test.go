@@ -45,6 +45,106 @@ func TestStreamMatchesWholeEverySplit(t *testing.T) {
 	}
 }
 
+// TestStreamCutNeverSplitsCompleteMatch ensures a complete match is never split
+// across an emitted prefix and a held suffix.
+func TestStreamCutNeverSplitsCompleteMatch(t *testing.T) {
+	cases := []string{
+		"BeArer 00BeArer ",
+		"Bearer abcdefgauthorization ",
+		"authorization: 1234567Bearer\n",
+	}
+	for _, input := range cases {
+		t.Run(input, func(t *testing.T) {
+			want := Redact(input)
+			n := len(input)
+			for i := 0; i <= n; i++ {
+				if got := streamed(input, i); got != want {
+					t.Fatalf("single split at %d for %q: got %q want %q", i, input, got, want)
+				}
+			}
+			for i := 0; i <= n; i++ {
+				for j := i; j <= n; j++ {
+					if got := streamed(input, i, j); got != want {
+						t.Fatalf("splits %d,%d for %q: got %q want %q", i, j, input, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestStreamCutNeverSplitsExactKey ensures an exact key match is never split
+// across an emitted prefix and a held suffix.
+func TestStreamCutNeverSplitsExactKey(t *testing.T) {
+	exactKeys := []string{"CUSTOM_KEY_12345Bearer ", "overlap-key-suffix"}
+	for _, k := range exactKeys {
+		t.Run(k, func(t *testing.T) {
+			want := Redact(RedactExactKeys(k, exactKeys))
+			n := len(k)
+			for i := 0; i <= n; i++ {
+				s := NewStream(exactKeys)
+				got := s.Write(k[:i]) + s.Write(k[i:]) + s.Flush()
+				if got != want {
+					t.Fatalf("single split at %d for %q: got %q want %q", i, k, got, want)
+				}
+			}
+			for i := 0; i <= n; i++ {
+				for j := i; j <= n; j++ {
+					s := NewStream(exactKeys)
+					got := s.Write(k[:i]) + s.Write(k[i:j]) + s.Write(k[j:]) + s.Flush()
+					if got != want {
+						t.Fatalf("splits %d,%d for %q: got %q want %q", i, j, k, got, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+// TestStreamPendingBoundedOnLongBearerChain verifies that streaming a long
+// repetition of Bearer tokens does not grow the held buffer without bound,
+// keeping Pending() <= StreamHoldCap within a match length margin.
+func TestStreamPendingBoundedOnLongBearerChain(t *testing.T) {
+	unit := "Bearer 00BeArer "
+	const count = 300
+	longInput := strings.Repeat(unit, count)
+	want := Redact(longInput)
+
+	// Chunk-by-chunk write
+	s := NewStream(nil)
+	var out strings.Builder
+	for i := 0; i < count; i++ {
+		out.WriteString(s.Write(unit))
+		if p := s.Pending(); p > StreamHoldCap {
+			t.Fatalf("pending %d exceeded StreamHoldCap %d at iteration %d", p, StreamHoldCap, i)
+		}
+		if p := s.Pending(); p > len(unit)*2 {
+			t.Fatalf("pending %d exceeded match margin %d at iteration %d", p, len(unit)*2, i)
+		}
+	}
+	out.WriteString(s.Flush())
+	if got := out.String(); got != want {
+		t.Fatalf("chunk-by-chunk got != want: got len %d want len %d", len(got), len(want))
+	}
+
+	// Byte-by-byte write
+	s2 := NewStream(nil)
+	var out2 strings.Builder
+	for i := 0; i < len(longInput); i++ {
+		out2.WriteString(s2.Write(longInput[i : i+1]))
+		if p := s2.Pending(); p > StreamHoldCap {
+			t.Fatalf("byte-by-byte pending %d exceeded StreamHoldCap %d at byte %d", p, StreamHoldCap, i)
+		}
+		if p := s2.Pending(); p > len(unit)*2 {
+			t.Fatalf("byte-by-byte pending %d exceeded match margin %d at byte %d", p, len(unit)*2, i)
+		}
+	}
+	out2.WriteString(s2.Flush())
+	if got := out2.String(); got != want {
+		t.Fatalf("byte-by-byte got != want: got len %d want len %d", len(got), len(want))
+	}
+}
+
 // TestStreamRandomChunking checks the same property under random chunk sizes
 // from 1 to 64, with a fixed seed so a failure is reproducible.
 func TestStreamRandomChunking(t *testing.T) {
