@@ -19,6 +19,17 @@ const StreamHoldCap = MaxBodyBytes
 // worse than a bounded temporary hold-back.
 const StreamPEMHoldCap = 8 * 1024
 
+// pemEndTail is enough to hold any "-----END ... PRIVATE KEY-----" line split
+// across writes. Held bytes are inside a swallowed block and are never emitted.
+const pemEndTail = 64
+
+func keepPEMEndTail(s string) string {
+	if len(s) > pemEndTail {
+		return s[len(s)-pemEndTail:]
+	}
+	return s
+}
+
 // pemBeginMarker and pemEndMarker are the two halves of the PEM private-key
 // shape, compiled on their own so the stream can tell a complete block from an
 // unterminated one that it must hold to end of input.
@@ -44,9 +55,14 @@ var (
 // A Stream is not safe for concurrent use: it carries the partial-match state
 // for one streamed field, and callers must use one goroutine per stream.
 type Stream struct {
-	exact      []string
-	pending    string
-	swallow    bool
+	exact   []string
+	pending string
+	// swallow is set when the cap forced a partial emit while inside an
+	// over-long token run. The rest of that run must not surface, so Write drops
+	// token bytes until the run ends.
+	swallow bool
+	// swallowPEM is set when an open PEM block exceeded StreamPEMHoldCap.
+	// The rest of the block is discarded until a matching END marker or Flush.
 	swallowPEM bool
 }
 
@@ -73,17 +89,7 @@ func (s *Stream) Write(chunk string) (emit string) {
 			s.pending = s.pending[loc[1]:]
 			s.swallowPEM = false
 		} else {
-			keep := 0
-			if idx := strings.LastIndex(s.pending, "-----"); idx >= 0 {
-				if k := len(s.pending) - idx; k <= 64 {
-					keep = k
-				}
-			}
-			if keep > 0 {
-				s.pending = s.pending[len(s.pending)-keep:]
-			} else {
-				s.pending = ""
-			}
+			s.pending = keepPEMEndTail(s.pending)
 			return emit
 		}
 	}
@@ -91,21 +97,24 @@ func (s *Stream) Write(chunk string) (emit string) {
 	// Finish swallowing an over-long token run before looking for new holds.
 	// Swallowing must never cross the start of a PEM boundary.
 	if s.swallow {
-		limit := len(s.pending)
-		if b := strings.Index(s.pending, "-----BEGIN"); b >= 0 && b < limit {
-			limit = b
-		}
-		if l := trailingPrefixOf(s.pending[:limit], "-----BEGIN"); l > 0 {
-			limit -= l
+		limit, full := len(s.pending), false
+		if b := strings.Index(s.pending, "-----BEGIN"); b >= 0 {
+			limit, full = b, true
+		} else {
+			limit -= trailingPrefixOf(s.pending, "-----BEGIN")
 		}
 		k := 0
 		for k < limit && isTokenByte(s.pending[k]) {
 			k++
 		}
+		ended := k < limit || full
 		s.pending = s.pending[k:]
-		if k < limit || limit < len(s.pending)+k {
-			s.swallow = false
+		if !ended {
+			// Still inside the over-cap run: hold only an ambiguous BEGIN prefix
+			// and keep swallowing on the next Write.
+			return emit
 		}
+		s.swallow = false
 		if s.pending == "" {
 			return emit
 		}
@@ -122,17 +131,7 @@ func (s *Stream) Write(chunk string) (emit string) {
 		}
 		if len(s.pending) > StreamPEMHoldCap {
 			emit += Token
-			keep := 0
-			if idx := strings.LastIndex(s.pending, "-----"); idx >= 0 {
-				if k := len(s.pending) - idx; k <= 64 {
-					keep = k
-				}
-			}
-			if keep > 0 {
-				s.pending = s.pending[len(s.pending)-keep:]
-			} else {
-				s.pending = ""
-			}
+			s.pending = keepPEMEndTail(s.pending)
 			s.swallowPEM = true
 			return emit
 		}
