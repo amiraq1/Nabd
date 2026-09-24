@@ -6,6 +6,8 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+- **Documentation correction (`docs`):** Removed reference to non-existent `nabd provider add` subcommand from `docs/CONFIG.md`. Credential enrollment is handled via `nabd connect <provider>` and provider definitions are configured in `~/.ag/providers.json`; `nabd provider` inspects configured providers and accepts zero arguments.
+
 ## v2.1.0
 
 - **Streamed-chunk redaction:** Secrets split across streamed chunks are now redacted in the journal, `--json` output, and the interactive feed. Streamed `text_delta` events are joined through a bounded hold-back (`internal/redact.Stream`) before they reach a sink, so a credential or PEM block split across two deltas is redacted as one value instead of surviving piecewise.

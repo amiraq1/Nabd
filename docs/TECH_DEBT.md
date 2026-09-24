@@ -359,35 +359,29 @@ sets the variable the feed separators degrade to ASCII while the command menu
 stays Unicode. Unverified and untested; fixing it touches production code and
 needs its own red case, so it is out of scope for the current test batch.
 
-## TWO_INTERACTIVE_UIS - the layout work targets the experimental path
+## TWO_INTERACTIVE_UIS - Feed is default, Chat preserved as fallback (ADR-0002)
 
 cmd/ag/main.go carries two interactive TUIs and a third replay model:
-doChat (line 111) runs ui.Chat, doChatWithFeed (line 237) runs ui.Feed, and
---replay runs ui.NewReplay. The -feed flag defaults to false, so the default
-interactive path is Chat, not Feed.
+doChat runs ui.Chat, doChatWithFeed runs ui.Feed, and --replay runs ui.NewReplay.
+The -feed flag defaults to true, so the default interactive path is Feed,
+with Chat preserved as a fallback via `--feed=false`.
 
-Everything measured and fixed in this batch - computeLayout, the slash menu
+Everything measured and fixed in earlier batches - computeLayout, the slash menu
 floor, visualRowsOf, the frame contract, separator width - lives in the Feed
-path. Users on the default path do not see it. This is the right order for
-promoting Feed to default, but it must not be described as a production fix.
-
-Chat (internal/ui/chat.go) has no computeLayout, no frame contract and no
-layout tests at all, while Feed (feed.go) now has both.
+path. Chat (internal/ui/chat.go) has no computeLayout or frame contract.
 
 The interactive session (root, registry, policy, approver, loop) and the five
-slash-command callbacks are now built once by `newInteractiveSession` in
+slash-command callbacks are built once by `newInteractiveSession` in
 cmd/ag/session.go and wired through a single `ui.SessionCallbacks` contract
-shared by Chat (`chat.SetCallbacks`) and Feed (`feed.SetCallbacks`). This
-resolves the previous divergence where `OnRewind` returned two strings on Feed
-versus one on Chat, and removes the duplicated permission-gate construction —
-there is now one gate (`gate{pol}`) and one `agent.Gate` contract for both
-paths. The command bodies themselves live in named helpers in session.go
-(`rewindSummary`, `ctxSummary`, `editsSummary`), so they cannot drift.
+shared by Chat (`chat.SetCallbacks`) and Feed (`feed.SetCallbacks`). The startup
+banner is unified via `sessionBanner(prov, root.Dir())`.
 
-Open decision: promote Feed to default and retire Chat, or keep both and
-duplicate every layout contract. Until it is decided, no layout finding should
-be acted on without stating which path it applies to. The Replay model has not
-been read at all.
+Decision resolved: ADR-0002 (docs/DECISIONS/0002-feed-default-chat-fallback.md)
+formally cancels ADR-0001. Feed is the default interface; the `--ui` and
+`NABD_UI` migration roadmap is rejected. Chat is retained via `--feed=false`
+for low-resource Termux environments and as an emergency fallback. Retirement of
+Chat is deferred until mobile-first feedback confirms Feed fully satisfies all
+performance and terminal constraint requirements.
 
 ## TWO_INTERACTIVE_UIS - correction to the entry above
 Two absolute claims in the previous entry were written without measurement and

@@ -308,7 +308,7 @@ positional arguments. Diagnostics go to stderr; stdout is JSONL only.
 User-defined providers live in `~/.ag/providers.json`; the path can be
 overridden with `NABD_PROVIDERS_FILE`. API keys are not stored here — they live
 in `~/.ag/auth.json` (override `NABD_AUTH_FILE`) and are enrolled with
-`nabd connect` or `nabd provider add`. The file is optional, and its document is
+`nabd connect <provider>`. The file is optional, and its document is
 a single object keyed by `provider`, whose keys are your provider IDs:
 
 ```json

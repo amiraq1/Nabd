@@ -2,8 +2,9 @@
 
 Checklist for a person who did not write this repository.
 The installable binary is `nabd`. The package path remains `./cmd/ag`.
+The repository target is exclusively `android/arm64` (Termux).
 
-`v1.5.0` is already tagged. Do not move or retag `v1.5.0`; every correction
+`v2.1.0` is already tagged. Do not move or retag any existing version tag; every correction
 must use a new tag.
 
 ## 0. One-time repository metadata
@@ -23,27 +24,27 @@ gh repo edit amiraq1/Nabd \
 
 ## 1. Gates on the commit you will tag
 
+Pre-release validation must pass all quality and security invariants for `android/arm64`:
+
 ```sh
 test -z "$(gofmt -l .)"
-go vet ./...
-staticcheck ./...          # v0.8.1
+CGO_ENABLED=0 GOOS=android GOARCH=arm64 go vet ./...
+GOOS=android GOARCH=arm64 staticcheck ./...          # v0.8.1
 go test ./... -race -count=1
-TMPDIR=${TMPDIR:-$(mktemp -d)}
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$TMPDIR/nabd-linux-amd64" ./cmd/ag
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./cmd/ag
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build ./cmd/ag
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build ./cmd/ag
 CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build ./cmd/ag
+bash scripts/check-threat-model-tests.sh
+bash scripts/check-security-invariants.sh
 ```
 
-Windows is not a release target (`syscall.Kill`, `Setpgid`).
+Desktop operating systems (Linux desktop, macOS, Windows) are not release targets.
+`v2.0.0` and later target Termux on `android/arm64` exclusively.
 
 ## 2. Tag
 
 Choose a new semantic version; never reuse an existing tag:
 
 ```sh
-VERSION=v1.5.1
+VERSION=v2.1.1
 git checkout master
 git pull --ff-only
 git tag -a "$VERSION" -m "nabd $VERSION"
@@ -51,19 +52,31 @@ git push origin "$VERSION"
 ```
 
 Pushing `v*` runs `.github/workflows/release.yml`, which runs
-`goreleaser release --clean`. The pipeline publishes five static, trimpath,
-ldflags-stamped `nabd` binaries, one distinct Syft SBOM per binary,
-`checksums.txt`, and the checksum signature and certificate. SBOMs are included
-in `checksums.txt`; signing that checksum transitively covers every listed
-binary and SBOM. The workflow also attaches a build-provenance attestation to
-`dist/checksums.txt`.
+`goreleaser release --clean`. The pipeline publishes:
+1. One static, trimpath, ldflags-stamped `android/arm64` binary: `nabd_{{ .Version }}_android_arm64`.
+2. One Syft SBOM: `nabd_{{ .Version }}_android_arm64.sbom.json`.
+3. Checksum manifest: `checksums.txt`.
+4. Cosign keyless signature and certificate: `checksums.txt.sig` and `checksums.txt.pem`.
+
+The SBOM is listed inside `checksums.txt`; signing `checksums.txt` transitively
+covers both the binary and the SBOM. The release workflow also attaches a
+build-provenance attestation to `dist/checksums.txt`.
 
 ## 3. Verify and smoke the artifacts
 
-On a machine that does not have the repository, download the binary for the
-platform together with `checksums.txt`, `checksums.txt.sig`, and
-`checksums.txt.pem`. Then verify the signed checksum manifest before trusting
-its entries:
+On a test machine or Termux environment, download the release artifacts:
+
+```sh
+V=2.1.1
+BASE="https://github.com/amiraq1/Nabd/releases/download/v${V}"
+curl -LO "${BASE}/nabd_${V}_android_arm64" \
+     -LO "${BASE}/nabd_${V}_android_arm64.sbom.json" \
+     -LO "${BASE}/checksums.txt" \
+     -LO "${BASE}/checksums.txt.sig" \
+     -LO "${BASE}/checksums.txt.pem"
+```
+
+Verify the signed checksum manifest using Cosign keyless verification:
 
 ```sh
 cosign verify-blob \
@@ -72,20 +85,23 @@ cosign verify-blob \
   --certificate-identity-regexp '^https://github\.com/amiraq1/Nabd/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   checksums.txt
+
 sha256sum --check --ignore-missing checksums.txt
 ```
 
-Smoke the downloaded binary:
+Smoke the downloaded binary on an `android/arm64` device:
 
 ```sh
-chmod +x nabd_1.5.1_linux_amd64
-./nabd_1.5.1_linux_amd64 --version
+chmod +x "nabd_${V}_android_arm64"
+"./nabd_${V}_android_arm64" --version
 ```
 
-Accept when the banner names version, commit, and date. A `dev · none` binary
-is a local `go build`, not a release.
+Accept when the banner names the expected version, commit SHA, and date.
+A `dev · none` banner indicates an unreleased local build.
 
 ## 4. Local stamp (not a release)
+
+For local development builds on Termux:
 
 ```sh
 ./build.sh
