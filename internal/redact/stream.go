@@ -13,6 +13,15 @@ import (
 // exceed the provider-body storage bound.
 const StreamHoldCap = MaxBodyBytes
 
+// StreamPEMHoldCap bounds how many unemitted bytes a Stream keeps for an
+// open PEM block or incomplete BEGIN marker. An unencrypted RSA-4096 private
+// key in standard base64 is ~3.3KB; with PKCS#8 wrapping or extended headers,
+// 4KB is uncomfortably tight and could prematurely trigger fail-closed on valid
+// keys. 8KB (8 * 1024) provides a >140% margin over RSA-4096 and also accommodates
+// RSA-8192 keys (~6.5KB), while strictly preventing unbounded memory allocation
+// on malicious or unclosed PEM inputs.
+const StreamPEMHoldCap = 8 * 1024
+
 // pemBeginMarker and pemEndMarker are the two halves of the PEM private-key
 // shape, compiled on their own so the stream can tell a complete block from an
 // unterminated one that it must hold to end of input.
@@ -30,10 +39,10 @@ var (
 // trailing run that could still grow into or extend a match, and Flush releases
 // it, redacted.
 //
-// Hold-back is bounded (StreamHoldCap) and minimal: only a trailing run of token
-// characters, a trailing Bearer/authorization keyword context, an exact-key
-// prefix, or an open PEM block is withheld. Ordinary prose ending in whitespace
-// or punctuation is emitted at once.
+// Hold-back is bounded (StreamHoldCap, StreamPEMHoldCap) and minimal: only a
+// trailing run of token characters, a trailing Bearer/authorization keyword
+// context, an exact-key prefix, or an open PEM block is withheld. Ordinary prose
+// ending in whitespace or punctuation is emitted at once.
 //
 // A Stream is not safe for concurrent use: it carries the partial-match state
 // for one streamed field, and callers must use one goroutine per stream.
@@ -44,6 +53,11 @@ type Stream struct {
 	// over-long token run. The rest of that run must not surface, so Write drops
 	// token bytes until the run ends.
 	swallow bool
+	// swallowPEM is set when an open PEM block or incomplete marker exceeded
+	// StreamPEMHoldCap. The block's start was emitted as Token; the remainder of
+	// the PEM block must not surface, so Write drops bytes until the matching
+	// END line or Flush.
+	swallowPEM bool
 }
 
 // NewStream returns a Stream that also redacts the given exact credential
@@ -85,6 +99,30 @@ func (s *Stream) Write(chunk string) (emit string) {
 		}
 	}
 
+	// While inside an over-cap PEM block, swallow all bytes until the matching
+	// END line or Flush. No interior bytes are emitted.
+	if s.swallowPEM {
+		if loc := pemEndMarker.FindStringIndex(s.pending); loc != nil {
+			end := loc[1]
+			if end < len(s.pending) && s.pending[end] == '\r' {
+				end++
+			}
+			if end < len(s.pending) && s.pending[end] == '\n' {
+				end++
+			}
+			s.pending = s.pending[end:]
+			s.swallowPEM = false
+			if s.pending == "" {
+				return emit
+			}
+		} else {
+			// Hold back only a trailing prefix that could complete pemEndMarker.
+			hold := trailingPEMEndPrefix(s.pending)
+			s.pending = s.pending[len(s.pending)-hold:]
+			return emit
+		}
+	}
+
 	// An open PEM block is held in full: its interior is arbitrary bytes and the
 	// only safe boundary is the matching END line or Flush. Everything before the
 	// BEGIN is already decidable, so it is emitted now.
@@ -102,6 +140,15 @@ func (s *Stream) Write(chunk string) (emit string) {
 				emit = s.redact(prefix)
 			}
 			s.pending = s.pending[b:]
+		}
+
+		// Enforce fail-closed bounded hold on open PEM blocks and incomplete markers:
+		// If held PEM content exceeds StreamPEMHoldCap, emit Token and swallow
+		// the rest of the block until the matching END line or Flush.
+		if len(s.pending) > StreamPEMHoldCap {
+			emit += Token
+			s.pending = ""
+			s.swallowPEM = true
 		}
 		return emit
 	}
@@ -149,8 +196,8 @@ func (s *Stream) Write(chunk string) (emit string) {
 func (s *Stream) Pending() int { return len(s.pending) }
 
 // Swallowing reports whether the stream is discarding the tail of an over-cap
-// token run.
-func (s *Stream) Swallowing() bool { return s.swallow }
+// token run or over-cap PEM block.
+func (s *Stream) Swallowing() bool { return s.swallow || s.swallowPEM }
 
 // PushBack returns previously emitted text to the hold. A caller that decides to
 // withhold a prefix — to keep a sequence number free for a later flush — uses
@@ -171,6 +218,13 @@ func (s *Stream) Flush() string {
 		// deliberately discarded rather than surfaced.
 		s.pending = ""
 		s.swallow = false
+		return ""
+	}
+	if s.swallowPEM {
+		// The PEM block's start was already emitted as Token on cap overflow;
+		// any remaining interior is swallowed fail-closed rather than surfaced.
+		s.pending = ""
+		s.swallowPEM = false
 		return ""
 	}
 	out := s.redact(s.pending)
@@ -315,3 +369,36 @@ func isTokenByte(b byte) bool {
 func isSepByte(b byte) bool {
 	return b == ':' || b == ' ' || b == '\t' || b == '\n' || b == '\r' || b == '\f' || b == '\v'
 }
+
+// trailingPEMEndPrefix returns the length of a trailing suffix of s that could
+// grow into pemEndMarker. If none, it returns 0.
+func trailingPEMEndPrefix(s string) int {
+	idx := strings.LastIndex(s, "-----")
+	if idx < 0 {
+		return 0
+	}
+	cand := s[idx:]
+	if strings.HasPrefix("-----END", cand) {
+		return len(cand)
+	}
+	if strings.HasPrefix(cand, "-----END") {
+		rest := cand[len("-----END"):]
+		dashes := 0
+		for i := 0; i < len(rest); i++ {
+			c := rest[i]
+			switch {
+			case c == '-':
+				dashes++
+			case c == ' ' || (c >= 'A' && c <= 'Z'):
+				dashes = 0
+			default:
+				return 0
+			}
+		}
+		if dashes < 5 {
+			return len(cand)
+		}
+	}
+	return 0
+}
+

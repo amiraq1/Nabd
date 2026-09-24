@@ -309,7 +309,119 @@ func FuzzStream(f *testing.F) {
 	})
 }
 
+// TestStreamPEMHoldCapOpenBlockBoundedAndRedacted tests that an open PEM block
+// exceeding StreamPEMHoldCap triggers fail-closed redaction: Token is emitted,
+// pending buffer growth is strictly bounded, and no interior key bytes leak.
+func TestStreamPEMHoldCapOpenBlockBoundedAndRedacted(t *testing.T) {
+	keySecret := "SUPERSECRETKEYBODY-RSA4096-DATA"
+	hugeKeyBody := strings.Repeat(keySecret+"\n", 500) // ~16KB, well over 8KB cap
+	openPEM := "-----BEGIN RSA PRIVATE KEY-----\n" + hugeKeyBody
 
+	s := NewStream(nil)
+	var out strings.Builder
+
+	chunkSize := 512
+	for i := 0; i < len(openPEM); i += chunkSize {
+		end := i + chunkSize
+		if end > len(openPEM) {
+			end = len(openPEM)
+		}
+		chunk := openPEM[i:end]
+		out.WriteString(s.Write(chunk))
+
+		// Invariant: pending must never grow without bound beyond StreamPEMHoldCap + chunkSize
+		if p := s.Pending(); p > StreamPEMHoldCap+chunkSize {
+			t.Fatalf("pending grew without bound: %d bytes (cap %d)", p, StreamPEMHoldCap)
+		}
+	}
+
+	// Close the block and add trailing prose
+	out.WriteString(s.Write("-----END RSA PRIVATE KEY-----\nnormal prose after key"))
+	out.WriteString(s.Flush())
+
+	got := out.String()
+
+	if strings.Contains(got, keySecret) {
+		t.Fatalf("key body leaked in output: %q", got)
+	}
+	if !strings.Contains(got, Token) {
+		t.Fatalf("expected Token in output, got: %q", got)
+	}
+	if !strings.Contains(got, "normal prose after key") {
+		t.Fatalf("prose after PEM block was lost: %q", got)
+	}
+	if s.Pending() != 0 {
+		t.Fatalf("pending not empty after Flush: %d", s.Pending())
+	}
+}
+
+// TestStreamPEMHoldCapIncompleteMarkerBounded tests that an incomplete PEM BEGIN
+// marker that never terminates does not cause unbounded pending buffer growth.
+func TestStreamPEMHoldCapIncompleteMarkerBounded(t *testing.T) {
+	incompleteMarker := "-----BEGIN " + strings.Repeat("UNTERMINATED PEM MARKER KEY WORDS ", 400) // ~13KB > 8KB
+
+	s := NewStream(nil)
+	var out strings.Builder
+
+	chunkSize := 256
+	for i := 0; i < len(incompleteMarker); i += chunkSize {
+		end := i + chunkSize
+		if end > len(incompleteMarker) {
+			end = len(incompleteMarker)
+		}
+		out.WriteString(s.Write(incompleteMarker[i:end]))
+
+		if p := s.Pending(); p > StreamPEMHoldCap+chunkSize {
+			t.Fatalf("incomplete marker caused unbounded pending: %d bytes", p)
+		}
+	}
+	out.WriteString(s.Flush())
+
+	got := out.String()
+	if strings.Contains(got, strings.Repeat("UNTERMINATED", 5)) {
+		t.Fatalf("raw bytes leaked from over-cap incomplete marker: %q", got)
+	}
+	if !strings.Contains(got, Token) {
+		t.Fatalf("expected Token for over-cap marker, got: %q", got)
+	}
+}
+
+// TestStreamPEMWithinCapMatchesRedact verifies that a realistic RSA-4096 PEM block
+// (~3.3KB), which is within StreamPEMHoldCap (8KB), matches whole-input Redact
+// exactly across various split chunk sizes.
+func TestStreamPEMWithinCapMatchesRedact(t *testing.T) {
+	// Realistic ~3.3KB RSA-4096 private key:
+	rsa4096 := "-----BEGIN RSA PRIVATE KEY-----\n" +
+		strings.Repeat("MIIJKAIBAAKCAgEA0Y5l6m7n8o9p1q2r3s4t5u6v7w8x9y0zabcdefghijklm=\n", 50) +
+		"-----END RSA PRIVATE KEY-----\n"
+
+	want := Redact(rsa4096)
+
+	chunkSizes := []int{32, 128, 512, 1024, 2048, 4096}
+	for _, sz := range chunkSizes {
+		s := NewStream(nil)
+		var out strings.Builder
+		for i := 0; i < len(rsa4096); i += sz {
+			end := i + sz
+			if end > len(rsa4096) {
+				end = len(rsa4096)
+			}
+			out.WriteString(s.Write(rsa4096[i:end]))
+		}
+		out.WriteString(s.Flush())
+		if got := out.String(); got != want {
+			t.Fatalf("chunk size %d: got %q want %q", sz, got, want)
+		}
+	}
+
+	// Also verify unterminated PEM block under 8KB flushed at EOF matches Redact:
+	unterminated := "-----BEGIN RSA PRIVATE KEY-----\n" + strings.Repeat("MIIEowIBAAKCAQEA", 100) // ~1.6KB
+	wantUnterminated := Redact(unterminated)
+	gotUnterminated := streamed(unterminated, 200, 800)
+	if gotUnterminated != wantUnterminated {
+		t.Fatalf("unterminated under cap: got %q want %q", gotUnterminated, wantUnterminated)
+	}
+}
 
 func BenchmarkRedact(b *testing.B) {
 	s := "Bash echo hello world this is a tool summary line with no secrets here"
