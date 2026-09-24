@@ -64,28 +64,46 @@ func NewStream(exactKeys []string) *Stream {
 func (s *Stream) Write(chunk string) (emit string) {
 	s.pending += chunk
 
+	// Finish swallowing an over-long token run before looking for new holds.
+	// Swallowing must never cross the beginning of a PEM block ("-----BEGIN"),
+	// which is composed of token bytes but begins a new credential boundary.
+	if s.swallow {
+		k := 0
+		for k < len(s.pending) && isTokenByte(s.pending[k]) {
+			if strings.HasPrefix(s.pending[k:], "-----BEGIN") ||
+				(strings.HasPrefix(s.pending[k:], "-----") && strings.HasPrefix("-----BEGIN", s.pending[k:])) {
+				break
+			}
+			k++
+		}
+		s.pending = s.pending[k:]
+		if k < len(s.pending) {
+			s.swallow = false
+		}
+		if s.pending == "" {
+			return emit
+		}
+	}
+
 	// An open PEM block is held in full: its interior is arbitrary bytes and the
 	// only safe boundary is the matching END line or Flush. Everything before the
 	// BEGIN is already decidable, so it is emitted now.
 	if b := openPEMStart(s.pending); b >= 0 {
 		if b > 0 {
-			emit = s.redact(s.pending[:b])
+			prefix := s.pending[:b]
+			n := len(prefix)
+			runStart := n
+			for runStart > 0 && isTokenByte(prefix[runStart-1]) {
+				runStart--
+			}
+			if n-runStart > StreamHoldCap {
+				emit = s.redact(prefix[:runStart]) + Token
+			} else {
+				emit = s.redact(prefix)
+			}
 			s.pending = s.pending[b:]
 		}
 		return emit
-	}
-
-	// Finish swallowing an over-long token run before looking for new holds.
-	if s.swallow {
-		k := 0
-		for k < len(s.pending) && isTokenByte(s.pending[k]) {
-			k++
-		}
-		s.pending = s.pending[k:]
-		s.swallow = false
-		if s.pending == "" {
-			return emit
-		}
 	}
 
 	hold := s.holdBackLen()
@@ -99,9 +117,19 @@ func (s *Stream) Write(chunk string) (emit string) {
 			// The trailing run alone is over the cap. Emit the decidable prefix,
 			// replace the run's start with Token, and swallow the remainder so the
 			// tail of a long key never surfaces without redaction.
+			// If the trailing run ends in a prefix of "-----BEGIN", preserve
+			// that prefix so a split PEM marker is not swallowed across chunks.
+			pemPrefixStart := n
+			if b := strings.LastIndex(s.pending[runStart:], "-----"); b >= 0 {
+				cand := s.pending[runStart+b:]
+				if strings.HasPrefix("-----BEGIN", cand) {
+					pemPrefixStart = runStart + b
+				}
+			}
+
 			emit += s.redact(s.pending[:runStart]) + Token
-			s.pending = s.pending[runStart:]
-			s.swallow = true
+			s.pending = s.pending[pemPrefixStart:]
+			s.swallow = (pemPrefixStart == n)
 			return emit
 		}
 		hold = StreamHoldCap

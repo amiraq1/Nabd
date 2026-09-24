@@ -146,6 +146,171 @@ func TestStreamUnterminatedPEMRedactedOnFlush(t *testing.T) {
 	}
 }
 
+// TestStreamPEMLeakViaSwallowInteraction_S1 reproduces the vulnerability where
+// openPEMStart is checked before s.swallow in Write:
+// 1. Chunk 1 has a token run exceeding StreamHoldCap (emits Token, sets swallow=true).
+// 2. Chunk 2 starts with an open PEM block (no END). Because openPEMStart is checked
+//    before swallow, redact(pending[:b]) emits the swallowed token tail raw,
+//    while swallow remains true.
+// 3. Chunk 3 provides the PEM END line. openPEMStart returns -1, so swallow runs on
+//    the pending PEM block, stripping "-----BEGIN" (10 token bytes) up to the space.
+//    Missing "-----BEGIN", the private key body matches no secret pattern and leaks raw.
+func TestStreamPEMLeakViaSwallowInteraction_S1(t *testing.T) {
+	s := NewStream(nil)
+	var out strings.Builder
+
+	tokenTail := strings.Repeat("x", StreamHoldCap+50)
+	chunk1 := tokenTail
+	out.WriteString(s.Write(chunk1))
+
+	keyBody := "MIIEowIBAAKCAQEA0Y1234567890abcdefghijklmnopqrstuvwxyzSECRETKEYBODY"
+	chunk2 := "-----BEGIN RSA PRIVATE KEY-----\n" + keyBody + "\n"
+	out.WriteString(s.Write(chunk2))
+
+	chunk3 := "-----END RSA PRIVATE KEY-----\n"
+	out.WriteString(s.Write(chunk3))
+	out.WriteString(s.Flush())
+
+	got := out.String()
+
+	// 1. Neither the PEM key body nor the swallowed token tail must appear.
+	if strings.Contains(got, keyBody) {
+		t.Fatalf("S1 leak reproduced: PEM private key body leaked in output: %q", got)
+	}
+	if strings.Contains(got, "SECRETKEYBODY") {
+		t.Fatalf("S1 leak reproduced: PEM secret fragment leaked in output: %q", got)
+	}
+	if strings.Contains(got, strings.Repeat("x", 32)) {
+		t.Fatalf("S1 leak reproduced: tail of over-cap token run leaked in output: %q", got)
+	}
+
+	// 2. No token bytes from the over-cap run must appear after Token.
+	idx := strings.Index(got, Token)
+	if idx < 0 {
+		t.Fatalf("expected Token in output, got: %q", got)
+	}
+	afterToken := got[idx+len(Token):]
+	if strings.Contains(afterToken, "xxxx") {
+		t.Fatalf("S1 leak reproduced: token bytes from over-cap run appeared after Token: %q", afterToken)
+	}
+}
+
+// TestStreamOverCapTokenRunsAndPEMEverySplit mixes over-cap token runs with PEM
+// blocks across all single split points and representative pairwise splits,
+// asserting that neither the secret body nor the over-cap token run leaks.
+func TestStreamOverCapTokenRunsAndPEMEverySplit(t *testing.T) {
+	const pemSecret = "SUPERSECRETKEYBODY123456789"
+	pemBlock := "-----BEGIN RSA PRIVATE KEY-----\n" + pemSecret + "\n-----END RSA PRIVATE KEY-----\n"
+	overCapRun := "sk-proj-" + strings.Repeat("q", StreamHoldCap+64)
+
+	testCases := []struct {
+		name  string
+		input string
+	}{
+		{
+			name:  "overcap-then-pem",
+			input: "lead " + overCapRun + " mid " + pemBlock + " tail",
+		},
+		{
+			name:  "pem-then-overcap",
+			input: "lead " + pemBlock + " mid " + overCapRun + " tail",
+		},
+		{
+			name:  "adjacent-overcap-pem",
+			input: overCapRun + "\n" + pemBlock,
+		},
+		{
+			name:  "adjacent-pem-overcap",
+			input: pemBlock + overCapRun,
+		},
+		{
+			name:  "overcap-then-unterminated-pem",
+			input: overCapRun + "\n-----BEGIN RSA PRIVATE KEY-----\n" + pemSecret,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertNoLeak := func(splitDesc string, got string) {
+				if strings.Contains(got, pemSecret) {
+					t.Fatalf("%s: PEM secret leaked: %q", splitDesc, got)
+				}
+				if strings.Contains(got, strings.Repeat("q", 32)) {
+					t.Fatalf("%s: over-cap token tail leaked: %q", splitDesc, got)
+				}
+				if strings.Contains(got, "-----BEGIN RSA PRIVATE KEY-----") {
+					t.Fatalf("%s: PEM marker leaked raw: %q", splitDesc, got)
+				}
+			}
+
+			n := len(tc.input)
+			// Test single split points: dense around boundaries and key transitions,
+			// stepped across uniform over-cap runs to keep test execution under 1s.
+			splits := make(map[int]bool)
+			for i := 0; i <= n; i++ {
+				if i < 128 || i > n-128 || (i >= StreamHoldCap-64 && i <= StreamHoldCap+64) || i%32 == 0 {
+					splits[i] = true
+				}
+			}
+			if idx := strings.Index(tc.input, "-----BEGIN"); idx >= 0 {
+				end := idx + 64
+				if end > n {
+					end = n
+				}
+				for i := idx; i <= end; i++ {
+					splits[i] = true
+				}
+			}
+			for i := range splits {
+				got := streamed(tc.input, i)
+				assertNoLeak("single split", got)
+			}
+
+			// Test representative two-cut splits stepped across the input:
+			step := n / 25
+			if step < 1 {
+				step = 1
+			}
+			for i := 0; i <= n; i += step {
+				for j := i; j <= n; j += step {
+					got := streamed(tc.input, i, j)
+					assertNoLeak("pairwise split", got)
+				}
+			}
+		})
+	}
+}
+
+// FuzzStream fuzzes chunk sizes and splits over arbitrary input to ensure no
+// panic occurs and PEM blocks are never emitted without redaction.
+func FuzzStream(f *testing.F) {
+	f.Add([]byte("hello world -----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----\n"), uint16(10))
+	f.Add([]byte("sk-proj-1234567890123456789012345678901234567890"), uint16(5))
+	f.Add([]byte(strings.Repeat("a", StreamHoldCap+10)+"-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----"), uint16(32))
+	f.Fuzz(func(t *testing.T, data []byte, chunkSize uint16) {
+		if len(data) > 8192 {
+			data = data[:8192]
+		}
+		step := int(chunkSize%64) + 1
+		s := NewStream(nil)
+		var out strings.Builder
+		for i := 0; i < len(data); i += step {
+			end := i + step
+			if end > len(data) {
+				end = len(data)
+			}
+			out.WriteString(s.Write(string(data[i:end])))
+		}
+		out.WriteString(s.Flush())
+		got := out.String()
+		if strings.Contains(got, "-----BEGIN") && strings.Contains(got, "PRIVATE KEY-----") && !strings.Contains(got, Token) {
+			t.Fatalf("PEM marker in output without Token: %q", got)
+		}
+	})
+}
+
+
+
 func BenchmarkRedact(b *testing.B) {
 	s := "Bash echo hello world this is a tool summary line with no secrets here"
 	b.ReportAllocs()
