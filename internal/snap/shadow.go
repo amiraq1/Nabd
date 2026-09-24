@@ -1,7 +1,6 @@
 package snap
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -76,16 +75,16 @@ func (s *Shadow) ensureShielded() error {
 // shieldStore applies the privacy shield to the nabd-owned .ag tree:
 //
 //  1. Creates (or tightens) agDir (.ag) and shadowDir (.ag/shadow) to 0700.
-//  2. Writes /shadow/ to agDir/.gitignore, atomically and idempotently, so
-//     that accidental git add -A does not stage shadow blobs.
+//  2. Writes agDir/.gitignore exactly once, as the single rule "*", so that
+//     accidental `git add -A` never stages any part of the store.
 //
 // Guarantees:
 //   - agDir and shadowDir are always 0700 when this returns nil, regardless
 //     of umask or the mode they had before.
-//   - The .gitignore rule is appended (with a leading newline separator if the
-//     file already has content) only when it is not already present; existing
-//     user content is preserved byte-for-byte.
-//   - The write is atomic: a sibling tmp file is written and renamed into
+//   - An existing agDir/.gitignore is never read, appended to, or replaced;
+//     its content is left byte-for-byte alone.
+//   - A file this function does create is 0600 (never wider than the 0700
+//     directory), written atomically: a sibling tmp file is renamed into
 //     place so that a concurrent reader never sees a partial file.
 //   - ErrAtomicPublishUnsupported is a separate error class; a failure here
 //     is a plain OS error unrelated to blob publication capability.
@@ -106,37 +105,22 @@ func shieldStore(agDir, shadowDir string) error {
 		}
 	}
 
-	// 2. Ensure .ag/.gitignore contains "/shadow/" without disturbing user
-	//    content.
+	// 2. Write .ag/.gitignore once, with the single rule "*", and never touch
+	//    an existing file. The store holds copies of file content, so the whole
+	//    .ag tree must stay out of git: ignoring only "/shadow/" left .ag
+	//    itself (and this file) untracked but stageable, so a user's
+	//    `git add -A` quietly staged nabd's bookkeeping. An existing file
+	//    belongs to the user, or to an older version of this shield, and
+	//    replacing it would be a write to a file this package does not own.
 	igPath := filepath.Join(agDir, ".gitignore")
-	const rule = "/shadow/"
-
-	// Read the existing file if present.
-	existing, err := os.ReadFile(igPath)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("snap: shield read %s: %w", igPath, err)
-	}
-
-	// Fast idempotent path: rule is already present.
-	if containsIgnoreRule(string(existing), rule) {
+	if _, err := os.Lstat(igPath); err == nil {
 		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("snap: shield stat %s: %w", igPath, err)
 	}
 
-	// Build the new content: preserve what is there, append the rule.
-	var content string
-	if len(existing) == 0 {
-		content = "# nabd: prevent accidental git-staging of shadow blobs\n" + rule + "\n"
-	} else {
-		// If existing content does not end with a newline, add one so the new
-		// rule starts on its own line.
-		sep := ""
-		if existing[len(existing)-1] != '\n' {
-			sep = "\n"
-		}
-		content = string(existing) + sep + rule + "\n"
-	}
-
-	// Atomic write: tmp sibling → rename.
+	// Atomic write: tmp sibling → rename. CreateTemp creates the file 0600,
+	// which is never wider than the 0700 directory that holds it.
 	tmp, err := os.CreateTemp(agDir, ".ag-gitignore-*.tmp")
 	if err != nil {
 		return fmt.Errorf("snap: shield tmp %s: %w", agDir, err)
@@ -144,14 +128,9 @@ func shieldStore(agDir, shadowDir string) error {
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op if rename succeeded
 
-	bw := bufio.NewWriter(tmp)
-	if _, err := bw.WriteString(content); err != nil {
+	if _, err := tmp.WriteString("*\n"); err != nil {
 		tmp.Close()
 		return fmt.Errorf("snap: shield write %s: %w", tmpName, err)
-	}
-	if err := bw.Flush(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("snap: shield flush %s: %w", tmpName, err)
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
@@ -164,18 +143,6 @@ func shieldStore(agDir, shadowDir string) error {
 		return fmt.Errorf("snap: shield rename %s → %s: %w", tmpName, igPath, err)
 	}
 	return nil
-}
-
-// containsIgnoreRule reports whether text already contains rule as a
-// non-commented, standalone line.  It avoids re-adding a rule the user or a
-// previous run already wrote.
-func containsIgnoreRule(text, rule string) bool {
-	for _, line := range strings.Split(text, "\n") {
-		if strings.TrimSpace(line) == rule {
-			return true
-		}
-	}
-	return false
 }
 
 func (s *Shadow) UsesGit() bool    { return false }
