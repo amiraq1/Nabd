@@ -177,7 +177,7 @@ stdout contains only the final assistant text, or JSONL with `--json`. Notices a
 
 The event is the contract: live rendering and replay consume the same append-only records. `/rewind` appends a new branch point rather than deleting history. `/undo` is intentionally separate and covers tracked file edits, not arbitrary approved shell effects.
 
-Edits recorded by the agent keep their recovery snapshots in a per-project `.ag/` directory (`<project>/.ag/shadow`), which is what `/undo` restores from. On first use nabd writes `<project>/.ag/.gitignore` containing the single rule `*`, so the store never shows up in `git status` even though it lives inside the working tree; an existing `.gitignore` there is never replaced.
+Edits recorded by the agent keep their recovery snapshots in a per-project `.ag/` directory (`<project>/.ag/shadow`), which is what `/undo` restores from. Whenever it opens the store for writing, nabd creates `<project>/.ag/.gitignore`, if missing, containing the single rule `*`, so the store never shows up in `git status` even though it lives inside the working tree; an existing `.gitignore` there is never replaced.
 
 ## Operational limits
 

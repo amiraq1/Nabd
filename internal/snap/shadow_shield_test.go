@@ -287,6 +287,42 @@ func TestShieldGitignoreKeepsProjectStoreOutOfGit(t *testing.T) {
 	}
 }
 
+// TestShieldGitignoreExistingContentStaysByteForByte: a .gitignore that
+// already exists with different content is left exactly as it is — the
+// write-open must not read, append to, or replace it.
+func TestShieldGitignoreExistingContentStaysByteForByte(t *testing.T) {
+	root := t.TempDir()
+	agDir := filepath.Join(root, ".ag")
+	if err := os.MkdirAll(agDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	igPath := filepath.Join(agDir, ".gitignore")
+	custom := "# custom rules\n!keep-me\nbuild/\n"
+	if err := os.WriteFile(igPath, []byte(custom), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "file.txt")
+	if err := os.WriteFile(target, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Capture(target); err != nil { // one write-open
+		t.Fatalf("Capture: %v", err)
+	}
+
+	got, err := os.ReadFile(igPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != custom {
+		t.Fatalf(".gitignore was modified:\n got %q\nwant %q", got, custom)
+	}
+}
+
 // TestShieldGitignoreNeverReplacesExistingFile: an existing .gitignore belongs
 // to the user, or to an older version of this shield (which wrote /shadow/),
 // and must survive byte-for-byte. Replacing it would be a write to a file this
