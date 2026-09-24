@@ -207,6 +207,47 @@ func TestStreamSwallowPreservesPEMBoundary(t *testing.T) {
 	}
 }
 
+func TestStreamPEMHoldCapOpenBlock(t *testing.T) {
+	s := NewStream(nil)
+	var out strings.Builder
+	head := "-----BEGIN RSA PRIVATE KEY-----\n"
+	body := strings.Repeat("A", 1024*1024)
+	chunkSize := 1024
+	input := head + body
+	for i := 0; i < len(input); i += chunkSize {
+		end := i + chunkSize
+		if end > len(input) {
+			end = len(input)
+		}
+		out.WriteString(s.Write(input[i:end]))
+		if s.Pending() > StreamPEMHoldCap {
+			t.Fatalf("pending exceeded StreamPEMHoldCap: %d > %d", s.Pending(), StreamPEMHoldCap)
+		}
+	}
+	out.WriteString(s.Flush())
+	got := out.String()
+	if strings.Contains(got, "AAAA") {
+		t.Fatalf("body byte surfaced: %q", got)
+	}
+	if !strings.Contains(got, Token) {
+		t.Fatalf("expected Token in output: %q", got)
+	}
+}
+
+func TestStreamPEMValidBlockMatchesRedact(t *testing.T) {
+	block := "-----BEGIN RSA PRIVATE KEY-----\n" +
+		strings.Repeat("MIIEowIBAAKCAQEA0123456789abcdefghijklmnopqrstuvwxyz\n", 58) +
+		"-----END RSA PRIVATE KEY-----\n"
+	if len(block) < 3000 || len(block) > 3600 {
+		t.Fatalf("unexpected test block size: %d", len(block))
+	}
+	want := Redact(block)
+	got := streamed(block, 10, 50, 100, 500, 1500, 2500)
+	if got != want {
+		t.Fatalf("streamed != Redact: got %q, want %q", got, want)
+	}
+}
+
 func BenchmarkRedact(b *testing.B) {
 	s := "Bash echo hello world this is a tool summary line with no secrets here"
 	b.ReportAllocs()
