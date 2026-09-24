@@ -13,7 +13,6 @@ import (
 	"syscall"
 
 	"nabd/internal/agent"
-	"nabd/internal/build"
 	"nabd/internal/config"
 	"nabd/internal/payload"
 	"nabd/internal/perm"
@@ -263,9 +262,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 	loop.Sink = newStreamRedactSink(sinks)
 	loop.MaxTurns = cfg.maxTurns
 
-	cwd, _ := os.Getwd()
-	if err := loop.Start(fmt.Sprintf("%s · %s · %s",
-		build.BannerPrefix(), prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
+	if err := loop.Start(sessionBanner(prov, root.Dir()), root.Dir()); err != nil {
 		journal.Close()
 		return err
 	}

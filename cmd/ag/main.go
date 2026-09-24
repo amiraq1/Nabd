@@ -188,6 +188,17 @@ func doReplay(path string, speed float64) error {
 	return err
 }
 
+// sessionBanner formats the unified session startup banner identity across
+// Chat, Feed, and Headless modes. It displays the build identity, provider name,
+// and project name (the base of the project root directory).
+func sessionBanner(prov provider.Provider, root string) string {
+	provName := ""
+	if prov != nil {
+		provName = prov.Name()
+	}
+	return fmt.Sprintf("%s · %s · %s", build.BannerPrefix(), provName, filepath.Base(root))
+}
+
 func doChat(mode perm.Mode, dir string, cont bool) error {
 	prov, err := pickProvider()
 	if err != nil {
@@ -237,9 +248,7 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 		sess.loop.Seed(prevEvs)
 	}
 
-	cwd, _ := os.Getwd()
-	if err := sess.loop.Start(fmt.Sprintf("%s · %s · %s",
-		build.BannerPrefix(), prov.Name(), filepath.Base(cwd)), root.Dir()); err != nil {
+	if err := sess.loop.Start(sessionBanner(prov, root.Dir()), root.Dir()); err != nil {
 		journal.Close()
 		return err
 	}
@@ -360,8 +369,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 		progDone <- err
 	}()
 
-	if err := sess.loop.Start(fmt.Sprintf("%s · %s · %s",
-		build.BannerPrefix(), prov.Name(), filepath.Base(journalPath)), root.Dir()); err != nil {
+	if err := sess.loop.Start(sessionBanner(prov, root.Dir()), root.Dir()); err != nil {
 		batcher.Stop()
 		journal.Close()
 		return err
