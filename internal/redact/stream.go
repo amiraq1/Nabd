@@ -159,6 +159,14 @@ func (s *Stream) Write(chunk string) (emit string) {
 
 	cut := n - hold
 	cut = clampPEMCut(s.pending, cut)
+	for {
+		prev := cut
+		cut = clampMatchCut(s.pending, cut)
+		cut = clampExactCut(s.pending, s.exact, cut)
+		if cut == prev {
+			break
+		}
+	}
 	if cut <= 0 {
 		return emit
 	}
@@ -228,6 +236,49 @@ func clampPEMCut(pending string, cut int) int {
 	end := last[1] + loc[1]
 	if cut > last[0] && cut < end {
 		return last[0]
+	}
+	return cut
+}
+
+// clampMatchCut moves cut back to the start of any recognized match that
+// straddles it, so a complete credential is never split between an emitted
+// prefix (redacted alone, too short to match) and a held suffix.
+func clampMatchCut(pending string, cut int) int {
+	for _, loc := range secretPattern.FindAllStringIndex(pending, -1) {
+		if loc[0] < cut && cut < loc[1] {
+			return loc[0]
+		}
+	}
+	return cut
+}
+
+// clampExactCut moves cut back to the start of any configured exact key match
+// that straddles it, so an exact key is never split between an emitted prefix
+// and a held suffix.
+func clampExactCut(pending string, exact []string, cut int) int {
+	for {
+		orig := cut
+		for _, key := range exact {
+			if key == "" {
+				continue
+			}
+			start := 0
+			for {
+				idx := strings.Index(pending[start:], key)
+				if idx < 0 {
+					break
+				}
+				pos := start + idx
+				end := pos + len(key)
+				if pos < cut && cut < end {
+					cut = pos
+				}
+				start = pos + 1
+			}
+		}
+		if cut == orig {
+			break
+		}
 	}
 	return cut
 }
