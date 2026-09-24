@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"unicode"
 
 	"nabd/internal/agent"
+	"nabd/internal/build"
 	"nabd/internal/config"
 	"nabd/internal/payload"
 )
@@ -257,5 +259,21 @@ func TestStartupNoticeBehavior(t *testing.T) {
 		if e.Type == agent.Notice {
 			t.Fatalf("unexpected notice emitted when conflicts slice is empty")
 		}
+	}
+}
+
+type dummyBannerProvider struct {
+	name string
+}
+
+func (d dummyBannerProvider) Name() string { return d.name }
+
+func TestSessionBannerShowsProjectName(t *testing.T) {
+	prov := dummyBannerProvider{name: "anthropic"}
+	rootDir := filepath.Join("some", "path", "my-project")
+	got := sessionBanner(prov, rootDir)
+	want := fmt.Sprintf("%s · anthropic · my-project", build.BannerPrefix())
+	if got != want {
+		t.Fatalf("sessionBanner() = %q, want %q", got, want)
 	}
 }
