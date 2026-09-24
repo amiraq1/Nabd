@@ -228,12 +228,16 @@ func (m *Feed) safeToQuit() bool {
 }
 
 // cancelRun cancels the in-flight run context directly (never via a
-// message, see onCtrlC). Repeated cancellation is a no-op.
+// message, see onCtrlC). Repeated cancellation is a no-op, and so is a call
+// with no cancelable run: setting "canceling…" without a context to cancel
+// would park the transient row in a state only a doneMsg could clear, and no
+// doneMsg can arrive for a run that does not exist.
 func (m *Feed) cancelRun(status string) {
-	if m.cancel != nil {
-		m.cancel()
-		m.cancel = nil
+	if m.cancel == nil {
+		return
 	}
+	m.cancel()
+	m.cancel = nil
 	m.runningTool = ""
 	if status != "" {
 		m.setStatus(status, rankRunLifecycle)
