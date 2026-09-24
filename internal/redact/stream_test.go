@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"fmt"
 	"math/rand"
 	"strings"
 	"testing"
@@ -142,6 +143,53 @@ func TestStreamPendingBoundedOnLongBearerChain(t *testing.T) {
 	out2.WriteString(s2.Flush())
 	if got := out2.String(); got != want {
 		t.Fatalf("byte-by-byte got != want: got len %d want len %d", len(got), len(want))
+	}
+}
+
+// TestStreamLongBearerTokenStaysCapped verifies the clamp cannot grow the hold
+// without bound. The clamp moves a cut back to the start of a straddling match,
+// so a single keyword-prefixed token run far longer than StreamHoldCap is the
+// adversarial case: if the cut were clamped inside a match that spans the whole
+// buffer, Pending() would grow with the run instead of staying capped. A run
+// over the cap must be emitted as one Token by the pre-clamp guard and its
+// remainder swallowed, keeping Pending() at O(StreamHoldCap).
+//
+// It deliberately does not assert that the streamed text equals whole-input
+// Redact. An over-cap run behind a keyword is a known, pre-existing divergence:
+// the swallow path emits the literal keyword (e.g. "Bearer [REDACTED]" where
+// Redact produces "[REDACTED]"). The secret body never surfaces, so this test
+// pins the bound and the absence of a raw run instead of the exact wording.
+func TestStreamLongBearerTokenStaysCapped(t *testing.T) {
+	input := "Bearer " + strings.Repeat("A", 1<<20)
+
+	for _, chunk := range []int{64, StreamHoldCap} {
+		t.Run(fmt.Sprintf("chunk=%d", chunk), func(t *testing.T) {
+			s := NewStream(nil)
+			var out strings.Builder
+			max := 0
+			for i := 0; i < len(input); {
+				n := chunk
+				if i+n > len(input) {
+					n = len(input) - i
+				}
+				out.WriteString(s.Write(input[i : i+n]))
+				if p := s.Pending(); p > max {
+					max = p
+				}
+				i += n
+			}
+			out.WriteString(s.Flush())
+
+			if max > 2*StreamHoldCap {
+				t.Fatalf("pending grew to %d bytes, over the 2*StreamHoldCap bound (%d)", max, 2*StreamHoldCap)
+			}
+			if strings.Contains(out.String(), "AAAA") {
+				t.Fatalf("token run leaked into the emitted stream")
+			}
+			if !strings.Contains(out.String(), Token) {
+				t.Fatalf("emitted stream %q carries no redaction token", out.String())
+			}
+		})
 	}
 }
 
