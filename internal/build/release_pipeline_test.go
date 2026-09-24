@@ -89,3 +89,63 @@ func TestGitattributesContracts(t *testing.T) {
 		}
 	}
 }
+
+// TestReleaseNotesExtractedFromChangelog asserts the release job passes
+// GoReleaser a notes file extracted from the matching CHANGELOG section, and that
+// the extractor fails closed when that section is missing or empty.
+func TestReleaseNotesExtractedFromChangelog(t *testing.T) {
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+
+	release := readRepoFile(t, ".github/workflows/release.yml")
+	if !strings.Contains(release, "scripts/release-notes.sh") {
+		t.Error("release.yml must extract release notes with scripts/release-notes.sh")
+	}
+	if !strings.Contains(release, "--release-notes=") {
+		t.Error("release.yml must pass the extracted notes to GoReleaser via --release-notes")
+	}
+
+	script := filepath.Join(root, "scripts", "release-notes.sh")
+	if _, err := os.Stat(script); err != nil {
+		t.Fatalf("scripts/release-notes.sh not found: %v", err)
+	}
+
+	// The v2.1.0 section is present and non-empty: its body must come out, and
+	// neither its header nor the next section may leak in.
+	code, stdout, stderr := runCmd(t, root, nil, "bash", script, "v2.1.0")
+	if code != 0 {
+		t.Fatalf("release-notes.sh v2.1.0 exited %d: %s", code, stderr)
+	}
+	if !strings.Contains(stdout, "Streamed-chunk redaction") {
+		t.Errorf("notes do not contain the v2.1.0 body: %q", stdout)
+	}
+	if strings.Contains(stdout, "## v2.1.0") || strings.Contains(stdout, "## v2.0.0") {
+		t.Errorf("notes must be the section body without headers or the next section: %q", stdout)
+	}
+
+	// A missing section fails closed.
+	code, _, stderr = runCmd(t, root, nil, "bash", script, "v9.9.9")
+	if code == 0 {
+		t.Error("a missing CHANGELOG section must fail closed")
+	}
+	if !strings.Contains(stderr, "no CHANGELOG section") {
+		t.Errorf("missing-section error is unclear: %s", stderr)
+	}
+
+	// An empty section fails closed, driven through the CHANGELOG_FILE override.
+	dir := t.TempDir()
+	empty := filepath.Join(dir, "CHANGELOG.md")
+	if err := os.WriteFile(empty, []byte("# Changelog\n\n## v9.9.9\n\n## v9.9.8\n\n- older\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(), "CHANGELOG_FILE="+empty)
+	code, _, stderr = runCmd(t, dir, env, "bash", script, "v9.9.9")
+	if code == 0 {
+		t.Error("an empty CHANGELOG section must fail closed")
+	}
+	if !strings.Contains(stderr, "no CHANGELOG section") {
+		t.Errorf("empty-section error is unclear: %s", stderr)
+	}
+}
