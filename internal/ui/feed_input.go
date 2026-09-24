@@ -733,8 +733,16 @@ func (m *Feed) menuKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.menu.next()
 		return m, nil
 	case k.Type == tea.KeyTab, k.Type == tea.KeyEnter:
-		// Complete the selected command into composer text. NEVER executes simultaneously!
+		// An exactly typed command is what the user meant to run: Enter runs
+		// it instead of quietly completing it into a trailing-space
+		// placeholder, which reads as "nothing happened". Completion stays for
+		// partial tokens, and Tab never executes — completion and execution
+		// are different intents and stay on different keys.
 		if cmd, ok := m.menu.currentCommand(); ok {
+			if text := strings.TrimSpace(m.composer.value()); k.Type == tea.KeyEnter && text == cmd.Name {
+				m.menu.close()
+				return m.runCommand(text)
+			}
 			completed := cmd.Name
 			if cmd.HasArg {
 				completed += " "
