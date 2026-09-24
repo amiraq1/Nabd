@@ -460,3 +460,92 @@ func TestPRChecklistGateExplicitNA(t *testing.T) {
 		})
 	}
 }
+
+// The regression-test item may be marked N/A, so the Phase 2 cross-check must not
+// key on the ticked wording. It used to: switching the item to `- [x] N/A:
+// <reason>` disabled the check entirely, and the reason length played no part in
+// that. The cross-check now always runs, so an executable change still needs a
+// test whichever form the item takes, while a documentation-only or
+// dependency-only change stays exempt.
+func TestPRChecklistGateNATestItemStillRequiresATest(t *testing.T) {
+	_, checklistScript := gateScripts(t)
+
+	const testItem = "- [x] I added or updated a regression test"
+	const naReason = "- [x] N/A: no regression test is needed for this change"
+
+	tests := []struct {
+		name       string
+		item       string
+		files      map[string]string
+		wantExit   int
+		wantStderr string
+	}{
+		{
+			name: "Negative_BehaviourChangeWithNATestItem",
+			item: naReason,
+			files: map[string]string{
+				"internal/build/gate_probe.go": "package build\n\nvar Probed = 42\n",
+			},
+			wantExit:   1,
+			wantStderr: "but no *_test.go in diff.",
+		},
+		{
+			name: "Negative_BehaviourChangeWithTickedTestItem",
+			item: testItem,
+			files: map[string]string{
+				"internal/build/gate_probe.go": "package build\n\nvar Probed = 42\n",
+			},
+			wantExit:   1,
+			wantStderr: "but no *_test.go in diff.",
+		},
+		{
+			name: "Positive_DocsOnlyWithNATestItem",
+			item: naReason,
+			files: map[string]string{
+				"docs/user_guide.md": "# Guide\nDocumentation only.\n",
+			},
+			wantExit: 0,
+		},
+		{
+			name: "Positive_DependencyOnlyWithNATestItem",
+			item: "- [x] N/A: dependency bump only",
+			files: map[string]string{
+				"go.mod": "module nabd\n\ngo 1.27.0\n",
+			},
+			wantExit: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			repoDir, base := initTestRepo(t)
+			runGit(t, repoDir, "checkout", "-B", "branch-"+tc.name, base)
+			for relPath, content := range tc.files {
+				fullPath := filepath.Join(repoDir, relPath)
+				if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+					t.Fatalf("mkdir: %v", err)
+				}
+				if err := os.WriteFile(fullPath, []byte(content), 0o644); err != nil {
+					t.Fatalf("write file: %v", err)
+				}
+			}
+			runGit(t, repoDir, "add", ".")
+			runGit(t, repoDir, "commit", "-qm", "change for "+tc.name)
+
+			body := strings.Replace(validPRBody, testItem, tc.item, 1)
+			bodyPath := filepath.Join(repoDir, "live-body.txt")
+			if err := os.WriteFile(bodyPath, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			exitCode, _, stderr := runCmd(t, repoDir, prGateEnv(bodyPath, "master"), "bash", checklistScript)
+			if exitCode != tc.wantExit {
+				t.Fatalf("expected exit %d, got %d\nstderr: %s", tc.wantExit, exitCode, stderr)
+			}
+			if tc.wantStderr != "" && !strings.Contains(stderr, tc.wantStderr) {
+				t.Errorf("expected stderr to contain %q, got: %s", tc.wantStderr, stderr)
+			}
+		})
+	}
+}
