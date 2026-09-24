@@ -8,7 +8,15 @@ set -euo pipefail
 [[ -f "$LIVE_BODY_FILE" ]] || { echo "LIVE_BODY_FILE does not exist" >&2; exit 1; }
 body=$(<"$LIVE_BODY_FILE")
 
-# Phase 1: All checklist items must be checked.
+# Phase 1: Every checklist item must be resolved.
+#
+# An item is satisfied either by ticking it in full (`- [x] <item>`) or, when it
+# genuinely does not apply, by marking the item's own line `- [x] N/A: <reason>`
+# with a reason of at least min_na_reason characters. The items whose
+# applicability depends on the diff (the THREAT_MODEL update and the regression
+# test) may be marked N/A; the items that state an invariant applying to every
+# pull request (classification, credential hygiene, action pinning) may not. An
+# unchecked `- [ ] ` item always fails.
 required=(
   "I classified whether this changes paths"
   "I updated \`docs/THREAT_MODEL.md\`"
@@ -16,8 +24,38 @@ required=(
   "I checked that logs, fixtures, and diffs contain no credentials"
   "I verified third-party actions are pinned to full commit SHAs"
 )
-for item in "${required[@]}"; do
-  if ! grep -Fq -- "- [x] $item" <<<"$body"; then
+na_forbidden=(0 3 4)
+min_na_reason=10
+
+mapfile -t checklist_lines < <(grep -E '^- \[[ x]\] ' <<<"$body" || true)
+if [[ ${#checklist_lines[@]} -ne ${#required[@]} ]]; then
+  echo "PR security checklist is incomplete: expected ${#required[@]} items, found ${#checklist_lines[@]}" >&2
+  exit 1
+fi
+for i in "${!required[@]}"; do
+  item=${required[$i]}
+  line=${checklist_lines[$i]}
+  if [[ "$line" != "- [x] "* ]]; then
+    echo "PR security checklist is incomplete: $item" >&2
+    exit 1
+  fi
+  rest=${line#"- [x] "}
+  if [[ "$rest" == "N/A:"* ]]; then
+    for j in "${na_forbidden[@]}"; do
+      if [[ "$i" -eq "$j" ]]; then
+        echo "PR security checklist: this item always applies and cannot be marked N/A: $item" >&2
+        exit 1
+      fi
+    done
+    reason=${rest#"N/A:"}
+    reason=${reason#"${reason%%[![:space:]]*}"}
+    if (( ${#reason} < min_na_reason )); then
+      echo "PR security checklist: N/A reason is shorter than ${min_na_reason} characters: $item" >&2
+      exit 1
+    fi
+    continue
+  fi
+  if [[ "$rest" != *"$item"* ]]; then
     echo "PR security checklist is incomplete: $item" >&2
     exit 1
   fi
