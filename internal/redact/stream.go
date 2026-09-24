@@ -13,6 +13,12 @@ import (
 // exceed the provider-body storage bound.
 const StreamHoldCap = MaxBodyBytes
 
+// StreamPEMHoldCap bounds how many unemitted bytes a Stream keeps while waiting
+// for an open PEM private-key block to close. It exceeds MaxBodyBytes because an
+// RSA-4096 private-key block is ~3.3KB; prematurely redacting a valid key is
+// worse than a bounded temporary hold-back.
+const StreamPEMHoldCap = 8 * 1024
+
 // pemBeginMarker and pemEndMarker are the two halves of the PEM private-key
 // shape, compiled on their own so the stream can tell a complete block from an
 // unterminated one that it must hold to end of input.
@@ -38,12 +44,10 @@ var (
 // A Stream is not safe for concurrent use: it carries the partial-match state
 // for one streamed field, and callers must use one goroutine per stream.
 type Stream struct {
-	exact   []string
-	pending string
-	// swallow is set when the cap forced a partial emit while inside an
-	// over-long token run. The rest of that run must not surface, so Write drops
-	// token bytes until the run ends.
-	swallow bool
+	exact      []string
+	pending    string
+	swallow    bool
+	swallowPEM bool
 }
 
 // NewStream returns a Stream that also redacts the given exact credential
@@ -63,6 +67,26 @@ func NewStream(exactKeys []string) *Stream {
 // swallowed; the caller then emits no event for this chunk.
 func (s *Stream) Write(chunk string) (emit string) {
 	s.pending += chunk
+
+	if s.swallowPEM {
+		if loc := pemEndMarker.FindStringIndex(s.pending); loc != nil {
+			s.pending = s.pending[loc[1]:]
+			s.swallowPEM = false
+		} else {
+			keep := 0
+			if idx := strings.LastIndex(s.pending, "-----"); idx >= 0 {
+				if k := len(s.pending) - idx; k <= 64 {
+					keep = k
+				}
+			}
+			if keep > 0 {
+				s.pending = s.pending[len(s.pending)-keep:]
+			} else {
+				s.pending = ""
+			}
+			return emit
+		}
+	}
 
 	// Finish swallowing an over-long token run before looking for new holds.
 	// Swallowing must never cross the start of a PEM boundary.
@@ -87,13 +111,30 @@ func (s *Stream) Write(chunk string) (emit string) {
 		}
 	}
 
-	// An open PEM block is held in full: its interior is arbitrary bytes and the
-	// only safe boundary is the matching END line or Flush. Everything before the
-	// BEGIN is already decidable, so it is emitted now.
+	// An open PEM block is held in full up to StreamPEMHoldCap: its interior is
+	// arbitrary bytes and the only safe boundary is the matching END line or
+	// Flush. Exceeding the cap fails closed: Token is emitted and the remainder
+	// of the block is swallowed. Everything before the BEGIN is emitted now.
 	if b := openPEMStart(s.pending); b >= 0 {
 		if b > 0 {
 			emit = s.redact(s.pending[:b])
 			s.pending = s.pending[b:]
+		}
+		if len(s.pending) > StreamPEMHoldCap {
+			emit += Token
+			keep := 0
+			if idx := strings.LastIndex(s.pending, "-----"); idx >= 0 {
+				if k := len(s.pending) - idx; k <= 64 {
+					keep = k
+				}
+			}
+			if keep > 0 {
+				s.pending = s.pending[len(s.pending)-keep:]
+			} else {
+				s.pending = ""
+			}
+			s.swallowPEM = true
+			return emit
 		}
 		return emit
 	}
@@ -131,8 +172,8 @@ func (s *Stream) Write(chunk string) (emit string) {
 func (s *Stream) Pending() int { return len(s.pending) }
 
 // Swallowing reports whether the stream is discarding the tail of an over-cap
-// token run.
-func (s *Stream) Swallowing() bool { return s.swallow }
+// token run or an over-cap open PEM block.
+func (s *Stream) Swallowing() bool { return s.swallow || s.swallowPEM }
 
 // PushBack returns previously emitted text to the hold. A caller that decides to
 // withhold a prefix — to keep a sequence number free for a later flush — uses
@@ -148,6 +189,11 @@ func (s *Stream) PushBack(prefix string) {
 // held bytes are never dropped and never emitted raw. After Flush the stream is
 // empty and may be reused for the next message.
 func (s *Stream) Flush() string {
+	if s.swallowPEM {
+		s.pending = ""
+		s.swallowPEM = false
+		return ""
+	}
 	if s.swallow {
 		// The run's start was already emitted as Token; the swallowed tail is
 		// deliberately discarded rather than surfaced.
