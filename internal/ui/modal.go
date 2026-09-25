@@ -3,12 +3,26 @@ package ui
 import (
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"nabd/internal/agent"
 
 	"github.com/charmbracelet/x/ansi"
 )
+
+// ModalArmDelay defines the typeahead guard interval.
+const ModalArmDelay = 400 * time.Millisecond
+
+var modalClock = time.Now
+
+func (f *Feed) setModalClock(fn func() time.Time) {
+	if fn == nil {
+		modalClock = time.Now
+	} else {
+		modalClock = fn
+	}
+}
 
 // PermissionChoice represents an selectable action in the permission modal.
 type PermissionChoice struct {
@@ -23,6 +37,7 @@ type PermissionModal struct {
 	call            *agent.ToolCall
 	selected        int
 	decisionPending bool
+	armedAt         time.Time
 }
 
 // choiceIndex returns the index of the given decision in choices, or -1 if
@@ -63,6 +78,7 @@ func (m *PermissionModal) open(call *agent.ToolCall) {
 	m.call = call
 	m.selected = denyIndex()
 	m.decisionPending = false
+	m.armedAt = modalClock()
 }
 
 func (m *PermissionModal) close() {
@@ -70,6 +86,20 @@ func (m *PermissionModal) close() {
 	m.call = nil
 	m.selected = denyIndex()
 	m.decisionPending = false
+	m.armedAt = time.Time{}
+}
+
+// isArmed reports whether the arm delay has elapsed.
+func (m *PermissionModal) isArmed() bool {
+	if m.armedAt.IsZero() {
+		return true
+	}
+	return modalClock().Sub(m.armedAt) >= ModalArmDelay
+}
+
+// Rearm resets the arm delay window to the current clock time.
+func (m *PermissionModal) Rearm() {
+	m.armedAt = modalClock()
 }
 
 func (m *PermissionModal) toolName() string {
@@ -344,8 +374,14 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	// the two shortest levels where no separate hint row exists.
 	hintBorder := func() string {
 		hint := "+-- Enter confirm · " + m.keyHintText() + " "
+		if !m.isArmed() {
+			hint = "+-- wait · " + m.keyHintText() + " "
+		}
 		if ansi.StringWidth(hint) > cardW-2 {
 			hint = "+-- Enter · " + m.keyHintText() + " "
+			if !m.isArmed() {
+				hint = "+-- wait · " + m.keyHintText() + " "
+			}
 		}
 		if ansi.StringWidth(hint) > cardW-2 {
 			hint = ansi.Truncate(hint, max(1, cardW-2), "…")
@@ -434,9 +470,13 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 			sel.Label = "submitting decision…"
 			sel.KeyHint = ""
 		}
+		hintLine := "Enter confirm · Up/Down select · " + m.keyHintText()
+		if !m.isArmed() {
+			hintLine = "wait · Up/Down select · " + m.keyHintText()
+		}
 		lines = append(lines,
 			formatRow(fmt.Sprintf("  %s %s (%s)", mark, sel.Label, sel.KeyHint)),
-			formatRow("Enter confirm · Up/Down select · "+m.keyHintText()),
+			formatRow(hintLine),
 			plainBorder(),
 		)
 		return strings.Join(lines, "\n")
@@ -473,6 +513,8 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	switch {
 	case m.decisionPending:
 		lines = append(lines, formatRow("waiting for decision to apply…"))
+	case !m.isArmed():
+		lines = append(lines, formatRow("wait · "+m.keyHintText()))
 	case m.selected >= 0:
 		lines = append(lines, formatRow("Enter confirm · Up/Down select · "+m.keyHintText()))
 	default:
