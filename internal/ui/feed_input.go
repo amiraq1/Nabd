@@ -228,12 +228,16 @@ func (m *Feed) safeToQuit() bool {
 }
 
 // cancelRun cancels the in-flight run context directly (never via a
-// message, see onCtrlC). Repeated cancellation is a no-op.
+// message, see onCtrlC). Repeated cancellation is a no-op, and so is a call
+// with no cancelable run: setting "canceling…" without a context to cancel
+// would park the transient row in a state only a doneMsg could clear, and no
+// doneMsg can arrive for a run that does not exist.
 func (m *Feed) cancelRun(status string) {
-	if m.cancel != nil {
-		m.cancel()
-		m.cancel = nil
+	if m.cancel == nil {
+		return
 	}
+	m.cancel()
+	m.cancel = nil
 	m.runningTool = ""
 	if status != "" {
 		m.setStatus(status, rankRunLifecycle)
@@ -299,26 +303,16 @@ func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch k.Type {
-	case tea.KeyUp, tea.KeyLeft:
-		m.permModal.prevChoice()
-		return m, nil
-	case tea.KeyDown, tea.KeyRight:
-		m.permModal.nextChoice()
-		return m, nil
-	case tea.KeyEnter:
-		if m.permModal.selected >= 0 {
-			return m.answerModal(m.permModal.currentDecision())
+	if !m.permModal.isArmed() {
+		if k.Type == tea.KeyEsc || k.String() == "esc" {
+			return m.answerModal(agent.Deny)
 		}
+		m.permModal.Rearm()
 		return m, nil
-	case tea.KeyEsc:
+	}
+
+	if k.Type == tea.KeyEsc || k.String() == "esc" {
 		return m.answerModal(agent.Deny)
-	case tea.KeyCtrlC:
-		// Cancels the in-flight run; never approves.
-		if m.running || m.busy {
-			m.cancelRun("canceling…")
-		}
-		return m, nil
 	}
 
 	switch k.String() {
@@ -326,15 +320,14 @@ func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.answerModal(agent.AllowOnce)
 	case "a", "A":
 		if m.permModal.call != nil && m.permModal.call.SessionGrantKnown && !m.permModal.call.SessionGrantAllowed {
+			m.permModal.Rearm()
 			return m, nil
 		}
 		return m.answerModal(agent.AllowSession)
 	case "n", "N":
 		return m.answerModal(agent.Deny)
-	case "esc":
-		return m.answerModal(agent.Deny)
 	default:
-		// Swallowed by the modal.
+		m.permModal.Rearm()
 		return m, nil
 	}
 }
@@ -729,8 +722,16 @@ func (m *Feed) menuKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.menu.next()
 		return m, nil
 	case k.Type == tea.KeyTab, k.Type == tea.KeyEnter:
-		// Complete the selected command into composer text. NEVER executes simultaneously!
+		// An exactly typed command is what the user meant to run: Enter runs
+		// it instead of quietly completing it into a trailing-space
+		// placeholder, which reads as "nothing happened". Completion stays for
+		// partial tokens, and Tab never executes — completion and execution
+		// are different intents and stay on different keys.
 		if cmd, ok := m.menu.currentCommand(); ok {
+			if text := strings.TrimSpace(m.composer.value()); k.Type == tea.KeyEnter && text == cmd.Name {
+				m.menu.close()
+				return m.runCommand(text)
+			}
 			completed := cmd.Name
 			if cmd.HasArg {
 				completed += " "

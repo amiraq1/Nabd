@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"nabd/internal/agent"
 
@@ -74,6 +75,7 @@ func TestBashAllowSessionCoreOwnedRawDecision(t *testing.T) {
 	}
 
 	// 2. Press 'a'
+	f.permModal.armedAt = time.Time{} // armed
 	_, cmd := f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	if cmd == nil {
 		t.Fatal("pressing 'a' must produce reply command")
@@ -108,50 +110,32 @@ func TestBashAllowSessionCoreOwnedRawDecision(t *testing.T) {
 	}
 }
 
-// TestModalArrowSelectionAndEnter confirms that Up/Down/Left/Right navigate choices
-// and Enter confirms the currently selected decision.
-// The default selection is Deny (fail-closed), so navigation wraps around it.
+// TestModalArrowSelectionAndEnter confirms that Up/Down/Left/Right and Enter
+// do not produce any decision under contract 0.2 (decisions are literal keys only).
 func TestModalArrowSelectionAndEnter(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	f.width = 80
 	f.height = 24
-	openModal(f) // choices: [0: Allow Once, 1: Allow Session, 2: Deny]
+	openModal(f)
+	f.permModal.armedAt = time.Time{} // armed
 
-	// Default selection must be Deny.
-	if f.permModal.selected != denyIndex() {
-		t.Fatalf("initial selected = %d, want denyIndex=%d", f.permModal.selected, denyIndex())
+	// Arrow keys produce no command
+	for _, k := range []tea.KeyMsg{
+		{Type: tea.KeyDown},
+		{Type: tea.KeyUp},
+		{Type: tea.KeyLeft},
+		{Type: tea.KeyRight},
+	} {
+		_, cmd := f.Update(k)
+		if cmd != nil {
+			t.Fatalf("arrow key %v produced unexpected command under contract 0.2", k)
+		}
 	}
 
-	// Down from Deny wraps to Allow Once (index 0)
-	f.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if f.permModal.selected != 0 {
-		t.Fatalf("after Down from Deny, selected = %d, want 0", f.permModal.selected)
-	}
-
-	// Second Down moves to Allow Session (index 1)
-	f.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if f.permModal.selected != 1 {
-		t.Fatalf("after second Down, selected = %d, want 1", f.permModal.selected)
-	}
-
-	// Third Down moves to Deny (index 2)
-	f.Update(tea.KeyMsg{Type: tea.KeyDown})
-	if f.permModal.selected != 2 {
-		t.Fatalf("after third Down, selected = %d, want 2", f.permModal.selected)
-	}
-
-	// Enter confirms selection (Deny)
+	// Enter produces no decision command
 	_, cmd := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("Enter must produce reply command")
-	}
-	msg := cmd()
-	reply, ok := msg.(permReplyMsg)
-	if !ok {
-		t.Fatalf("expected permReplyMsg, got %T", msg)
-	}
-	if reply.Decision != agent.Deny {
-		t.Fatalf("expected Decision=Deny, got %v", reply.Decision)
+	if cmd != nil {
+		t.Fatal("Enter must not produce decision command under contract 0.2")
 	}
 }
 
@@ -173,17 +157,17 @@ func TestModalDefaultSelectionIsDeny(t *testing.T) {
 	}
 }
 
-// TestModalEnterWithoutNavigationSubmitsDeny verifies that pressing Enter
-// immediately after opening the modal produces a Deny decision without invoking
-// the runner or modifying the composer.
-func TestModalEnterWithoutNavigationSubmitsDeny(t *testing.T) {
+// TestModalEnterWithoutNavigationProducesNoDecision verifies that pressing Enter
+// produces no decision without invoking the runner or modifying the composer.
+func TestModalEnterWithoutNavigationProducesNoDecision(t *testing.T) {
 	f, r := feedWithRunner(t)
 	typeIntoFeed(t, f, "pending message")
 	openModal(f)
+	f.permModal.armedAt = time.Time{}
 
 	_, cmd := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	if cmd == nil {
-		t.Fatal("Enter on default modal must produce reply command")
+	if cmd != nil {
+		t.Fatal("Enter on modal must not produce reply command under contract 0.2")
 	}
 
 	// Runner must never be invoked.
@@ -195,20 +179,10 @@ func TestModalEnterWithoutNavigationSubmitsDeny(t *testing.T) {
 	if got := f.composer.value(); got != "pending message" {
 		t.Fatalf("composer changed: %q", got)
 	}
-
-	// The produced command must yield a Deny permission reply.
-	msg := cmd()
-	reply, ok := msg.(permReplyMsg)
-	if !ok {
-		t.Fatalf("expected permReplyMsg, got %T", msg)
-	}
-	if reply.Decision != agent.Deny {
-		t.Fatalf("expected Decision=Deny, got %v", reply.Decision)
-	}
 }
 
 // TestModalVisibleSelectionMatchesDecision verifies, across all rendering
-// levels, that the visibly marked choice ([*]) matches currentDecision().
+// levels, that Deny is clearly indicated and no [*] selection markers exist.
 func TestModalVisibleSelectionMatchesDecision(t *testing.T) {
 	// maxRows values chosen to force each degradation level:
 	// full (>=8), compact (5-6), toolrow (4), minimum (3).
@@ -222,21 +196,15 @@ func TestModalVisibleSelectionMatchesDecision(t *testing.T) {
 			// Strip ANSI to inspect plain text.
 			plain := ansi.Strip(f.permModal.view(80, maxRows))
 
-			// The visible selection marker must be on Deny, never Allow.
-			if !strings.Contains(plain, "[*] Deny") {
-				t.Fatalf("maxRows=%d: expected [*] Deny in view, got:\n%s", maxRows, plain)
+			// The visible choice must contain Deny.
+			if !strings.Contains(plain, "Deny (n / esc)") {
+				t.Fatalf("maxRows=%d: expected Deny (n / esc) in view, got:\n%s", maxRows, plain)
 			}
-			if strings.Contains(plain, "[*] Allow Once") || strings.Contains(plain, "[*] Allow Session") {
-				t.Fatalf("maxRows=%d: [*] appears on a non-Deny choice:\n%s", maxRows, plain)
-			}
-
-			// Exactly one [*] marker in the modal.
-			if strings.Count(plain, "[*]") != 1 {
-				t.Fatalf("maxRows=%d: expected exactly one [*] marker, got %d:\n%s",
-					maxRows, strings.Count(plain, "[*]"), plain)
+			if strings.Contains(plain, "[*]") {
+				t.Fatalf("maxRows=%d: [*] appears in view under contract 0.2:\n%s", maxRows, plain)
 			}
 
-			// currentDecision must agree with the visible selection.
+			// currentDecision must agree with the default Deny.
 			if f.permModal.currentDecision() != agent.Deny {
 				t.Fatalf("maxRows=%d: currentDecision=%v, want Deny", maxRows, f.permModal.currentDecision())
 			}
@@ -258,11 +226,11 @@ func TestModalInvalidSelectionFallsBackToDeny(t *testing.T) {
 			}
 
 			plain := ansi.Strip(f.permModal.view(80, 3))
-			if !strings.Contains(plain, "[*] Deny") {
-				t.Fatalf("selected=%d: expected [*] Deny in narrow view, got:\n%s", sel, plain)
+			if !strings.Contains(plain, "Deny (n / esc)") {
+				t.Fatalf("selected=%d: expected Deny (n / esc) in narrow view, got:\n%s", sel, plain)
 			}
-			if strings.Contains(plain, "[*] Allow Once") || strings.Contains(plain, "[*] Allow Session") {
-				t.Fatalf("selected=%d: [*] on non-Deny choice:\n%s", sel, plain)
+			if strings.Contains(plain, "[*]") {
+				t.Fatalf("selected=%d: [*] on choice:\n%s", sel, plain)
 			}
 		})
 	}
@@ -273,6 +241,7 @@ func TestModalInvalidSelectionFallsBackToDeny(t *testing.T) {
 func TestModalReopenResetsToDeny(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	openModal(f)
+	f.permModal.armedAt = time.Time{} // armed
 
 	// Move to Allow Once and answer.
 	f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
@@ -317,6 +286,7 @@ func TestChoiceIndexReturnsMinusOneForMissingDecision(t *testing.T) {
 func TestModalIdempotentSingleDecision(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	openModal(f)
+	f.permModal.armedAt = time.Time{} // armed
 
 	// First press 'y'
 	_, cmd1 := f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
@@ -438,10 +408,7 @@ func TestModalTermuxSnapshotDimensions(t *testing.T) {
 				{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c_snap", Name: "bash", Args: json.RawMessage(`"pwd"`)}},
 			}})
 
-			// 2. Select index 0 (Allow Once) via Down arrow
-			f.Update(tea.KeyMsg{Type: tea.KeyDown})
-
-			// 3. Render view during active modal
+			// 2. Render view during active modal
 			v := f.View()
 			if v == "" {
 				t.Fatal("empty modal view")
@@ -458,9 +425,9 @@ func TestModalTermuxSnapshotDimensions(t *testing.T) {
 				t.Fatalf("missing card top border in view:\n%s", v)
 			}
 
-			// Invariant C: Selected choice must clearly display [*]
-			if !strings.Contains(v, "[*] Allow Once") {
-				t.Fatalf("selected choice must visually show [*] Allow Once:\n%s", v)
+			// Invariant C: Choice must visually show Allow Once (y)
+			if !strings.Contains(v, "Allow Once (y)") {
+				t.Fatalf("choice must visually show Allow Once (y):\n%s", v)
 			}
 
 			// Invariant D: Composer must be visibly paused
@@ -472,6 +439,7 @@ func TestModalTermuxSnapshotDimensions(t *testing.T) {
 			}
 
 			// Invariant E: Answer modal -> verify composer is restored
+			f.permModal.armedAt = time.Time{} // armed
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 			f.Update(agentEventBatchMsg{Events: []agent.Event{
 				{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c_snap"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},

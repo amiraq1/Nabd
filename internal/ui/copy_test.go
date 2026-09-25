@@ -56,7 +56,7 @@ func TestCopyRedactsRecognizedCredentials(t *testing.T) {
 			var buf bytes.Buffer
 			m.SetClipboardWriter(&buf)
 
-			_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+			_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 			if cmd != nil {
 				t.Fatal("copy returned non-nil cmd")
 			}
@@ -116,7 +116,7 @@ func TestCopyNeverUsesRawJournalContent(t *testing.T) {
 	var buf bytes.Buffer
 	m.SetClipboardWriter(&buf)
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 
 	decoded := decodeOSC52Payload(t, buf.String())
 
@@ -151,7 +151,7 @@ func TestCopyRejectsRawErrorBodies(t *testing.T) {
 	var buf bytes.Buffer
 	m.SetClipboardWriter(&buf)
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 
 	decoded := decodeOSC52Payload(t, buf.String())
 
@@ -204,7 +204,7 @@ func TestCopyNeverExecutesACommand(t *testing.T) {
 	var buf bytes.Buffer
 	m.SetClipboardWriter(&buf)
 
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 
 	if m.running || m.busy || m.runningTool != "" {
 		t.Fatal("copy triggered command execution or set running/busy state")

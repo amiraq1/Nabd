@@ -160,7 +160,7 @@ func (m *Feed) navigationKey(k tea.KeyMsg) (tea.Model, tea.Cmd, bool) {
 	case "/":
 		m, cmd := m.enterSearch()
 		return m, cmd, true
-	case "y", "c":
+	case "c":
 		m, cmd := m.copySelectedCard()
 		return m, cmd, true
 	case "Y":

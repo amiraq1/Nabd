@@ -19,6 +19,15 @@ func (m *Feed) statusLineWithMeta(base string, avail int) string {
 		return base
 	}
 	meta := m.statusProj.Meta(time.Now())
+	// The row times the current run, not the session: the projector clocks
+	// from the session's RunStart, so a resumed session or a second run would
+	// otherwise report the session's age next to a live request. reqStartedAt
+	// is the request clock (trySend), which is what the row is describing.
+	if m.running && !m.reqStartedAt.IsZero() {
+		if d := time.Since(m.reqStartedAt); d > 0 {
+			meta.Elapsed = d
+		}
+	}
 	variants := runtimeMetaVariants(meta)
 	if fit, ok := firstFit(variants, avail, func(v string) string {
 		return base + " · " + v

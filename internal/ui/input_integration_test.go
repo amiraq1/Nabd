@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"nabd/internal/agent"
 	"nabd/internal/presentation"
@@ -162,6 +163,7 @@ func TestIntegrationPhase3AFullSequence(t *testing.T) {
 	}
 
 	// 17. Answer the modal with y.
+	f.permModal.armedAt = time.Time{} // armed
 	_, cmd = f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	if cmd == nil {
 		t.Fatal("y during modal must produce a reply command")

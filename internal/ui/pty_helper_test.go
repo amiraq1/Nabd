@@ -700,7 +700,8 @@ func assertScreenBounds(
 	}
 }
 
-// waitForPermissionModal waits for permission modal card to become visible on the screen grid.
+// waitForPermissionModal waits for permission modal card to become visible on the screen grid
+// and for the arm delay to elapse.
 func waitForPermissionModal(
 	session *PTYSession,
 	timeout time.Duration,
@@ -710,5 +711,9 @@ func waitForPermissionModal(
 		lastSnap = snap
 		return snap.ModalVisible()
 	})
-	return lastSnap, err
+	if err != nil {
+		return lastSnap, err
+	}
+	time.Sleep(ModalArmDelay + 50*time.Millisecond)
+	return session.Snapshot(), nil
 }

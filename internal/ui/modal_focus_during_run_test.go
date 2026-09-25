@@ -2,6 +2,7 @@ package ui
 
 import (
 	"testing"
+	"time"
 
 	"nabd/internal/agent"
 
@@ -15,6 +16,7 @@ func TestFocusRestoredAfterModalDuringRun(t *testing.T) {
 	f, r := feedWithBlockingRunner(t)
 	startBlockingRun(t, f, r, "tool request")
 	openModal(f)
+	f.permModal.armedAt = time.Time{} // armed
 	if f.composer.focused() {
 		t.Fatal("composer must blur while the modal is visible")
 	}

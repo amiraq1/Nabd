@@ -142,19 +142,21 @@ no_test_explanation() {
   if [[ -n "$go_files" ]]; then
     behaviour_free_diff || return 1
   fi
-  grep -Eiq -- '^[[:space:]]*N/A:[[:space:]]*(dependency|documentation|docs?|changelog|workflow|pin|release)' <<<"$body"
+  grep -Eiq -- '(^[[:space:]]*N/A:|^- \[x\] N/A:)[[:space:]]*(dependency|documentation|docs?|changelog|workflow|pin|release)' <<<"$body"
 }
 
-# If the PR body claims a regression test was added/updated, a *_test.go file must be in the diff.
-if grep -Fq -- "- [x] I added or updated a regression test" <<<"$body"; then
-  if ! grep -Eq "_test\.go$" <<<"$changed"; then
-    if behaviour_free_diff; then
-      echo "Regression-test cross-check skipped: the diff changes only comments and documentation."
-    elif no_test_explanation; then
-      echo "Regression-test cross-check skipped: the PR documents why no test applies."
-    else
-      echo "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff." >&2
-      exit 1
-    fi
+# The regression-test item is resolved either by ticking it or by marking it N/A,
+# so this cross-check must not key on the ticked wording: doing so let a pull
+# request disable the requirement entirely by writing `- [x] N/A: <reason>`.
+# Phase 1 has already established that the item is resolved, so the check always
+# runs. "claims" below therefore covers both forms.
+if ! grep -Eq "_test\.go$" <<<"$changed"; then
+  if behaviour_free_diff; then
+    echo "Regression-test cross-check skipped: the diff changes only comments and documentation."
+  elif no_test_explanation; then
+    echo "Regression-test cross-check skipped: the PR documents why no test applies."
+  else
+    echo "S7 gate failed: checklist claims 'I added or updated a regression test' but no *_test.go in diff." >&2
+    exit 1
   fi
 fi

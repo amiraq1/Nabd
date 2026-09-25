@@ -136,13 +136,13 @@ func TestSmallScreenKeepsModalTitleAndSelectedChoice(t *testing.T) {
 			if !strings.Contains(v, "Permission") {
 				t.Fatalf("[%s] modal title 'Permission' was cut from View():\n%s", sz.name, v)
 			}
-			// Strip ANSI before inspecting the selection marker.
+			// Strip ANSI before inspecting the choice.
 			plain := ansi.Strip(v)
-			if !strings.Contains(plain, "[*] Deny") {
-				t.Fatalf("[%s] expected [*] Deny as the default selection, got:\n%s", sz.name, plain)
+			if !strings.Contains(plain, "Deny") {
+				t.Fatalf("[%s] expected Deny choice in view, got:\n%s", sz.name, plain)
 			}
-			if strings.Contains(plain, "[*] Allow Once") || strings.Contains(plain, "[*] Allow Session") {
-				t.Fatalf("[%s] [*] appears on a non-Deny choice (default should be Deny):\n%s", sz.name, plain)
+			if strings.Contains(plain, "[*]") {
+				t.Fatalf("[%s] [*] marker should not appear under contract 0.2:\n%s", sz.name, plain)
 			}
 		})
 	}

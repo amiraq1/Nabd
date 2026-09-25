@@ -1,7 +1,6 @@
 package snap
 
 import (
-	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -76,17 +75,18 @@ func (s *Shadow) ensureShielded() error {
 // shieldStore applies the privacy shield to the nabd-owned .ag tree:
 //
 //  1. Creates (or tightens) agDir (.ag) and shadowDir (.ag/shadow) to 0700.
-//  2. Writes /shadow/ to agDir/.gitignore, atomically and idempotently, so
-//     that accidental git add -A does not stage shadow blobs.
+//  2. Asserts agDir/.gitignore as the single rule "*", so that accidental
+//     `git add -A` never stages any part of the store. The file is created
+//     with O_CREATE|O_EXCL if missing; an existing one is never touched.
 //
 // Guarantees:
 //   - agDir and shadowDir are always 0700 when this returns nil, regardless
 //     of umask or the mode they had before.
-//   - The .gitignore rule is appended (with a leading newline separator if the
-//     file already has content) only when it is not already present; existing
-//     user content is preserved byte-for-byte.
-//   - The write is atomic: a sibling tmp file is written and renamed into
-//     place so that a concurrent reader never sees a partial file.
+//   - An existing agDir/.gitignore is never read, appended to, or replaced;
+//     its content is left byte-for-byte alone.
+//   - A file this function does create is 0600 (never wider than the 0700
+//     directory), and its creation is atomic (O_EXCL): a file that appears
+//     concurrently is never replaced, and a reader never sees a partial file.
 //   - ErrAtomicPublishUnsupported is a separate error class; a failure here
 //     is a plain OS error unrelated to blob publication capability.
 //
@@ -106,76 +106,44 @@ func shieldStore(agDir, shadowDir string) error {
 		}
 	}
 
-	// 2. Ensure .ag/.gitignore contains "/shadow/" without disturbing user
-	//    content.
-	igPath := filepath.Join(agDir, ".gitignore")
-	const rule = "/shadow/"
-
-	// Read the existing file if present.
-	existing, err := os.ReadFile(igPath)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("snap: shield read %s: %w", igPath, err)
-	}
-
-	// Fast idempotent path: rule is already present.
-	if containsIgnoreRule(string(existing), rule) {
-		return nil
-	}
-
-	// Build the new content: preserve what is there, append the rule.
-	var content string
-	if len(existing) == 0 {
-		content = "# nabd: prevent accidental git-staging of shadow blobs\n" + rule + "\n"
-	} else {
-		// If existing content does not end with a newline, add one so the new
-		// rule starts on its own line.
-		sep := ""
-		if existing[len(existing)-1] != '\n' {
-			sep = "\n"
-		}
-		content = string(existing) + sep + rule + "\n"
-	}
-
-	// Atomic write: tmp sibling → rename.
-	tmp, err := os.CreateTemp(agDir, ".ag-gitignore-*.tmp")
-	if err != nil {
-		return fmt.Errorf("snap: shield tmp %s: %w", agDir, err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op if rename succeeded
-
-	bw := bufio.NewWriter(tmp)
-	if _, err := bw.WriteString(content); err != nil {
-		tmp.Close()
-		return fmt.Errorf("snap: shield write %s: %w", tmpName, err)
-	}
-	if err := bw.Flush(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("snap: shield flush %s: %w", tmpName, err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return fmt.Errorf("snap: shield sync %s: %w", tmpName, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("snap: shield close %s: %w", tmpName, err)
-	}
-	if err := os.Rename(tmpName, igPath); err != nil {
-		return fmt.Errorf("snap: shield rename %s → %s: %w", tmpName, igPath, err)
-	}
+	// 2. Assert the store's gitignore. The store holds copies of file content,
+	//    so the whole .ag tree must stay out of git: ignoring only "/shadow/"
+	//    left .ag itself (and this file) untracked but stageable, so a user's
+	//    `git add -A` quietly staged nabd's bookkeeping. An existing file
+	//    belongs to the user, or to an older version of this shield, and is
+	//    left alone. The error is deliberately ignored: the shield must never
+	//    be the reason an edit fails.
+	_ = ensureGitignoreFn(agDir)
 	return nil
 }
 
-// containsIgnoreRule reports whether text already contains rule as a
-// non-commented, standalone line.  It avoids re-adding a rule the user or a
-// previous run already wrote.
-func containsIgnoreRule(text, rule string) bool {
-	for _, line := range strings.Split(text, "\n") {
-		if strings.TrimSpace(line) == rule {
-			return true
-		}
+// ensureGitignoreFn is a narrow seam so a test can prove a failed shield write
+// never blocks the edit it protects. Production uses ensureGitignore.
+var ensureGitignoreFn = ensureGitignore
+
+// ensureGitignore creates <agDir>/.gitignore as the single rule "*" with
+// O_CREATE|O_EXCL. The exclusive create is what makes "never replace an
+// existing file" atomic rather than check-then-write: a file that appears
+// between any look and the syscall is not replaced, and an existing one — the
+// user's, or an older shield's /shadow/ rule — is left byte-for-byte alone
+// (the open fails with EEXIST). Callers run this on every shadow write-open,
+// so a store that predates the shield, or lost its file, is shielded by the
+// next edit.
+//
+// The returned error is deliberately ignored by callers: a store that cannot
+// write this file must still be able to record the edit it protects.
+func ensureGitignore(agDir string) error {
+	path := filepath.Join(agDir, ".gitignore")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err // EEXIST included: an existing file is left alone
 	}
-	return false
+	if _, err := f.WriteString("*\n"); err != nil {
+		f.Close()
+		os.Remove(path) // leave nothing half-written for the next open to keep
+		return err
+	}
+	return f.Close()
 }
 
 func (s *Shadow) UsesGit() bool    { return false }
@@ -433,11 +401,16 @@ func blobMatches(existingData []byte, sum [sha256.Size]byte) bool {
 }
 
 func (s *Shadow) put(data []byte) (string, error) {
-	// Apply the privacy shield before writing the first blob.  This creates
-	// .ag and .ag/shadow at 0700 and writes /shadow/ to .ag/.gitignore.
+	// Apply the privacy shield before writing the first blob: .ag and
+	// .ag/shadow at 0700, once per process.
 	if err := s.ensureShielded(); err != nil {
 		return "", err
 	}
+	// The shield file is asserted on every write-open, not once per process:
+	// the store may predate the shield, or the user may have removed the file
+	// since the last write. The error is deliberately ignored — recording the
+	// edit does not depend on the store being invisible to git.
+	_ = ensureGitignoreFn(filepath.Dir(s.store))
 
 	sum := sha256.Sum256(data)
 	id := "s256:" + hex.EncodeToString(sum[:])

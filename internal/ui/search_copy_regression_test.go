@@ -55,7 +55,7 @@ func TestCopyDoesNotCorruptIndentedArabic(t *testing.T) {
 
 	var buf bytes.Buffer
 	m.SetClipboardWriter(&buf)
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	if cmd != nil {
 		t.Fatal("copy returned a non-nil tea.Cmd")
 	}
@@ -86,7 +86,7 @@ func TestOversizedCopyUsesTooLargeNotice(t *testing.T) {
 
 	var buf bytes.Buffer
 	m.SetClipboardWriter(&buf)
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	if cmd != nil {
 		t.Fatal("oversized copy returned a non-nil tea.Cmd")
 	}
@@ -148,7 +148,7 @@ func TestCopyEndToEndKeepsMarkerAtWidth63(t *testing.T) {
 
 	var buf bytes.Buffer
 	m.SetClipboardWriter(&buf)
-	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 
 	raw := buf.String()
 	if raw == "" {
@@ -186,7 +186,7 @@ func TestCopyTermuxPathKeepsMarkerAtWidth63(t *testing.T) {
 	m.clipboardWriter = nil
 	m.clipboardCommand = script
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 	if cmd == nil {
 		t.Fatal("termux path returned no command")
 	}
