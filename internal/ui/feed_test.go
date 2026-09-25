@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -8,6 +9,7 @@ import (
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // TestFeedEmpty verifies an empty feed renders without panic.
@@ -239,14 +241,32 @@ func TestFeedFollowMode(t *testing.T) {
 	f.width = 50
 	f.height = 10
 	f.follow = true
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "msg1"},
-		{Seq: 2, Type: agent.UserMsg, Text: "msg2"},
-		{Seq: 3, Type: agent.UserMsg, Text: "msg3"},
-	}})
+
+	var events []agent.Event
+	for i := 1; i <= 30; i++ {
+		events = append(events, agent.Event{
+			Seq:  i,
+			Type: agent.UserMsg,
+			Text: fmt.Sprintf("m%02d", i),
+		})
+	}
+	_, _ = f.Update(agentEventBatchMsg{Events: events})
 	if !f.follow {
 		t.Error("follow mode should remain active when appending at bottom")
 	}
+
+	if f.scrollTop <= 0 {
+		t.Errorf("scrollTop = %d, want > 0 when content exceeds viewport", f.scrollTop)
+	}
+
+	view := ansi.Strip(f.View())
+	if !strings.Contains(view, "m30") {
+		t.Errorf("expected view to contain latest message m30 in follow mode, got:\n%s", view)
+	}
+	if strings.Contains(view, "m01") {
+		t.Errorf("expected view to have scrolled past oldest message m01, got:\n%s", view)
+	}
+
 	lm := f.computeLayout()
 	want := f.bottomStart(lm.ViewportRows)
 	if f.scrollTop != want {
