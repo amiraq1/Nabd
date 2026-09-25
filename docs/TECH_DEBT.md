@@ -406,13 +406,14 @@ Only the names were read, not the bodies. What looks genuinely unautomated is
 narrow: text selection and copy inside the alternate screen, and Android
 keyboard variance on Alt+Enter / Ctrl+J.
 
-Two unverified suspicions, recorded as hypotheses: feed_test.go:251 compares
-f.scrollTop against f.bottomStart(lm.ViewportRows), i.e. against the production
-expression itself, and with three messages at height 10 both sides may be zero
-so nothing is measured - the per-card line count was never measured, so this is
-not asserted. And internal/ui/feed_layout.go holds bottomStart yet never
-appeared in this batch's inventory of layout files, so the production-side
-inventory is as incomplete as the test-side one was.
+Two layout-test hypotheses were recorded here. The first is resolved:
+feed_test.go:251 compared f.scrollTop against f.bottomStart(lm.ViewportRows),
+i.e. against the production expression itself, so nothing was measured
+independently. `TestFeedFollowMode` now verifies that f.scrollTop > 0, that the newest of
+30 messages is visible and that the oldest is not; it fails when bottomStart is
+forced to 0. The second is still open: internal/ui/feed_layout.go holds
+bottomStart yet never appeared in this batch's inventory of layout files, so the
+production-side inventory is as incomplete as the test-side one was.
 
 ## READ_CAP_TURN_COST (NBD-400) - the shipped read defaults cannot read a mid-sized file in one run
 
