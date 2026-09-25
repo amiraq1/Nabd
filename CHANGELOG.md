@@ -10,6 +10,15 @@ Published changes and downloadable artifacts are available on the
 
 ### Security
 - The streamed redactor no longer cuts inside a complete recognized credential or configured exact key, so a secret split across chunks can no longer survive as an unredacted emitted prefix plus a held suffix. This closes an additional low-impact edge case at hold-back boundaries.
+- Permission modal ignores decision keys for 400 ms after opening and after every ignored keystroke, so text typed ahead can no longer approve a tool call.
+- Enter and arrow keys no longer confirm a choice in the permission modal; decide with y (once), a (session) or n / Esc (deny).
+- In navigation mode, y no longer copies the focused card; use c.
+
+### Fixed
+- Resumed sessions start idle instead of inheriting a running state, so cancelling after a resume no longer sticks on "canceling…"; the status row now times the live turn rather than the whole session.
+- An exactly typed slash command such as /undo runs on the first Enter instead of needing a second one.
+- The project shadow store is kept out of git by its own .gitignore (rule *), created only when missing and never overwritten; earlier versions appended a line to an existing .ag/.gitignore. A failure to write it no longer blocks the edit.
+- nabd --help now lists /undo and /rewind, and the default system prompt tells the model that write_file/edit_file edits are reversible with /undo, so it no longer suggests git checkout to revert its own edits.
 
 ## v2.1.1
 
