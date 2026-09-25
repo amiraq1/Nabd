@@ -1,9 +1,7 @@
 package ui
 
-// typeahead_test.go — اختبارات مهلة التسليح ضد الكتابة المسبقة في نافذة الإذن.
-// تُكتب أولاً على الكود الحالي (يجب أن تفشل)؛ ثم يُثبّت الإصلاح نجاحها.
-
 import (
+	"bytes"
 	"strings"
 	"testing"
 	"time"
@@ -13,28 +11,33 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// armDelay هي المهلة المطلوبة بعقد العمل.
-// بعد الإصلاح تُعرَّف في modal.go؛ قبله نُعرِّفها هنا للاختبار فقط.
-// إن عرّفها الإصلاح فاحذف هذا السطر.
-const testArmDelay = ModalArmDelay
-
-// pressKey يضغط مفتاحاً واحداً ويعيد ما أنتجه.
-func pressKey(f *Feed, k tea.KeyMsg) tea.Cmd {
-	_, cmd := f.Update(k)
-	return cmd
+func setupTestFeed(t *testing.T) (*Feed, *runnerRecorder) {
+	t.Helper()
+	f, r := feedWithRunner(t)
+	r.decisionCh = make(chan agent.Decision, 10)
+	f.SetApprover(&Approver{reply: r.decisionCh})
+	return f, r
 }
 
-// decisionFrom ينفّذ cmd ويعيد (decision, true) إن كان permReplyMsg، وإلا (_, false).
-func decisionFrom(cmd tea.Cmd) (agent.Decision, bool) {
-	if cmd == nil {
+func press(f *Feed, k tea.KeyMsg) {
+	_, cmd := f.Update(k)
+	if cmd != nil {
+		_ = updateCmd(f, cmd)
+	}
+}
+
+func runnerDecision(r *runnerRecorder) (agent.Decision, bool) {
+	if r == nil || r.decisionCh == nil {
 		return agent.Deny, false
 	}
-	msg := cmd()
-	r, ok := msg.(permReplyMsg)
-	return r.Decision, ok
+	select {
+	case d := <-r.decisionCh:
+		return d, true
+	default:
+		return agent.Deny, false
+	}
 }
 
-// openModalWithCall يفتح النافذة لنداء bash.
 func openModalWithCall(f *Feed) {
 	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
 		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{
@@ -44,140 +47,125 @@ func openModalWithCall(f *Feed) {
 	}})
 }
 
-// --- TestPermissionModalIgnoresTypeaheadDecisionKeys ---
-// y, a, n, Enter خلال مهلة التسليح يجب ألا ينتجوا أي قرار.
-
+// TestPermissionModalIgnoresTypeaheadDecisionKeys verifies that decision keys
+// during arm delay are ignored, while Esc immediately denies.
 func TestPermissionModalIgnoresTypeaheadDecisionKeys(t *testing.T) {
-	f, _ := feedWithRunner(t)
+	now := time.Now()
+	setModalClock(func() time.Time { return now })
+	t.Cleanup(func() { setModalClock(nil) })
 
-	// اكتب شيئاً في المؤلف — يُحدِّث وقت آخر ضغطة.
-	typeIntoFeed(t, f, "sa")
-
-	// افتح النافذة فوراً (قبل انتهاء المهلة).
-	openModalWithCall(f)
-	if !f.modalVisible {
-		t.Fatal("modal must be visible after PermAsk")
-	}
-
-	// خلال المهلة: y, a, n, Enter يجب ألا يُنتجوا قرارات.
-	decisionKeys := []tea.KeyMsg{
+	// Each key is tested on a fresh modal during the arm delay window.
+	for _, k := range []tea.KeyMsg{
 		{Type: tea.KeyRunes, Runes: []rune{'y'}},
 		{Type: tea.KeyRunes, Runes: []rune{'a'}},
 		{Type: tea.KeyRunes, Runes: []rune{'n'}},
 		{Type: tea.KeyEnter},
-	}
-	for _, k := range decisionKeys {
-		cmd := pressKey(f, k)
-		if _, ok := decisionFrom(cmd); ok {
-			t.Errorf("key %q produced a decision during arm delay — typeahead vulnerability",
-				k.String())
+	} {
+		f, r := setupTestFeed(t)
+		openModalWithCall(f)
+		press(f, k)
+		if d, ok := runnerDecision(r); ok {
+			t.Errorf("key %q produced decision %v during arm delay — typeahead vulnerability", k.String(), d)
 		}
 	}
 
-	// Esc يجب أن يرفض فوراً في أي وقت.
-	cmd := pressKey(f, tea.KeyMsg{Type: tea.KeyEsc})
-	d, ok := decisionFrom(cmd)
+	// Esc during arm delay must deny immediately on an active modal.
+	f, r := setupTestFeed(t)
+	openModalWithCall(f)
+	press(f, tea.KeyMsg{Type: tea.KeyEsc})
+	d, ok := runnerDecision(r)
 	if !ok || d != agent.Deny {
 		t.Errorf("Esc during arm delay must immediately deny; got decision=%v ok=%v", d, ok)
 	}
 }
 
-// --- TestPermissionModalAcceptsDecisionAfterArmDelay ---
-// بعد انتهاء المهلة y=AllowOnce، a=AllowSession، n=Deny.
-// مفتاح مُتجاهَل خلال المهلة يُعيد تشغيلها.
-
+// TestPermissionModalAcceptsDecisionAfterArmDelay verifies that after the arm delay
+// elapses, decision keys are honored, and that an ignored key resets the delay.
 func TestPermissionModalAcceptsDecisionAfterArmDelay(t *testing.T) {
-	f, _ := feedWithRunner(t)
-
-	// حقن ساعة وهمية: يمكن تقديمها إلى ما بعد المهلة.
-	// بعد الإصلاح f يحمل حقل modalClock أو ما يناظره.
-	// قبل الإصلاح يفشل هذا الاختبار بعدم وجود الحقل أو بعدم انتهاء المهلة.
 	now := time.Now()
-	f.setModalClock(func() time.Time { return now })
-	t.Cleanup(func() { f.setModalClock(nil) })
+	setModalClock(func() time.Time { return now })
+	t.Cleanup(func() { setModalClock(nil) })
 
-	openModalWithCall(f)
-	if !f.modalVisible {
-		t.Fatal("modal must be visible")
+	// 1. Before arm delay expires: y produces no decision.
+	f1, r1 := setupTestFeed(t)
+	openModalWithCall(f1)
+	press(f1, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if d, ok := runnerDecision(r1); ok {
+		t.Errorf("y during arm delay produced decision %v; want none", d)
 	}
 
-	// خلال المهلة: y مُتجاهَل.
-	cmd := pressKey(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	if _, ok := decisionFrom(cmd); ok {
-		t.Error("y during arm delay must not produce a decision")
-	}
-
-	// تقدّم الساعة إلى ما بعد المهلة.
-	now = now.Add(testArmDelay + time.Millisecond)
-
-	// بعد المهلة: y يُعطي AllowOnce.
-	f2, _ := feedWithRunner(t)
-	f2.setModalClock(func() time.Time { return now })
-	t.Cleanup(func() { f2.setModalClock(nil) })
+	// 2. Advance clock past arm delay: y produces AllowOnce.
+	f2, r2 := setupTestFeed(t)
 	openModalWithCall(f2)
-	// تقدّم الساعة مسبقاً حتى لا تكون في المهلة.
-	cmd2 := pressKey(f2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	d, ok := decisionFrom(cmd2)
-	if !ok || d != agent.AllowOnce {
-		t.Errorf("y after arm delay must give AllowOnce; got d=%v ok=%v", d, ok)
+	now = now.Add(ModalArmDelay + time.Millisecond)
+	press(f2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if d, ok := runnerDecision(r2); !ok || d != agent.AllowOnce {
+		t.Errorf("y after arm delay: got decision=%v ok=%v, want AllowOnce", d, ok)
 	}
 
-	// مفتاح مُتجاهَل يُعيد تشغيل المهلة: كتابة 'x' ثم 'y' فوراً لا يُعطي قرار.
-	f3, _ := feedWithRunner(t)
-	f3Now := time.Now().Add(-testArmDelay - time.Millisecond) // المهلة الأولى انتهت
-	f3.setModalClock(func() time.Time { return f3Now })
-	t.Cleanup(func() { f3.setModalClock(nil) })
+	// 3. Advance clock past arm delay: a produces AllowSession.
+	f3, r3 := setupTestFeed(t)
 	openModalWithCall(f3)
-	// اضغط 'x' (مُتجاهَل، يعيد المهلة).
-	pressKey(f3, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	// اضغط 'y' فوراً (المهلة أُعيدت، يجب تجاهله).
-	cmd3 := pressKey(f3, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	if _, ok := decisionFrom(cmd3); ok {
-		t.Error("y immediately after ignored key must not produce a decision (arm delay reset)")
+	now = now.Add(ModalArmDelay + time.Millisecond)
+	press(f3, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
+	if d, ok := runnerDecision(r3); !ok || d != agent.AllowSession {
+		t.Errorf("a after arm delay: got decision=%v ok=%v, want AllowSession", d, ok)
+	}
+
+	// 4. Advance clock past arm delay: n produces Deny.
+	f4, r4 := setupTestFeed(t)
+	openModalWithCall(f4)
+	now = now.Add(ModalArmDelay + time.Millisecond)
+	press(f4, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
+	if d, ok := runnerDecision(r4); !ok || d != agent.Deny {
+		t.Errorf("n after arm delay: got decision=%v ok=%v, want Deny", d, ok)
+	}
+
+	// 5. Ignored key resets arm delay (rearm):
+	f5, r5 := setupTestFeed(t)
+	openModalWithCall(f5)
+	// Key during arm delay is ignored and resets arm delay:
+	press(f5, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	now = now.Add(200 * time.Millisecond)
+	press(f5, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if d, ok := runnerDecision(r5); ok {
+		t.Errorf("y immediately after ignored key produced decision %v; arm delay should have reset", d)
+	}
+	// After arm delay expires from rearm:
+	now = now.Add(ModalArmDelay + time.Millisecond)
+	press(f5, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if d, ok := runnerDecision(r5); !ok || d != agent.AllowOnce {
+		t.Errorf("y after reset arm delay: got decision=%v ok=%v, want AllowOnce", d, ok)
 	}
 }
 
-// --- TestPermissionModalArmDelayShowsHint ---
-// سطر التلميح ظاهر خلال المهلة ويختفي بعدها.
-
+// TestPermissionModalArmDelayShowsHint verifies wait hint appears during arm delay and disappears after.
 func TestPermissionModalArmDelayShowsHint(t *testing.T) {
-	f, _ := feedWithRunner(t)
 	now := time.Now()
-	f.setModalClock(func() time.Time { return now })
-	t.Cleanup(func() { f.setModalClock(nil) })
+	setModalClock(func() time.Time { return now })
+	t.Cleanup(func() { setModalClock(nil) })
 
+	f, _ := setupTestFeed(t)
 	openModalWithCall(f)
-	if !f.modalVisible {
-		t.Fatal("modal must be visible")
-	}
 
-	// خلال المهلة: الـ view يجب أن يحتوي تلميحاً بالانتظار.
 	viewDuring := f.View()
-	if !strings.Contains(viewDuring, "wait") &&
-		!strings.Contains(viewDuring, "Wait") &&
-		!strings.Contains(viewDuring, "انتظر") {
+	if !strings.Contains(viewDuring, "wait") && !strings.Contains(viewDuring, "Wait") {
 		t.Errorf("view during arm delay missing wait hint:\n%s", viewDuring)
 	}
 
-	// بعد المهلة: تلميح الانتظار يختفي.
-	now = now.Add(testArmDelay + time.Millisecond)
+	now = now.Add(ModalArmDelay + time.Millisecond)
 	viewAfter := f.View()
-	if strings.Contains(viewAfter, "انتظر") {
-		// مسموح بكلمة wait الإنجليزية ضمن النص العادي للإذن،
-		// لكن تلميح "انتظر" العربي يجب أن يختفي.
+	if strings.Contains(viewAfter, "wait") || strings.Contains(viewAfter, "Wait") {
 		t.Errorf("wait hint must disappear after arm delay:\n%s", viewAfter)
 	}
 }
 
-// --- TestNavigationYNoLongerCopiesOrApproves ---
-// y في وضع التنقل لا ينسخ ولا يمنح. c و Y يعملان.
-
+// TestNavigationYNoLongerCopiesOrApproves verifies y in navigation mode does not copy or approve.
 func TestNavigationYNoLongerCopiesOrApproves(t *testing.T) {
-	f, _ := feedWithRunner(t)
+	f, r := setupTestFeed(t)
 	f.width = 80
 	f.height = 24
 
-	// أضف بطاقة أداة في الـ feed.
 	f.BuildFromEvents([]agent.Event{
 		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "n1", Name: "bash"}},
 		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{
@@ -187,70 +175,59 @@ func TestNavigationYNoLongerCopiesOrApproves(t *testing.T) {
 	f.refresh()
 	f.selectedItem = 0
 
-	// ادخل وضع التنقل.
 	f.enterNavigation()
 	if !f.navigationMode {
 		t.Fatal("must be in navigation mode")
 	}
 
-	// y في وضع التنقل يجب ألا ينتج نسخاً أو قراراً.
-	cmd := pressKey(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	if cmd != nil {
-		msg := cmd()
-		if _, isReply := msg.(permReplyMsg); isReply {
-			t.Error("y in navigation mode must not produce a permission reply")
-		}
-		if _, isCopy := msg.(clipboardResultMsg); isCopy {
-			t.Error("y in navigation mode must not trigger a copy")
-		}
-		// أي cmd آخر: سجّله.
-		t.Logf("y in navigation produced cmd with msg type: %T", msg)
+	var buf bytes.Buffer
+	f.SetClipboardWriter(&buf)
+	press(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if d, ok := runnerDecision(r); ok {
+		t.Errorf("y in navigation mode produced permission decision %v", d)
+	}
+	if buf.Len() > 0 {
+		t.Errorf("y in navigation mode wrote to clipboard: %q", buf.String())
 	}
 
-	// c يجب أن ينسخ.
-	cmdC := pressKey(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
-	if cmdC == nil {
-		t.Log("c in navigation produced nil cmd (may be unavailable clipboard on Termux — acceptable)")
-	} else {
-		t.Log("c in navigation produced a copy cmd (expected)")
+	buf.Reset()
+	press(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
+	if buf.Len() == 0 {
+		t.Error("c in navigation mode should write to clipboard")
 	}
 
-	// Y يجب أن ينسخ التقرير الكامل.
-	cmdY := pressKey(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
-	if cmdY == nil {
-		t.Log("Y in navigation produced nil cmd (may be unavailable clipboard — acceptable)")
-	} else {
-		t.Log("Y in navigation produced a cmd (expected)")
+	buf.Reset()
+	press(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Y'}})
+	if buf.Len() == 0 {
+		t.Error("Y in navigation mode should write to clipboard")
 	}
 }
 
-// --- TestPermissionModalEnterNeverAllows ---
-// Enter لا يعطي AllowOnce ولا AllowSession بعد المهلة ولا بعد أي حركة أسهم.
-
+// TestPermissionModalEnterNeverAllows verifies Enter produces no decision (with or without arrows).
 func TestPermissionModalEnterNeverAllows(t *testing.T) {
-	f, _ := feedWithRunner(t)
-	now := time.Now().Add(-testArmDelay - time.Millisecond) // بعد المهلة مسبقاً
-	f.setModalClock(func() time.Time { return now })
-	t.Cleanup(func() { f.setModalClock(nil) })
+	now := time.Now()
+	setModalClock(func() time.Time { return now })
+	t.Cleanup(func() { setModalClock(nil) })
 
-	openModalWithCall(f)
-	if !f.modalVisible {
-		t.Fatal("modal must be visible")
+	// Case 1: Without arrows, after arm delay
+	f1, r1 := setupTestFeed(t)
+	openModalWithCall(f1)
+	now = now.Add(ModalArmDelay + time.Millisecond)
+
+	press(f1, tea.KeyMsg{Type: tea.KeyEnter})
+	if d, ok := runnerDecision(r1); ok {
+		t.Errorf("Enter without arrows after arm delay produced decision %v; contract 0.2 requires no decision", d)
 	}
 
-	// حرّك الاختيار إلى AllowOnce باستخدام Down.
-	pressKey(f, tea.KeyMsg{Type: tea.KeyDown})
-	pressKey(f, tea.KeyMsg{Type: tea.KeyDown})
+	// Case 2: With arrows (KeyUp/KeyDown), after arm delay
+	f2, r2 := setupTestFeed(t)
+	openModalWithCall(f2)
+	now = now.Add(ModalArmDelay + time.Millisecond)
 
-	// Enter يجب ألا يُعطي AllowOnce أو AllowSession.
-	cmd := pressKey(f, tea.KeyMsg{Type: tea.KeyEnter})
-	if d, ok := decisionFrom(cmd); ok {
-		if d == agent.AllowOnce || d == agent.AllowSession {
-			t.Errorf("Enter must never grant Allow; got %v", d)
-		}
-		// Enter يمنح Deny فقط — هذا مقبول كثبوت.
-		t.Logf("Enter produced Deny — this is the current behaviour; new contract requires Enter to be no-op")
-	} else {
-		t.Log("Enter produced no decision — satisfies the new contract")
+	press(f2, tea.KeyMsg{Type: tea.KeyDown})
+	press(f2, tea.KeyMsg{Type: tea.KeyDown})
+	press(f2, tea.KeyMsg{Type: tea.KeyEnter})
+	if d, ok := runnerDecision(r2); ok {
+		t.Errorf("Enter with arrows after arm delay produced decision %v; contract 0.2 requires no decision", d)
 	}
 }

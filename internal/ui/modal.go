@@ -16,7 +16,7 @@ const ModalArmDelay = 400 * time.Millisecond
 
 var modalClock = time.Now
 
-func (f *Feed) setModalClock(fn func() time.Time) {
+func setModalClock(fn func() time.Time) {
 	if fn == nil {
 		modalClock = time.Now
 	} else {
@@ -122,9 +122,9 @@ func (m *PermissionModal) choices() []PermissionChoice {
 
 func (m *PermissionModal) keyHintText() string {
 	if m.call != nil && m.call.SessionGrantKnown && !m.call.SessionGrantAllowed {
-		return "y once · n deny · Esc cancel"
+		return "y allow · n deny · Esc cancel"
 	}
-	return "y once · a session · n deny · Esc cancel"
+	return "y allow · a session · n deny · Esc cancel"
 }
 
 func (m *PermissionModal) scopeText() string {
@@ -142,7 +142,7 @@ func (m *PermissionModal) currentDecision() agent.Decision {
 	return ch[m.selected].Decision
 }
 
-func (m *PermissionModal) nextChoice() {
+func (m *PermissionModal) NextChoice() {
 	ch := m.choices()
 	if len(ch) == 0 {
 		return
@@ -154,7 +154,7 @@ func (m *PermissionModal) nextChoice() {
 	m.selected = (m.selected + 1) % len(ch)
 }
 
-func (m *PermissionModal) prevChoice() {
+func (m *PermissionModal) PrevChoice() {
 	ch := m.choices()
 	if len(ch) == 0 {
 		return
@@ -373,15 +373,9 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	// hintBorder is the bottom border that also carries the key hints, used by
 	// the two shortest levels where no separate hint row exists.
 	hintBorder := func() string {
-		hint := "+-- Enter confirm · " + m.keyHintText() + " "
+		hint := "+-- " + m.keyHintText() + " "
 		if !m.isArmed() {
 			hint = "+-- wait · " + m.keyHintText() + " "
-		}
-		if ansi.StringWidth(hint) > cardW-2 {
-			hint = "+-- Enter · " + m.keyHintText() + " "
-			if !m.isArmed() {
-				hint = "+-- wait · " + m.keyHintText() + " "
-			}
 		}
 		if ansi.StringWidth(hint) > cardW-2 {
 			hint = ansi.Truncate(hint, max(1, cardW-2), "…")
@@ -426,28 +420,24 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 			title = "+-- Perm: " + ansi.Truncate(tool, max(4, cardW-13), "…") + " "
 		}
 		sel := selectedChoice()
-		mark := "[*]"
 		if m.decisionPending {
-			mark = "[·]"
 			sel.Label = "submitting"
 			sel.KeyHint = "…"
 		}
-		choiceLine := formatRow(fmt.Sprintf("%s %s (%s)", mark, sel.Label, sel.KeyHint))
+		choiceLine := formatRow(fmt.Sprintf("%s (%s)", sel.Label, sel.KeyHint))
 		return strings.Join([]string{titleBorder(title), choiceLine, hintBorder()}, "\n")
 
 	case permLevelToolRow:
 		// 4 rows: title, tool, one choice, hint in the border.
 		sel := selectedChoice()
-		mark := "[*]"
 		if m.decisionPending {
-			mark = "[·]"
 			sel.Label = "submitting"
 			sel.KeyHint = "…"
 		}
 		return strings.Join([]string{
 			standardTitle(),
 			formatRow(fmt.Sprintf("Tool: %s", tool)),
-			formatRow(fmt.Sprintf("  %s %s (%s)", mark, sel.Label, sel.KeyHint)),
+			formatRow(fmt.Sprintf("  %s (%s)", sel.Label, sel.KeyHint)),
 			hintBorder(),
 		}, "\n")
 
@@ -464,18 +454,16 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 			lines = append(lines, droppedRow())
 		}
 		sel := selectedChoice()
-		mark := "[*]"
 		if m.decisionPending {
-			mark = "[·]"
 			sel.Label = "submitting decision…"
 			sel.KeyHint = ""
 		}
-		hintLine := "Enter confirm · Up/Down select · " + m.keyHintText()
+		hintLine := m.keyHintText()
 		if !m.isArmed() {
-			hintLine = "wait · Up/Down select · " + m.keyHintText()
+			hintLine = "wait · " + m.keyHintText()
 		}
 		lines = append(lines,
-			formatRow(fmt.Sprintf("  %s %s (%s)", mark, sel.Label, sel.KeyHint)),
+			formatRow(fmt.Sprintf("  %s (%s)", sel.Label, sel.KeyHint)),
 			formatRow(hintLine),
 			plainBorder(),
 		)
@@ -499,12 +487,8 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	if m.decisionPending {
 		lines = append(lines, formatRow("· submitting decision…"))
 	} else {
-		for i, c := range m.choices() {
-			mark := "[ ]"
-			if i == m.selected {
-				mark = "[*]"
-			}
-			lines = append(lines, formatRow(fmt.Sprintf("  %s %s (%s)", mark, c.Label, c.KeyHint)))
+		for _, c := range m.choices() {
+			lines = append(lines, formatRow(fmt.Sprintf("  %s (%s)", c.Label, c.KeyHint)))
 		}
 	}
 	if sh.includeBlanks {
@@ -515,10 +499,8 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 		lines = append(lines, formatRow("waiting for decision to apply…"))
 	case !m.isArmed():
 		lines = append(lines, formatRow("wait · "+m.keyHintText()))
-	case m.selected >= 0:
-		lines = append(lines, formatRow("Enter confirm · Up/Down select · "+m.keyHintText()))
 	default:
-		lines = append(lines, formatRow(m.keyHintText()+" · Up/Down select · Enter confirm"))
+		lines = append(lines, formatRow(m.keyHintText()))
 	}
 	lines = append(lines, plainBorder())
 	return strings.Join(lines, "\n")

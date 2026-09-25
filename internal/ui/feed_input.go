@@ -303,17 +303,34 @@ func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	switch k.Type {
-	case tea.KeyUp, tea.KeyLeft:
-		m.permModal.prevChoice()
+	if !m.permModal.isArmed() {
+		if k.Type == tea.KeyEsc || k.String() == "esc" {
+			return m.answerModal(agent.Deny)
+		}
+		if k.Type == tea.KeyCtrlC {
+			if m.running || m.busy {
+				m.cancelRun("canceling…")
+			}
+			return m, nil
+		}
+		switch k.Type {
+		case tea.KeyEnter:
+			m.permModal.Rearm()
+			return m, nil
+		}
+		switch k.String() {
+		case "y", "Y", "a", "A", "n", "N":
+			m.permModal.Rearm()
+			return m, nil
+		}
+		m.permModal.Rearm()
 		return m, nil
-	case tea.KeyDown, tea.KeyRight:
-		m.permModal.nextChoice()
+	}
+
+	switch k.Type {
+	case tea.KeyUp, tea.KeyLeft, tea.KeyDown, tea.KeyRight:
 		return m, nil
 	case tea.KeyEnter:
-		if m.permModal.selected >= 0 {
-			return m.answerModal(m.permModal.currentDecision())
-		}
 		return m, nil
 	case tea.KeyEsc:
 		return m.answerModal(agent.Deny)
