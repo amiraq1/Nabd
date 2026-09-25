@@ -149,3 +149,87 @@ func TestReleaseNotesExtractedFromChangelog(t *testing.T) {
 		t.Errorf("empty-section error is unclear: %s", stderr)
 	}
 }
+
+func TestReleaseNotesWrittenOutsideWorkspace(t *testing.T) {
+	release := readRepoFile(t, ".github/workflows/release.yml")
+
+	if strings.Contains(release, "> release-notes.md") {
+		t.Error("release.yml must not write release notes directly to the workspace (relative path > release-notes.md)")
+	}
+	if strings.Contains(release, "--release-notes=release-notes.md") {
+		t.Error("release.yml must not pass relative --release-notes=release-notes.md")
+	}
+
+	if !strings.Contains(release, `"${RUNNER_TEMP}/release-notes.md"`) {
+		t.Error(`release.yml extraction step must write to "${RUNNER_TEMP}/release-notes.md"`)
+	}
+	if !strings.Contains(release, "--release-notes=${{ runner.temp }}/release-notes.md") {
+		t.Error("release.yml GoReleaser step must use --release-notes=${{ runner.temp }}/release-notes.md")
+	}
+}
+
+func TestReleaseAssertsCleanTreeBeforeGoReleaser(t *testing.T) {
+	checkCleanStep := func(name, content, extractToken, goreleaserToken string) {
+		t.Helper()
+		idxExtract := strings.Index(content, extractToken)
+		if idxExtract == -1 {
+			t.Fatalf("%s missing extraction token %q", name, extractToken)
+		}
+		idxGoreleaser := strings.Index(content, goreleaserToken)
+		if idxGoreleaser == -1 {
+			t.Fatalf("%s missing goreleaser token %q", name, goreleaserToken)
+		}
+
+		cleanPattern := `test -z "$(git status --porcelain)"`
+		idxClean := strings.Index(content, cleanPattern)
+		if idxClean == -1 {
+			t.Fatalf("%s missing clean tree assertion %q", name, cleanPattern)
+		}
+
+		if !(idxExtract < idxClean && idxClean < idxGoreleaser) {
+			t.Errorf("%s step order must be extract (%d) < clean tree (%d) < goreleaser (%d)",
+				name, idxExtract, idxClean, idxGoreleaser)
+		}
+	}
+
+	release := readRepoFile(t, ".github/workflows/release.yml")
+	checkCleanStep("release.yml", release, "scripts/release-notes.sh", "goreleaser/goreleaser-action")
+
+	ci := readRepoFile(t, ".github/workflows/ci.yml")
+	start := strings.Index(ci, "release-dryrun:")
+	if start == -1 {
+		t.Fatal("ci.yml missing release-dryrun job")
+	}
+	end := strings.Index(ci[start:], "\n  termux:")
+	if end == -1 {
+		end = len(ci) - start
+	}
+	dryrunBlock := ci[start : start+end]
+	checkCleanStep("ci.yml (release-dryrun)", dryrunBlock, "scripts/release-notes.sh", "goreleaser/goreleaser-action")
+}
+
+func TestReleaseDryrunExtractsNotes(t *testing.T) {
+	ci := readRepoFile(t, ".github/workflows/ci.yml")
+	start := strings.Index(ci, "release-dryrun:")
+	if start == -1 {
+		t.Fatal("ci.yml missing release-dryrun job")
+	}
+	end := strings.Index(ci[start:], "\n  termux:")
+	if end == -1 {
+		end = len(ci) - start
+	}
+	dryrunBlock := ci[start : start+end]
+
+	if !strings.Contains(dryrunBlock, "scripts/release-notes.sh") {
+		t.Error("ci.yml release-dryrun must execute scripts/release-notes.sh")
+	}
+	if !strings.Contains(dryrunBlock, "--release-notes=${{ runner.temp }}/release-notes.md") {
+		t.Error("ci.yml release-dryrun must pass --release-notes=${{ runner.temp }}/release-notes.md to goreleaser")
+	}
+	if !strings.Contains(dryrunBlock, "CHANGELOG.md") {
+		t.Error("ci.yml release-dryrun must extract version from CHANGELOG.md")
+	}
+	if strings.Contains(dryrunBlock, "GITHUB_REF_NAME") {
+		t.Error("ci.yml release-dryrun must not rely on GITHUB_REF_NAME")
+	}
+}
