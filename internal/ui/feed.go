@@ -675,6 +675,15 @@ func (m *Feed) BuildFromEvents(events []agent.Event) {
 		}
 	}
 	m.history.buildFromEvents(events)
+	// Replay rebuilds history, not liveness. The events describe a previous
+	// process: any running/busy state they imply would otherwise survive
+	// forever, because no runner is in flight here to deliver the doneMsg that
+	// clears it, and Ctrl+C would then park the transient row in "canceling…"
+	// with nothing that could ever complete the cancellation.
+	m.running = false
+	m.busy = false
+	m.cancel = nil
+	m.runningTool = ""
 	m.refresh()
 	m.scrollToEnd()
 }

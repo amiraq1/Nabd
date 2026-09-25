@@ -3,6 +3,7 @@ package ui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"nabd/internal/agent"
 )
@@ -77,5 +78,26 @@ func TestStatusLineWithMetaKeepsBaseWhenNothingKnown(t *testing.T) {
 	f.height = 24
 	if got := f.statusLineWithMeta("Working…", 78); got != "Working…" {
 		t.Fatalf("status line = %q, want unchanged", got)
+	}
+}
+
+// TestStatusRowTimesTheLiveRunNotTheSession: the row must time the current
+// request (reqStartedAt, set by trySend), not the session clock the projector
+// carries. A resumed session's RunStart can be hours old while the live run
+// started seconds ago.
+func TestStatusRowTimesTheLiveRunNotTheSession(t *testing.T) {
+	f := NewFeed()
+	f.width = 80
+	f.height = 24
+	f.running = true
+	f.reqStartedAt = time.Now().Add(-90 * time.Second)
+	f.statusProj.Apply(agent.Event{Seq: 1, Type: agent.RunStart, Time: time.Now().Add(-2 * time.Hour)})
+
+	line := f.statusLineWithMeta("Generating…", 78)
+	if !strings.Contains(line, "1m30s") {
+		t.Fatalf("row = %q, want the live run's age 1m30s", line)
+	}
+	if strings.Contains(line, "120m") {
+		t.Fatalf("row = %q leaked the session clock", line)
 	}
 }
