@@ -375,7 +375,7 @@ func TestPTYModalBlocksComposerInput(t *testing.T) {
 	}
 
 	sess.WriteString("leak_text_should_be_blocked")
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(ModalArmDelay + 50*time.Millisecond)
 
 	snap := sess.Snapshot()
 	if snap.Contains("leak_text_should_be_blocked") {
