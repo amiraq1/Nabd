@@ -131,12 +131,19 @@ jobs:
           check-latest: true
       - name: Install syft
         uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+      - name: Extract notes for the next release
+        run: |
+          v=$(grep -m1 -oE '^## v[0-9]+\.[0-9]+\.[0-9]+$' CHANGELOG.md | cut -c4-)
+          test -n "$v"
+          bash scripts/release-notes.sh "$v" > "${RUNNER_TEMP}/release-notes.md"
+      - name: Assert clean tree
+        run: test -z "$(git status --porcelain)" || { git status --porcelain; exit 1; }
       - name: Snapshot release, no publish, no sign
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean --snapshot --skip=publish,sign,announce
+          args: release --clean --snapshot --skip=publish,sign,announce --release-notes=${{ runner.temp }}/release-notes.md
       - name: Assert one distinct SBOM per binary, all checksummed
         shell: bash
         run: |
