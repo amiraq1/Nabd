@@ -227,15 +227,14 @@ func TestModalKeyPriority(t *testing.T) {
 	}
 }
 
-// TestModalEnterDefaultsToDenyAndNeverSendsComposer: Enter while the modal is
-// visible submits a Deny decision by default — it never starts a runner run
+// TestModalEnterNeverSendsComposer: Enter while the modal is
+// visible produces no decision — it never starts a runner run
 // and never modifies the composer.
-// Contract change: previously selected=-1 made Enter a no-op; now the default
-// selection is Deny, so Enter must produce a Deny permReply.
 func TestModalEnterDefaultsToDenyAndNeverSendsComposer(t *testing.T) {
 	f, r := feedWithRunner(t)
 	typeIntoFeed(t, f, "would be sent")
 	openModal(f)
+	f.permModal.armedAt = time.Time{}
 
 	_, cmd := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
@@ -249,17 +248,9 @@ func TestModalEnterDefaultsToDenyAndNeverSendsComposer(t *testing.T) {
 		t.Fatalf("composer text lost during modal: %q", got)
 	}
 
-	// Enter on the default selection must produce a Deny reply.
-	if cmd == nil {
-		t.Fatal("Enter during modal must produce a permission-reply command")
-	}
-	msg := cmd()
-	reply, ok := msg.(permReplyMsg)
-	if !ok {
-		t.Fatalf("expected permReplyMsg, got %T", msg)
-	}
-	if reply.Decision != agent.Deny {
-		t.Fatalf("expected Decision=Deny, got %v", reply.Decision)
+	// Enter must produce no command under contract 0.2
+	if cmd != nil {
+		t.Fatal("Enter during modal must produce nil command under contract 0.2")
 	}
 }
 
@@ -293,6 +284,7 @@ func TestModalFeedKeepsUpdating(t *testing.T) {
 func TestModalAnswerRestoresFocus(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	openModal(f)
+	f.permModal.armedAt = time.Time{}
 	if f.composer.focused() {
 		t.Fatal("composer must lose focus while the modal is visible")
 	}

@@ -307,39 +307,12 @@ func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if k.Type == tea.KeyEsc || k.String() == "esc" {
 			return m.answerModal(agent.Deny)
 		}
-		if k.Type == tea.KeyCtrlC {
-			if m.running || m.busy {
-				m.cancelRun("canceling…")
-			}
-			return m, nil
-		}
-		switch k.Type {
-		case tea.KeyEnter:
-			m.permModal.Rearm()
-			return m, nil
-		}
-		switch k.String() {
-		case "y", "Y", "a", "A", "n", "N":
-			m.permModal.Rearm()
-			return m, nil
-		}
 		m.permModal.Rearm()
 		return m, nil
 	}
 
-	switch k.Type {
-	case tea.KeyUp, tea.KeyLeft, tea.KeyDown, tea.KeyRight:
-		return m, nil
-	case tea.KeyEnter:
-		return m, nil
-	case tea.KeyEsc:
+	if k.Type == tea.KeyEsc || k.String() == "esc" {
 		return m.answerModal(agent.Deny)
-	case tea.KeyCtrlC:
-		// Cancels the in-flight run; never approves.
-		if m.running || m.busy {
-			m.cancelRun("canceling…")
-		}
-		return m, nil
 	}
 
 	switch k.String() {
@@ -347,15 +320,14 @@ func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.answerModal(agent.AllowOnce)
 	case "a", "A":
 		if m.permModal.call != nil && m.permModal.call.SessionGrantKnown && !m.permModal.call.SessionGrantAllowed {
+			m.permModal.Rearm()
 			return m, nil
 		}
 		return m.answerModal(agent.AllowSession)
 	case "n", "N":
 		return m.answerModal(agent.Deny)
-	case "esc":
-		return m.answerModal(agent.Deny)
 	default:
-		// Swallowed by the modal.
+		m.permModal.Rearm()
 		return m, nil
 	}
 }

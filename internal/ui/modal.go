@@ -142,30 +142,6 @@ func (m *PermissionModal) currentDecision() agent.Decision {
 	return ch[m.selected].Decision
 }
 
-func (m *PermissionModal) NextChoice() {
-	ch := m.choices()
-	if len(ch) == 0 {
-		return
-	}
-	if m.selected < 0 {
-		m.selected = 0
-		return
-	}
-	m.selected = (m.selected + 1) % len(ch)
-}
-
-func (m *PermissionModal) PrevChoice() {
-	ch := m.choices()
-	if len(ch) == 0 {
-		return
-	}
-	if m.selected < 0 {
-		m.selected = len(ch) - 1
-		return
-	}
-	m.selected = (m.selected - 1 + len(ch)) % len(ch)
-}
-
 // hasArgs reports whether the pending call carries arguments worth showing.
 func (m *PermissionModal) hasArgs() bool {
 	return m.call != nil && len(m.call.Args) > 0 &&

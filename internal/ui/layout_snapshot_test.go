@@ -162,8 +162,8 @@ func TestLayoutSnapshotPermissionModal(t *testing.T) {
 	if !strings.Contains(v, "+-- Permission") {
 		t.Errorf("modal border missing in mobile view:\n%s", v)
 	}
-	// 2. Selection indicator
-	if !strings.Contains(v, "[*]") && !strings.Contains(v, "[ ]") {
+	// 2. Modal choice text
+	if !strings.Contains(v, "Allow Once (y)") {
 		t.Errorf("modal choices missing in mobile view:\n%s", v)
 	}
 	// 3. Paused composer line

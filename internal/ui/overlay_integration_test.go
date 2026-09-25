@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"nabd/internal/agent"
 
@@ -125,18 +126,11 @@ func TestOverlayFullEndToEndIntegration(t *testing.T) {
 		t.Fatalf("step 9: composer text changed during modal: %q → %q", beforeComposer, f.composer.value())
 	}
 
-	// 10. Select decision and confirm: arrow navigation and Enter
-	// Modal has choices: [0: Allow Once, 1: Allow Session, 2: Deny]
-	f.Update(tea.KeyMsg{Type: tea.KeyDown}) // select 0 (Allow Once)
-	f.Update(tea.KeyMsg{Type: tea.KeyDown}) // select 1 (Allow Session)
-	if f.permModal.selected != 1 {
-		t.Fatalf("step 10: expected selected=1 (Allow Session), got %d", f.permModal.selected)
-	}
-
-	// 11. Confirm selection with Enter: exactly ONE decision
-	_, cmdReply1 := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	// 10 & 11. Select decision with literal key 'a' (Allow Session) after arm delay
+	f.permModal.armedAt = time.Time{} // ensure modal is armed
+	_, cmdReply1 := f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	if cmdReply1 == nil {
-		t.Fatal("step 11: Enter must return perm-reply command")
+		t.Fatal("step 11: 'a' must return perm-reply command")
 	}
 
 	// Duplicate Enter press before command processed: must be swallowed

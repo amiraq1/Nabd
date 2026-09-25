@@ -2,6 +2,8 @@ package ui
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +11,7 @@ import (
 	"nabd/internal/agent"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func setupTestFeed(t *testing.T) (*Feed, *runnerRecorder) {
@@ -229,5 +232,174 @@ func TestPermissionModalEnterNeverAllows(t *testing.T) {
 	press(f2, tea.KeyMsg{Type: tea.KeyEnter})
 	if d, ok := runnerDecision(r2); ok {
 		t.Errorf("Enter with arrows after arm delay produced decision %v; contract 0.2 requires no decision", d)
+	}
+}
+
+// TestPermissionModalCtrlCDuringArmDelay verifies that pressing Ctrl+C while the modal
+// is in arm delay cancels the running turn, unblocks the approver with Deny,
+// and ensures the runner does not hang.
+func TestPermissionModalCtrlCDuringArmDelay(t *testing.T) {
+	now := time.Now()
+	setModalClock(func() time.Time { return now })
+	t.Cleanup(func() { setModalClock(nil) })
+
+	f, _ := setupTestFeed(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	f.running = true
+	f.busy = true
+	f.cancel = cancel
+
+	openModalWithCall(f)
+
+	ap := NewApprover()
+	f.SetApprover(ap)
+
+	decisionCh := make(chan agent.Decision, 1)
+	go func() {
+		decisionCh <- ap.Ask(ctx, *f.permModal.call)
+	}()
+
+	// Press Ctrl+C during arm delay
+	press(f, tea.KeyMsg{Type: tea.KeyCtrlC})
+
+	// Must cancel the run context
+	select {
+	case <-ctx.Done():
+		// Success: context was canceled
+	case <-time.After(1 * time.Second):
+		t.Fatal("Ctrl+C during arm delay did not cancel the run context")
+	}
+
+	// Approver must resolve (unblock) with Deny without hanging
+	select {
+	case d := <-decisionCh:
+		if d != agent.Deny {
+			t.Errorf("expected Deny on canceled ask, got %v", d)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("Approver.Ask hung after Ctrl+C during modal arm delay")
+	}
+}
+
+// TestPermissionModalRapidTypingYesPleaseNoDecision verifies that typing "yes please"
+// at 125ms intervals produces no decision because each keystroke resets the arm delay.
+func TestPermissionModalRapidTypingYesPleaseNoDecision(t *testing.T) {
+	now := time.Now()
+	setModalClock(func() time.Time { return now })
+	t.Cleanup(func() { setModalClock(nil) })
+
+	f, r := setupTestFeed(t)
+	openModalWithCall(f)
+
+	phrase := "yes please"
+	interval := 125 * time.Millisecond
+
+	for i, ch := range phrase {
+		now = now.Add(interval)
+		press(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		if d, ok := runnerDecision(r); ok {
+			t.Fatalf("keystroke %d (%q) at t=%v produced decision %v; arm delay should have reset", i, string(ch), now, d)
+		}
+	}
+
+	// Total elapsed time is 10 * 125ms = 1.25s, well past ModalArmDelay (400ms).
+	// Because keys reset the delay, no decision was made.
+	if d, ok := runnerDecision(r); ok {
+		t.Fatalf("unexpected decision %v after rapid typing sequence", d)
+	}
+
+	// Now wait past ModalArmDelay from the last keypress:
+	now = now.Add(ModalArmDelay + time.Millisecond)
+	press(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if d, ok := runnerDecision(r); !ok || d != agent.AllowOnce {
+		t.Fatalf("y after arm delay elapsed from typing: got decision=%v ok=%v, want AllowOnce", d, ok)
+	}
+}
+
+// TestPermissionModalUppercaseDecisions verifies that uppercase 'Y', 'A', 'N' behave
+// identically to lowercase 'y', 'a', 'n': ignored during arm delay, honored after.
+func TestPermissionModalUppercaseDecisions(t *testing.T) {
+	now := time.Now()
+	setModalClock(func() time.Time { return now })
+	t.Cleanup(func() { setModalClock(nil) })
+
+	// During arm delay: uppercase keys are ignored
+	for _, ch := range []rune{'Y', 'A', 'N'} {
+		f, r := setupTestFeed(t)
+		openModalWithCall(f)
+		press(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{ch}})
+		if d, ok := runnerDecision(r); ok {
+			t.Errorf("uppercase key %q produced decision %v during arm delay", string(ch), d)
+		}
+	}
+
+	// After arm delay:
+	cases := []struct {
+		key  rune
+		want agent.Decision
+	}{
+		{'Y', agent.AllowOnce},
+		{'A', agent.AllowSession},
+		{'N', agent.Deny},
+	}
+	for _, tc := range cases {
+		f, r := setupTestFeed(t)
+		openModalWithCall(f)
+		now = now.Add(ModalArmDelay + time.Millisecond)
+		press(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{tc.key}})
+		if d, ok := runnerDecision(r); !ok || d != tc.want {
+			t.Errorf("key %q after arm delay: got %v, want %v", string(tc.key), d, tc.want)
+		}
+	}
+}
+
+// TestPermissionModalHintLineDimensions verifies the 41-char hint line
+// ("y allow · a session · n deny · Esc cancel") renders cleanly across all requested
+// widths [20, 39, 40, 79, 80, 120] and heights [8, 12, 24, 40] with NO_COLOR set.
+func TestPermissionModalHintLineDimensions(t *testing.T) {
+	widths := []int{20, 39, 40, 79, 80, 120}
+	heights := []int{8, 12, 24, 40}
+
+	t.Setenv("NO_COLOR", "1")
+
+	for _, w := range widths {
+		for _, h := range heights {
+			name := fmt.Sprintf("%dx%d", w, h)
+			t.Run(name, func(t *testing.T) {
+				m := newPermissionModal()
+				m.open(&agent.ToolCall{
+					ID:                  "dim1",
+					Name:                "bash",
+					Args:                []byte(`"echo test"`),
+					SessionGrantKnown:   true,
+					SessionGrantAllowed: true,
+				})
+				m.armedAt = time.Time{} // armed
+
+				view := m.view(w, h)
+				lines := strings.Split(view, "\n")
+
+				if len(lines) > h {
+					t.Fatalf("[%s] modal view rendered %d lines, exceeding height %d:\n%s", name, len(lines), h, view)
+				}
+
+				for lineIdx, line := range lines {
+					plain := ansi.Strip(line)
+					lineWidth := ansi.StringWidth(plain)
+					if lineWidth > w {
+						t.Fatalf("[%s] line %d width %d exceeds terminal width %d:\n%q", name, lineIdx, lineWidth, w, plain)
+					}
+				}
+
+				plainView := ansi.Strip(view)
+				if w >= 80 {
+					if !strings.Contains(plainView, "y allow · a session · n deny · Esc cancel") {
+						t.Fatalf("[%s] expected full 41-char hint line at width %d, got:\n%s", name, w, plainView)
+					}
+				}
+			})
+		}
 	}
 }
