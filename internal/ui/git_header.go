@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,22 +36,67 @@ func isGitRepo(dir string) bool {
 	return err == nil
 }
 
+// gitHardeningArgs precede the subcommand. Command-line -c has the highest
+// precedence, so these override anything in repository-local .git/config.
+var gitHardeningArgs = []string{
+	"-c", "core.fsmonitor=false",
+	"--no-optional-locks",
+}
+
+var errGitConfigDefinesCommands = errors.New(
+	"git header: repository config defines filter commands; status skipped")
+
+// gitConfigDefinesCommands reports whether the effective config (system,
+// local, worktree, and included files) defines a clean/process filter
+// driver, which git status would execute on stat-dirty files. Reading
+// config executes nothing.
+func gitConfigDefinesCommands(ctx context.Context, dir string, env []string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "config", "--null", "--list", "--includes")
+	cmd.Env = env
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return false, err
+	}
+	// --null format: "key\nvalue\x00", or "key\x00" for valueless keys.
+	for _, entry := range bytes.Split(out, []byte{0}) {
+		key, _, _ := bytes.Cut(entry, []byte{'\n'})
+		k := strings.ToLower(string(key))
+		if strings.HasPrefix(k, "filter.") &&
+			(strings.HasSuffix(k, ".clean") || strings.HasSuffix(k, ".process")) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // gitStatusCmd shells out off the render path. View must never call git.
 func gitStatusCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v2", "--branch")
-		// Explicit, filtered env. A nil Env makes the child inherit the full
-		// parent environment; we instead forward only what git needs so the
-		// header hint can never leak session credentials into a child process.
-		cmd.Env = gitChildEnv(os.Environ())
+		env := gitChildEnv(os.Environ())
+
+		defines, err := gitConfigDefinesCommands(ctx, dir, env)
+		if err != nil {
+			return gitStatusMsg{err: err} // fail closed, silent: the header is a hint
+		}
+		if defines {
+			return gitStatusMsg{err: errGitConfigDefinesCommands}
+		}
+
+		args := append(append([]string{}, gitHardeningArgs...),
+			"status", "--porcelain=v2", "--branch", "--ignore-submodules=all")
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Env = env
 		if dir != "" {
 			cmd.Dir = dir
 		}
 		out, err := cmd.Output()
 		if err != nil {
-			return gitStatusMsg{err: err} // silent: the header is a hint
+			return gitStatusMsg{err: err}
 		}
 		return parseGitStatus(string(out))
 	}

@@ -2,6 +2,9 @@ package ui
 
 import (
 	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -269,5 +272,96 @@ func TestGitChildEnvForwardsOnlyAllowlist(t *testing.T) {
 	// An empty env must never be nil-equivalent to "inherit everything".
 	if gitChildEnv(nil) == nil {
 		t.Fatal("gitChildEnv(nil) must return a non-nil empty slice")
+	}
+}
+
+func requireGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+}
+
+func setupGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1", "HOME="+t.TempDir())
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+}
+
+func markerExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+func TestGitHeaderIgnoresRepoFsmonitor(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "MARKER")
+	setupGit(t, dir, "init", "-q")
+	setupGit(t, dir, "config", "core.fsmonitor", "touch "+marker+"; false")
+
+	setupGit(t, dir, "--no-optional-locks", "status", "--porcelain=v2")
+	if !markerExists(marker) {
+		t.Skip("this git does not execute core.fsmonitor; control failed")
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = gitStatusCmd(dir)()
+	if markerExists(marker) {
+		t.Fatal("git header executed core.fsmonitor from repository config")
+	}
+}
+
+func TestGitHeaderSkipsRepoCleanFilter(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "MARKER")
+	setupGit(t, dir, "init", "-q")
+	mustWrite(t, filepath.Join(dir, ".gitattributes"), "*.txt filter=x\n")
+	mustWrite(t, filepath.Join(dir, "a.txt"), "one\n")
+	setupGit(t, dir, "add", ".")
+	setupGit(t, dir, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+		"commit", "-qm", "init")
+	setupGit(t, dir, "config", "filter.x.clean", "touch "+marker+"; cat")
+	mustWrite(t, filepath.Join(dir, "a.txt"), "two\n")
+
+	setupGit(t, dir, "--no-optional-locks", "status", "--porcelain=v2")
+	if !markerExists(marker) {
+		t.Skip("this git did not run the clean filter; control failed")
+	}
+	if err := os.Remove(marker); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := gitStatusCmd(dir)()
+	if markerExists(marker) {
+		t.Fatal("git header executed filter.x.clean from repository config")
+	}
+	st, ok := msg.(gitStatusMsg) // adapt if the message is a pointer
+	if !ok || st.err == nil {
+		t.Fatalf("want skipped status with error, got %#v", msg)
+	}
+}
+
+func TestGitHeaderStillWorksOnPlainRepo(t *testing.T) {
+	requireGit(t)
+	dir := t.TempDir()
+	setupGit(t, dir, "init", "-q")
+	msg := gitStatusCmd(dir)()
+	if st, ok := msg.(gitStatusMsg); ok && st.err != nil {
+		t.Fatalf("plain repo must still produce a header, got %v", st.err)
+	}
+}
+
+func mustWrite(t *testing.T, p, s string) {
+	t.Helper()
+	if err := os.WriteFile(p, []byte(s), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

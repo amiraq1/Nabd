@@ -1,6 +1,6 @@
 # Threat model — v11
 
-Last reviewed: 2026-09-24
+Last reviewed: 2026-09-26
 
 This is the only place nabd states security claims. README points here.
 
@@ -53,6 +53,7 @@ the same uid.
 | Bash arguments are decoded strictly before any subprocess starts | GUARANTEED | `bashTool.RunDetailed` uses the shared `decodeStrict` decoder — duplicate keys rejected by tokenizing the raw object, undeclared fields by `DisallowUnknownFields` — instead of `json.Unmarshal`, which keeps the last duplicate key and ignores undeclared ones. The boundary is the net behind repair: with repair disabled, or for a call the layer declines, an undeclared or duplicate key fails as `invalid args` and runs nothing. Evidence: `TestBashRejectsNonStrictArgs`, `TestBashStrictDecodeStillFailsThroughLoop` |
 | Mutation recovery intent is journaled and synced before a file publish; failed pre-publish attempts are marked separately, while a committed edit remains undoable after restart | GUARANTEED | `edit_intent` and `edit_abort` are journal-only recovery records; critical journal events use the durable sink path before the filesystem mutation proceeds. The failure matrix distinguishes file-fsync and rename failures before publication from a parent-fsync failure after publication, so recovery never guesses from an ambiguous error. Evidence: `TestMutationIntentFailureDoesNotPublish`, `TestMutationAbortEventsTrackPrePublishFailure`, `TestWriteFileAtomicFailureMatrix`, `TestWriteFileAtomicReportsPublishedWhenParentFsyncFails`, `TestCriticalEventsSyncDurableSink` |
 | Git header subprocess inherits no parent environment: only PATH/TERM/LANG/LC_ALL are forwarded, secrets and `GIT_CONFIG_GLOBAL` are dropped, and Env is never nil | GUARANTEED | `TestGitChildEnvForwardsOnlyAllowlist` |
+| Git status header never executes commands defined by repository-local config | GUARANTEED | `core.fsmonitor=false` is forced via `-c` (highest precedence); status runs with `--no-optional-locks` and `--ignore-submodules=all`; when the effective config defines a `filter.*.clean` or `filter.*.process` driver, status is skipped and the header stays hidden; a failed config read fails closed. Residual: a future git release adding a new config-driven command to `status` is not covered until listed here. Evidence: `TestGitHeaderIgnoresRepoFsmonitor`, `TestGitHeaderSkipsRepoCleanFilter`, `TestGitHeaderStillWorksOnPlainRepo` |
 | Opened config must be regular, user-owned on Unix, and have no group/other permission bits | GUARANTEED | `internal/config` ParseFile and secure-open tests |
 | Config v1 and Config v2 default files coexistence on disk is fatal at startup | GUARANTEED | `TestV2CoexistenceOnDiskIsFatal` |
 | Config v2 rejects unknown fields, trailing JSON, and custom `base_url` | GUARANTEED | `TestV2RejectsUnknownFieldsAndTrailingJSON`, `TestV2CredentialFileAndClosedEndpointPolicy` |
@@ -687,6 +688,20 @@ outside the granted containment boundary. Therefore, `isGitRepo` inspects only
 the granted root directly (`filepath.Join(abs, ".git")`) without upward
 traversal, treating a parent repository as out-of-bounds even though `git` itself
 would answer. Evidence: `TestIsGitRepoDetection`.
+
+**Repository-local configuration cannot execute commands during status.** Git status
+in an untrusted directory honours repository-local `.git/config`, where
+`core.fsmonitor` or `filter.<driver>.clean`/`.process` can configure arbitrary
+commands to run on stat-dirty files. The header subprocess neutralises
+`core.fsmonitor` by setting `-c core.fsmonitor=false` (command-line `-c` has
+highest precedence) and adding `--no-optional-locks` and `--ignore-submodules=all`.
+Because clean and process filters cannot be neutralised by name in advance, the
+header reads the effective configuration first via
+`git config --null --list --includes` (which executes nothing) and skips `git
+status` entirely if any `filter.*.clean` or `filter.*.process` driver is defined,
+failing closed if the config read itself fails. Evidence:
+`TestGitHeaderIgnoresRepoFsmonitor`, `TestGitHeaderSkipsRepoCleanFilter`,
+`TestGitHeaderStillWorksOnPlainRepo`.
 
 ### Bash child environment and argument validation
 
