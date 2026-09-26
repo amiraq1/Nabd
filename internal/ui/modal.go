@@ -35,6 +35,7 @@ type PermissionChoice struct {
 type PermissionModal struct {
 	visible         bool
 	call            *agent.ToolCall
+	reason          string
 	selected        int
 	decisionPending bool
 	armedAt         time.Time
@@ -73,9 +74,13 @@ func newPermissionModal() *PermissionModal {
 	}
 }
 
-func (m *PermissionModal) open(call *agent.ToolCall) {
+func (m *PermissionModal) open(call *agent.ToolCall, reasons ...string) {
 	m.visible = true
 	m.call = call
+	m.reason = ""
+	if len(reasons) > 0 {
+		m.reason = SanitizeForDisplay(reasons[0], DisplayPolicy{Redact: true})
+	}
 	m.selected = denyIndex()
 	m.decisionPending = false
 	m.armedAt = modalClock()
@@ -84,6 +89,7 @@ func (m *PermissionModal) open(call *agent.ToolCall) {
 func (m *PermissionModal) close() {
 	m.visible = false
 	m.call = nil
+	m.reason = ""
 	m.selected = denyIndex()
 	m.decisionPending = false
 	m.armedAt = time.Time{}
@@ -132,6 +138,14 @@ func (m *PermissionModal) scopeText() string {
 		return "scope: this tool for this session"
 	}
 	return "scope: this request only"
+}
+
+func (m *PermissionModal) toolScopeLine(tool string) string {
+	line := fmt.Sprintf("Tool: %s (not executed yet)", tool)
+	if m.reason != "" {
+		line += " · " + m.reason
+	}
+	return line + " · " + m.scopeText()
 }
 
 func (m *PermissionModal) currentDecision() agent.Decision {
@@ -421,7 +435,7 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 		// 5, 6, or 7 rows: title, tool, [args], [dropped], one choice, hint row, border.
 		lines := []string{
 			standardTitle(),
-			formatRow(fmt.Sprintf("Tool: %s (not executed yet) · %s", tool, m.scopeText())),
+			formatRow(m.toolScopeLine(tool)),
 		}
 		if sh.includeArgs {
 			lines = append(lines, argsRow())
@@ -449,7 +463,7 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 	// permLevelFull: title, tool, [args], [dropped], [blank], choices, [blank], hint, border.
 	lines := []string{
 		standardTitle(),
-		formatRow(fmt.Sprintf("Tool: %s (not executed yet) · %s", tool, m.scopeText())),
+		formatRow(m.toolScopeLine(tool)),
 	}
 	if sh.includeArgs {
 		lines = append(lines, argsRow())

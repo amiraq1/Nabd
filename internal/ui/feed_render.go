@@ -161,6 +161,10 @@ func renderPerm(it presentation.FeedItem, width int) []string {
 		head += " " + truncate(toolSummaryText(p.Args), width/3)
 	}
 	out := []string{truncateToWidth(head, width, "…")}
+	if p.Reason != "" {
+		reason := SanitizeForDisplay(p.Reason, DisplayPolicy{Redact: true})
+		out = append(out, dim.Render(truncateToWidth("  · "+reason, width, "…")))
+	}
 	if p.Status == presentation.PermAllow && p.Effective != p.Decision {
 		out = append(out, dim.Render(truncateToWidth(fmt.Sprintf("  · requested %s, applied %s", p.Decision, p.Effective), width, "…")))
 	}

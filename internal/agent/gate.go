@@ -25,6 +25,13 @@ type Gate interface {
 	Effective(tool string, d Decision) Decision
 }
 
+// ReasonedGate is the additive permission-reason contract. Keeping it optional
+// preserves source compatibility for embedders and test gates while the built-in
+// policy emits stable codes for every new permission event.
+type ReasonedGate interface {
+	CheckReason(tool string) (Verdict, PermissionReason, string)
+}
+
 // SessionGrantPolicy is optional so existing test gates and integrations keep
 // compiling. The UI uses it only when the policy can explicitly describe
 // whether an AllowSession choice is valid for this tool.
@@ -46,23 +53,24 @@ func (l *Loop) decide(ctx context.Context, c ToolCall, emit func(Event) error) (
 	if l.Gate == nil {
 		return Deny, "no permission gate installed"
 	}
-	v, why := l.Gate.Check(c.Name)
+	v, reason, why := checkPermission(l.Gate, c.Name)
 	switch v {
 	case VerdictAllow:
 		return AllowOnce, ""
 	case VerdictDeny:
 		if why == "" {
 			why = "unknown or forbidden tool"
+			reason = PermissionReasonUnknownOrForbidden
 		}
-		if err := emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: why}); err != nil {
-			return Deny, "لم يُدوَّن قرار الإذن: " + err.Error()
+		if err := emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: why, Reason: reason}); err != nil {
+			return Deny, "permission decision was not journaled: " + err.Error()
 		}
 		return Deny, why
 	}
 	if l.Human == nil {
 		const noPrompt = "no prompt interface"
-		if err := emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: noPrompt}); err != nil {
-			return Deny, "لم يُدوَّن قرار الإذن: " + err.Error()
+		if err := emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: noPrompt, Reason: PermissionReasonNoPrompt}); err != nil {
+			return Deny, "permission decision was not journaled: " + err.Error()
 		}
 		return Deny, noPrompt
 	}
@@ -70,8 +78,8 @@ func (l *Loop) decide(ctx context.Context, c ToolCall, emit func(Event) error) (
 		c.SessionGrantKnown = true
 		c.SessionGrantAllowed = policy.SessionGrantAllowed(c.Name)
 	}
-	if err := emit(Event{Type: PermAsk, Call: &c, Text: why}); err != nil {
-		return Deny, "لم يُدوَّن سؤال الإذن: " + err.Error()
+	if err := emit(Event{Type: PermAsk, Call: &c, Text: why, Reason: reason}); err != nil {
+		return Deny, "permission question was not journaled: " + err.Error()
 	}
 	d := l.Human.Ask(ctx, c)
 	if ctx.Err() != nil {
@@ -80,11 +88,23 @@ func (l *Loop) decide(ctx context.Context, c ToolCall, emit func(Event) error) (
 	// Apply policy constraints: the effective decision may differ from the
 	// raw click (e.g. AllowSession for bash → AllowOnce).
 	effective := l.Gate.Effective(c.Name, d)
-	if err := emit(Event{Type: PermReply, Call: &c, Decision: effective, RawDecision: d}); err != nil {
-		return Deny, "لم يُدوَّن جواب الإذن: " + err.Error()
+	if err := emit(Event{Type: PermReply, Call: &c, Decision: effective, RawDecision: d, Text: why, Reason: reason}); err != nil {
+		return Deny, "permission reply was not journaled: " + err.Error()
 	}
 	if effective == AllowSession {
 		l.Gate.Record(c.Name, effective)
 	}
 	return effective, ""
+}
+
+func checkPermission(g Gate, tool string) (Verdict, PermissionReason, string) {
+	if rg, ok := g.(ReasonedGate); ok {
+		v, reason, text := rg.CheckReason(tool)
+		if reason != "" && !reason.Valid() {
+			return VerdictDeny, PermissionReasonUnknownOrForbidden, "unknown or forbidden tool"
+		}
+		return v, reason, text
+	}
+	v, text := g.Check(tool)
+	return v, "", text
 }
