@@ -41,7 +41,7 @@ Windows is not a release target (`syscall.Kill`, `Setpgid`).
 ## 2. Prepare release and bump README install version
 
 Before tagging, ensure `README.md` reflects the version to be released:
-1. Bump `V=<new_version>` (e.g. `V=2.1.2` without the `v` prefix) in the `Installation (Termux)` section under `Option A: Official signed release`.
+1. Bump `V=X.Y.Z` (without the `v` prefix) in the `Installation (Termux)` section under `Option A: Official signed release`.
 2. Add a new row to the `## Releases` table with the release version, publication status, and summary notes.
 
 Commit and push the version bump to `master` before tagging.
@@ -51,7 +51,7 @@ Commit and push the version bump to `master` before tagging.
 Choose a new semantic version; never reuse an existing tag:
 
 ```sh
-VERSION=v2.1.2
+VERSION=vX.Y.Z
 git checkout master
 git pull --ff-only
 git tag -a "$VERSION" -m "nabd $VERSION"
@@ -86,8 +86,9 @@ sha256sum --check --ignore-missing checksums.txt
 Smoke the downloaded binary:
 
 ```sh
-chmod +x nabd_1.5.1_linux_amd64
-./nabd_1.5.1_linux_amd64 --version
+V=X.Y.Z
+chmod +x nabd_${V}_android_arm64
+./nabd_${V}_android_arm64 --version
 ```
 
 Accept when the banner names version, commit, and date. A `dev · none` binary
