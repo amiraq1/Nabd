@@ -44,8 +44,10 @@ import (
 // — the allowed UI symbol set over string literals in their own package — and
 // are stricter there (they reject any non-ASCII rune outside the whitelist).
 // This guard is module-wide, Arabic-specific, and line-based; the three
-// overlap deliberately and none replaces another. When the allowlist below
-// empties, #223 closes; the older guards remain as the symbol whitelist.
+// overlap deliberately and none replaces another. #223 closes when the
+// allowlist is restricted to the ADR-0002-approved catalog files (the
+// sanctioned display boundary and the explicitly-approved low-layer files),
+// not when it empties; the older guards remain as the symbol whitelist.
 //
 // PROVENANCE: the counts were measured with this scan from master at 4bb2f42
 // (after the #225/#226 merges), not copied from issue #223.
