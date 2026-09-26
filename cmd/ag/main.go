@@ -726,13 +726,22 @@ type gate struct{ p *perm.Policy }
 
 func (g gate) Check(tool string) (agent.Verdict, string) {
 	v, why := g.p.Check(tool)
+	return mapVerdict(v), why
+}
+
+func (g gate) CheckReason(tool string) (agent.Verdict, agent.PermissionReason, string) {
+	v, reason, why := g.p.CheckReason(tool)
+	return mapVerdict(v), reason, why
+}
+
+func mapVerdict(v perm.Verdict) agent.Verdict {
 	switch v {
 	case perm.Allow:
-		return agent.VerdictAllow, why
+		return agent.VerdictAllow
 	case perm.Deny:
-		return agent.VerdictDeny, why
+		return agent.VerdictDeny
 	}
-	return agent.VerdictAsk, why
+	return agent.VerdictAsk
 }
 
 func (g gate) Record(tool string, d agent.Decision) {

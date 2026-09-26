@@ -82,6 +82,7 @@ type ToolCard struct {
 type PermCard struct {
 	Name      string
 	Args      string
+	Reason    string
 	Status    PermStatus
 	Decision  agent.Decision
 	Effective agent.Decision
@@ -138,6 +139,7 @@ func (it FeedItem) Fingerprint() uint64 {
 	if it.Perm != nil {
 		hashString(&h, it.Perm.Name)
 		hashString(&h, it.Perm.Args)
+		hashString(&h, it.Perm.Reason)
 		hashString(&h, string(it.Perm.Status))
 		hashString(&h, string(it.Perm.Decision))
 		hashString(&h, string(it.Perm.Effective))

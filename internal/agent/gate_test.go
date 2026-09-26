@@ -17,12 +17,16 @@ func (f *fakeHuman) Ask(ctx context.Context, call ToolCall) Decision {
 type fakeGate struct {
 	checkVerdict Verdict
 	checkWhy     string
+	checkReason  PermissionReason
 	effective    Decision
 	recorded     Decision
 	recordCalls  int
 }
 
 func (f *fakeGate) Check(tool string) (Verdict, string) { return f.checkVerdict, f.checkWhy }
+func (f *fakeGate) CheckReason(tool string) (Verdict, PermissionReason, string) {
+	return f.checkVerdict, f.checkReason, f.checkWhy
+}
 func (f *fakeGate) Record(tool string, d Decision) {
 	f.recorded = d
 	f.recordCalls++
@@ -61,6 +65,37 @@ func TestDecideLogsEffectiveDecision(t *testing.T) {
 	}
 }
 
+func TestDecidePersistsStablePermissionReason(t *testing.T) {
+	loop := &Loop{
+		Gate: &fakeGate{
+			checkVerdict: VerdictAsk,
+			checkReason:  PermissionReasonRequired,
+			checkWhy:     "permission required",
+			effective:    AllowOnce,
+		},
+		Human: &fakeHuman{answer: AllowOnce},
+	}
+	var events []Event
+	got, why := loop.decide(context.Background(), ToolCall{ID: "c1", Name: "bash"}, func(e Event) error {
+		events = append(events, e)
+		return nil
+	})
+	if got != AllowOnce || why != "" {
+		t.Fatalf("decide = %v, %q", got, why)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %d, want ask and reply", len(events))
+	}
+	for _, event := range events {
+		if event.Reason != PermissionReasonRequired {
+			t.Fatalf("%s reason = %q", event.Type, event.Reason)
+		}
+		if event.Text != "permission required" {
+			t.Fatalf("%s fallback text = %q", event.Type, event.Text)
+		}
+	}
+}
+
 func TestDecideRefusesWhenPermissionQuestionCannotBeJournaled(t *testing.T) {
 	loop := &Loop{
 		Gate:  &fakeGate{checkVerdict: VerdictAsk, effective: AllowOnce},
@@ -69,7 +104,7 @@ func TestDecideRefusesWhenPermissionQuestionCannotBeJournaled(t *testing.T) {
 	got, why := loop.decide(context.Background(), ToolCall{Name: "bash"}, func(Event) error {
 		return context.Canceled
 	})
-	if got != Deny || !strings.Contains(why, "لم يُدوَّن") {
+	if got != Deny || !strings.Contains(why, "not journaled") {
 		t.Fatalf("decide = %v, %q; want Deny with journal failure", got, why)
 	}
 }

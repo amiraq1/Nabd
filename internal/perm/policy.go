@@ -143,16 +143,24 @@ func (p *Policy) YOLO() bool {
 //  6. ModeDeny / ModeAllowReads → Deny (never wait).
 //  7. Otherwise → Ask.
 func (p *Policy) Check(tool string) (Verdict, string) {
+	v, _, text := p.CheckReason(tool)
+	return v, text
+}
+
+// CheckReason is Check plus a stable language-neutral reason. Text is an
+// English compatibility fallback for old readers; presentation translates the
+// reason for current user interfaces.
+func (p *Policy) CheckReason(tool string) (Verdict, agent.PermissionReason, string) {
 	if strings.TrimSpace(tool) == "" {
-		return Deny, "tool with no name"
+		return Deny, agent.PermissionReasonToolNoName, "tool with no name"
 	}
 
 	class, known := p.cls.Class(tool)
 	if !known {
-		return Deny, "unknown tool"
+		return Deny, agent.PermissionReasonUnknownTool, "unknown tool"
 	}
 	if class == ReadOnly {
-		return Allow, ""
+		return Allow, "", ""
 	}
 
 	p.mu.Lock()
@@ -162,18 +170,18 @@ func (p *Policy) Check(tool string) (Verdict, string) {
 	p.mu.Unlock()
 
 	if mode == ModePlan {
-		return Deny, "plan mode: read-only"
+		return Deny, agent.PermissionReasonPlanReadOnly, "plan mode: read-only"
 	}
 	if yolo && class == Mutating {
-		return Allow, ""
+		return Allow, "", ""
 	}
 	if class == Mutating && granted {
-		return Allow, "مسموح لهذه الجلسة"
+		return Allow, agent.PermissionReasonSessionGrant, "allowed for this session"
 	}
 	if mode == ModeDeny || mode == ModeAllowReads {
-		return Deny, "denied by policy"
+		return Deny, agent.PermissionReasonPolicyDenied, "denied by policy"
 	}
-	return Ask, ""
+	return Ask, agent.PermissionReasonRequired, "permission required"
 }
 
 // Record applies the user's answer. Only Mutating tools can leave a

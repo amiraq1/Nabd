@@ -64,6 +64,9 @@ type Event struct {
 	Text     string    `json:"text,omitempty"`
 	Call     *ToolCall `json:"call,omitempty"`
 	Decision Decision  `json:"decision,omitempty"`
+	// Reason is the stable permission-reason code for PermAsk/PermReply.
+	// Empty means a legacy record whose Text remains authoritative.
+	Reason PermissionReason `json:"reason,omitempty"`
 	// RawDecision preserves the user's raw click (e.g. AllowSession for bash)
 	// when the policy downgrades it (e.g. to AllowOnce). If missing (zero/deny),
 	// it means this is an old record where Decision holds the only known value.

@@ -31,14 +31,22 @@ func RenderEvent(e agent.Event, width int) string {
 		return block("⚙", callLine(e.Call), width, lipgloss.NewStyle())
 
 	case agent.PermAsk:
-		return block("?", callLine(e.Call)+" — allow?", width, warn)
+		line := callLine(e.Call) + " — allow?"
+		if reason := presentation.PermissionReasonText(e); reason != "" {
+			line += " · " + reason
+		}
+		return block("?", line, width, warn)
 
 	case agent.PermReply:
 		st, mark := bad, "✗"
 		if e.Decision != agent.Deny {
 			st, mark = good, "✓"
 		}
-		return st.Render(mark + " " + e.Decision.String())
+		line := mark + " " + e.Decision.String()
+		if reason := presentation.PermissionReasonText(e); reason != "" {
+			line += " · " + reason
+		}
+		return st.Render(line)
 
 	case agent.ToolEnd:
 		return toolEnd(e.Call, width)
