@@ -493,10 +493,6 @@ func liveSeqs(evs []agent.Event) []int {
 // that agent.Live returns the whole chain, and that replay (the journal) agrees
 // with the in-memory history on the branch point.
 func TestRewindToReusedParentKeepsChainResolvable(t *testing.T) {
-	t.Skip("docs/TECH_DEBT.md §STREAM_REDACT_PARENT_REUSE_REWIND_UNVERIFIED: this " +
-		"case fails in CI (cmd/ag: \"run 2 after rewind: no more scripted turns\"); " +
-		"per the phase rules it is committed skipped and left unfixed. See the PR " +
-		"body for the failure output.")
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package a\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -529,6 +525,7 @@ func TestRewindToReusedParentKeepsChainResolvable(t *testing.T) {
 			" end",
 		}, call: writeCall("x.txt", "hi")},
 		{chunks: []string{"two"}},
+		{chunks: []string{"three"}},
 	}}, reg, gate{pol}, silentAsker{})
 	loop.Sink = newStreamRedactSink(agent.Fanout{journal})
 
