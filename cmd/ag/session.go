@@ -123,7 +123,7 @@ func (s *interactiveSession) callbacks() *ui.SessionCallbacks {
 }
 
 func sessionProvider() string {
-	reg, err := registry.Load()
+	reg, err := loadRegistry()
 	if err != nil {
 		return "provider: " + err.Error()
 	}
@@ -131,7 +131,7 @@ func sessionProvider() string {
 }
 
 func sessionModels(ctx context.Context, providerID string) ([]string, string, error) {
-	reg, err := registry.Load()
+	reg, err := loadRegistry()
 	if err != nil {
 		return nil, "", err
 	}

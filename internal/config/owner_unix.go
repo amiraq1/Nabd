@@ -4,11 +4,30 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"os/user"
 	"syscall"
 )
+
+// OwnerMismatchError reports a config file that exists but is owned by another
+// uid. It carries the facts, not the sentence: the Arabic wording is rendered at
+// the CLI boundary (cmd/ag), so this package stays on the ASCII baseline. See
+// ADR-0002 (docs/DECISIONS/0002-user-facing-language.md).
+type OwnerMismatchError struct {
+	// Path is the config file that was refused.
+	Path string
+	// OwnerUID is the uid that owns the file on disk.
+	OwnerUID int
+	// Who describes the current user, and doubles as the chown argument.
+	Who string
+}
+
+// Error is the ASCII baseline. cmd/ag renders the Arabic sentence for this type;
+// nothing in this package decides which language the user reads.
+func (e *OwnerMismatchError) Error() string {
+	return e.Path + ": owned by uid " + itoa(e.OwnerUID) +
+		", not by " + e.Who + " - run: chown " + e.Who + " " + e.Path
+}
 
 // checkOwnerPlatform (Unix) refuses the config file unless it is owned by the
 // current user. A key you do not own is a key you cannot protect.
@@ -24,7 +43,7 @@ func checkOwnerPlatform(p string, fi os.FileInfo) error {
 		if err == nil {
 			who = cur.Username + " (uid " + itoa(uid) + ")"
 		}
-		return fmt.Errorf("%s: يملكه uid %d ولا يملكه %s — شغّل: chown %s %s", p, stat.Uid, who, who, p)
+		return &OwnerMismatchError{Path: p, OwnerUID: int(stat.Uid), Who: who}
 	}
 	return nil
 }

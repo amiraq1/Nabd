@@ -48,17 +48,21 @@ import (
 // boundary and the explicitly-approved low-layer files), not when it empties;
 // the older guards remain as the symbol whitelist.
 //
+// The config, registry, and snap diagnostics left this list when they moved to
+// typed errors with ASCII baselines whose Arabic sentence is rendered at the CLI
+// boundary; cmd/ag/errors.go gained the ownership sentence it now owns. The two
+// provider entries are what remains, and ADR-0002 decision 4 scopes provider
+// errors as a track separate from 3ج, so #223 stays open until that track lands.
+//
 // PROVENANCE: the counts were measured with this scan from master at a8a005c
-// (after the #228 and #229 merges), not copied from issue #223.
+// (after the #228 and #229 merges), not copied from issue #223, and re-measured
+// after the batch above.
 // ─────────────────────────────────────────────────────────────────────────────
 var arabicLiteralAllowlist = map[string]int{
-	"cmd/ag/errors.go":                           11,
-	"internal/config/owner_unix.go":              1,
+	"cmd/ag/errors.go":                           12,
 	"internal/provider/anthropic.go":             2,
 	"internal/provider/openai.go":                1,
 	"internal/presentation/permission_reason.go": 8,
-	"internal/registry/owner_unix.go":            1,
-	"internal/snap/shadow.go":                    2,
 }
 
 // arabicLiteralViolation is one reason the tree does not match the ratchet.

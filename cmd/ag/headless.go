@@ -195,7 +195,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 		return errors.New("empty prompt")
 	}
 
-	if err := config.Load(); err != nil {
+	if err := loadConfig(); err != nil {
 		return err
 	}
 
