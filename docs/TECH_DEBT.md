@@ -6,7 +6,7 @@
 | BUILTIN_CATALOG_STALENESS | The embedded catalog is a static list in source, while providers decommission models without notice; staleness is therefore a permanent condition, not a one-off incident. CI cannot guard it: the build has no network and no credentials, and querying a real provider from tests is forbidden. The only structural protection is that a default must be manually verified at edit time; `nabd models` is the live source of truth. The current Anthropic default `claude-sonnet-5` is unverified because no Anthropic key was available for measurement; it is recorded as unmeasured and is not changed by this PR. | Keep defaults declared in `Models`, verify them manually when editing the catalog, and direct users to `nabd models <provider>`. |
 | SKILL_WALK_BOUND_IS_POST_HOC | Directory listing in skill discovery (`internal/skill/skill.go`) reads entries via `f.ReadDir(64)` and bounds traversal post-hoc via `seen >= maxWalkEntries` after opening and reading batches, loading entries into memory before capping. | Bounding is applied post-hoc during batch iteration; follow-up should bound directory traversal queues upfront before descriptor allocation. |
 | UNREPRODUCIBLE_PERFORMANCE_METRICS | Historical performance claims frequently cited in PR descriptions and reports ("187 allocations", "44ms/46x" speedup from #120, and timing walls under `-race` in CI) lack committed benchmark harnesses or recorded execution environments. | Unverifiable performance figures risk being treated as canonical baselines without reproducible test code or known environmental specifications. Guard: Any future performance claims must be accompanied by committed benchmark functions (e.g. `Benchmark*`) with recorded hardware/OS baselines, matching the rigor of Section G1 in this file. |
-| THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | `docs/THREAT_MODEL.md` has grown to over 81 KB and 215 backtick-quoted test citations. It is edited via full-file rewrites, making concurrent edits, review diffs, and manual editing increasingly error-prone. | High risk of merge conflicts, accidental citation breakage, and review fatigue on every security-touching PR. Guard: Decompose `THREAT_MODEL.md` into modular per-domain specification files (e.g. paths, permissions, tools, providers) aggregated by CI scripts, while preserving the unified test citation check. |
+| THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | `docs/THREAT_MODEL.md` has grown to 102524 bytes (measured via `wc -c docs/THREAT_MODEL.md`) and 341 backtick-quoted test citations. It is edited via full-file rewrites, making concurrent edits, review diffs, and manual editing increasingly error-prone. | High risk of merge conflicts, accidental citation breakage, and review fatigue on every security-touching PR. Guard: Decompose `THREAT_MODEL.md` into modular per-domain specification files (e.g. paths, permissions, tools, providers) aggregated by CI scripts, while preserving the unified test citation check. |
 | RELEASE_DRYRUN_SKIPS_SIGN | `release-dryrun` in `.github/workflows/ci.yml` runs `goreleaser release --clean --snapshot --skip=publish,sign,announce`, so the signing step is stripped from the only pipeline that exercises the release path before a tag is cut; the cosign major that `.goreleaser.yaml` depends on is pinned in `release.yml` and first runs at tag time. | The v1.6.0 signing breakage reached a tag with a green dry-run: the cosign-installer bump to v4 silently moved the runner to cosign v3, whose bundle format ignores `--output-signature`/`--output-certificate`. Guard: `TestReleasePipelineContracts` pins the cosign major against the sign config, which catches that class without signing anything. Dropping `sign` from the skip was evaluated and not taken: keyless signing needs `id-token: write` and a Fulcio OIDC token that `pull_request` runs from forks do not receive, and it writes Rekor entries on every run, while a generated test key would exercise a different signer than the release. Accepted explicitly until a non-publishing keyless dry-run is designed. |
 
 ## STREAM_REDACT_PARENT_REUSE_REWIND_UNVERIFIED — RESOLVED by the unskipped regression test
@@ -367,20 +367,21 @@ needs its own red case, so it is out of scope for the current test batch.
 ## TWO_INTERACTIVE_UIS - the layout work targets the experimental path
 
 cmd/ag/main.go carries two interactive TUIs and a third replay model:
-doChat (line 111) runs ui.Chat, doChatWithFeed (line 237) runs ui.Feed, and
---replay runs ui.NewReplay. The -feed flag defaults to false, so the default
-interactive path is Chat, not Feed.
+doChat (line 191) runs ui.Chat, doChatWithFeed (line 281) runs ui.Feed, and
+--replay (line 134) runs ui.NewReplay. The -feed flag defaults to true
+(flag.Bool("feed", true, ...)), so the default interactive path is Feed,
+while --feed=false selects Chat as a rollback mechanism.
 
 Everything measured and fixed in this batch - computeLayout, the slash menu
 floor, visualRowsOf, the frame contract, separator width - lives in the Feed
-path. Users on the default path do not see it. This is the right order for
-promoting Feed to default, but it must not be described as a production fix.
+path. Because Feed is now the default path, users on the default path see
+these fixes; legacy Chat remains an uncontracted rollback mechanism.
 
 Chat (internal/ui/chat.go) has no computeLayout, no frame contract and no
-layout tests at all, while Feed (feed.go) now has both.
+frame-height layout tests, while Feed (feed.go) now has both.
 
 The interactive session (root, registry, policy, approver, loop) and the five
-slash-command callbacks are now built once by `newInteractiveSession` in
+slash-command callbacks are built once by `newInteractiveSession` in
 cmd/ag/session.go and wired through a single `ui.SessionCallbacks` contract
 shared by Chat (`chat.SetCallbacks`) and Feed (`feed.SetCallbacks`). This
 resolves the previous divergence where `OnRewind` returned two strings on Feed
@@ -389,10 +390,9 @@ there is now one gate (`gate{pol}`) and one `agent.Gate` contract for both
 paths. The command bodies themselves live in named helpers in session.go
 (`rewindSummary`, `ctxSummary`, `editsSummary`), so they cannot drift.
 
-Open decision: promote Feed to default and retire Chat, or keep both and
-duplicate every layout contract. Until it is decided, no layout finding should
-be acted on without stating which path it applies to. The Replay model has not
-been read at all.
+Status: Feed was promoted to default (guaranteed by `TestFeedIsTheDefaultInteractiveUI`
+in the threat model); Chat is retained as the `--feed=false` rollback path.
+The Replay model has not been read at all.
 
 ## TWO_INTERACTIVE_UIS - correction to the entry above
 Two absolute claims in the previous entry were written without measurement and

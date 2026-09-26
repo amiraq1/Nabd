@@ -38,12 +38,20 @@ CGO_ENABLED=0 GOOS=android GOARCH=arm64 go build ./cmd/ag
 
 Windows is not a release target (`syscall.Kill`, `Setpgid`).
 
-## 2. Tag
+## 2. Prepare release and bump README install version
+
+Before tagging, ensure `README.md` reflects the version to be released:
+1. Bump `V=<new_version>` (e.g. `V=2.1.2` without the `v` prefix) in the `Installation (Termux)` section under `Option A: Official signed release`.
+2. Add a new row to the `## Releases` table with the release version, publication status, and summary notes.
+
+Commit and push the version bump to `master` before tagging.
+
+## 3. Tag
 
 Choose a new semantic version; never reuse an existing tag:
 
 ```sh
-VERSION=v1.5.1
+VERSION=v2.1.2
 git checkout master
 git pull --ff-only
 git tag -a "$VERSION" -m "nabd $VERSION"
@@ -58,7 +66,7 @@ in `checksums.txt`; signing that checksum transitively covers every listed
 binary and SBOM. The workflow also attaches a build-provenance attestation to
 `dist/checksums.txt`.
 
-## 3. Verify and smoke the artifacts
+## 4. Verify and smoke the artifacts
 
 On a machine that does not have the repository, download the binary for the
 platform together with `checksums.txt`, `checksums.txt.sig`, and
@@ -85,7 +93,7 @@ chmod +x nabd_1.5.1_linux_amd64
 Accept when the banner names version, commit, and date. A `dev · none` binary
 is a local `go build`, not a release.
 
-## 4. Local stamp (not a release)
+## 5. Local stamp (not a release)
 
 ```sh
 ./build.sh
