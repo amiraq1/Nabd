@@ -406,6 +406,11 @@ func (e *httpError) Error() string {
 type modelUnavailableError struct {
 	Model  string
 	Status int
+	// Message, when non-empty, is the complete user-visible rendering. The
+	// OpenAI-compatible body heuristic historically returned the provider body
+	// plus a lookup hint; preserving that byte-for-byte while carrying a typed
+	// retry verdict requires keeping the rendering as data on the error.
+	Message string
 	// Suffix is appended verbatim after the status parenthesis. The two call
 	// sites render differently: the Anthropic path carries nothing, while the
 	// OpenAI path always carried a newline plus the model-lookup hint, so an
@@ -416,6 +421,9 @@ type modelUnavailableError struct {
 }
 
 func (e *modelUnavailableError) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
 	return fmt.Sprintf("الموديل %q غير متاح على هذا الخادم (%d)%s", e.Model, e.Status, e.Suffix)
 }
 

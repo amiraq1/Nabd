@@ -376,7 +376,11 @@ func (o *OpenAICompat) attempt(ctx context.Context, body []byte, out chan<- Chun
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		body := apiMessage(msg)
 		if isModelNotFound(resp.StatusCode, body) {
-			return 0, fmt.Errorf("%s\n%s", body, modelLookupHint(o.providerName, o.Model))
+			return 0, &modelUnavailableError{
+				Model:   o.Model,
+				Status:  resp.StatusCode,
+				Message: fmt.Sprintf("%s\n%s", body, modelLookupHint(o.providerName, o.Model)),
+			}
 		}
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
 			return 0, &modelUnavailableError{Model: o.Model, Status: resp.StatusCode, Suffix: ".\n" + modelLookupHint(o.providerName, o.Model)}

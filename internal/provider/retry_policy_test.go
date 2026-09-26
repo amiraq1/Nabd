@@ -7,6 +7,7 @@ package provider
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -128,6 +129,43 @@ func TestStandaloneOpenAICompatPreservesRetryBehavior(t *testing.T) {
 	// RetryStandalone: expects 2 requests (initial + 1 retry on transient 503).
 	if got := atomic.LoadInt32(count); got < 2 {
 		t.Errorf("RetryStandalone made %d HTTP requests, want ≥2 (one retry on transient)", got)
+	}
+}
+
+// A provider body that identifies a missing model is permanent even when the
+// HTTP status is 400. The standalone retry loop must classify it by type and
+// perform exactly one request.
+func TestStandaloneOpenAICompatDoesNotRetryModelNotFoundBody(t *testing.T) {
+	srv, count := countingServer(t, 400, `{"error":{"message":"model not found"}}`)
+
+	o := &OpenAICompat{
+		Key:          "test-key",
+		Model:        "missing-model",
+		providerName: "test-provider",
+		BaseURL:      srv.URL,
+		Client:       srv.Client(),
+		retryPolicy:  RetryStandalone,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	ch, err := o.Stream(ctx, minimalRequest())
+	if err != nil {
+		t.Fatalf("Stream error: %v", err)
+	}
+	_, streamErr := drainChannel(ch)
+
+	if got := atomic.LoadInt32(count); got != 1 {
+		t.Fatalf("model-not-found response made %d HTTP requests, want exactly 1", got)
+	}
+	var mue *modelUnavailableError
+	if !errors.As(streamErr, &mue) {
+		t.Fatalf("stream error type = %T, want *modelUnavailableError", streamErr)
+	}
+	want := "model not found\n" + modelLookupHint("test-provider", "missing-model")
+	if got := streamErr.Error(); got != want {
+		t.Fatalf("message changed:\n got %q\nwant %q", got, want)
 	}
 }
 
