@@ -190,7 +190,7 @@ func (a *Anthropic) attempt(ctx context.Context, body []byte, out chan<- Chunk, 
 	if resp.StatusCode != http.StatusOK {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode == 404 || resp.StatusCode == 410 {
-			return 0, fmt.Errorf("الموديل %q غير متاح على هذا الخادم (%d)", a.Model, resp.StatusCode)
+			return 0, &modelUnavailableError{Model: a.Model, Status: resp.StatusCode}
 		}
 		ra := parseRetryAfter(resp.Header.Get("retry-after"))
 		return ra, &httpError{Status: resp.StatusCode, Body: apiMessage(msg)}
@@ -399,6 +399,26 @@ func (e *httpError) Error() string {
 	return "http " + strconv.Itoa(e.Status)
 }
 
+// modelUnavailableError marks a provider answer saying the configured model
+// does not exist on this endpoint. The retry decision reads this TYPE, never
+// the wording of the message: a message can be reworded, re-accented, or
+// wrapped without anyone noticing that the decision changed with it.
+type modelUnavailableError struct {
+	Model  string
+	Status int
+	// Suffix is appended verbatim after the status parenthesis. The two call
+	// sites render differently: the Anthropic path carries nothing, while the
+	// OpenAI path always carried a newline plus the model-lookup hint, so an
+	// empty hint there still rendered the trailing newline. Keeping the suffix
+	// as data on the error, rather than as a conditional in Error(), is what
+	// makes both user-facing messages byte-identical to what they replaced.
+	Suffix string
+}
+
+func (e *modelUnavailableError) Error() string {
+	return fmt.Sprintf("الموديل %q غير متاح على هذا الخادم (%d)%s", e.Model, e.Status, e.Suffix)
+}
+
 // transient decides whether trying again could plausibly help. A 401 or
 // a 400 will fail identically forever; retrying them only wastes battery.
 func transient(err error) bool {
@@ -414,7 +434,8 @@ func transient(err error) bool {
 	if errors.As(err, &he) {
 		return he.Status == 408 || he.Status == 409 || he.Status == 429 || he.Status >= 500
 	}
-	if strings.Contains(err.Error(), "غير متاح على هذا الخادم") {
+	var mue *modelUnavailableError
+	if errors.As(err, &mue) {
 		return false
 	}
 	return true // network and EOF failures are worth one more try
