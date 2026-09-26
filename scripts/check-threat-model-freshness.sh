@@ -23,6 +23,8 @@ security_files=(
   internal/snap/
   internal/store/
   internal/tools/
+  internal/ui/copy.go
+  internal/ui/git_header.go
   cmd/ag/main.go
   .goreleaser.yaml
   scripts/
