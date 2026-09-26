@@ -145,7 +145,7 @@ func TestOriginalErrorPreservedInJournal(t *testing.T) {
 }
 
 // TestPermAllowReasonNeverReachesUIOrModel asserts that the internal reason
-// "مسموح لهذه الجلسة" in internal/perm/policy.go:93 on Allow is purely internal,
+// "مسموح لهذه الجلسة" in internal/perm/policy.go:171 on Allow is purely internal,
 // never rendered by RenderEvent, and never formatted into provider messages.
 func TestPermAllowReasonNeverReachesUIOrModel(t *testing.T) {
 	// 1. PermReply rendering: only renders mark and decision, never the internal why
