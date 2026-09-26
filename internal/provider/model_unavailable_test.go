@@ -44,10 +44,21 @@ func TestModelUnavailableRetryDecisionIgnoresWording(t *testing.T) {
 	}
 }
 
-// Neither user-facing message may change by a byte, including the empty-hint
-// shape the OpenAI literal could in principle produce.
+// Neither user-facing message may change by a byte, including the body-based
+// OpenAI heuristic and the empty-hint shape the status branch could in
+// principle produce.
 func TestModelUnavailableRendersBothSitesByteIdentical(t *testing.T) {
 	hint := modelLookupHint("openai", "gpt-x")
+
+	wantHeuristic := "model not found\n" + hint
+	gotHeuristic := (&modelUnavailableError{
+		Model:   "gpt-x",
+		Status:  400,
+		Message: wantHeuristic,
+	}).Error()
+	if gotHeuristic != wantHeuristic {
+		t.Fatalf("OpenAI heuristic message changed:\n got %q\nwant %q", gotHeuristic, wantHeuristic)
+	}
 
 	wantOpenAI := fmt.Sprintf(origOpenAIFmt, "gpt-x", 404, hint)
 	gotOpenAI := (&modelUnavailableError{Model: "gpt-x", Status: 404, Suffix: ".\n" + hint}).Error()
@@ -65,6 +76,26 @@ func TestModelUnavailableRendersBothSitesByteIdentical(t *testing.T) {
 	gotAnthropic := (&modelUnavailableError{Model: "claude-x", Status: 410}).Error()
 	if gotAnthropic != wantAnthropic {
 		t.Fatalf("anthropic message changed:\n got %q\nwant %q", gotAnthropic, wantAnthropic)
+	}
+}
+
+// The body heuristic must carry the same typed retry verdict as the 404/410
+// status branch. This is the exact gap reported in #227.
+func TestModelUnavailableHeuristicIsTypedAndNotRetried(t *testing.T) {
+	err := &modelUnavailableError{
+		Model:   "gpt-x",
+		Status:  400,
+		Message: "model not found\nlookup hint",
+	}
+	if transient(err) {
+		t.Fatal("the body-based model-unavailable answer must not be retried")
+	}
+	var mue *modelUnavailableError
+	if !errors.As(error(err), &mue) {
+		t.Fatal("the body-based model-unavailable answer must remain typed")
+	}
+	if mue.Message != err.Message {
+		t.Fatalf("message lost through typed classification: got %q want %q", mue.Message, err.Message)
 	}
 }
 
