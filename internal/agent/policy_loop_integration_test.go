@@ -27,6 +27,9 @@ func (g gate) Record(tool string, d agent.Decision) { g.p.Record(tool, d) }
 func (g gate) Effective(tool string, d agent.Decision) agent.Decision {
 	return g.p.Effective(tool, d)
 }
+func (g gate) SessionGrantAllowed(tool string) bool {
+	return g.p.SessionGrantAllowed(tool)
+}
 
 type fakeHuman struct {
 	answer agent.Decision

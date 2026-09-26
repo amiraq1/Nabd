@@ -115,26 +115,40 @@ func (m *PermissionModal) toolName() string {
 	return m.call.Name
 }
 
+// sessionGrantAllowed reports whether a standing session grant is permitted
+// for the given tool call. Executing tools (such as bash) are strictly excluded:
+// the UI must neither show nor accept a session grant choice for them under any
+// circumstances.
+func sessionGrantAllowed(call *agent.ToolCall) bool {
+	if call == nil || call.Name == "bash" {
+		return false
+	}
+	if call.SessionGrantKnown {
+		return call.SessionGrantAllowed
+	}
+	return true
+}
+
 func (m *PermissionModal) choices() []PermissionChoice {
 	choices := []PermissionChoice{
 		{Decision: agent.AllowOnce, Label: "Allow Once", KeyHint: "y"},
 		{Decision: agent.Deny, Label: "Deny", KeyHint: "n / esc"},
 	}
-	if m.call == nil || !m.call.SessionGrantKnown || m.call.SessionGrantAllowed {
+	if sessionGrantAllowed(m.call) {
 		choices = append(choices[:1], append([]PermissionChoice{{Decision: agent.AllowSession, Label: "Allow Session", KeyHint: "a"}}, choices[1:]...)...)
 	}
 	return choices
 }
 
 func (m *PermissionModal) keyHintText() string {
-	if m.call != nil && m.call.SessionGrantKnown && !m.call.SessionGrantAllowed {
+	if !sessionGrantAllowed(m.call) {
 		return "y allow · n deny · Esc cancel"
 	}
 	return "y allow · a session · n deny · Esc cancel"
 }
 
 func (m *PermissionModal) scopeText() string {
-	if m.call != nil && m.call.SessionGrantKnown && m.call.SessionGrantAllowed {
+	if sessionGrantAllowed(m.call) {
 		return "scope: this tool for this session"
 	}
 	return "scope: this request only"
