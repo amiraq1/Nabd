@@ -52,14 +52,13 @@ import (
 // (after the #228 and #229 merges), not copied from issue #223.
 // ─────────────────────────────────────────────────────────────────────────────
 var arabicLiteralAllowlist = map[string]int{
-	"cmd/ag/errors.go":                11,
-	"internal/agent/gate.go":          4,
-	"internal/config/owner_unix.go":   1,
-	"internal/perm/policy.go":         1,
-	"internal/provider/anthropic.go":  2,
-	"internal/provider/openai.go":     1,
-	"internal/registry/owner_unix.go": 1,
-	"internal/snap/shadow.go":         2,
+	"cmd/ag/errors.go":                           11,
+	"internal/config/owner_unix.go":              1,
+	"internal/provider/anthropic.go":             2,
+	"internal/provider/openai.go":                1,
+	"internal/presentation/permission_reason.go": 8,
+	"internal/registry/owner_unix.go":            1,
+	"internal/snap/shadow.go":                    2,
 }
 
 // arabicLiteralViolation is one reason the tree does not match the ratchet.
