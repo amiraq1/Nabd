@@ -365,3 +365,31 @@ func mustWrite(t *testing.T, p, s string) {
 		t.Fatal(err)
 	}
 }
+
+func TestRepoConfigDefinesCommands(t *testing.T) {
+	cases := []struct {
+		name, in string
+		want     bool
+	}{
+		{"empty", "", false},
+		{"system lfs trusted",
+			"system\x00filter.lfs.clean\ngit-lfs clean -- %f\x00" +
+				"system\x00filter.lfs.process\ngit-lfs filter-process\x00" +
+				"local\x00core.bare\nfalse\x00", false},
+		{"global trusted", "global\x00filter.x.clean\ncat\x00", false},
+		{"local clean", "local\x00filter.x.clean\ntouch m\x00", true},
+		{"local overrides lfs", "local\x00filter.lfs.clean\ntouch m\x00", true},
+		{"worktree process", "worktree\x00filter.x.process\nsh\x00", true},
+		{"case insensitive", "local\x00FILTER.X.Clean\ncat\x00", true},
+		{"unknown scope fails closed", "command\x00filter.x.clean\ncat\x00", true},
+		{"smudge not run by status", "local\x00filter.x.smudge\ncat\x00", false},
+		{"malformed fails closed", "local\x00", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := repoConfigDefinesCommands([]byte(c.in)); got != c.want {
+				t.Fatalf("got %v, want %v", got, c.want)
+			}
+		})
+	}
+}

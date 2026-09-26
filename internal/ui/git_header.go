@@ -46,12 +46,40 @@ var gitHardeningArgs = []string{
 var errGitConfigDefinesCommands = errors.New(
 	"git header: repository config defines filter commands; status skipped")
 
+// repoConfigDefinesCommands reports whether a repository-controlled scope
+// defines a clean/process filter driver, which git status would execute on
+// stat-dirty files. System and global scopes belong to the user, not to the
+// repository (git-lfs installs filter.lfs.* system-wide), so they are
+// trusted. Any other scope, including unknown ones, is not.
+func repoConfigDefinesCommands(out []byte) bool {
+	if len(out) == 0 {
+		return false
+	}
+	fields := bytes.Split(bytes.TrimSuffix(out, []byte{0}), []byte{0})
+	if len(fields)%2 != 0 {
+		return true // malformed: fail closed
+	}
+	for i := 0; i < len(fields); i += 2 {
+		switch string(fields[i]) {
+		case "system", "global":
+			continue
+		}
+		key, _, _ := bytes.Cut(fields[i+1], []byte{'\n'})
+		k := strings.ToLower(string(key))
+		if strings.HasPrefix(k, "filter.") &&
+			(strings.HasSuffix(k, ".clean") || strings.HasSuffix(k, ".process")) {
+			return true
+		}
+	}
+	return false
+}
+
 // gitConfigDefinesCommands reports whether the effective config (system,
 // local, worktree, and included files) defines a clean/process filter
 // driver, which git status would execute on stat-dirty files. Reading
 // config executes nothing.
 func gitConfigDefinesCommands(ctx context.Context, dir string, env []string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "config", "--null", "--list", "--includes")
+	cmd := exec.CommandContext(ctx, "git", "config", "--null", "--list", "--includes", "--show-scope")
 	cmd.Env = env
 	if dir != "" {
 		cmd.Dir = dir
@@ -60,16 +88,7 @@ func gitConfigDefinesCommands(ctx context.Context, dir string, env []string) (bo
 	if err != nil {
 		return false, err
 	}
-	// --null format: "key\nvalue\x00", or "key\x00" for valueless keys.
-	for _, entry := range bytes.Split(out, []byte{0}) {
-		key, _, _ := bytes.Cut(entry, []byte{'\n'})
-		k := strings.ToLower(string(key))
-		if strings.HasPrefix(k, "filter.") &&
-			(strings.HasSuffix(k, ".clean") || strings.HasSuffix(k, ".process")) {
-			return true, nil
-		}
-	}
-	return false, nil
+	return repoConfigDefinesCommands(out), nil
 }
 
 // gitStatusCmd shells out off the render path. View must never call git.

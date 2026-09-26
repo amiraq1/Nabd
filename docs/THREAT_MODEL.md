@@ -53,7 +53,7 @@ the same uid.
 | Bash arguments are decoded strictly before any subprocess starts | GUARANTEED | `bashTool.RunDetailed` uses the shared `decodeStrict` decoder — duplicate keys rejected by tokenizing the raw object, undeclared fields by `DisallowUnknownFields` — instead of `json.Unmarshal`, which keeps the last duplicate key and ignores undeclared ones. The boundary is the net behind repair: with repair disabled, or for a call the layer declines, an undeclared or duplicate key fails as `invalid args` and runs nothing. Evidence: `TestBashRejectsNonStrictArgs`, `TestBashStrictDecodeStillFailsThroughLoop` |
 | Mutation recovery intent is journaled and synced before a file publish; failed pre-publish attempts are marked separately, while a committed edit remains undoable after restart | GUARANTEED | `edit_intent` and `edit_abort` are journal-only recovery records; critical journal events use the durable sink path before the filesystem mutation proceeds. The failure matrix distinguishes file-fsync and rename failures before publication from a parent-fsync failure after publication, so recovery never guesses from an ambiguous error. Evidence: `TestMutationIntentFailureDoesNotPublish`, `TestMutationAbortEventsTrackPrePublishFailure`, `TestWriteFileAtomicFailureMatrix`, `TestWriteFileAtomicReportsPublishedWhenParentFsyncFails`, `TestCriticalEventsSyncDurableSink` |
 | Git header subprocess inherits no parent environment: only PATH/TERM/LANG/LC_ALL are forwarded, secrets and `GIT_CONFIG_GLOBAL` are dropped, and Env is never nil | GUARANTEED | `TestGitChildEnvForwardsOnlyAllowlist` |
-| Git status header never executes commands defined by repository-local config | GUARANTEED | `core.fsmonitor=false` is forced via `-c` (highest precedence); status runs with `--no-optional-locks` and `--ignore-submodules=all`; when the effective config defines a `filter.*.clean` or `filter.*.process` driver, status is skipped and the header stays hidden; a failed config read fails closed. Residual: a future git release adding a new config-driven command to `status` is not covered until listed here. Evidence: `TestGitHeaderIgnoresRepoFsmonitor`, `TestGitHeaderSkipsRepoCleanFilter`, `TestGitHeaderStillWorksOnPlainRepo` |
+| Git status header never executes commands defined by repository-local config | GUARANTEED | `core.fsmonitor=false` is forced via `-c` (highest precedence); status runs with `--no-optional-locks` and `--ignore-submodules=all`; filter detection applies to repository-controlled scopes (local, worktree, their includes, and any unknown scope) via `--show-scope`, trusting system and global scopes as user-installed; when a repository-controlled scope defines a `filter.*.clean` or `filter.*.process` driver, status is skipped and the header stays hidden; a failed config read or malformed output fails closed. Residual: a user-installed system filter (e.g. git-lfs) may still run when the repository's `.gitattributes` references it, executing a program the user installed rather than one the repository defined; a future git release adding a new config-driven command to `status` is not covered until listed here. Evidence: `TestGitHeaderIgnoresRepoFsmonitor`, `TestGitHeaderSkipsRepoCleanFilter`, `TestGitHeaderStillWorksOnPlainRepo`, `TestRepoConfigDefinesCommands` |
 | Opened config must be regular, user-owned on Unix, and have no group/other permission bits | GUARANTEED | `internal/config` ParseFile and secure-open tests |
 | Config v1 and Config v2 default files coexistence on disk is fatal at startup | GUARANTEED | `TestV2CoexistenceOnDiskIsFatal` |
 | Config v2 rejects unknown fields, trailing JSON, and custom `base_url` | GUARANTEED | `TestV2RejectsUnknownFieldsAndTrailingJSON`, `TestV2CredentialFileAndClosedEndpointPolicy` |
@@ -697,11 +697,16 @@ commands to run on stat-dirty files. The header subprocess neutralises
 highest precedence) and adding `--no-optional-locks` and `--ignore-submodules=all`.
 Because clean and process filters cannot be neutralised by name in advance, the
 header reads the effective configuration first via
-`git config --null --list --includes` (which executes nothing) and skips `git
-status` entirely if any `filter.*.clean` or `filter.*.process` driver is defined,
-failing closed if the config read itself fails. Evidence:
+`git config --null --list --includes --show-scope` (which executes nothing).
+Filter detection inspects repository-controlled scopes (local, worktree, included
+files, and unknown scopes), trusting system and global scopes as user-installed.
+If any repository-controlled scope defines a `filter.*.clean` or
+`filter.*.process` driver, `git status` is skipped entirely, failing closed if
+the config read fails or output is malformed. Residual: a user-installed system
+filter (e.g. git-lfs) may still run if referenced by `.gitattributes`, which
+executes user-installed software rather than repository-defined commands. Evidence:
 `TestGitHeaderIgnoresRepoFsmonitor`, `TestGitHeaderSkipsRepoCleanFilter`,
-`TestGitHeaderStillWorksOnPlainRepo`.
+`TestGitHeaderStillWorksOnPlainRepo`, `TestRepoConfigDefinesCommands`.
 
 ### Bash child environment and argument validation
 
