@@ -188,6 +188,7 @@ Edits recorded by the agent keep their recovery snapshots in a per-project `.ag/
 - File reads are bounded; provider-specific limits and `NABD_MAX_READ` determine the cap.
 - Compaction may call the model and falls back to a mechanical summary on failure.
 - `bash` runs after explicit permission, outside path containment. Treat approval as access equivalent to the current OS user.
+- `bash` runs with an isolated, fresh `HOME` directory per invocation, so `GOCACHE` is cold on every call and `git commit` fails without committer identity. Pass identity inline as a workaround: `git -c user.name=... -c user.email=... commit ...`.
 - DNS resolution on Termux reads `$PREFIX/etc/resolv.conf` (which defaults to Google Public DNS `8.8.8.8`/`8.8.4.4` in Termux). This bypasses Android Private DNS and VPN-directed DNS. To use custom nameservers, configure `$PREFIX/etc/resolv.conf`. If `$PREFIX/etc/resolv.conf` is missing or empty, public DNS fallback requires explicit opt-in via `NABD_PUBLIC_DNS=1`.
 - Session journals are redacted by default for recognized credential patterns,
   but journals and the shadow store still contain sensitive working data even
