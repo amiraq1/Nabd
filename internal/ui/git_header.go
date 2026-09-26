@@ -74,10 +74,10 @@ func repoConfigDefinesCommands(out []byte) bool {
 	return false
 }
 
-// gitConfigDefinesCommands reports whether the effective config (system,
-// local, worktree, and included files) defines a clean/process filter
-// driver, which git status would execute on stat-dirty files. Reading
-// config executes nothing.
+// gitConfigDefinesCommands reads all scopes with --show-scope and delegates
+// the trust decision to repoConfigDefinesCommands (system and global scopes
+// are trusted; repository-controlled scopes are not). Reading config executes
+// nothing.
 func gitConfigDefinesCommands(ctx context.Context, dir string, env []string) (bool, error) {
 	cmd := exec.CommandContext(ctx, "git", "config", "--null", "--list", "--includes", "--show-scope")
 	cmd.Env = env
