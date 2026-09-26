@@ -12,6 +12,9 @@ The installable binary is `nabd`; the package path remains `./cmd/ag`.
 
 | Release | Status | Notes |
 |---|---|---|
+| `v2.1.2` | Published with signed `android/arm64` binary and Syft SBOM | Streamed redactor secret boundary hardening, permission modal arm delay |
+| `v2.1.1` | Published with signed `android/arm64` binary and Syft SBOM | Streaming redaction fixes at hold-back boundaries |
+| `v2.1.0` | Published with signed `android/arm64` binary and Syft SBOM | Streamed-chunk redaction, extended credentials, error remedy cards |
 | `v2.0.0` | Published with signed `android/arm64` binary and Syft SBOM | Scoped exclusively to Termux (`android/arm64`) |
 | `v1.6.1` | Published with binaries and `checksums.txt` | Last release supporting Linux & macOS desktop |
 | `v1.5.0` | Published with binaries and `checksums.txt` | |
@@ -27,7 +30,7 @@ Download assets from [GitHub Releases](https://github.com/amiraq1/Nabd/releases)
 Download the release binary and verification materials:
 
 ```sh
-V=2.0.0; B=https://github.com/amiraq1/Nabd/releases/download/v$V
+V=2.1.2; B=https://github.com/amiraq1/Nabd/releases/download/v$V
 curl -LO $B/nabd_${V}_android_arm64 -LO $B/checksums.txt \
      -LO $B/checksums.txt.sig -LO $B/checksums.txt.pem
 ```
@@ -185,6 +188,7 @@ Edits recorded by the agent keep their recovery snapshots in a per-project `.ag/
 - File reads are bounded; provider-specific limits and `NABD_MAX_READ` determine the cap.
 - Compaction may call the model and falls back to a mechanical summary on failure.
 - `bash` runs after explicit permission, outside path containment. Treat approval as access equivalent to the current OS user.
+- `bash` runs with an isolated, fresh `HOME` directory per invocation, so `GOCACHE` is cold on every call and `git commit` fails without committer identity. Pass identity inline as a workaround: `git -c user.name=... -c user.email=... commit ...`.
 - DNS resolution on Termux reads `$PREFIX/etc/resolv.conf` (which defaults to Google Public DNS `8.8.8.8`/`8.8.4.4` in Termux). This bypasses Android Private DNS and VPN-directed DNS. To use custom nameservers, configure `$PREFIX/etc/resolv.conf`. If `$PREFIX/etc/resolv.conf` is missing or empty, public DNS fallback requires explicit opt-in via `NABD_PUBLIC_DNS=1`.
 - Session journals are redacted by default for recognized credential patterns,
   but journals and the shadow store still contain sensitive working data even
