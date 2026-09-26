@@ -135,6 +135,9 @@ func TestChatBashSessionKeyRejected(t *testing.T) {
 	// Sending 'y' must reply AllowOnce
 	mdl, _ = chat.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
 	chat = asChat(t, mdl)
+	if chat.pending != nil {
+		t.Fatal("chat pending must be nil after 'y'")
+	}
 	select {
 	case d := <-ap.reply:
 		if d != agent.AllowOnce {

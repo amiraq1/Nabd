@@ -110,6 +110,9 @@ func TestBashSessionKeyNeitherShownNorAccepted(t *testing.T) {
 		t.Fatal("pressing 'y' on bash modal must produce reply command")
 	}
 	f = updateCmd(f, cmdY)
+	if f.modalVisible {
+		t.Fatal("modal must not be visible after 'y'")
+	}
 	select {
 	case d := <-ap.reply:
 		if d != agent.AllowOnce {
