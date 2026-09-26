@@ -62,15 +62,23 @@ func (l *Loop) emitAt(parent int, e Event) error {
 // Use inside a critical section where an invariant must be validated and the
 // event appended atomically.
 //
-// WARNING: l.Sink.Emit is invoked while l.mu remains held. A Sink that calls
-// back into the same Loop (e.g. calling emit or emitAt) will deadlock
-// (pre-existing hazard noted in NOTES.md P0-1.5).
+// Sink.Emit (and the durable Sync that may follow it) are invoked OUTSIDE
+// l.mu. The previous version held l.mu across the sink call, so any Sink that
+// called back into the same Loop (e.g. emit or emitAt) deadlocked on l.mu —
+// the pre-existing hazard recorded as NOTES.md P0-1.5. Emission is driven by a
+// single goroutine (Run), so no other emitter can interleave between releasing
+// l.mu here and re-acquiring it to commit; Seq stays unique and hist stays
+// ordered. State is committed only AFTER the sink accepts the event, so a sink
+// failure leaves the in-memory history unchanged (fail-closed).
 func (l *Loop) emitLocked(parent int, e Event) error {
+	l.mu.Lock()
 	nextSeq := l.seq + 1
 	e.Seq, e.Parent = nextSeq, parent
 	if e.Time.IsZero() {
 		e.Time = l.clockNowUTC()
 	}
+	l.mu.Unlock()
+
 	if l.Sink != nil {
 		if err := l.Sink.Emit(e); err != nil {
 			return NewPersistError(err, sinkJournalPath(l.Sink))
@@ -83,9 +91,12 @@ func (l *Loop) emitLocked(parent int, e Event) error {
 			}
 		}
 	}
+
+	l.mu.Lock()
 	l.seq = nextSeq
 	l.parent = e.Seq
 	l.hist = append(l.hist, e)
+	l.mu.Unlock()
 	return nil
 }
 
