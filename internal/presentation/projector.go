@@ -265,7 +265,7 @@ func (p *Projector) flushPendingReads() {
 }
 
 func (p *Projector) appendPermAsk(e agent.Event) error {
-	return p.append(FeedItem{Type: ItemPermission, ID: toolID(e), Seq: e.Seq, Perm: &PermCard{Name: toolName(e), Args: callArgs(e.Call), Status: PermAsked}})
+	return p.append(FeedItem{Type: ItemPermission, ID: toolID(e), Seq: e.Seq, Perm: &PermCard{Name: toolName(e), Args: callArgs(e.Call), Reason: PermissionReasonText(e), Status: PermAsked}})
 }
 func (p *Projector) appendPermReply(e agent.Event) error {
 	id := toolID(e)
@@ -278,7 +278,7 @@ func (p *Projector) appendPermReply(e agent.Event) error {
 	}
 	idx, ok := p.byID[FeedItem{Type: ItemPermission, ID: id}.key()]
 	if !ok || idx < 0 || idx >= len(p.items) {
-		card := &PermCard{Name: toolName(e), Status: PermAllow, Decision: e.Decision, Effective: raw}
+		card := &PermCard{Name: toolName(e), Reason: PermissionReasonText(e), Status: PermAllow, Decision: e.Decision, Effective: raw}
 		if raw == agent.Deny {
 			card.Status = PermDeny
 		}
@@ -290,6 +290,9 @@ func (p *Projector) appendPermReply(e agent.Event) error {
 	}
 	t.Perm.Decision = e.Decision
 	t.Perm.Effective = raw
+	if reason := PermissionReasonText(e); reason != "" {
+		t.Perm.Reason = reason
+	}
 	t.Perm.Status = PermAllow
 	if raw == agent.Deny {
 		t.Perm.Status = PermDeny

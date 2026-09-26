@@ -119,6 +119,7 @@ func TestFingerprintPermSensitivity(t *testing.T) {
 	}{
 		{"Name", func(p *PermCard) { p.Name = "read_file" }},
 		{"Args", func(p *PermCard) { p.Args = "/other" }},
+		{"Reason", func(p *PermCard) { p.Reason = "different reason" }},
 		{"Status", func(p *PermCard) { p.Status = PermAllow }},
 		{"Decision", func(p *PermCard) { p.Decision = agent.Deny }},
 		{"Effective", func(p *PermCard) { p.Effective = agent.Deny }},

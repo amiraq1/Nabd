@@ -536,7 +536,7 @@ func (m *Feed) trackState(e agent.Event) {
 		}
 		m.modalVisible = true
 		m.pending = e.Call
-		m.permModal.open(e.Call)
+		m.permModal.open(e.Call, presentation.PermissionReasonText(e))
 		// While the modal is visible the composer must not receive keys.
 		if m.composer.focused() {
 			m.composer.blur()
