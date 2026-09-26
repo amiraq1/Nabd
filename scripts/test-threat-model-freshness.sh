@@ -29,3 +29,23 @@ printf '\nReviewed.\n' >> docs/THREAT_MODEL.md
 git add .
 git commit -qm documentation-change
 bash "$check" "$base"
+
+# Verify internal/ui/git_header.go is covered by the freshness gate
+mkdir -p internal/ui
+printf 'package ui\n' > internal/ui/git_header.go
+git add internal/ui/git_header.go
+git commit -qm base-ui
+base_ui=$(git rev-parse HEAD)
+
+printf '// git header change\n' >> internal/ui/git_header.go
+git add internal/ui/git_header.go
+git commit -qm git-header-change
+if bash "$check" "$base_ui" >/dev/null 2>&1; then
+  echo "expected internal/ui/git_header.go change without THREAT_MODEL.md to fail" >&2
+  exit 1
+fi
+
+printf '\nReviewed git header.\n' >> docs/THREAT_MODEL.md
+git add docs/THREAT_MODEL.md
+git commit -qm doc-change-for-git-header
+bash "$check" "$base_ui"
