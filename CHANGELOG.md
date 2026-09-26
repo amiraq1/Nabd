@@ -6,6 +6,9 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+### Security
+- The git status header subprocess forces `core.fsmonitor=false` via `-c`, runs status with `--no-optional-locks` and `--ignore-submodules=all`, and inspects effective repository configuration before running status, skipping it only when a repository-controlled scope (local, worktree, their includes, unknown) defines `filter.*.clean` or `filter.*.process`; system and global scopes are trusted (git-lfs). This prevents repository-local `.git/config` from executing arbitrary commands when opening an untrusted repository.
+
 ## v2.1.2
 
 ### Security

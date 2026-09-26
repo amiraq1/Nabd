@@ -1,7 +1,9 @@
 package ui
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -34,22 +36,86 @@ func isGitRepo(dir string) bool {
 	return err == nil
 }
 
+// gitHardeningArgs precede the subcommand. Command-line -c has the highest
+// precedence, so these override anything in repository-local .git/config.
+var gitHardeningArgs = []string{
+	"-c", "core.fsmonitor=false",
+	"--no-optional-locks",
+}
+
+var errGitConfigDefinesCommands = errors.New(
+	"git header: repository config defines filter commands; status skipped")
+
+// repoConfigDefinesCommands reports whether a repository-controlled scope
+// defines a clean/process filter driver, which git status would execute on
+// stat-dirty files. System and global scopes belong to the user, not to the
+// repository (git-lfs installs filter.lfs.* system-wide), so they are
+// trusted. Any other scope, including unknown ones, is not.
+func repoConfigDefinesCommands(out []byte) bool {
+	if len(out) == 0 {
+		return false
+	}
+	fields := bytes.Split(bytes.TrimSuffix(out, []byte{0}), []byte{0})
+	if len(fields)%2 != 0 {
+		return true // malformed: fail closed
+	}
+	for i := 0; i < len(fields); i += 2 {
+		switch string(fields[i]) {
+		case "system", "global":
+			continue
+		}
+		key, _, _ := bytes.Cut(fields[i+1], []byte{'\n'})
+		k := strings.ToLower(string(key))
+		if strings.HasPrefix(k, "filter.") &&
+			(strings.HasSuffix(k, ".clean") || strings.HasSuffix(k, ".process")) {
+			return true
+		}
+	}
+	return false
+}
+
+// gitConfigDefinesCommands reads all scopes with --show-scope and delegates
+// the trust decision to repoConfigDefinesCommands (system and global scopes
+// are trusted; repository-controlled scopes are not). Reading config executes
+// nothing.
+func gitConfigDefinesCommands(ctx context.Context, dir string, env []string) (bool, error) {
+	cmd := exec.CommandContext(ctx, "git", "config", "--null", "--list", "--includes", "--show-scope")
+	cmd.Env = env
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	out, err := cmd.Output()
+	if err != nil {
+		return false, err
+	}
+	return repoConfigDefinesCommands(out), nil
+}
+
 // gitStatusCmd shells out off the render path. View must never call git.
 func gitStatusCmd(dir string) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
-		cmd := exec.CommandContext(ctx, "git", "status", "--porcelain=v2", "--branch")
-		// Explicit, filtered env. A nil Env makes the child inherit the full
-		// parent environment; we instead forward only what git needs so the
-		// header hint can never leak session credentials into a child process.
-		cmd.Env = gitChildEnv(os.Environ())
+		env := gitChildEnv(os.Environ())
+
+		defines, err := gitConfigDefinesCommands(ctx, dir, env)
+		if err != nil {
+			return gitStatusMsg{err: err} // fail closed, silent: the header is a hint
+		}
+		if defines {
+			return gitStatusMsg{err: errGitConfigDefinesCommands}
+		}
+
+		args := append(append([]string{}, gitHardeningArgs...),
+			"status", "--porcelain=v2", "--branch", "--ignore-submodules=all")
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Env = env
 		if dir != "" {
 			cmd.Dir = dir
 		}
 		out, err := cmd.Output()
 		if err != nil {
-			return gitStatusMsg{err: err} // silent: the header is a hint
+			return gitStatusMsg{err: err}
 		}
 		return parseGitStatus(string(out))
 	}
