@@ -58,7 +58,7 @@ func runModelsCommand(args []string, out, errOut io.Writer, client *http.Client)
 	}
 	id := strings.ToLower(strings.TrimSpace(fs.Arg(0)))
 
-	reg, err := registry.Load()
+	reg, err := loadRegistry()
 	if err != nil {
 		fmt.Fprintln(errOut, "nabd models:", err)
 		return 1
@@ -100,7 +100,7 @@ func runProviderCommand(args []string, out, errOut io.Writer) int {
 		fmt.Fprintln(errOut, "usage: nabd provider")
 		return 2
 	}
-	reg, err := registry.Load()
+	reg, err := loadRegistry()
 	if err != nil {
 		fmt.Fprintln(errOut, "nabd provider:", err)
 		return 1

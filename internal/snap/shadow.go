@@ -17,6 +17,12 @@ var (
 	ErrShadowCorruption         = errors.New("recovery content is damaged")
 	ErrAtomicPublishUnsupported = errors.New("atomic publish unsupported")
 	ErrShadowInvalidID          = errors.New("invalid shadow identifier")
+	// ErrShadowNotRegular and ErrShadowSymlink are the two refusals of the
+	// capture walk: a path that exists but cannot be shadowed as a regular
+	// file. They are ASCII baselines — these are diagnostics about the file
+	// system, not user-facing prose (ADR-0002, decision 3).
+	ErrShadowNotRegular = errors.New("shadow path is not a regular file")
+	ErrShadowSymlink    = errors.New("shadow path is a symlink")
 )
 
 // State is a file at one instant. Absent is a state, not an error: the
@@ -167,12 +173,12 @@ func (s *Shadow) Capture(abs string) (State, error) {
 		return State{}, err
 	}
 	if fi.IsDir() {
-		return State{}, fmt.Errorf("%s مجلد", st.Rel)
+		return State{}, fmt.Errorf("%s: %w", st.Rel, ErrShadowNotRegular)
 	}
 	// A symlink is never followed here: containment already refused any
 	// link that escapes, and following one would shadow the wrong file.
 	if fi.Mode()&os.ModeSymlink != 0 {
-		return State{}, fmt.Errorf("%s رابط رمزي", st.Rel)
+		return State{}, fmt.Errorf("%s: %w", st.Rel, ErrShadowSymlink)
 	}
 
 	data, err := os.ReadFile(abs)

@@ -1,6 +1,7 @@
 package snap
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -102,8 +103,8 @@ func TestCaptureRefusesDirsAndLinks(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(s.root, "d"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Capture(filepath.Join(s.root, "d")); err == nil {
-		t.Error("a directory must not be captured")
+	if _, err := s.Capture(filepath.Join(s.root, "d")); !errors.Is(err, ErrShadowNotRegular) {
+		t.Errorf("a directory must be refused with ErrShadowNotRegular, got %v", err)
 	}
 	target := filepath.Join(s.root, "real.txt")
 	if err := WriteAtomic(target, []byte("x"), 0o644); err != nil {
@@ -113,8 +114,8 @@ func TestCaptureRefusesDirsAndLinks(t *testing.T) {
 	if err := os.Symlink(target, l); err != nil {
 		t.Skip("no symlinks")
 	}
-	if _, err := s.Capture(l); err == nil {
-		t.Error("a symlink must not be captured")
+	if _, err := s.Capture(l); !errors.Is(err, ErrShadowSymlink) {
+		t.Errorf("a symlink must be refused with ErrShadowSymlink, got %v", err)
 	}
 }
 

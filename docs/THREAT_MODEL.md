@@ -201,6 +201,25 @@ of config loading.
 - Config v2 credential files must contain exactly one non-empty line.
 - Loaded credentials remain in package memory and are never copied into the environment of `bash` children.
 
+### Ownership refusals and shadow refusals: typed errors, language at the boundary
+
+- A config or registry file owned by another uid is refused through a typed error
+  (`config.OwnerMismatchError`, `registry.OwnerMismatchError`) carrying the path,
+  the owning uid, and the current-user description. Those packages hold no
+  user-facing Arabic: they carry ASCII baselines, and the Arabic sentence is
+  rendered once at the CLI boundary in `cmd/ag/errors.go` (ADR-0002, decision 5).
+- The refusal keeps the original error reachable through `Unwrap`, so a caller
+  that inspects the cause with `errors.Is`/`errors.As` still finds it; the
+  refusal decision itself is unchanged.
+- The shadow capture walk refuses a directory with `ErrShadowNotRegular` and a
+  symlink with `ErrShadowSymlink`, both ASCII sentinels. These are filesystem
+  diagnostics rather than user-facing prose (ADR-0002, decision 3); what the walk
+  refuses, and when, is unchanged.
+- Evidence: `TestCheckOwnerPlatform` pins the typed refusal and its facts,
+  `TestCaptureRefusesDirsAndLinks` pins both sentinels, and
+  `TestSourceArabicLiteralRatchet` pins that no non-catalog source file gained
+  Arabic text.
+
 ### Router timing keys
 
 `NABD_ROUTER_PRESTREAM_TIMEOUT` and `NABD_ROUTER_RETRY_AFTER_WAIT` are

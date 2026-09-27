@@ -144,9 +144,12 @@ func TestOriginalErrorPreservedInJournal(t *testing.T) {
 	}
 }
 
-// TestPermAllowReasonNeverReachesUIOrModel asserts that the internal reason
-// "مسموح لهذه الجلسة" in internal/perm/policy.go:171 on Allow is purely internal,
-// never rendered by RenderEvent, and never formatted into provider messages.
+// TestPermAllowReasonNeverReachesUIOrModel asserts that the session-grant reason
+// is purely internal: internal/perm/policy.go returns the ASCII baseline
+// ("allowed for this session") beside agent.PermissionReasonSessionGrant, and the
+// Arabic prose lives only at the display boundary
+// (internal/presentation/permission_reason.go). It must never be rendered by
+// RenderEvent and never be formatted into provider messages.
 func TestPermAllowReasonNeverReachesUIOrModel(t *testing.T) {
 	// 1. PermReply rendering: only renders mark and decision, never the internal why
 	ev := agent.Event{

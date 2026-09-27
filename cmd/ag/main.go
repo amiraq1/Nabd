@@ -139,7 +139,7 @@ func main() {
 		headlessMode = perm.ModeDeny
 	}
 
-	if err := config.Load(); err != nil {
+	if err := loadConfig(); err != nil {
 		die(err)
 	}
 
@@ -646,7 +646,7 @@ func die(err error) {
 // an error naming the file — never a silent fall-through to the
 // credential-detection order below, which now runs only when nothing was named.
 func pickProvider() (provider.Provider, error) {
-	if err := config.Load(); err != nil {
+	if err := loadConfig(); err != nil {
 		return nil, err
 	}
 	if id := strings.ToLower(strings.TrimSpace(config.Get("NABD_PROVIDER"))); id != "" {

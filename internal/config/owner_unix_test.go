@@ -4,6 +4,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"syscall"
@@ -45,8 +46,18 @@ func TestCheckOwnerPlatform(t *testing.T) {
 	if err == nil {
 		t.Fatal("mismatched UID accepted; want refusal")
 	}
-	if !strings.Contains(err.Error(), "يملكه uid") {
-		t.Fatalf("err=%v, want Arabic ownership refusal message", err)
+	// The refusal is a typed error carrying the facts; the sentence is ASCII here
+	// and the Arabic rendering belongs to the CLI boundary (cmd/ag), which is
+	// where it is asserted. See ADR-0002, decision 5.
+	var mismatch *OwnerMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("err=%v (%T), want *OwnerMismatchError", err, err)
+	}
+	if mismatch.Path != "/path/to/config.v2.json" || mismatch.OwnerUID != int(wrongUID) {
+		t.Fatalf("typed refusal lost its facts: %+v", *mismatch)
+	}
+	if !strings.Contains(err.Error(), "owned by uid") {
+		t.Fatalf("err=%q, want the ASCII ownership baseline", err.Error())
 	}
 
 	// Sys() not returning *syscall.Stat_t -> skipped (nil)
