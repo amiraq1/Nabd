@@ -540,10 +540,13 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 	}
 
 	var (
-		text        string
-		calls       []provider.ToolCall
-		stop        string
-		rateLimited bool // set when the provider emits a 429 this turn
+		text             string
+		calls            []provider.ToolCall
+		stop             string
+		finishReason     string
+		promptTokens     int
+		completionTokens int
+		rateLimited      bool // set when the provider emits a 429 this turn
 	)
 	for c := range ch {
 		switch c.Kind {
@@ -558,19 +561,22 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 
 		case provider.ChunkStop:
 			stop = c.Stop
-			promptTokens := c.PromptTokens
-			if promptTokens <= 0 {
+			finishReason = c.FinishReason
+			promptTokens = c.PromptTokens
+			completionTokens = c.CompletionTokens
+			budgetPromptTokens := c.PromptTokens
+			if budgetPromptTokens <= 0 {
 				if l.Budget != nil {
-					promptTokens = l.Budget.Estimate(ms)
+					budgetPromptTokens = l.Budget.Estimate(ms)
 				} else {
-					promptTokens = EstimateMessages(ms)
+					budgetPromptTokens = EstimateMessages(ms)
 				}
 			}
 			unknown := 0
 			if c.PromptTokens <= 0 || c.CompletionTokens <= 0 {
 				unknown = maxOutputTokens()
 			}
-			if err := l.SpendBudget.Charge(promptTokens, c.CompletionTokens, unknown); err != nil {
+			if err := l.SpendBudget.Charge(budgetPromptTokens, c.CompletionTokens, unknown); err != nil {
 				for range ch {
 				}
 				return nil, "", err
@@ -697,6 +703,28 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 	if stop == "max_tokens" && text != "" {
 		if err := l.emit(Event{Type: TextDelta, Text: "\n\n[CUT: reached length limit — say \"continue\" to resume]\n\n"}); err != nil {
 			return nil, "", err
+		}
+	}
+	if len(calls) == 0 && text == "" && !rateLimited {
+		if finishReason == "length" || stop == "max_tokens" {
+			_ = l.emit(Event{
+				Type:           Notice,
+				NoticeCategory: NoticeCategoryLengthLimit,
+				Text:           fmt.Sprintf("reached token limit before generating output; consider increasing NABD_MAX_TOKENS (current limit: %d)", maxOutputTokens()),
+			})
+			stop = ""
+		} else if (finishReason == "stop" || stop == "end_turn") && promptTokens == 0 && completionTokens == 0 {
+			_ = l.emit(Event{
+				Type:           Notice,
+				NoticeCategory: NoticeCategoryDisplay,
+				Text:           "provider returned an empty response (upstream issue)",
+			})
+		} else {
+			_ = l.emit(Event{
+				Type:           Notice,
+				NoticeCategory: NoticeCategoryDisplay,
+				Text:           "provider returned an empty response (upstream issue)",
+			})
 		}
 	}
 	if err := l.emit(Event{Type: TurnEnd}); err != nil {
