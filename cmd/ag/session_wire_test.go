@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"nabd/internal/agent"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
@@ -155,3 +156,70 @@ func TestHeadlessSessionWiresPathRule(t *testing.T) {
 		t.Fatalf("headless session: tool result leaked content: %q", foundResult.Output)
 	}
 }
+
+// TestSessionGateWiresSessionGrantPolicy proves that the real cmd/ag gate
+// implements agent.SessionGrantPolicy on the production session construction path,
+// asserting:
+//   bash PermAsk       -> SessionGrantKnown=true, SessionGrantAllowed=false;
+//   write_file PermAsk -> SessionGrantKnown=true, SessionGrantAllowed=true.
+// Mutation: deleting gate.SessionGrantAllowed in cmd/ag/main.go causes this test
+// to fail because the gate no longer implements agent.SessionGrantPolicy, leaving
+// SessionGrantKnown=false on both PermAsk events.
+func TestSessionGateWiresSessionGrantPolicy(t *testing.T) {
+	proj := t.TempDir()
+	t.Chdir(proj)
+
+	prov := &scriptedProvider{turns: []scriptTurn{
+		{call: &provider.ToolCall{ID: "c1", Name: "bash", Input: []byte(`{"cmd":"echo hi"}`)}},
+		{call: &provider.ToolCall{ID: "c2", Name: "write_file", Input: []byte(`{"path":"a.txt","content":"hello"}`)}},
+		{text: "done"},
+	}}
+
+	sess, err := newInteractiveSession(prov)
+	if err != nil {
+		t.Fatalf("newInteractiveSession failed: %v", err)
+	}
+
+	var permAsks []*agent.ToolCall
+	sess.loop.Human = silentAsker{}
+	sess.loop.Sink = yoloSink(func(e agent.Event) error {
+		if e.Type == agent.PermAsk && e.Call != nil {
+			cp := *e.Call
+			permAsks = append(permAsks, &cp)
+		}
+		return nil
+	})
+
+	if err := sess.loop.Run(context.Background(), "test prompt"); err != nil {
+		t.Fatalf("loop.Run failed: %v", err)
+	}
+
+	if len(permAsks) != 2 {
+		t.Fatalf("expected 2 PermAsk events, got %d", len(permAsks))
+	}
+
+	// 1. bash PermAsk -> SessionGrantKnown=true, SessionGrantAllowed=false
+	bashCall := permAsks[0]
+	if bashCall.Name != "bash" {
+		t.Fatalf("call[0] name = %q, want bash", bashCall.Name)
+	}
+	if !bashCall.SessionGrantKnown {
+		t.Errorf("bash PermAsk: SessionGrantKnown = false, want true")
+	}
+	if bashCall.SessionGrantAllowed {
+		t.Errorf("bash PermAsk: SessionGrantAllowed = true, want false")
+	}
+
+	// 2. write_file PermAsk -> SessionGrantKnown=true, SessionGrantAllowed=true
+	writeCall := permAsks[1]
+	if writeCall.Name != "write_file" {
+		t.Fatalf("call[1] name = %q, want write_file", writeCall.Name)
+	}
+	if !writeCall.SessionGrantKnown {
+		t.Errorf("write_file PermAsk: SessionGrantKnown = false, want true")
+	}
+	if !writeCall.SessionGrantAllowed {
+		t.Errorf("write_file PermAsk: SessionGrantAllowed = false, want true")
+	}
+}
+
