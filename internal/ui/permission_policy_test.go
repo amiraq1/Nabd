@@ -48,3 +48,29 @@ func TestPermissionModalShowsSupportedSessionGrantScope(t *testing.T) {
 		t.Fatalf("view omits supported session scope: %q", view)
 	}
 }
+
+func TestPermissionModalFailsClosedWhenSessionGrantUnknown(t *testing.T) {
+	m := newPermissionModal()
+	call := &agent.ToolCall{
+		ID:                  "c1",
+		Name:                "write_file",
+		SessionGrantKnown:   false,
+		SessionGrantAllowed: false,
+	}
+	if sessionGrantAllowed(call) {
+		t.Fatal("sessionGrantAllowed must return false when SessionGrantKnown is false (fail closed)")
+	}
+	m.open(call)
+	if len(m.choices()) != 2 {
+		t.Fatalf("choices = %+v, want once and deny only", m.choices())
+	}
+	for _, choice := range m.choices() {
+		if choice.Decision == agent.AllowSession {
+			t.Fatal("AllowSession choice was exposed when SessionGrantKnown was false")
+		}
+	}
+	view := m.view(80)
+	if strings.Contains(view, "Allow Session") || strings.Contains(view, "a session") {
+		t.Fatalf("view exposes session grant when unknown: %q", view)
+	}
+}

@@ -44,7 +44,7 @@ func runnerDecision(r *runnerRecorder) (agent.Decision, bool) {
 func openModalWithCall(f *Feed) {
 	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
 		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{
-			ID: "ta1", Name: "bash",
+			ID: "ta1", Name: "write_file",
 			SessionGrantKnown: true, SessionGrantAllowed: true,
 		}},
 	}})
@@ -371,8 +371,8 @@ func TestPermissionModalHintLineDimensions(t *testing.T) {
 				m := newPermissionModal()
 				m.open(&agent.ToolCall{
 					ID:                  "dim1",
-					Name:                "bash",
-					Args:                []byte(`"echo test"`),
+					Name:                "write_file",
+					Args:                []byte(`"main.go"`),
 					SessionGrantKnown:   true,
 					SessionGrantAllowed: true,
 				})

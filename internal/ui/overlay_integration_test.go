@@ -101,7 +101,13 @@ func TestOverlayFullEndToEndIntegration(t *testing.T) {
 	// 7. Permission request arrives: Modal appears
 	initialFollow := f.follow
 	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "call_1", Name: "write_file", Args: json.RawMessage(`"main.go"`)}},
+		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{
+			ID:                  "call_1",
+			Name:                "write_file",
+			Args:                json.RawMessage(`"main.go"`),
+			SessionGrantKnown:   true,
+			SessionGrantAllowed: true,
+		}},
 	}})
 	if !f.modalVisible {
 		t.Fatal("step 7: modal must be visible after PermAsk")

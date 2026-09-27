@@ -22,7 +22,13 @@ func TestModalRenderingAndChoices(t *testing.T) {
 
 	// Open modal for mutating tool (supports session)
 	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "write_file", Args: json.RawMessage(`"test.go"`)}},
+		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{
+			ID:                  "c1",
+			Name:                "write_file",
+			Args:                json.RawMessage(`"test.go"`),
+			SessionGrantKnown:   true,
+			SessionGrantAllowed: true,
+		}},
 	}})
 
 	if !f.modalVisible {
@@ -43,7 +49,7 @@ func TestModalRenderingAndChoices(t *testing.T) {
 		t.Errorf("view missing choices for write_file:\n%s", view)
 	}
 
-	// For bash (executing tool), all choices including Allow Session are rendered
+	// For bash (executing tool), session choice must neither be rendered nor offered
 	f2, _ := feedWithRunner(t)
 	f2.width = 80
 	f2.height = 24
@@ -51,17 +57,17 @@ func TestModalRenderingAndChoices(t *testing.T) {
 		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c2", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
 	}})
 	view2 := f2.View()
-	if !strings.Contains(view2, "Allow Session") {
-		t.Errorf("bash modal must include Allow Session choice, got:\n%s", view2)
+	if strings.Contains(view2, "Allow Session") || strings.Contains(view2, "a session") {
+		t.Errorf("bash modal must not include Allow Session choice, got:\n%s", view2)
 	}
 }
 
-// TestBashAllowSessionCoreOwnedRawDecision proves that:
+// TestBashSessionKeyNeitherShownNorAccepted proves that:
 // 1. Modal opens for a bash request.
-// 2. Pressing 'a' sends agent.AllowSession to the approver (UI does NOT compute RawDecision).
-// 3. Core policy calculates RawDecision = AllowOnce.
-// 4. Emitted event records Decision=AllowSession and RawDecision=AllowOnce.
-func TestBashAllowSessionCoreOwnedRawDecision(t *testing.T) {
+// 2. Visible options do NOT include Allow Session or 'a session' key hint.
+// 3. Pressing 'a' or 'A' produces no decision command (approver channel remains empty).
+// 4. Pressing 'y' allows once.
+func TestBashSessionKeyNeitherShownNorAccepted(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	ap := NewApprover()
 	f.SetApprover(ap)
@@ -74,39 +80,77 @@ func TestBashAllowSessionCoreOwnedRawDecision(t *testing.T) {
 		t.Fatal("modal must be visible for bash tool call")
 	}
 
-	// 2. Press 'a'
-	f.permModal.armedAt = time.Time{} // armed
-	_, cmd := f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	if cmd == nil {
-		t.Fatal("pressing 'a' must produce reply command")
+	// 2. Visible choices must not include Allow Session
+	view := f.View()
+	if strings.Contains(view, "Allow Session") || strings.Contains(view, "a session") {
+		t.Fatalf("bash modal must not include session choice in view:\n%s", view)
 	}
 
-	// 3. Approver receives agent.AllowSession exactly once
-	f = updateCmd(f, cmd)
+	// 3. Pressing 'a' must NOT produce reply command
+	f.permModal.armedAt = time.Time{} // armed
+	_, cmdA := f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if cmdA != nil {
+		t.Fatal("pressing 'a' on bash modal must not produce reply command")
+	}
 	select {
 	case d := <-ap.reply:
-		if d != agent.AllowSession {
-			t.Fatalf("approver received %v, want agent.AllowSession (UI must not downgrade)", d)
-		}
+		t.Fatalf("approver received unexpected decision %v after pressing 'a'", d)
 	default:
-		t.Fatal("approver reply channel is empty")
 	}
 
-	// 4 & 5. Core Gate computes RawDecision = AllowOnce for bash,
-	// and emits PermReply event with Decision=AllowSession and RawDecision=AllowOnce.
+	// Uppercase 'A' must also be rejected
+	_, cmdUpperA := f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("A")})
+	if cmdUpperA != nil {
+		t.Fatal("pressing 'A' on bash modal must not produce reply command")
+	}
+	select {
+	case d := <-ap.reply:
+		t.Fatalf("approver received unexpected decision %v after pressing 'A'", d)
+	default:
+	}
+
+	// 4. Pressing 'y' allows once (after re-arming)
+	f.permModal.armedAt = time.Time{}
+	_, cmdY := f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if cmdY == nil {
+		t.Fatal("pressing 'y' on bash modal must produce reply command")
+	}
+	f = updateCmd(f, cmdY)
+	if f.modalVisible {
+		t.Fatal("modal must not be visible after 'y'")
+	}
+	select {
+	case d := <-ap.reply:
+		if d != agent.AllowOnce {
+			t.Fatalf("approver received %v, want AllowOnce", d)
+		}
+	default:
+		t.Fatal("approver reply channel is empty after 'y'")
+	}
+}
+
+// TestFeedPermReplyDowngradeFormatting verifies that when a PermReply event
+// contains a downgraded permission (decision: once, raw_decision: session),
+// presentation renders "requested session, applied once" and NOT "requested once, applied session".
+func TestFeedPermReplyDowngradeFormatting(t *testing.T) {
+	f, _ := feedWithRunner(t)
+	f.width = 80
+	f.height = 24
 	permEv := agent.Event{
 		Seq:         2,
 		Type:        agent.PermReply,
 		Call:        &agent.ToolCall{ID: "c_bash", Name: "bash"},
-		Decision:    agent.AllowSession,
-		RawDecision: agent.AllowOnce,
+		Decision:    agent.AllowOnce,
+		RawDecision: agent.AllowSession,
 	}
 	f.Update(agentEventBatchMsg{Events: []agent.Event{permEv}})
 
-	// 6. Presentation renders both requested and applied decisions
 	view := f.View()
 	if !strings.Contains(view, "requested session, applied once") {
-		t.Fatalf("expected feed view to show requested session and applied once, got:\n%s", view)
+		t.Fatalf("expected feed view to show 'requested session, applied once', got:\n%s", view)
+	}
+	if strings.Contains(view, "requested once, applied session") {
+		t.Fatalf("feed view shows inverted 'requested once, applied session':\n%s", view)
 	}
 }
 
