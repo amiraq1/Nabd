@@ -22,7 +22,13 @@ func TestModalRenderingAndChoices(t *testing.T) {
 
 	// Open modal for mutating tool (supports session)
 	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "write_file", Args: json.RawMessage(`"test.go"`)}},
+		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{
+			ID:                  "c1",
+			Name:                "write_file",
+			Args:                json.RawMessage(`"test.go"`),
+			SessionGrantKnown:   true,
+			SessionGrantAllowed: true,
+		}},
 	}})
 
 	if !f.modalVisible {

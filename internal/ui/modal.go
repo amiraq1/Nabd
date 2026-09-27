@@ -123,10 +123,10 @@ func sessionGrantAllowed(call *agent.ToolCall) bool {
 	if call == nil || call.Name == "bash" {
 		return false
 	}
-	if call.SessionGrantKnown {
-		return call.SessionGrantAllowed
+	if !call.SessionGrantKnown {
+		return false
 	}
-	return true
+	return call.SessionGrantAllowed
 }
 
 func (m *PermissionModal) choices() []PermissionChoice {
