@@ -4,6 +4,13 @@ Release notes are generated from conventional commit history by GoReleaser.
 Published changes and downloadable artifacts are available on the
 [GitHub Releases](https://github.com/amiraq1/Nabd/releases) page.
 
+## Unreleased
+
+### Fixed
+- `/models` catalog output in the Feed UI is formatted into a multi-column grid, preventing long catalogs from overflowing the viewport and scrolling earlier model names off-screen.
+- Silent empty turns (turns ending with 0 completion tokens or cut by length limit with no text or tool calls) emit an explanatory notice naming `NABD_MAX_TOKENS` and the value used, and headless mode (`-p`) exits non-zero rather than silently succeeding.
+- Tool cards waiting for human confirmation transition to `ToolPending` ("awaiting approval") upon `PermAsk`, moving to `ToolRunning` only after an allowing decision, and to `ToolDenied` on deny, accurately reflecting execution state in both live and replayed sessions.
+
 ## v2.1.3
 
 ### Security

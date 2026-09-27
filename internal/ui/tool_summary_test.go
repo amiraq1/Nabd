@@ -35,7 +35,13 @@ func TestToolFailureIsUnderstandableWithoutColor(t *testing.T) {
 	for _, tc := range []struct {
 		status presentation.ToolStatus
 		want   string
-	}{{presentation.ToolFailed, "failed"}, {presentation.ToolDenied, "denied"}, {presentation.ToolCancelled, "cancelled"}, {presentation.ToolRunning, "running"}} {
+	}{
+		{presentation.ToolPending, "awaiting approval"},
+		{presentation.ToolFailed, "failed"},
+		{presentation.ToolDenied, "denied"},
+		{presentation.ToolCancelled, "cancelled"},
+		{presentation.ToolRunning, "running"},
+	} {
 		card := &presentation.ToolCard{Name: "bash", Status: tc.status}
 		plain := ansi.Strip(renderToolSummary(card, 40))
 		if !strings.Contains(plain, tc.want) {
