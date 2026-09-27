@@ -12,6 +12,7 @@ The installable binary is `nabd`; the package path remains `./cmd/ag`.
 
 | Release | Status | Notes |
 |---|---|---|
+| `v2.1.3` | Published with signed `android/arm64` binary and Syft SBOM | Git status header local config isolation (#231), bash session grant rejection and fail-closed permission policy (#238) |
 | `v2.1.2` | Published with signed `android/arm64` binary and Syft SBOM | Streamed redactor secret boundary hardening, permission modal arm delay |
 | `v2.1.1` | Published with signed `android/arm64` binary and Syft SBOM | Streaming redaction fixes at hold-back boundaries |
 | `v2.1.0` | Published with signed `android/arm64` binary and Syft SBOM | Streamed-chunk redaction, extended credentials, error remedy cards |
@@ -30,7 +31,7 @@ Download assets from [GitHub Releases](https://github.com/amiraq1/Nabd/releases)
 Download the release binary and verification materials:
 
 ```sh
-V=2.1.2; B=https://github.com/amiraq1/Nabd/releases/download/v$V
+V=2.1.3; B=https://github.com/amiraq1/Nabd/releases/download/v$V
 curl -LO $B/nabd_${V}_android_arm64 -LO $B/checksums.txt \
      -LO $B/checksums.txt.sig -LO $B/checksums.txt.pem
 ```
