@@ -479,7 +479,7 @@ func TestStreamOverCapTokenRunsAndPEMEverySplit(t *testing.T) {
 
 			n := len(tc.input)
 			// Test single split points: dense around boundaries and key transitions,
-			// stepped across uniform over-cap runs to keep test execution under 1s.
+			// stepped across uniform over-cap runs to keep test execution bounded.
 			splits := make(map[int]bool)
 			for i := 0; i <= n; i++ {
 				if i < 128 || i > n-128 || (i >= StreamHoldCap-64 && i <= StreamHoldCap+64) || i%32 == 0 {
@@ -515,15 +515,15 @@ func TestStreamOverCapTokenRunsAndPEMEverySplit(t *testing.T) {
 	}
 }
 
-// TestStreamPEMLeakViaSwallowInteraction_S1 reproduces the vulnerability where
-// openPEMStart is checked before s.swallow in Write:
+// TestStreamPEMLeakViaSwallowInteraction_S1 is a regression test for the bug where
+// openPEMStart was previously checked before s.swallow in Write:
 // 1. Chunk 1 has a token run exceeding StreamHoldCap (emits Token, sets swallow=true).
-// 2. Chunk 2 starts with an open PEM block (no END). Because openPEMStart is checked
-//    before swallow, redact(pending[:b]) emits the swallowed token tail raw,
-//    while swallow remains true.
-// 3. Chunk 3 provides the PEM END line. openPEMStart returns -1, so swallow runs on
-//    the pending PEM block, stripping "-----BEGIN" (10 token bytes) up to the space.
-//    Missing "-----BEGIN", the private key body matches no secret pattern and leaks raw.
+// 2. Chunk 2 starts with an open PEM block (no END). If openPEMStart was checked
+//    before swallow, redact(pending[:b]) would emit the swallowed token tail raw,
+//    while swallow remained true.
+// 3. Chunk 3 provides the PEM END line. openPEMStart returns -1, so swallow would run
+//    on the pending PEM block, stripping "-----BEGIN" (10 token bytes) up to the space.
+//    Missing "-----BEGIN", the private key body matched no secret pattern and leaked raw.
 func TestStreamPEMLeakViaSwallowInteraction_S1(t *testing.T) {
 	s := NewStream(nil)
 	var out strings.Builder
@@ -633,7 +633,10 @@ func TestStreamPEMHoldCapIncompleteMarkerBounded(t *testing.T) {
 	out.WriteString(s.Flush())
 
 	got := out.String()
-	if strings.Contains(got, strings.Repeat("UNTERMINATED", 5)) {
+	if strings.Contains(got, "UNTERMINATED") {
+		t.Fatalf("raw bytes leaked from over-cap incomplete marker: %q", got)
+	}
+	if strings.Contains(got, "MARKER KEY WORDS") {
 		t.Fatalf("raw bytes leaked from over-cap incomplete marker: %q", got)
 	}
 	if !strings.Contains(got, Token) {
