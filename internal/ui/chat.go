@@ -151,6 +151,9 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.Approve.Reply(agent.AllowOnce)
 			return m, nil
 		case "a", "A":
+			if !sessionGrantAllowed(m.pending) {
+				return m, nil
+			}
 			m.pending = nil
 			m.Approve.Reply(agent.AllowSession)
 			return m, nil
@@ -311,7 +314,7 @@ func (m *Chat) View() string {
 	}
 	if m.pending != nil {
 		keys := "y allow once · a allow session · n deny"
-		if m.pending.Name == "bash" {
+		if !sessionGrantAllowed(m.pending) {
 			keys = "y allow once · n deny · (no session allow for commands)"
 		}
 		return line + "\n" + warn.Render(keys)

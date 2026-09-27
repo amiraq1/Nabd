@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"nabd/internal/agent"
@@ -86,5 +87,63 @@ func TestBufFlushOnTurnEnd(t *testing.T) {
 	m = asChat(t, mdl)
 	if m.buf != "" {
 		t.Fatalf("after turn end: buf=%q, want empty", m.buf)
+	}
+}
+
+// TestChatBashSessionKeyRejected asserts that Chat neither displays the session
+// grant hint for bash nor accepts 'a' or 'A' to reply with AllowSession.
+func TestChatBashSessionKeyRejected(t *testing.T) {
+	ch := make(chan agent.Event, 8)
+	chat := asChat(t, NewChat(runnerStub{}, ch))
+	ap := NewApprover()
+	chat.Approve = ap
+
+	// Ask permission for bash
+	mdl, _ := chat.Update(evMsg(agent.Event{
+		Type: agent.PermAsk,
+		Call: &agent.ToolCall{ID: "c_bash", Name: "bash"},
+	}))
+	chat = asChat(t, mdl)
+
+	// View must not show "a allow session"
+	view := chat.View()
+	if strings.Contains(view, "a allow session") {
+		t.Fatalf("chat view exposes session grant for bash:\n%s", view)
+	}
+	if !strings.Contains(view, "(no session allow for commands)") {
+		t.Fatalf("chat view missing no session allow notice for bash:\n%s", view)
+	}
+
+	// Sending 'a' must NOT reply with session
+	mdl, _ = chat.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	chat = asChat(t, mdl)
+	select {
+	case d := <-ap.reply:
+		t.Fatalf("chat approved session unexpectedly on 'a': %v", d)
+	default:
+	}
+
+	// Sending 'A' must NOT reply with session
+	mdl, _ = chat.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("A")})
+	chat = asChat(t, mdl)
+	select {
+	case d := <-ap.reply:
+		t.Fatalf("chat approved session unexpectedly on 'A': %v", d)
+	default:
+	}
+
+	// Sending 'y' must reply AllowOnce
+	mdl, _ = chat.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	chat = asChat(t, mdl)
+	if chat.pending != nil {
+		t.Fatal("chat pending must be nil after 'y'")
+	}
+	select {
+	case d := <-ap.reply:
+		if d != agent.AllowOnce {
+			t.Fatalf("chat approver received %v, want AllowOnce", d)
+		}
+	default:
+		t.Fatal("chat approver received no reply after 'y'")
 	}
 }

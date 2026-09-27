@@ -256,6 +256,39 @@ func TestBuildPermissionDeny(t *testing.T) {
 	}
 }
 
+// TestBuildPermissionDowngradeMapping verifies that a PermReply with
+// raw_decision "session" and decision "once" maps to
+// PermCard.Decision = AllowSession (requested) and PermCard.Effective = AllowOnce (applied).
+func TestBuildPermissionDowngradeMapping(t *testing.T) {
+	evs := []agent.Event{
+		{Seq: 1, Type: agent.RunStart},
+		{Seq: 2, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
+		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowSession},
+		{Seq: 4, Type: agent.TurnEnd},
+	}
+	p := presentation.NewProjector()
+	items, err := p.Build(evs)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	var perm *presentation.FeedItem
+	for i := range items {
+		if items[i].Type == presentation.ItemPermission {
+			perm = &items[i]
+			break
+		}
+	}
+	if perm == nil {
+		t.Fatal("no permission item found")
+	}
+	if perm.Perm.Decision != agent.AllowSession {
+		t.Errorf("perm Decision (requested) = %v, want AllowSession", perm.Perm.Decision)
+	}
+	if perm.Perm.Effective != agent.AllowOnce {
+		t.Errorf("perm Effective (applied) = %v, want AllowOnce", perm.Perm.Effective)
+	}
+}
+
 // TestBuildNoticeAndError verifies notice and error items.
 func TestBuildNoticeAndError(t *testing.T) {
 	evs := []agent.Event{

@@ -158,14 +158,14 @@ func TestFeedPermissionDeny(t *testing.T) {
 	}
 }
 
-// TestFeedRawDecisionDiffers verifies AllowSession → AllowOnce is shown.
+// TestFeedRawDecisionDiffers verifies AllowSession (raw) → AllowOnce (effective) is mapped and shown.
 func TestFeedRawDecisionDiffers(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
 	f.height = 10
 	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
 		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
-		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowSession, RawDecision: agent.AllowOnce},
+		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowSession},
 	}})
 	items := f.proj.Items()
 	var perm *presentation.FeedItem
@@ -181,6 +181,13 @@ func TestFeedRawDecisionDiffers(t *testing.T) {
 	if perm.Perm.Decision != agent.AllowSession || perm.Perm.Effective != agent.AllowOnce {
 		t.Errorf("perm decision/effective = %v/%v, want AllowSession/AllowOnce",
 			perm.Perm.Decision, perm.Perm.Effective)
+	}
+	view := f.View()
+	if !strings.Contains(view, "requested session, applied once") {
+		t.Fatalf("feed view missing 'requested session, applied once':\n%s", view)
+	}
+	if strings.Contains(view, "requested once, applied session") {
+		t.Fatalf("feed view has inverted 'requested once, applied session':\n%s", view)
 	}
 }
 

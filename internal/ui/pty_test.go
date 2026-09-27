@@ -251,9 +251,10 @@ func TestPTYPermissionDenyDoesNotExecuteTool(t *testing.T) {
 	assertScreenBounds(t, sess.Snapshot())
 }
 
-// 7. TestPTYBashAllowSessionIsCoreDowngraded: verifies that when user presses 'a' for bash,
-// UI forwards raw AllowSession to approver, and presentation renders the core downgrade indicator.
-func TestPTYBashAllowSessionIsCoreDowngraded(t *testing.T) {
+// 7. TestPTYBashSessionKeyIgnoredAndDowngradeRendered: verifies that pressing 'a' for bash
+// is ignored by the UI (not forwarded to approver), and presentation correctly renders the
+// downgrade indicator "requested session, applied once" from a PermReply with raw_decision=session, decision=once.
+func TestPTYBashSessionKeyIgnoredAndDowngradeRendered(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
 
 	sess.InjectBatch([]agent.Event{
@@ -269,25 +270,36 @@ func TestPTYBashAllowSessionIsCoreDowngraded(t *testing.T) {
 		t.Fatalf("modal did not appear: %v", err)
 	}
 
+	// Pressing 'a' on a bash modal must NOT produce a decision.
 	sess.SendKey([]byte("a"))
+	err = sess.Approver.WaitCount(1, 200*time.Millisecond)
+	if err == nil {
+		d, _ := sess.Approver.LastDecision()
+		t.Fatalf("approver unexpectedly received decision %v after pressing 'a' for bash", d)
+	}
 
+	// Wait for the arm delay caused by the rejected key to elapse.
+	time.Sleep(ModalArmDelay + 50*time.Millisecond)
+
+	// Pressing 'y' allows once.
+	sess.SendKey([]byte("y"))
 	err = sess.Approver.WaitCount(1, 2*time.Second)
 	if err != nil {
-		t.Fatalf("approver did not receive decision: %v", err)
+		t.Fatalf("approver did not receive decision after 'y': %v\nScreen:\n%s", err, sess.Snapshot().PlainText())
 	}
 	d, _ := sess.Approver.LastDecision()
-	if d != agent.AllowSession {
-		t.Fatalf("approver received %v, want AllowSession (UI must not downgrade)", d)
+	if d != agent.AllowOnce {
+		t.Fatalf("approver received %v, want AllowOnce", d)
 	}
 
-	// Core policy calculation: AllowSession for bash -> AllowOnce
+	// Presenting a downgraded decision: raw_decision=session, decision=once
 	sess.InjectBatch([]agent.Event{
 		{
 			Seq:         2,
 			Type:        agent.PermReply,
 			Call:        &agent.ToolCall{ID: "c_bash", Name: "bash"},
-			Decision:    agent.AllowSession,
-			RawDecision: agent.AllowOnce,
+			Decision:    agent.AllowOnce,
+			RawDecision: agent.AllowSession,
 		},
 	})
 

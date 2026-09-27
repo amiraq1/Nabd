@@ -273,13 +273,20 @@ func (p *Projector) appendPermReply(e agent.Event) error {
 	if raw == agent.Deny && e.Decision != agent.Deny {
 		raw = e.Decision
 	}
-	if e.Call != nil && raw == agent.Deny {
+	effective := e.Decision
+	if e.Call != nil && (raw == agent.Deny || effective == agent.Deny) {
 		p.deniedCalls[e.Call.ID] = true
 	}
 	idx, ok := p.byID[FeedItem{Type: ItemPermission, ID: id}.key()]
 	if !ok || idx < 0 || idx >= len(p.items) {
-		card := &PermCard{Name: toolName(e), Reason: PermissionReasonText(e), Status: PermAllow, Decision: e.Decision, Effective: raw}
-		if raw == agent.Deny {
+		card := &PermCard{
+			Name:      toolName(e),
+			Reason:    PermissionReasonText(e),
+			Status:    PermAllow,
+			Decision:  raw,
+			Effective: effective,
+		}
+		if raw == agent.Deny || effective == agent.Deny {
 			card.Status = PermDeny
 		}
 		return p.append(FeedItem{Type: ItemPermission, ID: id, Seq: e.Seq, Perm: card})
@@ -288,13 +295,13 @@ func (p *Projector) appendPermReply(e agent.Event) error {
 	if t.Perm == nil {
 		t.Perm = &PermCard{Name: toolName(e), Args: callArgs(e.Call)}
 	}
-	t.Perm.Decision = e.Decision
-	t.Perm.Effective = raw
+	t.Perm.Decision = raw
+	t.Perm.Effective = effective
 	if reason := PermissionReasonText(e); reason != "" {
 		t.Perm.Reason = reason
 	}
 	t.Perm.Status = PermAllow
-	if raw == agent.Deny {
+	if raw == agent.Deny || effective == agent.Deny {
 		t.Perm.Status = PermDeny
 	}
 	return nil

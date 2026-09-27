@@ -336,6 +336,13 @@ func (m *Feed) footerText(width int) string {
 		if m.decisionPending {
 			sub := "submitting decision…"
 			candidates = []string{sub}
+		} else if !sessionGrantAllowed(m.permModal.call) {
+			candidates = []string{
+				"y once · n deny · Enter confirm · Up/Down select",
+				"y once · n deny · Enter confirm",
+				"y once · n deny",
+				"y/n",
+			}
 		} else {
 			candidates = []string{
 				"y once · a session · n deny · Enter confirm · Up/Down select",
