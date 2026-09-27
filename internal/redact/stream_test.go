@@ -517,13 +517,13 @@ func TestStreamOverCapTokenRunsAndPEMEverySplit(t *testing.T) {
 
 // TestStreamPEMLeakViaSwallowInteraction_S1 is a regression test for the bug where
 // openPEMStart was previously checked before s.swallow in Write:
-// 1. Chunk 1 has a token run exceeding StreamHoldCap (emits Token, sets swallow=true).
-// 2. Chunk 2 starts with an open PEM block (no END). If openPEMStart was checked
-//    before swallow, redact(pending[:b]) would emit the swallowed token tail raw,
-//    while swallow remained true.
-// 3. Chunk 3 provides the PEM END line. openPEMStart returns -1, so swallow would run
-//    on the pending PEM block, stripping "-----BEGIN" (10 token bytes) up to the space.
-//    Missing "-----BEGIN", the private key body matched no secret pattern and leaked raw.
+//  1. Chunk 1 has a token run exceeding StreamHoldCap (emits Token, sets swallow=true).
+//  2. Chunk 2 starts with an open PEM block (no END). If openPEMStart was checked
+//     before swallow, redact(pending[:b]) would emit the swallowed token tail raw,
+//     while swallow remained true.
+//  3. Chunk 3 provides the PEM END line. openPEMStart returns -1, so swallow would run
+//     on the pending PEM block, stripping "-----BEGIN" (10 token bytes) up to the space.
+//     Missing "-----BEGIN", the private key body matched no secret pattern and leaked raw.
 func TestStreamPEMLeakViaSwallowInteraction_S1(t *testing.T) {
 	s := NewStream(nil)
 	var out strings.Builder
