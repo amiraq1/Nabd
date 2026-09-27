@@ -14,6 +14,7 @@ import (
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // This file owns the Feed model itself: its state, its wiring, and the
@@ -374,14 +375,15 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addErrorNotice(card, msg.err.Error())
 			return m, nil
 		}
-		var b strings.Builder
-		for _, mod := range msg.models {
-			b.WriteString(mod + "\n")
-		}
+		text := formatModelGrid(msg.models, m.width)
 		if msg.disclaimer != "" {
-			b.WriteString(msg.disclaimer)
+			if text != "" {
+				text += "\n" + msg.disclaimer
+			} else {
+				text = msg.disclaimer
+			}
 		}
-		m.addNotice(presentation.ItemNotice, strings.TrimRight(b.String(), "\n"))
+		m.addNotice(presentation.ItemNotice, text)
 		return m, nil
 	case clipboardResultMsg:
 		if msg.err != nil {
@@ -699,4 +701,53 @@ type agentEventBatchMsg struct {
 // Update handler that forwards it to the approver.
 type permReplyMsg struct {
 	Decision agent.Decision
+}
+
+// formatModelGrid formats a slice of model names into a columnar grid that fits
+// within the specified width, ensuring that catalogs fit within terminal viewports
+// without scrolling the earlier entries off-screen.
+func formatModelGrid(models []string, width int) string {
+	if len(models) == 0 {
+		return ""
+	}
+	avail := width - 4
+	if avail < 20 {
+		avail = 20
+	}
+	maxLen := 0
+	for _, m := range models {
+		if l := ansi.StringWidth(m); l > maxLen {
+			maxLen = l
+		}
+	}
+	if maxLen == 0 {
+		return ""
+	}
+	colWidth := maxLen + 2 // 2 spaces between columns
+	cols := avail / colWidth
+	if cols < 1 {
+		cols = 1
+	}
+	if cols > len(models) {
+		cols = len(models)
+	}
+	rows := (len(models) + cols - 1) / cols
+	var b strings.Builder
+	for r := 0; r < rows; r++ {
+		for c := 0; c < cols; c++ {
+			idx := c*rows + r
+			if idx >= len(models) {
+				continue
+			}
+			if c == cols-1 || (c+1)*rows+r >= len(models) {
+				b.WriteString(models[idx])
+			} else {
+				fmt.Fprintf(&b, "%-*s", colWidth, models[idx])
+			}
+		}
+		if r < rows-1 {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
 }
