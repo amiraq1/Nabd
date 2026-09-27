@@ -74,4 +74,3 @@ func TestPermissionModalFailsClosedWhenSessionGrantUnknown(t *testing.T) {
 		t.Fatalf("view exposes session grant when unknown: %q", view)
 	}
 }
-

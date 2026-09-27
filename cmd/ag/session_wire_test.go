@@ -160,8 +160,10 @@ func TestHeadlessSessionWiresPathRule(t *testing.T) {
 // TestSessionGateWiresSessionGrantPolicy proves that the real cmd/ag gate
 // implements agent.SessionGrantPolicy on the production session construction path,
 // asserting:
-//   bash PermAsk       -> SessionGrantKnown=true, SessionGrantAllowed=false;
-//   write_file PermAsk -> SessionGrantKnown=true, SessionGrantAllowed=true.
+//
+//	bash PermAsk       -> SessionGrantKnown=true, SessionGrantAllowed=false;
+//	write_file PermAsk -> SessionGrantKnown=true, SessionGrantAllowed=true.
+//
 // Mutation: deleting gate.SessionGrantAllowed in cmd/ag/main.go causes this test
 // to fail because the gate no longer implements agent.SessionGrantPolicy, leaving
 // SessionGrantKnown=false on both PermAsk events.
@@ -222,4 +224,3 @@ func TestSessionGateWiresSessionGrantPolicy(t *testing.T) {
 		t.Errorf("write_file PermAsk: SessionGrantAllowed = false, want true")
 	}
 }
-
