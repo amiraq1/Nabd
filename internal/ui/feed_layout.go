@@ -248,10 +248,10 @@ func (m *Feed) syncFingerprints(items []presentation.FeedItem) (changed bool) {
 		}
 		key := it.Key()
 		active[key] = true
-		fp, ok := m.fpCache[key]
+		oldFP, ok := m.fpCache[key]
 		if !ok || touched[key] {
-			fp = it.Fingerprint()
-			if !ok || fp != m.fpCache[key] {
+			fp := it.Fingerprint()
+			if !ok || fp != oldFP {
 				changed = true
 			}
 			m.fpCache[key] = fp
