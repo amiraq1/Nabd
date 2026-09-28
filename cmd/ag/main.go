@@ -178,7 +178,10 @@ func main() {
 }
 
 func doReplay(path string, speed float64) error {
-	events, err := store.Read(path)
+	// Resolve the live branch streaming: a huge compacted journal replays
+	// without loading its pre-compaction history into memory. NewReplay
+	// still applies event.Live, which is idempotent on a live branch.
+	events, _, _, err := store.ReadLiveBranch(path, false)
 	if err != nil {
 		return err
 	}
@@ -231,7 +234,7 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 	if cont {
 		// Stream only the live branch: a huge journal no longer loads
 		// wholesale into memory on resume.
-		liveEvs, totalEvs, _, err := store.ReadLiveBranch(journalPath, false)
+		liveEvs, _, totalEvs, err := store.ReadLiveBranch(journalPath, false)
 		if err != nil {
 			journal.Close()
 			return err
@@ -333,7 +336,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 	if cont {
 		// Stream only the live branch: a huge journal no longer loads
 		// wholesale into memory on resume.
-		liveEvs, totalEvs, _, err := store.ReadLiveBranch(journalPath, false)
+		liveEvs, _, totalEvs, err := store.ReadLiveBranch(journalPath, false)
 		if err != nil {
 			journal.Close()
 			return err

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -448,6 +449,78 @@ func TestReadLiveBranchNoCompactFallsBack(t *testing.T) {
 	}
 	if total != 2 || len(live) != 2 {
 		t.Fatalf("total=%d live=%d, want 2/2", total, len(live))
+	}
+}
+
+func TestReadLiveBranchRewindWithoutCompact(t *testing.T) {
+	// A rewind-only journal has no Compact event. The abandoned branch must
+	// not come back on resume, and raw lines must align with the live
+	// branch for rotation.
+	evs := []event.Event{
+		{Seq: 1, Parent: 0, Type: event.UserMsg, Text: "q1"},
+		{Seq: 2, Parent: 1, Type: event.TextDelta, Text: "a1"},
+		{Seq: 3, Parent: 2, Type: event.UserMsg, Text: "q2"},
+		{Seq: 4, Parent: 3, Type: event.TextDelta, Text: "a2"},
+		{Seq: 5, Parent: 2, Type: event.Rewind, Text: "rewound"},
+		{Seq: 6, Parent: 5, Type: event.UserMsg, Text: "q2 retry"},
+	}
+	lines := make([]string, 0, len(evs))
+	for _, e := range evs {
+		lines = append(lines, marshalLine(t, e))
+	}
+	path := writeTestJournal(t, lines)
+
+	live, raw, total, err := ReadLiveBranch(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != len(evs) {
+		t.Fatalf("total=%d, want %d", total, len(evs))
+	}
+	wantSeq := []int{1, 2, 5, 6}
+	if len(live) != len(wantSeq) {
+		t.Fatalf("live=%d, want %d (seqs 3-4 abandoned by rewind)", len(live), len(wantSeq))
+	}
+	for i, want := range wantSeq {
+		if live[i].Seq != want {
+			t.Fatalf("live[%d].Seq=%d, want %d", i, live[i].Seq, want)
+		}
+	}
+	if len(raw) != len(live) {
+		t.Fatalf("raw/live line mismatch: %d vs %d", len(raw), len(live))
+	}
+	for i, e := range live {
+		var decoded event.Event
+		if err := json.Unmarshal(bytes.TrimSuffix(raw[i], []byte("\n")), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Seq != e.Seq {
+			t.Fatalf("raw[%d].Seq=%d, want live seq %d", i, decoded.Seq, e.Seq)
+		}
+	}
+}
+
+func TestReadLiveBranchLegacyNoParentLinks(t *testing.T) {
+	// Journals predating Parent links have Parent==0 everywhere. Live()
+	// cannot see a branch there; the fallback must keep the whole file
+	// rather than resuming from a single event.
+	evs := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "q1"},
+		{Seq: 2, Type: event.TextDelta, Text: "a1"},
+		{Seq: 3, Type: event.UserMsg, Text: "q2"},
+	}
+	lines := make([]string, 0, len(evs))
+	for _, e := range evs {
+		lines = append(lines, marshalLine(t, e))
+	}
+	path := writeTestJournal(t, lines)
+
+	live, _, total, err := ReadLiveBranch(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 || len(live) != 3 {
+		t.Fatalf("total=%d live=%d, want 3/3", total, len(live))
 	}
 }
 
