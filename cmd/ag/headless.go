@@ -36,6 +36,7 @@ const (
 
 var (
 	errPermissionStuck = errors.New("permission denied; model could not proceed")
+	errEmptyResponse   = errors.New("empty response from provider")
 	errInterrupted     = errors.New("interrupted")
 )
 
@@ -133,6 +134,23 @@ func deniedAndStuck(evs []event.Event, text string) bool {
 	return false
 }
 
+func emptyResponse(evs []event.Event, text string) bool {
+	if strings.TrimSpace(text) != "" {
+		return false
+	}
+	for _, e := range event.Live(evs) {
+		if e.Type == event.ToolStart || e.Type == event.ToolEnd {
+			return false
+		}
+	}
+	for _, e := range event.Live(evs) {
+		if e.Type == event.Notice && (strings.Contains(e.Text, "empty response") || strings.Contains(e.Text, "NABD_MAX_TOKENS") || e.NoticeCategory == event.NoticeCategoryLengthLimit) {
+			return true
+		}
+	}
+	return false
+}
+
 func mapHeadlessExit(err error) int {
 	if err == nil {
 		return exitSettled
@@ -148,6 +166,9 @@ func mapHeadlessExit(err error) int {
 	}
 	if errors.Is(err, errPermissionStuck) {
 		return exitPermStuck
+	}
+	if errors.Is(err, errEmptyResponse) {
+		return exitError
 	}
 	return exitError
 }
@@ -324,6 +345,9 @@ func runHeadlessErr(cfg headlessConfig) error {
 	text := finalAssistantText(loop.Hist())
 	if deniedAndStuck(loop.Hist(), text) {
 		return errPermissionStuck
+	}
+	if emptyResponse(loop.Hist(), text) {
+		return errEmptyResponse
 	}
 	if !cfg.json {
 		_, werr := io.WriteString(cfg.stdout, text)
