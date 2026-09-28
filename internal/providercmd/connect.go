@@ -73,6 +73,14 @@ func Connect(authPath, providerID string, readKey func() (string, error)) (strin
 		return "", errors.New("empty key; nothing written")
 	}
 
+	// Serialize the read-modify-write cycle across processes so two
+	// concurrent invocations cannot drop each other's provider entry.
+	lock, err := registry.LockAuthFile(authPath)
+	if err != nil {
+		return "", err
+	}
+	defer lock.Unlock()
+
 	af, err := registry.ParseAuthFile(authPath)
 	if err != nil {
 		return "", err
