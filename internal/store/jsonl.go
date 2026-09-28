@@ -423,17 +423,35 @@ func ReadLiveBranch(path string, keepRaw bool) (live []event.Event, raw [][]byte
 		return nil, nil, 0, err
 	}
 	if newestCompact == nil {
-		// No compaction: the whole file may be live. Fall back to one full
-		// read rather than a second streaming pass over everything.
+		// No compaction: resolve the live branch through the Parent chain
+		// rather than assuming the whole file is live. A rewind-only
+		// journal has no Compact event, but the abandoned branch must not
+		// come back on resume or rotate into the new journal.
 		evs, err := Read(path)
 		if err != nil {
 			return nil, nil, 0, err
 		}
+		live := event.Live(evs)
+		if len(evs) > 1 && len(live) <= 1 && evs[len(evs)-1].Parent == 0 {
+			// Journals predating Parent links: the chain is absent, not
+			// short. Keep the whole file rather than resuming from a
+			// single event.
+			live = evs
+		}
 		if !keepRaw {
-			return evs, nil, len(evs), nil
+			return live, nil, len(evs), nil
+		}
+		// Align raw lines with the live branch: only lines whose event
+		// survived the branch resolution rotate into the new journal.
+		liveSeq := make(map[int]bool, len(live))
+		for _, e := range live {
+			liveSeq[e.Seq] = true
 		}
 		var rawLines [][]byte
-		if err := scanLines(path, func(raw []byte, _ event.Event, _ int) error {
+		if err := scanLines(path, func(raw []byte, e event.Event, _ int) error {
+			if !liveSeq[e.Seq] {
+				return nil
+			}
 			cp := make([]byte, len(raw)+1)
 			copy(cp, raw)
 			cp[len(raw)] = '\n'
@@ -442,7 +460,7 @@ func ReadLiveBranch(path string, keepRaw bool) (live []event.Event, raw [][]byte
 		}); err != nil {
 			return nil, nil, 0, err
 		}
-		return evs, rawLines, len(evs), nil
+		return live, rawLines, len(evs), nil
 	}
 	firstKept := newestCompact.FirstKept
 	if firstKept < 1 {

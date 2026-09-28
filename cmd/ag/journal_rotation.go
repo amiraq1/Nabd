@@ -80,7 +80,10 @@ func maybeRotateOversizedJournal(path string, warn io.Writer) (rotated bool, err
 		return false, fmt.Errorf("cannot install rotated journal: %w", err)
 	}
 	if err = fsyncDir(dir); err != nil {
-		return false, fmt.Errorf("cannot sync session directory: %w", err)
+		// The rotated journal is already installed: the rotation happened.
+		// Report it as done so the caller warns about the sync failure
+		// instead of claiming rotation was skipped and retrying.
+		return true, fmt.Errorf("cannot sync session directory: %w", err)
 	}
 
 	if warn != nil {

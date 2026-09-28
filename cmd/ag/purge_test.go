@@ -31,13 +31,17 @@ func TestPurgeIsDryRunUnlessConfirmed(t *testing.T) {
 func TestPurgeDeletesOnlyEligibleRegularJournals(t *testing.T) {
 	dir := t.TempDir()
 	old := filepath.Join(dir, "old.jsonl")
+	oldArchive := filepath.Join(dir, "old.jsonl.archived-1700000000000000000")
 	recent := filepath.Join(dir, "recent.jsonl")
+	recentArchive := filepath.Join(dir, "recent.jsonl.archived-1800000000000000000")
 	other := filepath.Join(dir, "notes.txt")
 	subdir := filepath.Join(dir, "nested.jsonl")
 	for path, data := range map[string]string{
-		old:    "old\n",
-		recent: "recent\n",
-		other:  "keep\n",
+		old:           "old\n",
+		oldArchive:    "old archive\n",
+		recent:        "recent\n",
+		recentArchive: "recent archive\n",
+		other:         "keep\n",
 	} {
 		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 			t.Fatalf("write %s: %v", path, err)
@@ -51,8 +55,10 @@ func TestPurgeDeletesOnlyEligibleRegularJournals(t *testing.T) {
 		t.Fatalf("symlink: %v", err)
 	}
 	oldTime := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(old, oldTime, oldTime); err != nil {
-		t.Fatalf("chtimes old: %v", err)
+	for _, p := range []string{old, oldArchive} {
+		if err := os.Chtimes(p, oldTime, oldTime); err != nil {
+			t.Fatalf("chtimes %s: %v", p, err)
+		}
 	}
 
 	var out, errOut bytes.Buffer
@@ -60,15 +66,17 @@ func TestPurgeDeletesOnlyEligibleRegularJournals(t *testing.T) {
 	if code := runPurgeCommand([]string{"--dir", dir, "--before", cutoff, "--yes"}, &out, &errOut); code != 0 {
 		t.Fatalf("purge exit code=%d stdout=%q stderr=%q", code, out.String(), errOut.String())
 	}
-	if _, err := os.Stat(old); !os.IsNotExist(err) {
-		t.Fatalf("old journal still exists: %v", err)
+	for _, p := range []string{old, oldArchive} {
+		if _, err := os.Stat(p); !os.IsNotExist(err) {
+			t.Fatalf("old journal %s still exists: %v", p, err)
+		}
 	}
-	for _, path := range []string{recent, other, subdir, link} {
+	for _, path := range []string{recent, recentArchive, other, subdir, link} {
 		if _, err := os.Lstat(path); err != nil {
 			t.Fatalf("ineligible path %s changed: %v", path, err)
 		}
 	}
-	if !strings.Contains(out.String(), "purged 1 session journal") {
+	if !strings.Contains(out.String(), "purged 2 session journal") {
 		t.Fatalf("unexpected purge output: %q", out.String())
 	}
 }
