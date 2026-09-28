@@ -52,6 +52,19 @@ type Feed struct {
 	selectedItem   int
 	navigationMode bool
 
+	// fpCache memoizes FeedItem fingerprints by item Key(). The projector
+	// reports exactly which items an event batch touched, so refresh()
+	// re-hashes only those instead of every visible item's full text/output
+	// on every frame (L15). Entries for items that leave the feed are
+	// evicted alongside the line cache.
+	fpCache map[presentation.ItemKey]uint64
+	// lastStructSig is the structural signature of the last full render;
+	// when no fingerprint changed and the signature matches, the rendered
+	// lines are provably identical and refresh() skips re-rendering and the
+	// O(lines) output fingerprint entirely.
+	lastStructSig  uint64
+	structSigValid bool
+
 	// Cached rendered lines for the current viewport.
 	lines   []string
 	offsets []int
@@ -667,6 +680,10 @@ func (m *Feed) BuildFromEvents(events []agent.Event) {
 	m.proj = presentation.NewProjector()
 	m.notices = nil
 	m.lastSeq = 0
+	// New projector: drop all cached fingerprints and the structural
+	// signature — every item is new.
+	m.fpCache = nil
+	m.structSigValid = false
 	for _, e := range events {
 		_ = m.proj.Apply(e)
 		m.trackState(e)

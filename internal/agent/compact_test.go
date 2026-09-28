@@ -186,3 +186,74 @@ func TestSummaryFallsBackWithoutProvider(t *testing.T) {
 		t.Fatalf("mechanical summary missing text: %s", sum)
 	}
 }
+
+func TestCompactTrimsInMemoryHistory(t *testing.T) {
+	l := &Loop{Budget: NewBudget()}
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("t%d", i)
+		l.emit(Event{Type: UserMsg, Text: strings.Repeat("سؤال طويل ", 200)})
+		l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: id, Name: "read_file"}})
+		l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: id, OK: true,
+			Output: strings.Repeat("سطر\n", 500)}})
+		l.emit(Event{Type: TurnEnd})
+	}
+	before := len(l.hist)
+	if err := l.Compact(context.Background(), 2000); err != nil {
+		t.Fatal(err)
+	}
+	// The trim must actually drop pre-boundary events from memory.
+	if len(l.hist) >= before {
+		t.Fatalf("hist not trimmed: before=%d after=%d", before, len(l.hist))
+	}
+	live := Live(l.hist)
+	if len(live) == 0 || live[0].Type != Compact {
+		t.Fatal("live branch must start with the Compact summary after trim")
+	}
+	firstKept := live[0].FirstKept
+	if firstKept <= 0 {
+		t.Fatalf("Compact event missing FirstKept: %+v", live[0])
+	}
+	for _, e := range l.hist {
+		if e.Seq < firstKept {
+			t.Fatalf("trimmed hist keeps unreachable event seq=%d < firstKept=%d", e.Seq, firstKept)
+		}
+	}
+	if live[0].Text == "" {
+		t.Fatal("compact summary text lost by trim")
+	}
+	// The branch must still walk cleanly: every live event's parent is either
+	// in the trimmed history or terminates the walk (pre-boundary).
+	by := map[int]bool{}
+	for _, e := range l.hist {
+		by[e.Seq] = true
+	}
+	for _, e := range live[1:] {
+		if e.Parent != 0 && !by[e.Parent] && e.Seq != firstKept {
+			t.Fatalf("live event seq=%d has dangling parent %d after trim", e.Seq, e.Parent)
+		}
+	}
+	// A second compaction must chain on the trimmed history: its summary is
+	// built from the live branch, which starts at the first Compact event.
+	for i := 0; i < 6; i++ {
+		id := fmt.Sprintf("u%d", i)
+		l.emit(Event{Type: UserMsg, Text: strings.Repeat("سؤال طويل ", 200)})
+		l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: id, Name: "read_file"}})
+		l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: id, OK: true,
+			Output: strings.Repeat("سطر\n", 500)}})
+		l.emit(Event{Type: TurnEnd})
+	}
+	if err := l.Compact(context.Background(), 2000); err != nil {
+		t.Fatal(err)
+	}
+	live2 := Live(l.hist)
+	if len(live2) == 0 || live2[0].Type != Compact {
+		t.Fatal("second compaction must also lead the live branch")
+	}
+	if live2[0].Text == "" {
+		t.Fatal("second compact summary lost")
+	}
+	// Rewind still works on trimmed history (bounded by the compact boundary).
+	if _, err := l.Rewind(1); err != nil {
+		t.Fatalf("rewind after trim+compact: %v", err)
+	}
+}

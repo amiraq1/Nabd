@@ -99,6 +99,7 @@ func (m *Feed) toggleTools() (tea.Model, tea.Cmd) {
 	// Follow is false: preserve visible content anchor.
 	// Use stored offsets: they are already in m.lines coordinate space.
 	oldOffsets := m.offsets
+	m.syncFingerprints(items)
 	if len(oldOffsets) != len(items) {
 		_, oldOffsets = renderItemsCached(m, items, m.width, m.toolsExpanded)
 	}

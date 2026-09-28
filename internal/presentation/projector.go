@@ -14,15 +14,20 @@ type pendingRead struct {
 
 type Projector struct {
 	items               []FeedItem
-	byID                map[string]int
+	byID                map[ItemKey]int
 	assistantIdx        int
 	pendingReads        []pendingRead
 	deniedCalls         map[string]bool
 	UnhandledEventTypes map[agent.EventType]int
+	// touched records item keys created or mutated since the last
+	// DrainTouched call. The UI uses it to re-fingerprint only the items an
+	// incoming event batch actually changed, instead of hashing every
+	// visible item's full text/output on every 20ms refresh (L15).
+	touched map[ItemKey]bool
 }
 
 func NewProjector() *Projector {
-	return &Projector{byID: map[string]int{}, assistantIdx: -1, deniedCalls: map[string]bool{}, UnhandledEventTypes: map[agent.EventType]int{}}
+	return &Projector{byID: map[ItemKey]int{}, assistantIdx: -1, deniedCalls: map[string]bool{}, UnhandledEventTypes: map[agent.EventType]int{}}
 }
 
 func (p *Projector) Build(events []agent.Event) ([]FeedItem, error) {
@@ -114,11 +119,36 @@ func (p *Projector) Items() []FeedItem {
 
 func (p *Projector) reset() {
 	p.items = nil
-	p.byID = map[string]int{}
+	p.byID = map[ItemKey]int{}
 	p.assistantIdx = -1
 	p.pendingReads = nil
 	p.deniedCalls = map[string]bool{}
 	p.UnhandledEventTypes = map[agent.EventType]int{}
+	p.touched = nil
+}
+
+// touch records that the item with key was created or mutated. Every
+// in-place mutation of p.items must go through here (append included), or
+// the UI's fingerprint cache will serve stale lines for the item.
+func (p *Projector) touch(key ItemKey) {
+	if p.touched == nil {
+		p.touched = make(map[ItemKey]bool)
+	}
+	p.touched[key] = true
+}
+
+// DrainTouched returns the keys of items created or mutated since the
+// previous drain and clears the set. A nil return means nothing changed.
+func (p *Projector) DrainTouched() []ItemKey {
+	if len(p.touched) == 0 {
+		return nil
+	}
+	out := make([]ItemKey, 0, len(p.touched))
+	for k := range p.touched {
+		out = append(out, k)
+	}
+	p.touched = make(map[ItemKey]bool)
+	return out
 }
 
 func (p *Projector) appendRunBoundary(kind string, e agent.Event) error {
@@ -136,6 +166,7 @@ func (p *Projector) appendTextDelta(e agent.Event) error {
 		_ = p.append(it)
 	}
 	p.items[p.assistantIdx].Text += e.Text
+	p.touch(p.items[p.assistantIdx].key())
 	return nil
 }
 func (p *Projector) finalizeAssistant() { p.assistantIdx = -1 }
@@ -155,6 +186,7 @@ func (p *Projector) appendToolEnd(e agent.Event) error {
 		return p.append(FeedItem{Type: ItemTool, ID: id, Seq: e.Seq, Tool: card})
 	}
 	target := &p.items[idx]
+	p.touch(target.key())
 	if target.Tool == nil {
 		target.Tool = &ToolCard{CallID: callID(e), Name: toolName(e), Args: callArgs(e.Call)}
 	}
@@ -227,6 +259,7 @@ func (p *Projector) applyReadToLatest(rec agent.ReadRecord) bool {
 			continue
 		}
 		applyReadRecord(card, rec)
+		p.touch(p.items[i].key())
 		return true
 	}
 	return false
@@ -292,6 +325,7 @@ func (p *Projector) appendPermReply(e agent.Event) error {
 		return p.append(FeedItem{Type: ItemPermission, ID: id, Seq: e.Seq, Perm: card})
 	}
 	t := &p.items[idx]
+	p.touch(t.key())
 	if t.Perm == nil {
 		t.Perm = &PermCard{Name: toolName(e), Args: callArgs(e.Call)}
 	}
@@ -319,6 +353,7 @@ func (p *Projector) appendInterrupted(e agent.Event) error {
 	for i := range p.items {
 		if p.items[i].Tool != nil && p.items[i].Tool.Status == ToolRunning {
 			p.items[i].Tool.Status = ToolCancelled
+			p.touch(p.items[i].key())
 		}
 	}
 	text := e.Text
@@ -330,6 +365,7 @@ func (p *Projector) appendInterrupted(e agent.Event) error {
 func (p *Projector) append(it FeedItem) error {
 	p.byID[it.key()] = len(p.items)
 	p.items = append(p.items, it)
+	p.touch(it.key())
 	return nil
 }
 func callID(e agent.Event) string {

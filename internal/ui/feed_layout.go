@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 
 	"nabd/internal/presentation"
 
@@ -151,10 +152,28 @@ func (m *Feed) clampScroll() {
 // refresh rebuilds the visible lines from the projector plus UI notices.
 // It returns true when the final rendered output (m.lines) actually changed,
 // and false when it is byte-for-byte identical to the previous refresh.
-// The detection uses a deterministic fingerprint of the rendered lines, so
-// callers no longer need to clone and compare the slice themselves.
+//
+// Fingerprinting is incremental: the projector reports exactly which items
+// the incoming batch touched, so only those items are re-hashed (L15);
+// every other item reuses its cached fingerprint. When no fingerprint
+// changed and the structural signature (width, expansion, selection,
+// notices, item count) matches the last full render, the rendered lines are
+// provably identical: refresh() rebuilds them from the warm line cache with
+// plain copies (no re-render, no content hashing) and returns false without
+// hashing the output again.
 func (m *Feed) refresh() bool {
 	items := visibleFeedItems(mergeNotices(m.proj.Items(), m.notices))
+
+	changed := m.syncFingerprints(items)
+	sig := m.structSig(items)
+	if !changed && m.structSigValid && sig == m.lastStructSig && m.renderSigValid {
+		// Nothing feeding the renderer changed: rebuild m.lines from the
+		// warm line cache (cheap copies — no re-render, no re-fingerprint)
+		// and report unchanged without hashing the output again.
+		m.lines, m.offsets = renderItemsCached(m, items, m.width, m.toolsExpanded)
+		m.clampScroll()
+		return false
+	}
 
 	// Invalidate entire cache on width change.
 	if m.width != m.cacheWidth {
@@ -192,9 +211,114 @@ func (m *Feed) refresh() bool {
 	m.renderSig = nextSig
 	m.renderRows = nextRows
 	m.renderSigValid = true
+	// Recompute after pruneOverrides: the stored signature must reflect the
+	// final render state, while the fast-path check above (correctly) used
+	// the pre-prune signature.
+	m.lastStructSig = m.structSig(items)
+	m.structSigValid = true
 
 	m.clampScroll()
 	return dirty
+}
+
+// syncFingerprints drains the projector's touched set and (re)computes
+// fingerprints only for touched or unseen items; everything else reuses the
+// cached value. It evicts cache entries for items that left the feed and
+// reports whether any fingerprint differs from the previous refresh.
+func (m *Feed) syncFingerprints(items []presentation.FeedItem) (changed bool) {
+	if m.fpCache == nil {
+		m.fpCache = make(map[presentation.ItemKey]uint64)
+	}
+	var touched map[presentation.ItemKey]bool
+	if m.proj != nil {
+		if ids := m.proj.DrainTouched(); len(ids) > 0 {
+			touched = make(map[presentation.ItemKey]bool, len(ids))
+			for _, id := range ids {
+				touched[id] = true
+			}
+		}
+	}
+	active := make(map[presentation.ItemKey]bool, len(items))
+	for _, it := range items {
+		if it.ID == "" {
+			// ID-less items are never cached by the render path either;
+			// treat them as always changed (cheap: they are tiny).
+			changed = true
+			continue
+		}
+		key := it.Key()
+		active[key] = true
+		fp, ok := m.fpCache[key]
+		if !ok || touched[key] {
+			fp = it.Fingerprint()
+			if !ok || fp != m.fpCache[key] {
+				changed = true
+			}
+			m.fpCache[key] = fp
+		}
+	}
+	for key := range m.fpCache {
+		if !active[key] {
+			delete(m.fpCache, key)
+		}
+	}
+	return changed
+}
+
+// fpOf returns the item's fingerprint, preferring the cache populated by
+// syncFingerprints. A miss computes it directly, so render paths that run
+// without a preceding sync (tests, one-off renders) stay correct.
+func (m *Feed) fpOf(it presentation.FeedItem) uint64 {
+	if it.ID != "" && m.fpCache != nil {
+		if fp, ok := m.fpCache[it.Key()]; ok {
+			return fp
+		}
+	}
+	return it.Fingerprint()
+}
+
+// structSig hashes the non-content inputs of the render pipeline: width,
+// expansion state (global flag plus the full per-card overrides map),
+// selection, and item count. Item content is covered by the fingerprint
+// cache; the projector's touched set guarantees content changes surface
+// through syncFingerprints. The overrides map is hashed by content (sorted
+// keys) so every mutation path — including direct test writes — is
+// reflected; it only ever holds a handful of entries.
+func (m *Feed) structSig(items []presentation.FeedItem) uint64 {
+	const offset64 uint64 = 14695981039346656037
+	const prime64 uint64 = 1099511628211
+	h := offset64
+	mix := func(v uint64) {
+		h = (h ^ v) * prime64
+	}
+	mixStr := func(s string) {
+		for i := 0; i < len(s); i++ {
+			mix(uint64(s[i]))
+		}
+		mix(0xff)
+	}
+	mix(uint64(m.width))
+	if m.toolsExpanded {
+		mix(1)
+	}
+	if len(m.overrides) > 0 {
+		ids := make([]string, 0, len(m.overrides))
+		for id := range m.overrides {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		for _, id := range ids {
+			mixStr(id)
+			mix(uint64(m.overrides[id]))
+		}
+	}
+	mix(0xfe)
+	if m.navigationMode {
+		mix(1)
+	}
+	mix(uint64(m.selectedItem))
+	mix(uint64(len(items)))
+	return h
 }
 
 // renderedLinesFingerprint returns a deterministic FNV-1a (64-bit) hash of the
