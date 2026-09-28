@@ -17,7 +17,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.1'
-          check-latest: true
       - run: go mod tidy -diff
       - run: go mod tidy -diff
         working-directory: third_party/bubbles
@@ -29,7 +28,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.1'
-          check-latest: true
       - name: Run govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
@@ -46,7 +44,6 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version: '1.27.1'
-        check-latest: true
     - name: Environment diagnostics
       run: go env GOOS GOARCH CGO_ENABLED CC
     - name: Threat model freshness guard tests
@@ -128,7 +125,6 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.27.1'
-          check-latest: true
       - name: Install syft
         uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
       - name: Extract notes for the next release
@@ -142,8 +138,36 @@ jobs:
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: "v2.18.2"
           args: release --clean --snapshot --skip=publish,sign,announce --release-notes=${{ runner.temp }}/release-notes.md
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: "v2.6.5"
+      - name: Exercise the release signing step with an ephemeral key
+        # The real release signs keylessly via goreleaser's signs: block
+        # (cosign sign-blob --yes ... dist/checksums.txt). That block is
+        # skipped in dry-run, so a broken cosign setup would only surface on
+        # release day. This step runs the same command shape against the
+        # snapshot checksums with a throwaway keypair that never leaves
+        # RUNNER_TEMP: it proves cosign installs, the flags are valid, and
+        # the artifact exists — without touching keyless OIDC or publishing
+        # anything.
+        env:
+          COSIGN_PASSWORD: ""
+        shell: bash
+        run: |
+          set -euo pipefail
+          key_prefix="${RUNNER_TEMP}/dryrun-cosign"
+          cosign generate-key-pair --output-key-prefix "$key_prefix"
+          cosign sign-blob --yes --key "$key_prefix.key" \
+            --output-certificate "$key_prefix.pem" \
+            --output-signature "$key_prefix.sig" \
+            dist/checksums.txt
+          cosign verify-blob --key "$key_prefix.pub" \
+            --signature "$key_prefix.sig" \
+            dist/checksums.txt
+          echo "signing step exercised OK"
       - name: Assert one distinct SBOM per binary, all checksummed
         shell: bash
         run: |
@@ -170,7 +194,6 @@ jobs:
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version: '1.27.1'
-        check-latest: true
     - name: Build and vet for Termux (android/arm64)
       env:
         CGO_ENABLED: "0"

@@ -1,4 +1,5 @@
-#!/bin/sh
+#!/usr/bin/env bash
+set -euo pipefail
 # The banner must name the exact code the binary was built from: a stale
 # binary attributing a live session to the wrong commit invalidates every
 # measurement it produces. describe gives the tag and dirty state,
