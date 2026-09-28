@@ -3,7 +3,7 @@ package presentation
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestFingerprintDeterministic verifies identical items produce identical fingerprints.
@@ -106,8 +106,8 @@ func TestFingerprintPermSensitivity(t *testing.T) {
 			Name:      "write_file",
 			Args:      "/path",
 			Status:    PermAsked,
-			Decision:  agent.AllowSession,
-			Effective: agent.AllowSession,
+			Decision:  event.AllowSession,
+			Effective: event.AllowSession,
 		},
 	}
 
@@ -121,8 +121,8 @@ func TestFingerprintPermSensitivity(t *testing.T) {
 		{"Args", func(p *PermCard) { p.Args = "/other" }},
 		{"Reason", func(p *PermCard) { p.Reason = "different reason" }},
 		{"Status", func(p *PermCard) { p.Status = PermAllow }},
-		{"Decision", func(p *PermCard) { p.Decision = agent.Deny }},
-		{"Effective", func(p *PermCard) { p.Effective = agent.Deny }},
+		{"Decision", func(p *PermCard) { p.Decision = event.Deny }},
+		{"Effective", func(p *PermCard) { p.Effective = event.Deny }},
 	}
 
 	for _, tc := range cases {
@@ -142,7 +142,7 @@ func TestFingerprintPermSensitivity(t *testing.T) {
 func TestFingerprintErrorWaitSensitivity(t *testing.T) {
 	base := FeedItem{
 		Type:  ItemError,
-		Error: &ErrorCard{Code: agent.ErrCodeProviderTemporary, Message: "exhausted"},
+		Error: &ErrorCard{Code: event.ErrCodeProviderTemporary, Message: "exhausted"},
 	}
 	changed := base
 	cardCopy := *base.Error

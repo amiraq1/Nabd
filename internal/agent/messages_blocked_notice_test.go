@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"nabd/internal/event"
 	"strings"
 	"testing"
 
@@ -17,38 +18,38 @@ import (
 // Every category outside the noticeReachesModel allowlist must be dropped,
 // whether or not tool calls are pending.
 func TestBlockedNoticeCategoriesDroppedWhileToolCallsPending(t *testing.T) {
-	blocked := []NoticeCategory{
-		NoticeCategoryUnknown,
-		NoticeCategoryCalibration,
-		NoticeCategoryContextPressure,
-		NoticeCategoryRateLimit,
-		NoticeCategoryLengthLimit,
-		NoticeCategoryTPM,
-		NoticeCategoryDisplay,
+	blocked := []event.NoticeCategory{
+		event.NoticeCategoryUnknown,
+		event.NoticeCategoryCalibration,
+		event.NoticeCategoryContextPressure,
+		event.NoticeCategoryRateLimit,
+		event.NoticeCategoryLengthLimit,
+		event.NoticeCategoryTPM,
+		event.NoticeCategoryDisplay,
 	}
 
 	const marker = "BLOCKED-NOTICE-MARKER"
 
-	pending := func(cat NoticeCategory) []Event {
-		return []Event{
-			{Seq: 1, Type: UserMsg, Text: "go"},
-			{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "read_file"}},
-			{Seq: 3, Parent: 2, Type: Notice, Text: marker, NoticeCategory: cat},
-			{Seq: 4, Parent: 3, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "read_file", Output: "out", OK: true}},
-			{Seq: 5, Parent: 4, Type: TurnEnd},
+	pending := func(cat event.NoticeCategory) []event.Event {
+		return []event.Event{
+			{Seq: 1, Type: event.UserMsg, Text: "go"},
+			{Seq: 2, Parent: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file"}},
+			{Seq: 3, Parent: 2, Type: event.Notice, Text: marker, NoticeCategory: cat},
+			{Seq: 4, Parent: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "read_file", Output: "out", OK: true}},
+			{Seq: 5, Parent: 4, Type: event.TurnEnd},
 		}
 	}
-	idle := func(cat NoticeCategory) []Event {
-		return []Event{
-			{Seq: 1, Type: UserMsg, Text: "go"},
-			{Seq: 2, Parent: 1, Type: Notice, Text: marker, NoticeCategory: cat},
-			{Seq: 3, Parent: 2, Type: TurnEnd},
+	idle := func(cat event.NoticeCategory) []event.Event {
+		return []event.Event{
+			{Seq: 1, Type: event.UserMsg, Text: "go"},
+			{Seq: 2, Parent: 1, Type: event.Notice, Text: marker, NoticeCategory: cat},
+			{Seq: 3, Parent: 2, Type: event.TurnEnd},
 		}
 	}
 
 	for _, scenario := range []struct {
 		name string
-		evs  func(NoticeCategory) []Event
+		evs  func(event.NoticeCategory) []event.Event
 	}{
 		{"tool_calls_pending", pending},
 		{"idle", idle},
@@ -71,21 +72,21 @@ func TestBlockedNoticeCategoriesDroppedWhileToolCallsPending(t *testing.T) {
 // queue and reach the model once the tool round flushes. If both tests pass,
 // the drop behaviour is category-driven, not a blanket discard.
 func TestAllowedNoticeCategoriesFlushedAfterToolCallsPending(t *testing.T) {
-	allowed := []NoticeCategory{
-		NoticeCategoryUndoResult,
-		NoticeCategoryLoopLimit,
+	allowed := []event.NoticeCategory{
+		event.NoticeCategoryUndoResult,
+		event.NoticeCategoryLoopLimit,
 	}
 
 	const marker = "ALLOWED-NOTICE-MARKER"
 
 	for _, cat := range allowed {
 		t.Run(fmt.Sprintf("category_%d", cat), func(t *testing.T) {
-			evs := []Event{
-				{Seq: 1, Type: UserMsg, Text: "go"},
-				{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "read_file"}},
-				{Seq: 3, Parent: 2, Type: Notice, Text: marker, NoticeCategory: cat},
-				{Seq: 4, Parent: 3, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "read_file", Output: "out", OK: true}},
-				{Seq: 5, Parent: 4, Type: TurnEnd},
+			evs := []event.Event{
+				{Seq: 1, Type: event.UserMsg, Text: "go"},
+				{Seq: 2, Parent: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file"}},
+				{Seq: 3, Parent: 2, Type: event.Notice, Text: marker, NoticeCategory: cat},
+				{Seq: 4, Parent: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "read_file", Output: "out", OK: true}},
+				{Seq: 5, Parent: 4, Type: event.TurnEnd},
 			}
 			msgs := Messages(evs)
 

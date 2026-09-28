@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -101,7 +101,7 @@ func TestFeedUnknownSlashCommandShowsNoticeNotSilence(t *testing.T) {
 // executed an exactly typed command. Feed now matches it for the exact case;
 // the partial case intentionally differs (Chat reports unknown, Feed completes).
 func TestChatExactTokenUndoExecutesOnSingleEnter(t *testing.T) {
-	c := NewChat(runnerStub{}, make(chan agent.Event, 1))
+	c := NewChat(runnerStub{}, make(chan event.Event, 1))
 	var calls []int
 	c.SetCallbacks(&SessionCallbacks{
 		OnUndo: func(n int) string {
@@ -122,7 +122,7 @@ func TestChatExactTokenUndoExecutesOnSingleEnter(t *testing.T) {
 // comparison: without a completion menu, Chat cannot complete "/und" and says
 // so. The Feed keeps completing instead, by design.
 func TestChatPartialTokenReportsUnknown(t *testing.T) {
-	c := NewChat(runnerStub{}, make(chan agent.Event, 1))
+	c := NewChat(runnerStub{}, make(chan event.Event, 1))
 	c.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/und")})
 	c.Update(tea.KeyMsg{Type: tea.KeyEnter})
 

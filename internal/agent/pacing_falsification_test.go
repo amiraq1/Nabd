@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"math"
+	"nabd/internal/event"
 	"testing"
 
 	"nabd/internal/provider"
@@ -122,7 +123,7 @@ func TestFalsificationSilentAttemptDoesNotConsumeTurns(t *testing.T) {
 	}
 	turnStarts := 0
 	for _, e := range sink.evs {
-		if e.Type == TurnStart {
+		if e.Type == event.TurnStart {
 			turnStarts++
 		}
 	}

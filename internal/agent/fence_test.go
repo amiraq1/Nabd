@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"nabd/internal/event"
 	"regexp"
 	"strings"
 	"testing"
@@ -268,11 +269,11 @@ func TestFenceDeterministic(t *testing.T) {
 // TestFenceToolEndFencedInMessages proves Messages() returns the fenced
 // output for a real ToolEnd event, while the journal keeps the raw output.
 func TestFenceToolEndFencedInMessages(t *testing.T) {
-	evs := []Event{
-		{Seq: 1, Type: UserMsg, Text: "read"},
-		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "read_file"}},
-		{Seq: 3, Parent: 2, Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "read_file", Output: "secret content", OK: true}},
-		{Seq: 4, Parent: 3, Type: TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "read"},
+		{Seq: 2, Parent: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file"}},
+		{Seq: 3, Parent: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "read_file", Output: "secret content", OK: true}},
+		{Seq: 4, Parent: 3, Type: event.TurnEnd},
 	}
 	ms := Messages(evs)
 	var found string
@@ -294,10 +295,10 @@ func TestFenceToolEndFencedInMessages(t *testing.T) {
 // by Nabd itself, not by a tool) are NOT fenced: they carry their own
 // semantic and come from the harness, not from workspace or a subprocess.
 func TestFenceCancelledUnfenced(t *testing.T) {
-	evs := []Event{
-		{Seq: 1, Type: UserMsg, Text: "read"},
-		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "read_file"}},
-		{Seq: 3, Parent: 2, Type: Interrupted},
+	evs := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "read"},
+		{Seq: 2, Parent: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file"}},
+		{Seq: 3, Parent: 2, Type: event.Interrupted},
 	}
 	ms := Messages(evs)
 	for _, m := range ms {
@@ -317,13 +318,13 @@ func TestFenceCancelledUnfenced(t *testing.T) {
 // TestFencePreservesIDsOrderIsErr proves fencing does not alter tool-result
 // IDs, ordering, or the IsErr flag.
 func TestFencePreservesIDsOrderIsErr(t *testing.T) {
-	evs := []Event{
-		{Seq: 1, Type: UserMsg, Text: "run"},
-		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "a", Name: "bash"}},
-		{Seq: 3, Parent: 2, Type: ToolStart, Call: &ToolCall{ID: "b", Name: "read_file"}},
-		{Seq: 4, Parent: 3, Type: ToolEnd, Call: &ToolCall{ID: "b", Name: "read_file", Output: "ok", OK: true}},
-		{Seq: 5, Parent: 4, Type: ToolEnd, Call: &ToolCall{ID: "a", Name: "bash", Output: "", OK: false}},
-		{Seq: 6, Parent: 5, Type: TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "run"},
+		{Seq: 2, Parent: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "a", Name: "bash"}},
+		{Seq: 3, Parent: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "b", Name: "read_file"}},
+		{Seq: 4, Parent: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "b", Name: "read_file", Output: "ok", OK: true}},
+		{Seq: 5, Parent: 4, Type: event.ToolEnd, Call: &event.ToolCall{ID: "a", Name: "bash", Output: "", OK: false}},
+		{Seq: 6, Parent: 5, Type: event.TurnEnd},
 	}
 	ms := Messages(evs)
 	var results []provider.ToolResult

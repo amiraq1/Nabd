@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 func TestNewJSONLDefaultPreservesRawEvent(t *testing.T) {
@@ -16,9 +16,9 @@ func TestNewJSONLDefaultPreservesRawEvent(t *testing.T) {
 	}
 
 	const raw = "raw credential-like value"
-	if err := journal.Append(agent.Event{
+	if err := journal.Append(event.Event{
 		Seq:  1,
-		Type: agent.UserMsg,
+		Type: event.UserMsg,
 		Text: raw,
 	}); err != nil {
 		t.Fatalf("Append: %v", err)
@@ -42,7 +42,7 @@ func TestNewJSONLDefaultPreservesRawEvent(t *testing.T) {
 func TestNewJSONLWithOptionsPersistsRedactedCopy(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "redacted.jsonl")
 
-	redactor := func(e agent.Event) agent.Event {
+	redactor := func(e event.Event) event.Event {
 		e.Text = "[REDACTED]"
 		if e.Call != nil {
 			call := *e.Call
@@ -59,11 +59,11 @@ func TestNewJSONLWithOptionsPersistsRedactedCopy(t *testing.T) {
 		t.Fatalf("NewJSONLWithOptions: %v", err)
 	}
 
-	original := agent.Event{
+	original := event.Event{
 		Seq:  1,
-		Type: agent.ToolEnd,
+		Type: event.ToolEnd,
 		Text: "raw text",
-		Call: &agent.ToolCall{
+		Call: &event.ToolCall{
 			ID:     "call-1",
 			Name:   "read_file",
 			Output: "raw output",
@@ -105,7 +105,7 @@ func TestNewJSONLExclusiveWithOptionsUsesRedactor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "exclusive.jsonl")
 
 	journal, err := NewJSONLExclusiveWithOptions(path, Options{
-		Redact: func(e agent.Event) agent.Event {
+		Redact: func(e event.Event) event.Event {
 			e.Err = "[REDACTED]"
 			return e
 		},
@@ -114,9 +114,9 @@ func TestNewJSONLExclusiveWithOptionsUsesRedactor(t *testing.T) {
 		t.Fatalf("NewJSONLExclusiveWithOptions: %v", err)
 	}
 
-	if err := journal.Append(agent.Event{
+	if err := journal.Append(event.Event{
 		Seq:  1,
-		Type: agent.RunError,
+		Type: event.RunError,
 		Err:  "raw error",
 	}); err != nil {
 		t.Fatalf("Append: %v", err)
@@ -136,11 +136,11 @@ func TestNewJSONLExclusiveWithOptionsUsesRedactor(t *testing.T) {
 
 func TestJSONLRedactorRunsBeforeForStore(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ordering.jsonl")
-	rawOutput := strings.Repeat("x", agent.MaxPersistedOutput+100)
+	rawOutput := strings.Repeat("x", event.MaxPersistedOutput+100)
 
 	sawFullOutput := false
 	journal, err := NewJSONLWithOptions(path, Options{
-		Redact: func(e agent.Event) agent.Event {
+		Redact: func(e event.Event) event.Event {
 			if e.Call != nil &&
 				len(e.Call.Output) == len(rawOutput) {
 				sawFullOutput = true
@@ -152,10 +152,10 @@ func TestJSONLRedactorRunsBeforeForStore(t *testing.T) {
 		t.Fatalf("NewJSONLWithOptions: %v", err)
 	}
 
-	if err := journal.Append(agent.Event{
+	if err := journal.Append(event.Event{
 		Seq:  1,
-		Type: agent.ToolEnd,
-		Call: &agent.ToolCall{
+		Type: event.ToolEnd,
+		Call: &event.ToolCall{
 			ID:     "call-1",
 			Name:   "read_file",
 			Output: rawOutput,

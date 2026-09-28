@@ -3,7 +3,7 @@ package perm_test
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/perm"
 	"nabd/internal/snap"
 	"nabd/internal/tools"
@@ -38,7 +38,7 @@ func TestRegistryClassificationUsesRealRegistry(t *testing.T) {
 		if v, _ := p.Check(tool); v != perm.Ask {
 			t.Errorf("%s = %v, want Ask", tool, v)
 		}
-		p.Record(tool, agent.AllowSession)
+		p.Record(tool, event.AllowSession)
 		if v, _ := p.Check(tool); v != perm.Allow {
 			t.Errorf("%s = %v after session grant, want Allow", tool, v)
 		}
@@ -48,16 +48,16 @@ func TestRegistryClassificationUsesRealRegistry(t *testing.T) {
 	if v, _ := p.Check("bash"); v != perm.Ask {
 		t.Errorf("bash = %v, want Ask", v)
 	}
-	p.Record("bash", agent.AllowSession)
+	p.Record("bash", event.AllowSession)
 	if v, _ := p.Check("bash"); v != perm.Ask {
 		t.Errorf("bash = %v after session grant; must stay Ask", v)
 	}
-	if got := p.Effective("bash", agent.AllowSession); got != agent.AllowOnce {
+	if got := p.Effective("bash", event.AllowSession); got != event.AllowOnce {
 		t.Errorf("Effective(bash, session) = %v, want AllowOnce", got)
 	}
 
 	// unknown tools are denied even with a grant.
-	p.Record("unknown_tool", agent.AllowSession)
+	p.Record("unknown_tool", event.AllowSession)
 	if v, _ := p.Check("unknown_tool"); v != perm.Deny {
 		t.Errorf("unknown tool = %v, want Deny", v)
 	}

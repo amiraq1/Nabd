@@ -13,8 +13,8 @@ import (
 	"strconv"
 	"strings"
 
-	"nabd/internal/agent"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
@@ -138,7 +138,7 @@ func (readFile) Name() string { return "read_file" }
 // plain-Run path and is drained within RunDetailed, so it cannot leak past the
 // call that produced it.
 type readMeta struct {
-	credit     agent.ReadCredit
+	credit     event.ReadCredit
 	linesRead  int
 	totalLines int
 	offset     int
@@ -149,7 +149,7 @@ type readMeta struct {
 // RunDetailed lets read_file report truncation and line count through the
 // Outcome, so the loop can journal a read_record event when the byte cap cut
 // the file short.
-func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.Outcome, error) {
+func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (event.Outcome, error) {
 	text, meta, ok, err := t.run(ctx, raw)
 	if err != nil || ctx.Err() != nil {
 		// A failed or cancelled read must not leave partial metadata for a
@@ -157,7 +157,7 @@ func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 		if t.reg != nil {
 			t.reg.ClearReadState()
 		}
-		return agent.Outcome{Text: text, OK: ok}, err
+		return event.Outcome{Text: text, OK: ok}, err
 	}
 	// The truncation flag lives in the Outcome (per-invocation). Drain the
 	// legacy slot here — its recovered value is intentionally discarded in
@@ -165,7 +165,7 @@ func (t readFile) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	if t.reg != nil {
 		t.reg.ConsumeTruncated()
 	}
-	return agent.Outcome{
+	return event.Outcome{
 		Text:       text,
 		OK:         ok,
 		Truncated:  meta.truncated,
@@ -336,7 +336,7 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 	}
 
 	if shown == 0 {
-		meta.credit = agent.ReadCredit{
+		meta.credit = event.ReadCredit{
 			Path:      rel,
 			Hash:      fileHash,
 			Offset:    from,
@@ -352,7 +352,7 @@ func (t readFile) run(_ context.Context, raw json.RawMessage) (string, readMeta,
 		b.WriteString(capped + "\n")
 	}
 	meta.linesRead = shown
-	meta.credit = agent.ReadCredit{
+	meta.credit = event.ReadCredit{
 		Path:      rel,
 		Hash:      fileHash,
 		Offset:    from,

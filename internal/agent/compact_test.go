@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"nabd/internal/event"
 	"strings"
 	"testing"
 
@@ -16,16 +17,16 @@ func TestValidateBoundary(t *testing.T) {
 	// streamed deltas, not a single assistant-message event. validateBoundary
 	// reads only Seq and the tool-pairing shape, so the exact non-UserMsg type
 	// is immaterial — it is chosen here to keep the fixture representative.
-	live := []Event{
-		{Seq: 1, Type: UserMsg, Text: "turn 1"},
-		{Seq: 2, Type: TextDelta, Text: "reply 1"},
-		{Seq: 3, Type: UserMsg, Text: "turn 2"},
-		{Seq: 4, Type: TextDelta, Text: "reply 2"},
+	live := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "turn 1"},
+		{Seq: 2, Type: event.TextDelta, Text: "reply 1"},
+		{Seq: 3, Type: event.UserMsg, Text: "turn 2"},
+		{Seq: 4, Type: event.TextDelta, Text: "reply 2"},
 	}
 
 	cases := []struct {
 		name      string
-		live      []Event
+		live      []event.Event
 		firstKept int
 		wantIdx   int
 		wantErr   error
@@ -52,10 +53,10 @@ func TestValidateBoundary(t *testing.T) {
 }
 
 func TestBoundaryIsAlwaysUserMessage(t *testing.T) {
-	live2 := []Event{
-		{Seq: 1, Type: UserMsg, Text: strings.Repeat("a", 1000)},
-		{Seq: 2, Parent: 1, Type: TurnEnd},
-		{Seq: 3, Parent: 2, Type: UserMsg, Text: "b"},
+	live2 := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: strings.Repeat("a", 1000)},
+		{Seq: 2, Parent: 1, Type: event.TurnEnd},
+		{Seq: 3, Parent: 2, Type: event.UserMsg, Text: "b"},
 	}
 	// target is 100, which means we must cut at the start of "a" or "b".
 	// "a" is too big. So it will cut at "b".
@@ -72,16 +73,16 @@ func TestCompactKeepsPairing(t *testing.T) {
 	l := &Loop{Budget: NewBudget()}
 	for i := 0; i < 6; i++ {
 		id := fmt.Sprintf("t%d", i)
-		l.emit(Event{Type: UserMsg, Text: strings.Repeat("سؤال طويل ", 200)})
-		l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: id, Name: "read_file"}})
-		l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: id, OK: true,
+		l.emit(event.Event{Type: event.UserMsg, Text: strings.Repeat("سؤال طويل ", 200)})
+		l.emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: id, Name: "read_file"}})
+		l.emit(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: id, OK: true,
 			Output: strings.Repeat("سطر\n", 500)}})
-		l.emit(Event{Type: TurnEnd})
+		l.emit(event.Event{Type: event.TurnEnd})
 	}
 	if err := l.Compact(context.Background(), 2000); err != nil {
 		t.Fatal(err)
 	}
-	ms := Messages(Live(l.hist))
+	ms := Messages(event.Live(l.hist))
 	var calls, results int
 	for _, m := range ms {
 		calls += len(m.ToolCalls)
@@ -90,7 +91,7 @@ func TestCompactKeepsPairing(t *testing.T) {
 	if calls != results {
 		t.Fatalf("%d نداء مقابل %d نتيجة بعد الضغط", calls, results)
 	}
-	if Live(l.hist)[0].Type != Compact {
+	if event.Live(l.hist)[0].Type != event.Compact {
 		t.Fatal("الفرع الحيّ لا يبدأ بالملخّص")
 	}
 }
@@ -167,8 +168,8 @@ func TestReadRangeParsesTail(t *testing.T) {
 }
 
 func TestEstimateDoesNotUndercountArabic(t *testing.T) {
-	eng := EstimateText("hello world this is english text")
-	ar := EstimateText("مرحبا بالعالم هذا نص عربي")
+	eng := event.EstimateText("hello world this is english text")
+	ar := event.EstimateText("مرحبا بالعالم هذا نص عربي")
 
 	// Arabic should cost more tokens per character due to runesPerTokOther
 	if ar < eng {
@@ -178,8 +179,8 @@ func TestEstimateDoesNotUndercountArabic(t *testing.T) {
 
 func TestSummaryFallsBackWithoutProvider(t *testing.T) {
 	l := &Loop{} // No provider
-	evs := []Event{
-		{Seq: 1, Type: UserMsg, Text: "do a thing"},
+	evs := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "do a thing"},
 	}
 	sum := l.summarise(context.Background(), evs)
 	if !strings.Contains(sum, "do a thing") {
@@ -191,11 +192,11 @@ func TestCompactTrimsInMemoryHistory(t *testing.T) {
 	l := &Loop{Budget: NewBudget()}
 	for i := 0; i < 6; i++ {
 		id := fmt.Sprintf("t%d", i)
-		l.emit(Event{Type: UserMsg, Text: strings.Repeat("سؤال طويل ", 200)})
-		l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: id, Name: "read_file"}})
-		l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: id, OK: true,
+		l.emit(event.Event{Type: event.UserMsg, Text: strings.Repeat("سؤال طويل ", 200)})
+		l.emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: id, Name: "read_file"}})
+		l.emit(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: id, OK: true,
 			Output: strings.Repeat("سطر\n", 500)}})
-		l.emit(Event{Type: TurnEnd})
+		l.emit(event.Event{Type: event.TurnEnd})
 	}
 	before := len(l.hist)
 	if err := l.Compact(context.Background(), 2000); err != nil {
@@ -205,8 +206,8 @@ func TestCompactTrimsInMemoryHistory(t *testing.T) {
 	if len(l.hist) >= before {
 		t.Fatalf("hist not trimmed: before=%d after=%d", before, len(l.hist))
 	}
-	live := Live(l.hist)
-	if len(live) == 0 || live[0].Type != Compact {
+	live := event.Live(l.hist)
+	if len(live) == 0 || live[0].Type != event.Compact {
 		t.Fatal("live branch must start with the Compact summary after trim")
 	}
 	firstKept := live[0].FirstKept
@@ -236,17 +237,17 @@ func TestCompactTrimsInMemoryHistory(t *testing.T) {
 	// built from the live branch, which starts at the first Compact event.
 	for i := 0; i < 6; i++ {
 		id := fmt.Sprintf("u%d", i)
-		l.emit(Event{Type: UserMsg, Text: strings.Repeat("سؤال طويل ", 200)})
-		l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: id, Name: "read_file"}})
-		l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: id, OK: true,
+		l.emit(event.Event{Type: event.UserMsg, Text: strings.Repeat("سؤال طويل ", 200)})
+		l.emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: id, Name: "read_file"}})
+		l.emit(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: id, OK: true,
 			Output: strings.Repeat("سطر\n", 500)}})
-		l.emit(Event{Type: TurnEnd})
+		l.emit(event.Event{Type: event.TurnEnd})
 	}
 	if err := l.Compact(context.Background(), 2000); err != nil {
 		t.Fatal(err)
 	}
-	live2 := Live(l.hist)
-	if len(live2) == 0 || live2[0].Type != Compact {
+	live2 := event.Live(l.hist)
+	if len(live2) == 0 || live2[0].Type != event.Compact {
 		t.Fatal("second compaction must also lead the live branch")
 	}
 	if live2[0].Text == "" {

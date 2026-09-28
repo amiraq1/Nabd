@@ -17,7 +17,7 @@ package payload
 import (
 	"fmt"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/provider"
 )
 
@@ -50,7 +50,7 @@ const probeText = "x"
 func Formats() []string { return []string{FormatAnthropic, FormatOpenAI} }
 
 // Measurement is the decomposition of one request's fixed payload, in the
-// project's estimator units (agent.EstimateText over the encoded bytes).
+// project's estimator units (event.EstimateText over the encoded bytes).
 //
 // Each component is one field's cost, isolated by removing that field and
 // subtracting; the marshaller writes independent JSON fields, so the
@@ -89,7 +89,7 @@ func Measure(format, system string, specs []provider.ToolSpec) (Measurement, err
 		if err != nil {
 			return 0, fmt.Errorf("payload: encode %s: %w", format, err)
 		}
-		return agent.EstimateText(string(b)), nil
+		return event.EstimateText(string(b)), nil
 	}
 
 	full, err := encode(measureModel, system, specs)
@@ -120,7 +120,7 @@ func Measure(format, system string, specs []provider.ToolSpec) (Measurement, err
 		System:  full - noSystem,
 		Schema:  full - noTools,
 		Model:   bareModel - noModel,
-		Framing: noModel - agent.EstimateText(probeText),
+		Framing: noModel - event.EstimateText(probeText),
 		Total:   full,
 	}
 	m.Residue = m.Total - (m.System + m.Schema + m.Model + m.Framing)

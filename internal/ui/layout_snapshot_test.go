@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -27,8 +27,8 @@ func TestSpinnerStopsWhenRuntimeReturnsReady(t *testing.T) {
 	f.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	// Start a run: tool starts
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"pwd"`)}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"pwd"`)}},
 	}})
 
 	// While tool is active, status reports it
@@ -38,9 +38,9 @@ func TestSpinnerStopsWhenRuntimeReturnsReady(t *testing.T) {
 	}
 
 	// Tool completes, then run finishes via doneMsg
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: "/home/termux\n", OK: true}},
-		{Seq: 3, Type: agent.TurnEnd},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "bash", Output: "/home/termux\n", OK: true}},
+		{Seq: 3, Type: event.TurnEnd},
 	}})
 
 	_, cmd := f.Update(doneMsg{err: nil})
@@ -120,8 +120,8 @@ func TestLayoutSnapshotToolRunning(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	f.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "read_file", Args: json.RawMessage(`"main.go"`)}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file", Args: json.RawMessage(`"main.go"`)}},
 	}})
 
 	v := stripANSI(f.View())
@@ -152,8 +152,8 @@ func TestLayoutSnapshotPermissionModal(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	f.Update(tea.WindowSizeMsg{Width: 40, Height: 20})
 
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"rm -rf /tmp"`)}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"rm -rf /tmp"`)}},
 	}})
 
 	v := stripANSI(f.View())

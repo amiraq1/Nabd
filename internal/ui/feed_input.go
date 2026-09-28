@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -306,27 +306,27 @@ func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if !m.permModal.isArmed() {
 		if k.Type == tea.KeyEsc || k.String() == "esc" {
-			return m.answerModal(agent.Deny)
+			return m.answerModal(event.Deny)
 		}
 		m.permModal.Rearm()
 		return m, nil
 	}
 
 	if k.Type == tea.KeyEsc || k.String() == "esc" {
-		return m.answerModal(agent.Deny)
+		return m.answerModal(event.Deny)
 	}
 
 	switch k.String() {
 	case "y", "Y":
-		return m.answerModal(agent.AllowOnce)
+		return m.answerModal(event.AllowOnce)
 	case "a", "A":
 		if !sessionGrantAllowed(m.permModal.call) {
 			m.permModal.Rearm()
 			return m, nil
 		}
-		return m.answerModal(agent.AllowSession)
+		return m.answerModal(event.AllowSession)
 	case "n", "N":
-		return m.answerModal(agent.Deny)
+		return m.answerModal(event.Deny)
 	default:
 		m.permModal.Rearm()
 		return m, nil
@@ -337,7 +337,7 @@ func (m *Feed) modalKey(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 // composer focus. The loop answers with a PermReply event (which also
 // clears any residual modal state); the focus restore happens here so the
 // keyboard is usable immediately even before that event arrives.
-func (m *Feed) answerModal(d agent.Decision) (tea.Model, tea.Cmd) {
+func (m *Feed) answerModal(d event.Decision) (tea.Model, tea.Cmd) {
 	if m.decisionPending {
 		return m, nil
 	}

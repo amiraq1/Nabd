@@ -3,7 +3,7 @@ package presentation
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 func drainKeys(t *testing.T, p *Projector) map[ItemKey]bool {
@@ -24,7 +24,7 @@ func TestDrainTouchedCoversAllMutationPaths(t *testing.T) {
 		t.Fatalf("fresh projector: DrainTouched=%v, want nil", got)
 	}
 
-	apply := func(e agent.Event) {
+	apply := func(e event.Event) {
 		t.Helper()
 		if err := p.Apply(e); err != nil {
 			t.Fatal(err)
@@ -32,7 +32,7 @@ func TestDrainTouchedCoversAllMutationPaths(t *testing.T) {
 	}
 
 	// New user message: touched.
-	apply(agent.Event{Seq: 1, Type: agent.UserMsg, Text: "hi"})
+	apply(event.Event{Seq: 1, Type: event.UserMsg, Text: "hi"})
 	keys := drainKeys(t, p)
 	if !keys[ItemKey{Type: ItemUserMsg, ID: "user_1"}] {
 		t.Fatalf("user msg not touched: %v", keys)
@@ -42,8 +42,8 @@ func TestDrainTouchedCoversAllMutationPaths(t *testing.T) {
 	}
 
 	// Streaming deltas mutate the same assistant item in place.
-	apply(agent.Event{Seq: 2, Type: agent.TextDelta, Text: "hel"})
-	apply(agent.Event{Seq: 3, Type: agent.TextDelta, Text: "lo"})
+	apply(event.Event{Seq: 2, Type: event.TextDelta, Text: "hel"})
+	apply(event.Event{Seq: 3, Type: event.TextDelta, Text: "lo"})
 	keys = drainKeys(t, p)
 	asst := ItemKey{Type: ItemAssistant, ID: "asst_turn_2"}
 	if !keys[asst] {
@@ -51,46 +51,46 @@ func TestDrainTouchedCoversAllMutationPaths(t *testing.T) {
 	}
 
 	// Tool lifecycle: start creates, end mutates in place.
-	apply(agent.Event{Seq: 4, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash"}})
+	apply(event.Event{Seq: 4, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "bash"}})
 	tool := ItemKey{Type: ItemTool, ID: "tool_c1"}
 	if keys := drainKeys(t, p); !keys[tool] {
 		t.Fatalf("tool start not touched: %v", keys)
 	}
-	apply(agent.Event{Seq: 5, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash", Output: "out", OK: true}})
+	apply(event.Event{Seq: 5, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "bash", Output: "out", OK: true}})
 	if keys := drainKeys(t, p); !keys[tool] {
 		t.Fatalf("tool end (in-place card update) not touched: %v", keys)
 	}
 
 	// Permission ask/reply: reply mutates the ask's card in place.
-	apply(agent.Event{Seq: 6, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c2", Name: "write_file"}})
+	apply(event.Event{Seq: 6, Type: event.PermAsk, Call: &event.ToolCall{ID: "c2", Name: "write_file"}})
 	perm := ItemKey{Type: ItemPermission, ID: "tool_c2"}
 	if keys := drainKeys(t, p); !keys[perm] {
 		t.Fatalf("perm ask not touched: %v", keys)
 	}
-	apply(agent.Event{Seq: 7, Type: agent.PermReply, Decision: agent.AllowOnce,
-		Call: &agent.ToolCall{ID: "c2", Name: "write_file"}})
+	apply(event.Event{Seq: 7, Type: event.PermReply, Decision: event.AllowOnce,
+		Call: &event.ToolCall{ID: "c2", Name: "write_file"}})
 	if keys := drainKeys(t, p); !keys[perm] {
 		t.Fatalf("perm reply (in-place card update) not touched: %v", keys)
 	}
 
 	// Interrupted mass-cancels running tools in place.
-	apply(agent.Event{Seq: 8, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c3", Name: "bash"}})
+	apply(event.Event{Seq: 8, Type: event.ToolStart, Call: &event.ToolCall{ID: "c3", Name: "bash"}})
 	running := ItemKey{Type: ItemTool, ID: "tool_c3"}
 	if keys := drainKeys(t, p); !keys[running] {
 		t.Fatalf("second tool start not touched: %v", keys)
 	}
-	apply(agent.Event{Seq: 9, Type: agent.Interrupted, Text: "stop"})
+	apply(event.Event{Seq: 9, Type: event.Interrupted, Text: "stop"})
 	keys = drainKeys(t, p)
 	if !keys[running] {
 		t.Fatalf("interrupted did not touch running tool: %v", keys)
 	}
 
 	// Read records attach to the latest read_file card in place.
-	apply(agent.Event{Seq: 10, Type: agent.ToolStart,
-		Call: &agent.ToolCall{ID: "c4", Name: "read_file"}})
+	apply(event.Event{Seq: 10, Type: event.ToolStart,
+		Call: &event.ToolCall{ID: "c4", Name: "read_file"}})
 	_ = drainKeys(t, p)
-	apply(agent.Event{Seq: 11, Type: agent.EventRead,
-		Read: &agent.ReadRecord{Path: "f.txt", LinesRead: 3}})
+	apply(event.Event{Seq: 11, Type: event.EventRead,
+		Read: &event.ReadRecord{Path: "f.txt", LinesRead: 3}})
 	// Note: ToolStart above has no Args, so applyReadToLatest matches on
 	// empty Args (rec.Path != "" && card.Args != "" fails open).
 	if keys := drainKeys(t, p); !keys[ItemKey{Type: ItemTool, ID: "tool_c4"}] {

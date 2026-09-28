@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/payload"
 	"nabd/internal/provider"
 )
@@ -139,7 +140,7 @@ func runReadCost(t *testing.T, reg *Registry, dir, rel string, capBytes int) rea
 
 	run := readCostRun{capBytes: capBytes, turns: prov.turns, calls: len(prov.messages)}
 	for _, e := range sink.events {
-		if e.Type == agent.Notice && strings.Contains(e.Text, "context compacted") {
+		if e.Type == event.Notice && strings.Contains(e.Text, "context compacted") {
 			run.compacted = true
 		}
 	}

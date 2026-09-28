@@ -3,7 +3,7 @@ package perm
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 func TestModeTable(t *testing.T) {
@@ -47,7 +47,7 @@ func TestModePlanOverridesGrants(t *testing.T) {
 	cls := fakeClassifier{"write_file": Mutating, "bash": Executing}
 	p := New(cls)
 	p.SetMode(ModePlan)
-	p.Record("write_file", agent.AllowSession)
+	p.Record("write_file", event.AllowSession)
 	p.SetYOLO(true)
 
 	if v, why := p.Check("write_file"); v != Deny {
@@ -116,7 +116,7 @@ func TestModeDenyOverridesYOLO(t *testing.T) {
 			t.Fatalf("mode %v denied a read: %v", mode, v)
 		}
 
-		p.Record("write_file", agent.AllowSession)
+		p.Record("write_file", event.AllowSession)
 		if v, _ := p.Check("write_file"); v != Allow {
 			t.Fatalf("mode %v ignored an explicit session grant: %v", mode, v)
 		}

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -30,13 +30,13 @@ func TestSlashInvalidArgumentShowsUsage(t *testing.T) {
 }
 
 func TestFeedCardNavigationAndSemanticJumps(t *testing.T) {
-	call := &agent.ToolCall{ID: "p", Name: "bash"}
+	call := &event.ToolCall{ID: "p", Name: "bash"}
 	f := NewFeed()
-	f.BuildFromEvents([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "one"},
-		{Seq: 2, Type: agent.RunError, Err: "failure", ErrorCode: "unknown"},
-		{Seq: 3, Type: agent.PermAsk, Call: call},
-		{Seq: 4, Type: agent.PermReply, Call: call, Decision: agent.Deny, RawDecision: agent.Deny},
+	f.BuildFromEvents([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "one"},
+		{Seq: 2, Type: event.RunError, Err: "failure", ErrorCode: "unknown"},
+		{Seq: 3, Type: event.PermAsk, Call: call},
+		{Seq: 4, Type: event.PermReply, Call: call, Decision: event.Deny, RawDecision: event.Deny},
 	})
 	f.composer.clear()
 	f.composer.focus()

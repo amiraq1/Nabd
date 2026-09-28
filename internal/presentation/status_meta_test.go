@@ -5,25 +5,25 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 )
 
 func TestMetaTracksTurnTokensAndCommittedRoute(t *testing.T) {
 	start := time.Date(2026, 9, 13, 5, 0, 0, 0, time.UTC)
 	p := presentation.NewStatusProjector()
-	for _, e := range []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Time: start},
-		{Seq: 2, Type: agent.TurnStart, Time: start.Add(time.Second)},
-		{Seq: 3, Type: agent.EventProviderRoute, Route: &agent.ProviderRoute{
+	for _, e := range []event.Event{
+		{Seq: 1, Type: event.RunStart, Time: start},
+		{Seq: 2, Type: event.TurnStart, Time: start.Add(time.Second)},
+		{Seq: 3, Type: event.EventProviderRoute, Route: &event.ProviderRoute{
 			Status: "failed", Provider: "groq", Model: "openai/gpt-oss-120b", Attempt: 1,
 			Reason: "429 rate limit",
 		}},
-		{Seq: 4, Type: agent.EventProviderRoute, Route: &agent.ProviderRoute{
+		{Seq: 4, Type: event.EventProviderRoute, Route: &event.ProviderRoute{
 			Status: "selected", Provider: "nvidia", Model: "moonshotai/kimi-k2.6", Attempt: 2,
 			StreamID: "stream-secret-xyz",
 		}},
-		{Seq: 5, Type: agent.EventProviderUsage, Usage: &agent.ProviderUsage{
+		{Seq: 5, Type: event.EventProviderUsage, Usage: &event.ProviderUsage{
 			PromptTokens: 6000, CompletionTokens: 605,
 		}},
 	} {
@@ -58,14 +58,14 @@ func TestMetaTracksTurnTokensAndCommittedRoute(t *testing.T) {
 // truthfulness rule: a dead run must not appear to still be running.
 func TestMetaElapsedFreezesAtTerminalEvent(t *testing.T) {
 	start := time.Date(2026, 9, 13, 5, 0, 0, 0, time.UTC)
-	for name, terminal := range map[string]agent.Event{
-		"run_error":   {Seq: 2, Type: agent.RunError, Time: start.Add(5 * time.Second), Err: "boom"},
-		"run_end":     {Seq: 2, Type: agent.RunEnd, Time: start.Add(5 * time.Second)},
-		"interrupted": {Seq: 2, Type: agent.Interrupted, Time: start.Add(5 * time.Second)},
+	for name, terminal := range map[string]event.Event{
+		"run_error":   {Seq: 2, Type: event.RunError, Time: start.Add(5 * time.Second), Err: "boom"},
+		"run_end":     {Seq: 2, Type: event.RunEnd, Time: start.Add(5 * time.Second)},
+		"interrupted": {Seq: 2, Type: event.Interrupted, Time: start.Add(5 * time.Second)},
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := presentation.NewStatusProjector()
-			p.Apply(agent.Event{Seq: 1, Type: agent.RunStart, Time: start})
+			p.Apply(event.Event{Seq: 1, Type: event.RunStart, Time: start})
 			p.Apply(terminal)
 			if got := p.Meta(start.Add(time.Hour)).Elapsed; got != 5*time.Second {
 				t.Fatalf("elapsed = %v, want 5s", got)

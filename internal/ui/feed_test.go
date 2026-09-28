@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -25,8 +25,8 @@ func TestFeedUserMsg(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
 	f.height = 10
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "مرحبا"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "مرحبا"},
 	}})
 	view := f.View()
 	if !strings.Contains(view, "مرحبا") {
@@ -39,9 +39,9 @@ func TestFeedAssistantNonStreamed(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
 	f.height = 10
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.TextDelta, Text: "Hello world"},
-		{Seq: 2, Type: agent.TurnEnd},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.TextDelta, Text: "Hello world"},
+		{Seq: 2, Type: event.TurnEnd},
 	}})
 	items := f.proj.Items()
 	var found bool
@@ -61,11 +61,11 @@ func TestFeedMultipleDeltasMerge(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
 	f.height = 10
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.TextDelta, Text: "Hello "},
-		{Seq: 2, Type: agent.TextDelta, Text: "world"},
-		{Seq: 3, Type: agent.TextDelta, Text: "!"},
-		{Seq: 4, Type: agent.TurnEnd},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.TextDelta, Text: "Hello "},
+		{Seq: 2, Type: event.TextDelta, Text: "world"},
+		{Seq: 3, Type: event.TextDelta, Text: "!"},
+		{Seq: 4, Type: event.TurnEnd},
 	}})
 	items := f.proj.Items()
 	var asst *presentation.FeedItem
@@ -88,9 +88,9 @@ func TestFeedToolLifecycle(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
 	f.height = 10
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "read_file", Args: []byte(`{"path":"a.go"}`)}},
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "read_file", Output: "content", OK: true}},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "read_file", Args: []byte(`{"path":"a.go"}`)}},
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "read_file", Output: "content", OK: true}},
 	}})
 	items := f.proj.Items()
 	var tool *presentation.FeedItem
@@ -113,9 +113,9 @@ func TestFeedPermissionAllow(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
 	f.height = 10
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: []byte(`{"cmd":"ls"}`)}},
-		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "bash", Args: []byte(`{"cmd":"ls"}`)}},
+		{Seq: 2, Type: event.PermReply, Call: &event.ToolCall{ID: "c1"}, Decision: event.AllowOnce, RawDecision: event.AllowOnce},
 	}})
 	items := f.proj.Items()
 	var perm *presentation.FeedItem
@@ -138,9 +138,9 @@ func TestFeedPermissionDeny(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
 	f.height = 10
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
-		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, RawDecision: agent.Deny},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "bash"}},
+		{Seq: 2, Type: event.PermReply, Call: &event.ToolCall{ID: "c1"}, Decision: event.Deny, RawDecision: event.Deny},
 	}})
 	items := f.proj.Items()
 	var perm *presentation.FeedItem
@@ -163,9 +163,9 @@ func TestFeedRawDecisionDiffers(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
 	f.height = 10
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
-		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowSession},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "bash"}},
+		{Seq: 2, Type: event.PermReply, Call: &event.ToolCall{ID: "c1"}, Decision: event.AllowOnce, RawDecision: event.AllowSession},
 	}})
 	items := f.proj.Items()
 	var perm *presentation.FeedItem
@@ -178,7 +178,7 @@ func TestFeedRawDecisionDiffers(t *testing.T) {
 	if perm == nil {
 		t.Fatal("no permission item found")
 	}
-	if perm.Perm.Decision != agent.AllowSession || perm.Perm.Effective != agent.AllowOnce {
+	if perm.Perm.Decision != event.AllowSession || perm.Perm.Effective != event.AllowOnce {
 		t.Errorf("perm decision/effective = %v/%v, want AllowSession/AllowOnce",
 			perm.Perm.Decision, perm.Perm.Effective)
 	}
@@ -196,9 +196,9 @@ func TestFeedNoticeAndError(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
 	f.height = 10
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.Notice, Text: "calibrated"},
-		{Seq: 2, Type: agent.RunError, Err: "boom"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.Notice, Text: "calibrated"},
+		{Seq: 2, Type: event.RunError, Err: "boom"},
 	}})
 	items := f.proj.Items()
 	var notice, errMsg *presentation.FeedItem
@@ -224,9 +224,9 @@ func TestFeedUnknownEventNoPanic(t *testing.T) {
 	f.width = 50
 	f.height = 10
 	// Should not panic.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.EventType("future_event"), Text: "unknown"},
-		{Seq: 2, Type: agent.UserMsg, Text: "hi"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.EventType("future_event"), Text: "unknown"},
+		{Seq: 2, Type: event.UserMsg, Text: "hi"},
 	}})
 	items := f.proj.Items()
 	// Unknown event skipped; user_msg present.
@@ -249,11 +249,11 @@ func TestFeedFollowMode(t *testing.T) {
 	f.height = 10
 	f.follow = true
 
-	var events []agent.Event
+	var events []event.Event
 	for i := 1; i <= 30; i++ {
-		events = append(events, agent.Event{
+		events = append(events, event.Event{
 			Seq:  i,
-			Type: agent.UserMsg,
+			Type: event.UserMsg,
 			Text: fmt.Sprintf("m%02d", i),
 		})
 	}
@@ -289,9 +289,9 @@ func TestFeedScrollUpDisablesFollow(t *testing.T) {
 	f.width = 50
 	f.height = 10
 	f.follow = true
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "msg1"},
-		{Seq: 2, Type: agent.UserMsg, Text: "msg2"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "msg1"},
+		{Seq: 2, Type: event.UserMsg, Text: "msg2"},
 	}})
 	// Scroll up.
 	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyPgUp})
@@ -306,15 +306,15 @@ func TestFeedUnseenCounter(t *testing.T) {
 	f.width = 50
 	f.height = 10
 	f.follow = true
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "msg1"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "msg1"},
 	}})
 	// Scroll up to disable follow (PgUp is the explicit scroll key while
 	// the composer owns Up/Down).
 	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyPgUp})
 	// New event arrives while not following.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.UserMsg, Text: "msg2"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.UserMsg, Text: "msg2"},
 	}})
 	if f.unseen == 0 {
 		t.Errorf("unseen = %d, want > 0", f.unseen)
@@ -338,8 +338,8 @@ func TestFeedItemsAreCopy(t *testing.T) {
 	f := NewFeed()
 	f.width = 50
 	f.height = 10
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hi"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hi"},
 	}})
 	// Access internal items via the projector.
 	items := f.proj.Items()

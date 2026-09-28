@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/ui"
 )
 
@@ -20,11 +21,11 @@ import (
 // separates "drop" from "wait then give up": any solution that waits for
 // the UI fails it.
 func TestChanSinkDropsImmediatelyWhenFull(t *testing.T) {
-	ch := make(chan agent.Event, 1)
+	ch := make(chan event.Event, 1)
 	sink := &chanSink{ch: ch}
 
 	// First event lands in the buffer.
-	if err := sink.Emit(agent.Event{Type: agent.RunStart}); err != nil {
+	if err := sink.Emit(event.Event{Type: event.RunStart}); err != nil {
 		t.Fatalf("Emit on a channel with room failed: %v", err)
 	}
 	if got := sink.Dropped(); got != 0 {
@@ -34,7 +35,7 @@ func TestChanSinkDropsImmediatelyWhenFull(t *testing.T) {
 	// The channel is now full and nothing drains it: the next emit must
 	// drop instantly, return nil, and count the loss.
 	start := time.Now()
-	err := sink.Emit(agent.Event{Type: agent.TextDelta, Text: "dropped", Seq: 7})
+	err := sink.Emit(event.Event{Type: event.TextDelta, Text: "dropped", Seq: 7})
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -48,7 +49,7 @@ func TestChanSinkDropsImmediatelyWhenFull(t *testing.T) {
 	}
 
 	// Subsequent drops accumulate.
-	if err := sink.Emit(agent.Event{Type: agent.TextDelta, Text: "again", Seq: 8}); err != nil {
+	if err := sink.Emit(event.Event{Type: event.TextDelta, Text: "again", Seq: 8}); err != nil {
 		t.Fatalf("second drop returned error: %v", err)
 	}
 	if got := sink.Dropped(); got != 2 {
@@ -61,20 +62,20 @@ func TestChanSinkDropsImmediatelyWhenFull(t *testing.T) {
 // journal Notice before RunEnd, so the loss stays observable without killing
 // the session.
 func TestChanSinkNotesDroppedCount(t *testing.T) {
-	sink := &chanSink{ch: make(chan agent.Event)}
+	sink := &chanSink{ch: make(chan event.Event)}
 	rec := &recordSink{}
 	loop := &agent.Loop{Sink: rec}
 
 	// Nothing drains the channel: two events are dropped.
-	sink.Emit(agent.Event{Type: agent.TextDelta, Text: "one", Seq: 1})
-	sink.Emit(agent.Event{Type: agent.TextDelta, Text: "two", Seq: 2})
+	sink.Emit(event.Event{Type: event.TextDelta, Text: "one", Seq: 1})
+	sink.Emit(event.Event{Type: event.TextDelta, Text: "two", Seq: 2})
 	if got := sink.Dropped(); got != 2 {
 		t.Fatalf("Dropped() = %d, want 2", got)
 	}
 
 	sink.noteDrops(loop)
 
-	if len(rec.evs) != 1 || rec.evs[0].Type != agent.Notice {
+	if len(rec.evs) != 1 || rec.evs[0].Type != event.Notice {
 		t.Fatalf("expected exactly one Notice, got %v", rec.evs)
 	}
 	if !strings.Contains(rec.evs[0].Text, "2") {
@@ -89,7 +90,7 @@ func TestChanSinkNotesDroppedCount(t *testing.T) {
 
 	// With nothing dropped, noteDrops stays silent.
 	rec2 := &recordSink{}
-	(&chanSink{ch: make(chan agent.Event)}).noteDrops(&agent.Loop{Sink: rec2})
+	(&chanSink{ch: make(chan event.Event)}).noteDrops(&agent.Loop{Sink: rec2})
 	if len(rec2.evs) != 0 {
 		t.Fatalf("noteDrops must not emit when nothing was dropped, got %v", rec2.evs)
 	}
@@ -98,14 +99,14 @@ func TestChanSinkNotesDroppedCount(t *testing.T) {
 // TestChanSinkDeliversWhenDrained proves the happy path: when the UI drains
 // promptly, events are delivered in order with no error.
 func TestChanSinkDeliversWhenDrained(t *testing.T) {
-	ch := make(chan agent.Event, 16)
+	ch := make(chan event.Event, 16)
 	sink := &chanSink{ch: ch}
 
 	var mu sync.Mutex
-	var got []agent.Event
+	var got []event.Event
 	count := 3
 	for i := 0; i < count; i++ {
-		e := agent.Event{Type: agent.TextDelta, Seq: i + 1}
+		e := event.Event{Type: event.TextDelta, Seq: i + 1}
 		if err := sink.Emit(e); err != nil {
 			t.Fatalf("Emit failed on drained channel: %v", err)
 		}
@@ -159,13 +160,13 @@ func TestJournalCloseErrorObservable(t *testing.T) {
 // failSink is a sink that always returns a fixed error.
 type failSink struct{ err error }
 
-func (f *failSink) Emit(e agent.Event) error { return f.err }
+func (f *failSink) Emit(e event.Event) error { return f.err }
 
 // recordSink captures every event it receives, for asserting what the loop
 // actually emitted.
-type recordSink struct{ evs []agent.Event }
+type recordSink struct{ evs []event.Event }
 
-func (r *recordSink) Emit(e agent.Event) error {
+func (r *recordSink) Emit(e event.Event) error {
 	r.evs = append(r.evs, e)
 	return nil
 }
@@ -182,9 +183,9 @@ func (r *recordSink) Emit(e agent.Event) error {
 // program exits, that flush is observed and the test fails on the spot.
 func TestFinishFeedSessionStopsBatcherOnlyAfterTheProgramExits(t *testing.T) {
 	var mu sync.Mutex
-	var delivered []agent.Event
+	var delivered []event.Event
 	flushed := make(chan struct{}, 1)
-	b := ui.NewBatcher(time.Hour, 100, func(batch []agent.Event) {
+	b := ui.NewBatcher(time.Hour, 100, func(batch []event.Event) {
 		mu.Lock()
 		delivered = append(delivered, batch...)
 		mu.Unlock()
@@ -196,7 +197,7 @@ func TestFinishFeedSessionStopsBatcherOnlyAfterTheProgramExits(t *testing.T) {
 	b.Start()
 
 	// A pending event that only a premature Stop would flush.
-	b.Add(agent.Event{Type: agent.TextDelta, Seq: 99})
+	b.Add(event.Event{Type: event.TextDelta, Seq: 99})
 
 	sink := feedSink{batcher: b}
 	loop := &agent.Loop{Sink: &recordSink{}}
@@ -216,7 +217,7 @@ func TestFinishFeedSessionStopsBatcherOnlyAfterTheProgramExits(t *testing.T) {
 
 	// A live event now reaches the receiver; the sensitive type forces the
 	// flush, so both the pending event and this one are delivered.
-	sink.Emit(agent.Event{Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "read_file"}})
+	sink.Emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file"}})
 	mu.Lock()
 	got := len(delivered)
 	mu.Unlock()
@@ -231,7 +232,7 @@ func TestFinishFeedSessionStopsBatcherOnlyAfterTheProgramExits(t *testing.T) {
 	}
 
 	// Shutdown completed: the batcher is stopped, so later events are dropped.
-	sink.Emit(agent.Event{Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t2", Name: "read_file"}})
+	sink.Emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: "t2", Name: "read_file"}})
 	mu.Lock()
 	got = len(delivered)
 	mu.Unlock()
@@ -244,7 +245,7 @@ func TestFinishFeedSessionStopsBatcherOnlyAfterTheProgramExits(t *testing.T) {
 // program still stops the batcher and closes the journal, so the shutdown
 // does not leak.
 func TestFinishFeedSessionReportsProgramError(t *testing.T) {
-	b := ui.NewBatcher(time.Hour, 100, func([]agent.Event) {})
+	b := ui.NewBatcher(time.Hour, 100, func([]event.Event) {})
 	b.Start()
 
 	progDone := make(chan error, 1)
@@ -267,7 +268,7 @@ type failCloser struct {
 	err    error
 }
 
-func (f *failCloser) Emit(e agent.Event) error { return nil }
+func (f *failCloser) Emit(e event.Event) error { return nil }
 func (f *failCloser) Close() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -285,14 +286,14 @@ func TestChanSinkCapacityMatchesContract(t *testing.T) {
 		t.Fatalf("UI event channel capacity = %d, want %d", got, want)
 	}
 	for i := 0; i < want; i++ {
-		if err := sink.Emit(agent.Event{Type: agent.TextDelta, Seq: i + 1}); err != nil {
+		if err := sink.Emit(event.Event{Type: event.TextDelta, Seq: i + 1}); err != nil {
 			t.Fatalf("Emit(%d) returned error while the channel had room: %v", i, err)
 		}
 	}
 	if got := sink.Dropped(); got != 0 {
 		t.Fatalf("Dropped() = %d, want 0 after exactly %d events", got, want)
 	}
-	if err := sink.Emit(agent.Event{Type: agent.TextDelta, Seq: want + 1}); err != nil {
+	if err := sink.Emit(event.Event{Type: event.TextDelta, Seq: want + 1}); err != nil {
 		t.Fatalf("Emit past capacity returned error: %v", err)
 	}
 	if got := sink.Dropped(); got != 1 {
@@ -306,11 +307,11 @@ func TestChanSinkCapacityMatchesContract(t *testing.T) {
 // timescale. The elapsed-time bound is the assertion that separates "drop"
 // from "wait then give up"; an "eventually" check would hide a blocking sink.
 func TestChanSinkNeverBlocksUnderBurst(t *testing.T) {
-	sink := &chanSink{ch: make(chan agent.Event, 1)}
+	sink := &chanSink{ch: make(chan event.Event, 1)}
 
 	start := time.Now()
 	for i := 0; i < 10; i++ {
-		if err := sink.Emit(agent.Event{Type: agent.TextDelta, Seq: i + 1}); err != nil {
+		if err := sink.Emit(event.Event{Type: event.TextDelta, Seq: i + 1}); err != nil {
 			t.Fatalf("Emit(%d) returned error: %v", i, err)
 		}
 	}

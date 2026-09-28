@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/store"
 )
 
@@ -21,7 +21,7 @@ func oversizedJournalFixture(t *testing.T) (path string, liveSeqs []int) {
 
 	var lines []string
 	seq := 0
-	emit := func(e agent.Event) {
+	emit := func(e event.Event) {
 		seq++
 		e.Seq = seq
 		if e.Parent == 0 {
@@ -35,12 +35,12 @@ func oversizedJournalFixture(t *testing.T) (path string, liveSeqs []int) {
 	}
 	pad := strings.Repeat("x", 16*1024) // 16 KiB per event, like MaxPersistedOutput
 	for i := 0; i < 1500; i++ {
-		emit(agent.Event{Type: agent.UserMsg, Text: pad})
+		emit(event.Event{Type: event.UserMsg, Text: pad})
 	}
 	firstKept := seq + 1
-	emit(agent.Event{Type: agent.Compact, FirstKept: firstKept, Text: "summary"})
+	emit(event.Event{Type: event.Compact, FirstKept: firstKept, Text: "summary"})
 	for i := 0; i < 600; i++ {
-		emit(agent.Event{Type: agent.UserMsg, Text: pad})
+		emit(event.Event{Type: event.UserMsg, Text: pad})
 		liveSeqs = append(liveSeqs, seq)
 	}
 	// Sanity: the fixture really is oversized.
@@ -93,7 +93,7 @@ func TestMaybeRotateOversizedJournal(t *testing.T) {
 	if len(kept) != len(liveSeqs)+1 {
 		t.Fatalf("rotated journal has %d events, want %d (compact + live tail)", len(kept), len(liveSeqs)+1)
 	}
-	if kept[0].Type != agent.Compact {
+	if kept[0].Type != event.Compact {
 		t.Fatalf("rotated journal must start with the Compact event, got %v", kept[0].Type)
 	}
 	for i, e := range kept[1:] {
@@ -101,7 +101,7 @@ func TestMaybeRotateOversizedJournal(t *testing.T) {
 			t.Fatalf("kept[%d].Seq=%d, want %d", i+1, e.Seq, liveSeqs[i])
 		}
 	}
-	if got := len(kept); agent.Live(kept)[0].Type != agent.Compact || got != len(agent.Live(origEvents)) {
+	if got := len(kept); event.Live(kept)[0].Type != event.Compact || got != len(event.Live(origEvents)) {
 		t.Fatal("rotated file's live branch differs from the original's")
 	}
 
@@ -119,7 +119,7 @@ func TestMaybeRotateOversizedJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := j.Append(agent.Event{Type: agent.UserMsg, Text: "after rotation"}); err != nil {
+	if err := j.Append(event.Event{Type: event.UserMsg, Text: "after rotation"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := j.Close(); err != nil {

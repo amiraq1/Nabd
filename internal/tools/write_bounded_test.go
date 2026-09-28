@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // diffBoundsBackup restores the configurable diff/event/output bounds after a
@@ -229,11 +229,11 @@ func TestEventSizeBounded(t *testing.T) {
 	// patch to fit.
 	bare := *full
 	bare.Patch = ""
-	bareBytes, err := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: &bare})
+	bareBytes, err := json.Marshal(event.Event{Type: event.EventEdit, Edit: &bare})
 	if err != nil {
 		t.Fatal(err)
 	}
-	fullBytes, err := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: full})
+	fullBytes, err := json.Marshal(event.Event{Type: event.EventEdit, Edit: full})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestEventSizeBounded(t *testing.T) {
 	if rec.Patch != "" {
 		t.Fatalf("patch should have been dropped to fit budget; got %d bytes", len(rec.Patch))
 	}
-	b, err := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: rec})
+	b, err := json.Marshal(event.Event{Type: event.EventEdit, Edit: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +305,7 @@ func TestEventSizeUnderBudgetKeepsPatch(t *testing.T) {
 	// baseline + 6*len(patch) + envelope + 1 (one byte of headroom).
 	bare := *full
 	bare.Patch = ""
-	bareBytes, err := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: &bare})
+	bareBytes, err := json.Marshal(event.Event{Type: event.EventEdit, Edit: &bare})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +337,7 @@ func TestEventSizeUnderBudgetKeepsPatch(t *testing.T) {
 		t.Errorf("recovery blobs lost: before=%q after=%q", rec.BlobBefore, rec.BlobAfter)
 	}
 	// The serialized event (bare + envelope allowance) must not exceed budget.
-	b, _ := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: rec})
+	b, _ := json.Marshal(event.Event{Type: event.EventEdit, Edit: rec})
 	if len(b)+eventEnvelopeAllowance > budget {
 		t.Errorf("event+%d envelope = %d bytes exceeds budget %d", eventEnvelopeAllowance, len(b)+eventEnvelopeAllowance, budget)
 	}

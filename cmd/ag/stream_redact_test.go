@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/redact"
@@ -192,11 +193,11 @@ func TestReplayOldJournalUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	branch := agent.Live(evs)
+	branch := event.Live(evs)
 
 	var texts []string
 	for _, e := range branch {
-		if e.Type == agent.TextDelta {
+		if e.Type == event.TextDelta {
 			texts = append(texts, e.Text)
 		}
 	}
@@ -254,22 +255,22 @@ func (p *multiChunkProvider) Stream(ctx context.Context, req provider.Request) (
 
 type noopSink struct{}
 
-func (noopSink) Emit(agent.Event) error { return nil }
+func (noopSink) Emit(event.Event) error { return nil }
 
 // turnTexts splits a live branch into the concatenated TextDelta text of each
 // turn, so a held delta that lands in the wrong turn is visible.
-func turnTexts(branch []agent.Event) []string {
+func turnTexts(branch []event.Event) []string {
 	var turns []string
 	var cur strings.Builder
 	open := false
 	for _, e := range branch {
 		switch e.Type {
-		case agent.TurnStart:
+		case event.TurnStart:
 			cur.Reset()
 			open = true
-		case agent.TextDelta:
+		case event.TextDelta:
 			cur.WriteString(e.Text)
-		case agent.TurnEnd:
+		case event.TurnEnd:
 			if open {
 				turns = append(turns, cur.String())
 				open = false
@@ -282,7 +283,7 @@ func turnTexts(branch []agent.Event) []string {
 // TestRewindNewJournalWithHeldDeltas writes a new journal whose stream redactor
 // holds back and drops deltas (a secret split across three chunks), then proves
 // the journal is a valid tree: unique strictly-increasing seqs, every Parent
-// resolves, agent.Live returns the whole chain, the redacted text lands in the
+// resolves, event.Live returns the whole chain, the redacted text lands in the
 // right turns, and a rewind on the replayed session succeeds.
 func TestRewindNewJournalWithHeldDeltas(t *testing.T) {
 	setUpProject(t)
@@ -330,11 +331,11 @@ func TestRewindNewJournalWithHeldDeltas(t *testing.T) {
 		}
 	}
 	// Live follows the whole chain, not truncated at a held delta.
-	branch := agent.Live(evs)
+	branch := event.Live(evs)
 	if len(branch) != len(evs) {
 		t.Fatalf("Live returned %d of %d events: chain truncated at a held delta", len(branch), len(evs))
 	}
-	if branch[0].Type != agent.RunStart {
+	if branch[0].Type != event.RunStart {
 		t.Fatalf("Live chain does not start at RunStart: %s", branch[0].Type)
 	}
 
@@ -365,7 +366,7 @@ func TestRewindNewJournalWithHeldDeltas(t *testing.T) {
 // TestLiveRewindThenContinueKeepsJournalChain runs a live session, streams a
 // split secret, runs a tool call, rewinds the LIVE loop to the branch point,
 // runs another turn, and then reads the journal. Every Parent must resolve,
-// agent.Live must return the whole post-rewind branch, and the journal and the
+// event.Live must return the whole post-rewind branch, and the journal and the
 // in-memory history must agree that the branch point is the Rewind event.
 func TestLiveRewindThenContinueKeepsJournalChain(t *testing.T) {
 	dir := t.TempDir()
@@ -433,19 +434,19 @@ func TestLiveRewindThenContinueKeepsJournalChain(t *testing.T) {
 			t.Fatalf("seq %d has dangling parent %d", e.Seq, e.Parent)
 		}
 	}
-	branch := agent.Live(evs)
+	branch := event.Live(evs)
 	if len(branch) == 0 || branch[0].Seq != 1 {
 		t.Fatalf("Live branch does not start at the root: %+v", branch)
 	}
 
 	journalRewinds, histRewinds := 0, 0
 	for _, e := range branch {
-		if e.Type == agent.Rewind {
+		if e.Type == event.Rewind {
 			journalRewinds++
 		}
 	}
-	for _, e := range agent.Live(loop.Hist()) {
-		if e.Type == agent.Rewind {
+	for _, e := range event.Live(loop.Hist()) {
+		if e.Type == event.Rewind {
 			histRewinds++
 		}
 	}
@@ -458,13 +459,13 @@ func TestLiveRewindThenContinueKeepsJournalChain(t *testing.T) {
 // greater than its Parent's Seq. That gap is the signature of a boundary flush
 // reusing a sequence number a dropped delta left free, and it is the only way
 // such an out-of-order TextDelta can appear.
-func reusedFlushSeq(evs []agent.Event) int {
-	by := map[int]agent.Event{}
+func reusedFlushSeq(evs []event.Event) int {
+	by := map[int]event.Event{}
 	for _, e := range evs {
 		by[e.Seq] = e
 	}
 	for _, e := range evs {
-		if e.Type != agent.TextDelta || e.Parent == 0 {
+		if e.Type != event.TextDelta || e.Parent == 0 {
 			continue
 		}
 		if p, ok := by[e.Parent]; ok && e.Seq > p.Seq+1 {
@@ -474,9 +475,9 @@ func reusedFlushSeq(evs []agent.Event) int {
 	return 0
 }
 
-func liveSeqs(evs []agent.Event) []int {
+func liveSeqs(evs []event.Event) []int {
 	out := make([]int, 0, len(evs))
-	for _, e := range agent.Live(evs) {
+	for _, e := range event.Live(evs) {
 		out = append(out, e.Seq)
 	}
 	return out
@@ -490,7 +491,7 @@ func liveSeqs(evs []agent.Event) []int {
 // across enough chunks that at least two deltas are dropped before the flush;
 // the test first proves that state occurred, then rewinds, continues, and checks
 // that every Parent resolves, that the seqs are unique and strictly increasing,
-// that agent.Live returns the whole chain, and that replay (the journal) agrees
+// that event.Live returns the whole chain, and that replay (the journal) agrees
 // with the in-memory history on the branch point.
 func TestRewindToReusedParentKeepsChainResolvable(t *testing.T) {
 	dir := t.TempDir()
@@ -588,8 +589,8 @@ func TestRewindToReusedParentKeepsChainResolvable(t *testing.T) {
 		t.Fatalf("the reused seq %d was lost from the journal", reused)
 	}
 
-	branch := agent.Live(evs)
-	if len(branch) == 0 || branch[0].Type != agent.RunStart {
+	branch := event.Live(evs)
+	if len(branch) == 0 || branch[0].Type != event.RunStart {
 		t.Fatalf("Live chain does not start at RunStart: %+v", branch)
 	}
 	last := evs[len(evs)-1]
@@ -600,7 +601,7 @@ func TestRewindToReusedParentKeepsChainResolvable(t *testing.T) {
 	// The rewind's branch point (its Parent) must resolve onto the live chain.
 	rewindParent := 0
 	for _, e := range evs {
-		if e.Type == agent.Rewind {
+		if e.Type == event.Rewind {
 			rewindParent = e.Parent
 		}
 	}
@@ -617,8 +618,8 @@ func TestRewindToReusedParentKeepsChainResolvable(t *testing.T) {
 	// Replay (the journal) must agree with the in-memory history on the branch
 	// point: each has exactly one Rewind and the same rewind parent.
 	histParent, histRewinds := 0, 0
-	for _, e := range agent.Live(loop.Hist()) {
-		if e.Type == agent.Rewind {
+	for _, e := range event.Live(loop.Hist()) {
+		if e.Type == event.Rewind {
 			histRewinds++
 			histParent = e.Parent
 		}

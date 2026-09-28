@@ -188,10 +188,10 @@ func TestRenderEventLayerDeclarations(t *testing.T) {
 	}
 }
 
-// TestRenderEventLayerImportsAgent verifies that render_event.go does
-// import nabd/internal/agent — the whole point of the split is that this
+// TestRenderEventLayerImportsEvent verifies that render_event.go does
+// import nabd/internal/event — the whole point of the split is that this
 // layer is the only render file that touches the event domain.
-func TestRenderEventLayerImportsAgent(t *testing.T) {
+func TestRenderEventLayerImportsEvent(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, "render_event.go", nil, parser.ImportsOnly)
 	if err != nil {
@@ -201,13 +201,13 @@ func TestRenderEventLayerImportsAgent(t *testing.T) {
 	imports := parseImports(f)
 	found := false
 	for _, imp := range imports {
-		if imp == "nabd/internal/agent" {
+		if imp == "nabd/internal/event" {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("render_event.go must import nabd/internal/agent; got imports: %v", imports)
+		t.Fatalf("render_event.go must import nabd/internal/event; got imports: %v", imports)
 	}
 
 	// Also verify it does NOT import go/ast etc. (those belong to tests only).

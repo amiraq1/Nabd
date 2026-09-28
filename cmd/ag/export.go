@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/provider"
 	"nabd/internal/store"
 )
@@ -68,7 +68,7 @@ func exportJournal(path string, redactOutput bool, stdout, stderr io.Writer) err
 
 	// Stream the journal instead of loading it: a long session's export no
 	// longer costs O(journal) memory.
-	sink := jsonlStdout{w: stdout, redact: func(e agent.Event) agent.Event {
+	sink := jsonlStdout{w: stdout, redact: func(e event.Event) event.Event {
 		return redactJournalEvent(e, exportExactKeys(redactOutput))
 	}}
 	return store.Scan(path, sink.Emit)

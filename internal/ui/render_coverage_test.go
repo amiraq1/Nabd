@@ -5,16 +5,15 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"nabd/internal/event"
 	"strings"
 	"testing"
-
-	"nabd/internal/agent"
 
 	"github.com/charmbracelet/x/ansi"
 )
 
 // TestRenderEventCoversAllKnownTypes is the source-derived replacement for the
-// hand-written guard. It parses internal/agent/event.go, extracts every
+// hand-written guard. It parses internal/event/event.go, extracts every
 // EventType constant declared there, and verifies that RenderEvent has an
 // explicit case arm for each one — i.e. none of them reaches the unknown-type
 // fallback ("· <type>").
@@ -25,11 +24,11 @@ import (
 func TestRenderEventCoversAllKnownTypes(t *testing.T) {
 	fset := token.NewFileSet()
 	//lint:ignore SA1019 ParseDir is required by the Stage A2 specification
-	pkgs, err := parser.ParseDir(fset, "../agent", func(fi fs.FileInfo) bool {
+	pkgs, err := parser.ParseDir(fset, "../event", func(fi fs.FileInfo) bool {
 		return !strings.HasSuffix(fi.Name(), "_test.go")
 	}, 0)
 	if err != nil {
-		t.Fatalf("parsing ../agent: %v", err)
+		t.Fatalf("parsing ../event: %v", err)
 	}
 
 	var types []string
@@ -65,17 +64,17 @@ func TestRenderEventCoversAllKnownTypes(t *testing.T) {
 	}
 
 	if len(types) == 0 {
-		t.Fatal("found zero EventType constants in ../agent — parser bug or path wrong")
+		t.Fatal("found zero EventType constants in ../event — parser bug or path wrong")
 	}
 
 	for _, ty := range types {
-		e := agent.Event{Type: agent.EventType(ty)}
+		e := event.Event{Type: event.EventType(ty)}
 		// Populate sub-records that nil-guard to "" to avoid a false negative.
-		switch agent.EventType(ty) {
-		case agent.EventRead:
-			e.Read = &agent.ReadRecord{Path: "sample.go"}
-		case agent.EventEdit:
-			e.Edit = &agent.EditRecord{Path: "sample.go"}
+		switch event.EventType(ty) {
+		case event.EventRead:
+			e.Read = &event.ReadRecord{Path: "sample.go"}
+		case event.EventEdit:
+			e.Edit = &event.EditRecord{Path: "sample.go"}
 		}
 
 		got := ansi.Strip(RenderEvent(e, DefaultWidth))

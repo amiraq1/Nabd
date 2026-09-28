@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/perm"
 )
 
@@ -358,7 +358,7 @@ func TestUndoRevertsWriteToGitignoredFile(t *testing.T) {
 	if lastCreate == nil {
 		t.Fatal("expected LastEdit record for creation")
 	}
-	resCreate := r.PersistedUndo([]*agent.EditRecord{lastCreate}, 1)
+	resCreate := r.PersistedUndo([]*event.EditRecord{lastCreate}, 1)
 	if len(resCreate) != 1 || !resCreate[0].OK {
 		t.Fatalf("undo creation failed: %+v", resCreate)
 	}
@@ -386,7 +386,7 @@ func TestUndoRevertsWriteToGitignoredFile(t *testing.T) {
 	if lastReplace == nil {
 		t.Fatal("expected LastEdit record for replacement")
 	}
-	resReplace := r.PersistedUndo([]*agent.EditRecord{lastReplace}, 1)
+	resReplace := r.PersistedUndo([]*event.EditRecord{lastReplace}, 1)
 	if len(resReplace) != 1 || !resReplace[0].OK {
 		t.Fatalf("undo replacement failed: %+v", resReplace)
 	}
@@ -418,7 +418,7 @@ func TestExcludedWriteConsumesReadCredit(t *testing.T) {
 	beforeHash := hex.EncodeToString(h[:])
 
 	// Stage read credit for dist/bundle.js
-	credit := agent.ReadCredit{
+	credit := event.ReadCredit{
 		Path:      "dist/bundle.js",
 		Hash:      beforeHash,
 		Offset:    1,
@@ -439,7 +439,7 @@ func TestExcludedWriteConsumesReadCredit(t *testing.T) {
 	}
 
 	// Staged credit must be consumed (empty)
-	if empty := r.ReadCredit(); empty != (agent.ReadCredit{}) {
+	if empty := r.ReadCredit(); empty != (event.ReadCredit{}) {
 		t.Fatalf("staged read credit was not consumed: %+v", empty)
 	}
 

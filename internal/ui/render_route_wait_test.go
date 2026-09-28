@@ -4,16 +4,16 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestRenderEvent_ProviderRoute_Waiting checks the UI side of the waiting
 // notice: the badge is owned by the renderer, the text by presentation.
 func TestRenderEvent_ProviderRoute_Waiting(t *testing.T) {
-	ev := agent.Event{
+	ev := event.Event{
 		Seq:  20,
-		Type: agent.EventProviderRoute,
-		Route: &agent.ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			Status:   "waiting",
 			Provider: "groq",
 			Model:    "openai/gpt-oss-120b",
@@ -44,9 +44,9 @@ func TestFeed_ProviderRoute_WaitingReachesFeed(t *testing.T) {
 	f.width = 80
 	f.height = 20
 
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "run started"},
-		{Seq: 2, Type: agent.EventProviderRoute, Route: &agent.ProviderRoute{
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "run started"},
+		{Seq: 2, Type: event.EventProviderRoute, Route: &event.ProviderRoute{
 			Status:   "waiting",
 			Provider: "groq",
 			Model:    "openai/gpt-oss-120b",

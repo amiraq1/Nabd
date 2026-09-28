@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 )
 
@@ -15,9 +15,9 @@ func TestCacheReuseOnIdenticalRefresh(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
-		{Seq: 2, Type: agent.TurnEnd},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
+		{Seq: 2, Type: event.TurnEnd},
 	})
 
 	f.refresh()
@@ -38,16 +38,16 @@ func TestCacheOnlyLastItemRedrawsOnGrowth(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "say hello"},
-		{Seq: 2, Type: agent.TextDelta, Text: "hel"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "say hello"},
+		{Seq: 2, Type: event.TextDelta, Text: "hel"},
 	})
 
 	f.refresh()
 	countBefore := f.renderCount
 
-	f.applyBatch([]agent.Event{
-		{Seq: 3, Type: agent.TextDelta, Text: "lo world"},
+	f.applyBatch([]event.Event{
+		{Seq: 3, Type: event.TextDelta, Text: "lo world"},
 	})
 
 	redraws := f.renderCount - countBefore
@@ -63,9 +63,9 @@ func TestCacheInvalidatesOnWidthChange(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
-		{Seq: 2, Type: agent.TextDelta, Text: "world"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
+		{Seq: 2, Type: event.TextDelta, Text: "world"},
 	})
 
 	f.refresh()
@@ -88,9 +88,9 @@ func TestCacheInvalidatesOnExpansionChange(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: "done", OK: true}},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash"}},
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "bash", Output: "done", OK: true}},
 	})
 
 	f.refresh()
@@ -112,12 +112,12 @@ func TestToggleToolsOnlyInvalidatesToolCards(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "first question"},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: "output line", OK: true}},
-		{Seq: 4, Type: agent.TextDelta, Text: "assistant answer"},
-		{Seq: 5, Type: agent.TurnEnd},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "first question"},
+		{Seq: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash"}},
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "bash", Output: "output line", OK: true}},
+		{Seq: 4, Type: event.TextDelta, Text: "assistant answer"},
+		{Seq: 5, Type: event.TurnEnd},
 	})
 
 	f.refresh()
@@ -140,15 +140,15 @@ func TestCacheInvalidatesOnVisibleFieldChange(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
 	})
 
 	f.refresh()
 	countBefore := f.renderCount
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello world"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello world"},
 	})
 
 	if f.renderCount <= countBefore {
@@ -163,8 +163,8 @@ func TestCacheSeqIDChangeNoWrongRedraw(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
 	})
 	f.refresh()
 	linesForSeq1 := make([]string, len(f.lines))
@@ -173,8 +173,8 @@ func TestCacheSeqIDChangeNoWrongRedraw(t *testing.T) {
 	f2 := NewFeed()
 	f2.width = 80
 	f2.height = 24
-	f2.applyBatch([]agent.Event{
-		{Seq: 999, Type: agent.UserMsg, Text: "hello"},
+	f2.applyBatch([]event.Event{
+		{Seq: 999, Type: event.UserMsg, Text: "hello"},
 	})
 	f2.refresh()
 	linesForSeq999 := make([]string, len(f2.lines))
@@ -197,10 +197,10 @@ func TestCacheEvictsDeletedItems(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "msg1"},
-		{Seq: 2, Type: agent.UserMsg, Text: "msg2"},
-		{Seq: 3, Type: agent.UserMsg, Text: "msg3"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "msg1"},
+		{Seq: 2, Type: event.UserMsg, Text: "msg2"},
+		{Seq: 3, Type: event.UserMsg, Text: "msg3"},
 	})
 
 	f.refresh()
@@ -223,9 +223,9 @@ func TestCacheEmptyOrDuplicateIDNoLeakage(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "no-id-1"},
-		{Seq: 2, Type: agent.UserMsg, Text: "no-id-2"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "no-id-1"},
+		{Seq: 2, Type: event.UserMsg, Text: "no-id-2"},
 	})
 
 	f.refresh()
@@ -255,8 +255,8 @@ func TestCacheNoAliasing(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
 	})
 
 	f.refresh()

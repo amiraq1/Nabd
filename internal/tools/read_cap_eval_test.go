@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // NBD-400 read-cap eval.
@@ -115,7 +116,7 @@ func walkRead(t *testing.T, r *Registry, rel string, totalLines, capBytes int) r
 		}
 		// The prompt cost of this result as the loop would serialise it: the
 		// same fence the provider boundary applies.
-		run.tokensEst += agent.EstimateText(agent.FenceToolOutput("read_file", out.Text))
+		run.tokensEst += event.EstimateText(agent.FenceToolOutput("read_file", out.Text))
 
 		if !out.Truncated {
 			run.elapsed = time.Since(start)

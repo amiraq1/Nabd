@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestRefreshIncrementalDirtyTracking verifies the L15 fast path: refreshes
@@ -13,9 +13,9 @@ import (
 func TestRefreshIncrementalDirtyTracking(t *testing.T) {
 	f := NewFeed()
 	f.width, f.height = 80, 24
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
-		{Seq: 2, Type: agent.TextDelta, Text: "wor"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
+		{Seq: 2, Type: event.TextDelta, Text: "wor"},
 	})
 	// applyBatch renders internally; the first explicit refresh is a no-op.
 	if f.refresh() {
@@ -39,7 +39,7 @@ func TestRefreshIncrementalDirtyTracking(t *testing.T) {
 
 	// A new delta touches exactly the assistant item. Apply it directly to the
 	// projector (applyBatch would render internally).
-	if err := f.proj.Apply(agent.Event{Seq: 3, Type: agent.TextDelta, Text: "ld"}); err != nil {
+	if err := f.proj.Apply(event.Event{Seq: 3, Type: event.TextDelta, Text: "ld"}); err != nil {
 		t.Fatal(err)
 	}
 	if !f.refresh() {
@@ -89,8 +89,8 @@ func TestRefreshDetectsWidthChange(t *testing.T) {
 	f := NewFeed()
 	f.width, f.height = 80, 24
 	long := strings.Repeat("w", 200)
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: long},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: long},
 	})
 	narrowRows := len(f.lines)
 	if narrowRows == 0 {
@@ -119,9 +119,9 @@ func TestRefreshDetectsWidthChange(t *testing.T) {
 func TestFingerprintCacheStaysBounded(t *testing.T) {
 	f := NewFeed()
 	f.width, f.height = 80, 24
-	var evs []agent.Event
+	var evs []event.Event
 	for i := 1; i <= 10; i++ {
-		evs = append(evs, agent.Event{Seq: i, Type: agent.UserMsg, Text: "m"})
+		evs = append(evs, event.Event{Seq: i, Type: event.UserMsg, Text: "m"})
 	}
 	f.applyBatch(evs)
 	f.refresh()

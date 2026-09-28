@@ -2,6 +2,7 @@ package agent
 
 import (
 	"errors"
+	"nabd/internal/event"
 	"testing"
 )
 
@@ -13,7 +14,7 @@ func TestSpendBudgetAccumulatesAcrossAttempts(t *testing.T) {
 	if err := b.Charge(40, 10, 0); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Charge(1, 0, 1); !errors.Is(err, ErrSpendBudget) {
+	if err := b.Charge(1, 0, 1); !errors.Is(err, event.ErrSpendBudget) {
 		t.Fatalf("Charge error = %v, want ErrSpendBudget", err)
 	}
 	if b.Used != 100 {

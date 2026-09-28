@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -30,7 +30,7 @@ func (r *runnerHooks) Run(ctx context.Context, text string) error {
 // m, nil — never tea.Quit. A quit would terminate the program before the
 // channel drains, swallowing the buffered paragraph.
 func TestCtrlCHandlerCancelsNotQuits(t *testing.T) {
-	ch := make(chan agent.Event, 8)
+	ch := make(chan event.Event, 8)
 	r := &runnerHooks{}
 	m := NewChat(r, ch)
 
@@ -83,7 +83,7 @@ func TestCtrlCHandlerCancelsNotQuits(t *testing.T) {
 // TestCtrlCSecondPressQuits: after the run finished (running=false), ctrl+c
 // is the quit key.
 func TestCtrlCSecondPressQuits(t *testing.T) {
-	ch := make(chan agent.Event, 8)
+	ch := make(chan event.Event, 8)
 	m := NewChat(runnerStub{}, ch)
 
 	mdl, _ := m.Update(doneMsg{err: nil}) // turn over, not running

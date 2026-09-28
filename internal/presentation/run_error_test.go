@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 )
 
@@ -18,8 +18,8 @@ const exhaustedErr = "all 2 route(s) exhausted (mixed failures); shortest retry-
 const leakyErr = "auth failed\n  Authorization: Bearer sk-ant-api03-abcdef0123456789abcdef0123456789"
 
 func TestFormatRunErrorKeepsCodeAndRouteDetail(t *testing.T) {
-	v := presentation.FormatRunError(agent.Event{
-		Type:      agent.RunError,
+	v := presentation.FormatRunError(event.Event{
+		Type:      event.RunError,
 		Err:       exhaustedErr,
 		ErrorCode: "budget",
 	})
@@ -42,8 +42,8 @@ func TestFormatRunErrorHidesUnknownCode(t *testing.T) {
 	cases := map[string]string{"empty": "", "explicit": "unknown"}
 	for name, code := range cases {
 		t.Run(name, func(t *testing.T) {
-			v := presentation.FormatRunError(agent.Event{
-				Type:      agent.RunError,
+			v := presentation.FormatRunError(event.Event{
+				Type:      event.RunError,
 				Err:       "boom",
 				ErrorCode: code,
 			})
@@ -64,8 +64,8 @@ func TestFormatRunErrorHintsPerCode(t *testing.T) {
 		"budget":        "NABD_ROUTER_RETRY_AFTER_WAIT",
 	}
 	for code, want := range cases {
-		v := presentation.FormatRunError(agent.Event{
-			Type:      agent.RunError,
+		v := presentation.FormatRunError(event.Event{
+			Type:      event.RunError,
 			Err:       "x",
 			ErrorCode: code,
 		})
@@ -81,15 +81,15 @@ func TestFormatRunErrorHintsPerCode(t *testing.T) {
 // TestFormatRunErrorNeverRendersEmpty keeps a failure visible even when the
 // loop journaled no message: an empty row reads as "nothing happened".
 func TestFormatRunErrorNeverRendersEmpty(t *testing.T) {
-	v := presentation.FormatRunError(agent.Event{Type: agent.RunError})
+	v := presentation.FormatRunError(event.Event{Type: event.RunError})
 	if v.Headline == "" || len(v.Lines()) == 0 {
 		t.Fatalf("empty failure produced no visible line: %+v", v)
 	}
 }
 
 func TestFormatRunErrorIncludesHTTPStatus(t *testing.T) {
-	v := presentation.FormatRunError(agent.Event{
-		Type:      agent.RunError,
+	v := presentation.FormatRunError(event.Event{
+		Type:      event.RunError,
 		Err:       "provider refused",
 		ErrorCode: "provider_auth",
 		Code:      401,
@@ -102,8 +102,8 @@ func TestFormatRunErrorIncludesHTTPStatus(t *testing.T) {
 // TestFormatRunErrorRedactsSecrets holds the new surface inside the existing
 // disclosure contract: an error body is provider-controlled text.
 func TestFormatRunErrorRedactsSecrets(t *testing.T) {
-	v := presentation.FormatRunError(agent.Event{
-		Type:      agent.RunError,
+	v := presentation.FormatRunError(event.Event{
+		Type:      event.RunError,
 		Err:       leakyErr,
 		ErrorCode: "provider_auth",
 	})
@@ -125,7 +125,7 @@ func TestFormatRunErrorCapsDetails(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		b.WriteString(fmt.Sprintf("\n  route %d failed", i))
 	}
-	v := presentation.FormatRunError(agent.Event{Type: agent.RunError, Err: b.String()})
+	v := presentation.FormatRunError(event.Event{Type: event.RunError, Err: b.String()})
 	if len(v.Details) > 7 {
 		t.Fatalf("details not capped: %d lines", len(v.Details))
 	}

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"os"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 var (
@@ -27,7 +27,7 @@ type UndoResult struct {
 // from session history, content comes from the shadow, and the HashAfter
 // check refuses to overwrite a file that changed since the agent wrote it.
 // recs must be the live branch's edit records, newest first.
-func (r *Registry) PersistedUndo(recs []*agent.EditRecord, n int) []UndoResult {
+func (r *Registry) PersistedUndo(recs []*event.EditRecord, n int) []UndoResult {
 	var out []UndoResult
 	for i := 0; i < n && i < len(recs); i++ {
 		rec := recs[i]
@@ -45,7 +45,7 @@ func (r *Registry) PersistedUndo(recs []*agent.EditRecord, n int) []UndoResult {
 
 // rewindRecord restores one persisted record: verify the file still matches
 // HashAfter, then put BlobBefore back through the shadow.
-func (r *Registry) rewindRecord(rec *agent.EditRecord) UndoResult {
+func (r *Registry) rewindRecord(rec *event.EditRecord) UndoResult {
 	// D: Restore Only Through the Descriptor-Relative Path. relative is the
 	// filesystem authority; abs is metadata for the messages and the journal.
 	rel, abs, err := writePathFromRoot(r.root, rec.Path)

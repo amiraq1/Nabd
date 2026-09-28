@@ -4,12 +4,10 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 )
 
-// ErrToolLoop is returned when the model repeats an identical tool call past the abort threshold.
-// It is a semantic circuit breaker that aborts before max-turns is exhausted.
-var ErrToolLoop = errors.New("tool execution loop detected: identical call repeated past threshold")
+// Loop errors are raised as event.ErrToolLoop (see internal/event): it is a
+// semantic circuit breaker that aborts before max-turns is exhausted.
 
 const (
 	// LoopNoticeThreshold is the number of identical tool executions that triggers

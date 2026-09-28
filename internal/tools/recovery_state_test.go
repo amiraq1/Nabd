@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/snap"
 )
 
@@ -30,7 +30,7 @@ func TestReconcileMutationClassifiesWorkingTreeWithoutWriting(t *testing.T) {
 	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
 		t.Fatalf("write before: %v", err)
 	}
-	rec := &agent.EditRecord{
+	rec := &event.EditRecord{
 		MutationID: "m1",
 		Path:       "notes.txt",
 		HashBefore: recoveryHash("before"),
@@ -77,7 +77,7 @@ func TestReconcileMutationRejectsUnsafePath(t *testing.T) {
 		t.Fatalf("snap.New: %v", err)
 	}
 	reg := NewRegistry(root, sh)
-	if _, err := reg.ReconcileMutation(&agent.EditRecord{Path: "../outside.txt"}); err == nil {
+	if _, err := reg.ReconcileMutation(&event.EditRecord{Path: "../outside.txt"}); err == nil {
 		t.Fatal("unsafe mutation path was accepted")
 	}
 }

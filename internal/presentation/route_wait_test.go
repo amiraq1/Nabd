@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 )
 
@@ -12,7 +12,7 @@ import (
 // Retry-After pause used to be invisible, so a deliberate wait looked like a
 // hang.
 func TestFormatRouteNoticeWaitingIsVisible(t *testing.T) {
-	got, ok := presentation.FormatRouteNotice(&agent.ProviderRoute{
+	got, ok := presentation.FormatRouteNotice(&event.ProviderRoute{
 		Status:   "waiting",
 		Provider: "groq",
 		Model:    "openai/gpt-oss-120b",
@@ -40,7 +40,7 @@ func TestFormatRouteNoticeWaitingIsVisible(t *testing.T) {
 // TestFormatRouteNoticeWaitingWithoutReason falls back to a placeholder rather
 // than printing an empty explanation.
 func TestFormatRouteNoticeWaitingWithoutReason(t *testing.T) {
-	got, ok := presentation.FormatRouteNotice(&agent.ProviderRoute{
+	got, ok := presentation.FormatRouteNotice(&event.ProviderRoute{
 		Status: "waiting",
 		Reason: "   ",
 	})
@@ -55,7 +55,7 @@ func TestFormatRouteNoticeWaitingWithoutReason(t *testing.T) {
 // TestFormatRouteNoticeBlockedIsVisible covers the breaker path: a skipped
 // route must be explained, not silently dropped.
 func TestFormatRouteNoticeBlockedIsVisible(t *testing.T) {
-	got, ok := presentation.FormatRouteNotice(&agent.ProviderRoute{
+	got, ok := presentation.FormatRouteNotice(&event.ProviderRoute{
 		Status:   "blocked",
 		Provider: "nvidia",
 		Model:    "moonshotai/kimi-k2.6",
@@ -74,7 +74,7 @@ func TestFormatRouteNoticeBlockedIsVisible(t *testing.T) {
 // TestFormatRouteNoticeWaitingRedactsSecrets keeps the new statuses inside the
 // same sanitizer contract as the existing ones.
 func TestFormatRouteNoticeWaitingRedactsSecrets(t *testing.T) {
-	got, ok := presentation.FormatRouteNotice(&agent.ProviderRoute{
+	got, ok := presentation.FormatRouteNotice(&event.ProviderRoute{
 		Status: "waiting",
 		Reason: "upstream said Bearer sk-ant-api03-abcdef0123456789abcdef0123456789",
 	})
@@ -93,7 +93,7 @@ func TestFormatRouteNoticeWaitingRedactsSecrets(t *testing.T) {
 // must stay invisible, so widening visibility does not become a habit.
 func TestFormatRouteNoticeStillHidesStructuralStatuses(t *testing.T) {
 	for _, status := range []string{"attempted", "exhausted", "unknown_status", ""} {
-		if _, ok := presentation.FormatRouteNotice(&agent.ProviderRoute{
+		if _, ok := presentation.FormatRouteNotice(&event.ProviderRoute{
 			Status:   status,
 			Provider: "groq",
 			Model:    "openai/gpt-oss-120b",

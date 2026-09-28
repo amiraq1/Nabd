@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // fakeClassifier implements Classifier for unit-level policy tests.
@@ -45,7 +45,7 @@ func TestUnknownToolIsDenied(t *testing.T) {
 	if v, _ := p.Check("  "); v != Deny {
 		t.Errorf("empty name = %v, want Deny", v)
 	}
-	p.Record("rm_rf", agent.AllowSession)
+	p.Record("rm_rf", event.AllowSession)
 	if v, _ := p.Check("rm_rf"); v != Deny {
 		t.Error("granting an unknown tool made it allowed")
 	}
@@ -54,7 +54,7 @@ func TestUnknownToolIsDenied(t *testing.T) {
 func TestSessionGrantAppliesToWritesOnly(t *testing.T) {
 	p := New(testCls())
 
-	p.Record("write_file", agent.AllowSession)
+	p.Record("write_file", event.AllowSession)
 	if v, _ := p.Check("write_file"); v != Allow {
 		t.Errorf("granted write_file = %v, want Allow", v)
 	}
@@ -65,21 +65,21 @@ func TestSessionGrantAppliesToWritesOnly(t *testing.T) {
 	}
 
 	// bash can never be granted for a session.
-	p.Record("bash", agent.AllowSession)
+	p.Record("bash", event.AllowSession)
 	if v, _ := p.Check("bash"); v != Ask {
 		t.Errorf("bash = %v after session grant, want Ask forever", v)
 	}
-	if got := p.Effective("bash", agent.AllowSession); got != agent.AllowOnce {
+	if got := p.Effective("bash", event.AllowSession); got != event.AllowOnce {
 		t.Errorf("Effective(bash, session) = %v, want once", got)
 	}
-	if got := p.Effective("write_file", agent.AllowSession); got != agent.AllowSession {
+	if got := p.Effective("write_file", event.AllowSession); got != event.AllowSession {
 		t.Errorf("Effective(write_file, session) = %v, want session", got)
 	}
 }
 
 func TestOnceAndDenyLeaveNothingBehind(t *testing.T) {
 	p := New(testCls())
-	for _, d := range []agent.Decision{agent.Deny, agent.AllowOnce} {
+	for _, d := range []event.Decision{event.Deny, event.AllowOnce} {
 		p.Record("write_file", d)
 		if v, _ := p.Check("write_file"); v != Ask {
 			t.Errorf("after %v the tool is %v, want Ask", d, v)
@@ -89,7 +89,7 @@ func TestOnceAndDenyLeaveNothingBehind(t *testing.T) {
 
 func TestResetRevokes(t *testing.T) {
 	p := New(testCls())
-	p.Record("write_file", agent.AllowSession)
+	p.Record("write_file", event.AllowSession)
 	p.SetYOLO(true)
 	p.Reset()
 	if v, _ := p.Check("write_file"); v != Ask {
@@ -207,20 +207,20 @@ func TestYOLOStillAllowsMutating(t *testing.T) {
 
 func TestRawDecisionForBash(t *testing.T) {
 	p := New(testCls())
-	if got := p.Effective("bash", agent.AllowSession); got != agent.AllowOnce {
+	if got := p.Effective("bash", event.AllowSession); got != event.AllowOnce {
 		t.Errorf("Effective(bash, AllowSession) = %v, want AllowOnce", got)
 	}
-	if got := p.Effective("bash", agent.AllowOnce); got != agent.AllowOnce {
+	if got := p.Effective("bash", event.AllowOnce); got != event.AllowOnce {
 		t.Errorf("Effective(bash, AllowOnce) = %v, want AllowOnce", got)
 	}
-	if got := p.Effective("bash", agent.Deny); got != agent.Deny {
+	if got := p.Effective("bash", event.Deny); got != event.Deny {
 		t.Errorf("Effective(bash, Deny) = %v, want Deny", got)
 	}
 }
 
 func TestRawDecisionForWriteFile(t *testing.T) {
 	p := New(testCls())
-	if got := p.Effective("write_file", agent.AllowSession); got != agent.AllowSession {
+	if got := p.Effective("write_file", event.AllowSession); got != event.AllowSession {
 		t.Errorf("Effective(write_file, AllowSession) = %v, want AllowSession", got)
 	}
 }

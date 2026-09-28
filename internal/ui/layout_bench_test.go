@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -124,17 +124,17 @@ func BenchmarkViewFullScreenWithLiveThroughput(b *testing.B) {
 func BenchmarkThroughputBatchedDeltas(b *testing.B) {
 	t0 := time.Now()
 	const batchSize = 10
-	events := make([]agent.Event, batchSize)
+	events := make([]event.Event, batchSize)
 	for i := 0; i < batchSize; i++ {
-		events[i] = agent.Event{
+		events[i] = event.Event{
 			Seq:  i + 1,
-			Type: agent.TextDelta,
+			Type: event.TextDelta,
 			Text: "streaming chunk with prose ",
 			Time: t0.Add(time.Duration(i*25) * time.Millisecond),
 		}
 	}
 	f := &Feed{running: true, busy: true}
-	f.trackState(agent.Event{Type: agent.TurnStart, Time: t0})
+	f.trackState(event.Event{Type: event.TurnStart, Time: t0})
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -156,16 +156,16 @@ func BenchmarkRefreshWithRunningTool(b *testing.B) {
 	f := NewFeed()
 	f.width = 80
 	for i := 1; i <= 19; i++ {
-		_ = f.proj.Apply(agent.Event{
+		_ = f.proj.Apply(event.Event{
 			Seq:  i,
-			Type: agent.UserMsg,
+			Type: event.UserMsg,
 			Text: fmt.Sprintf("message %d", i),
 		})
 	}
-	_ = f.proj.Apply(agent.Event{
+	_ = f.proj.Apply(event.Event{
 		Seq:  20,
-		Type: agent.ToolStart,
-		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+		Type: event.ToolStart,
+		Call: &event.ToolCall{ID: "c1", Name: "bash"},
 	})
 	items := f.proj.Items()
 	// Warm the cache

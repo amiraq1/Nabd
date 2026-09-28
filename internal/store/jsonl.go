@@ -14,13 +14,13 @@ import (
 	"sync"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // EventRedactor returns the event representation that may be persisted.
 // Implementations must not mutate the supplied event and must be safe for
 // concurrent use.
-type EventRedactor func(agent.Event) agent.Event
+type EventRedactor func(event.Event) event.Event
 
 // Options controls optional JSONL persistence behavior.
 // The zero value preserves the original raw-journal behavior.
@@ -162,7 +162,7 @@ func (j *JSONL) Path() string { return j.path }
 // one corruption replay cannot recover from. Sync is deliberately absent
 // on the hot path -- on a phone it costs more than the crash it prevents,
 // and Read already tolerates a truncated final line.
-func (j *JSONL) Append(e agent.Event) error {
+func (j *JSONL) Append(e event.Event) error {
 	persisted := e
 	if j.redact != nil {
 		persisted = j.redact(e)
@@ -218,7 +218,7 @@ func prepareExistingJournal(path string) (bool, error) {
 		}
 		raw := bytes.TrimSpace(data[offset:end])
 		if len(raw) != 0 {
-			var event agent.Event
+			var event event.Event
 			if err := json.Unmarshal(raw, &event); err != nil {
 				finalLine := end == len(data) || (hasNewline && end+1 == len(data))
 				if !finalLine {
@@ -336,9 +336,9 @@ const MaxJournalBytes = 32 << 20
 // Read parses a whole session. It is deliberately forgiving: a blank line
 // is skipped, and an unparsable final line is assumed to be a crash during
 // Append and dropped. An unparsable line anywhere else is a real error.
-func Read(path string) ([]agent.Event, error) {
-	var out []agent.Event
-	err := Scan(path, func(e agent.Event) error {
+func Read(path string) ([]event.Event, error) {
+	var out []event.Event
+	err := Scan(path, func(e event.Event) error {
 		out = append(out, e)
 		return nil
 	})
@@ -353,8 +353,8 @@ func Read(path string) ([]agent.Event, error) {
 // truncated final line dropped) but keeps only O(1) events in memory, so
 // --export --redact and --continue can process huge journals without loading
 // them wholesale.
-func Scan(path string, fn func(agent.Event) error) error {
-	return scanLines(path, func(_ []byte, e agent.Event, _ int) error {
+func Scan(path string, fn func(event.Event) error) error {
+	return scanLines(path, func(_ []byte, e event.Event, _ int) error {
 		return fn(e)
 	})
 }
@@ -363,7 +363,7 @@ func Scan(path string, fn func(agent.Event) error) error {
 // rules: blank lines are skipped and an unparsable final line is assumed to
 // be a torn Append and dropped. An unparsable line anywhere else is an error.
 // The raw slice is only valid for the duration of fn.
-func scanLines(path string, fn func(raw []byte, e agent.Event, line int) error) error {
+func scanLines(path string, fn func(raw []byte, e event.Event, line int) error) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
@@ -380,7 +380,7 @@ func scanLines(path string, fn func(raw []byte, e agent.Event, line int) error) 
 		if len(raw) == 0 {
 			continue
 		}
-		var e agent.Event
+		var e event.Event
 		if err := json.Unmarshal(raw, &e); err != nil {
 			// Tolerate a truncated final line only if nothing follows it.
 			if sc.Scan() {
@@ -405,16 +405,16 @@ func scanLines(path string, fn func(raw []byte, e agent.Event, line int) error) 
 // whole file. It streams the file twice: the first pass finds the newest
 // Compact event (and counts events); the second keeps only that Compact
 // event and events with Seq >= its FirstKept, then resolves the branch with
-// agent.Live. Memory stays O(live branch) instead of O(journal).
+// event.Live. Memory stays O(live branch) instead of O(journal).
 //
 // When keepRaw is true the raw source lines of the live events are also
 // returned, so rotation can rewrite the journal byte-for-byte (unknown
 // fields and formatting preserved).
-func ReadLiveBranch(path string, keepRaw bool) (live []agent.Event, raw [][]byte, total int, err error) {
-	var newestCompact *agent.Event
-	if err := Scan(path, func(e agent.Event) error {
+func ReadLiveBranch(path string, keepRaw bool) (live []event.Event, raw [][]byte, total int, err error) {
+	var newestCompact *event.Event
+	if err := Scan(path, func(e event.Event) error {
 		total++
-		if e.Type == agent.Compact {
+		if e.Type == event.Compact {
 			cp := e
 			newestCompact = &cp
 		}
@@ -433,7 +433,7 @@ func ReadLiveBranch(path string, keepRaw bool) (live []agent.Event, raw [][]byte
 			return evs, nil, len(evs), nil
 		}
 		var rawLines [][]byte
-		if err := scanLines(path, func(raw []byte, _ agent.Event, _ int) error {
+		if err := scanLines(path, func(raw []byte, _ event.Event, _ int) error {
 			cp := make([]byte, len(raw)+1)
 			copy(cp, raw)
 			cp[len(raw)] = '\n'
@@ -448,10 +448,10 @@ func ReadLiveBranch(path string, keepRaw bool) (live []agent.Event, raw [][]byte
 	if firstKept < 1 {
 		firstKept = 1
 	}
-	var kept []agent.Event
+	var kept []event.Event
 	var keptRaw [][]byte
-	if err := scanLines(path, func(raw []byte, e agent.Event, _ int) error {
-		if e.Type != agent.Compact && e.Seq < firstKept {
+	if err := scanLines(path, func(raw []byte, e event.Event, _ int) error {
+		if e.Type != event.Compact && e.Seq < firstKept {
 			return nil
 		}
 		kept = append(kept, e)
@@ -465,7 +465,7 @@ func ReadLiveBranch(path string, keepRaw bool) (live []agent.Event, raw [][]byte
 	}); err != nil {
 		return nil, nil, 0, err
 	}
-	live = agent.Live(kept)
+	live = event.Live(kept)
 	if !keepRaw {
 		return live, nil, total, nil
 	}

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -17,7 +17,7 @@ import (
 func setupTestFeed(t *testing.T) (*Feed, *runnerRecorder) {
 	t.Helper()
 	f, r := feedWithRunner(t)
-	r.decisionCh = make(chan agent.Decision, 10)
+	r.decisionCh = make(chan event.Decision, 10)
 	f.SetApprover(&Approver{reply: r.decisionCh})
 	return f, r
 }
@@ -29,21 +29,21 @@ func press(f *Feed, k tea.KeyMsg) {
 	}
 }
 
-func runnerDecision(r *runnerRecorder) (agent.Decision, bool) {
+func runnerDecision(r *runnerRecorder) (event.Decision, bool) {
 	if r == nil || r.decisionCh == nil {
-		return agent.Deny, false
+		return event.Deny, false
 	}
 	select {
 	case d := <-r.decisionCh:
 		return d, true
 	default:
-		return agent.Deny, false
+		return event.Deny, false
 	}
 }
 
 func openModalWithCall(f *Feed) {
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{
 			ID: "ta1", Name: "write_file",
 			SessionGrantKnown: true, SessionGrantAllowed: true,
 		}},
@@ -77,7 +77,7 @@ func TestPermissionModalIgnoresTypeaheadDecisionKeys(t *testing.T) {
 	openModalWithCall(f)
 	press(f, tea.KeyMsg{Type: tea.KeyEsc})
 	d, ok := runnerDecision(r)
-	if !ok || d != agent.Deny {
+	if !ok || d != event.Deny {
 		t.Errorf("Esc during arm delay must immediately deny; got decision=%v ok=%v", d, ok)
 	}
 }
@@ -102,7 +102,7 @@ func TestPermissionModalAcceptsDecisionAfterArmDelay(t *testing.T) {
 	openModalWithCall(f2)
 	now = now.Add(ModalArmDelay + time.Millisecond)
 	press(f2, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	if d, ok := runnerDecision(r2); !ok || d != agent.AllowOnce {
+	if d, ok := runnerDecision(r2); !ok || d != event.AllowOnce {
 		t.Errorf("y after arm delay: got decision=%v ok=%v, want AllowOnce", d, ok)
 	}
 
@@ -111,7 +111,7 @@ func TestPermissionModalAcceptsDecisionAfterArmDelay(t *testing.T) {
 	openModalWithCall(f3)
 	now = now.Add(ModalArmDelay + time.Millisecond)
 	press(f3, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
-	if d, ok := runnerDecision(r3); !ok || d != agent.AllowSession {
+	if d, ok := runnerDecision(r3); !ok || d != event.AllowSession {
 		t.Errorf("a after arm delay: got decision=%v ok=%v, want AllowSession", d, ok)
 	}
 
@@ -120,7 +120,7 @@ func TestPermissionModalAcceptsDecisionAfterArmDelay(t *testing.T) {
 	openModalWithCall(f4)
 	now = now.Add(ModalArmDelay + time.Millisecond)
 	press(f4, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'n'}})
-	if d, ok := runnerDecision(r4); !ok || d != agent.Deny {
+	if d, ok := runnerDecision(r4); !ok || d != event.Deny {
 		t.Errorf("n after arm delay: got decision=%v ok=%v, want Deny", d, ok)
 	}
 
@@ -137,7 +137,7 @@ func TestPermissionModalAcceptsDecisionAfterArmDelay(t *testing.T) {
 	// After arm delay expires from rearm:
 	now = now.Add(ModalArmDelay + time.Millisecond)
 	press(f5, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	if d, ok := runnerDecision(r5); !ok || d != agent.AllowOnce {
+	if d, ok := runnerDecision(r5); !ok || d != event.AllowOnce {
 		t.Errorf("y after reset arm delay: got decision=%v ok=%v, want AllowOnce", d, ok)
 	}
 }
@@ -169,9 +169,9 @@ func TestNavigationYNoLongerCopiesOrApproves(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.BuildFromEvents([]agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "n1", Name: "bash"}},
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{
+	f.BuildFromEvents([]event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "n1", Name: "bash"}},
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{
 			ID: "n1", Name: "bash", OK: true, Output: "hello world",
 		}},
 	})
@@ -256,7 +256,7 @@ func TestPermissionModalCtrlCDuringArmDelay(t *testing.T) {
 	ap := NewApprover()
 	f.SetApprover(ap)
 
-	decisionCh := make(chan agent.Decision, 1)
+	decisionCh := make(chan event.Decision, 1)
 	go func() {
 		decisionCh <- ap.Ask(ctx, *f.permModal.call)
 	}()
@@ -275,7 +275,7 @@ func TestPermissionModalCtrlCDuringArmDelay(t *testing.T) {
 	// Approver must resolve (unblock) with Deny without hanging
 	select {
 	case d := <-decisionCh:
-		if d != agent.Deny {
+		if d != event.Deny {
 			t.Errorf("expected Deny on canceled ask, got %v", d)
 		}
 	case <-time.After(1 * time.Second):
@@ -313,7 +313,7 @@ func TestPermissionModalRapidTypingYesPleaseNoDecision(t *testing.T) {
 	// Now wait past ModalArmDelay from the last keypress:
 	now = now.Add(ModalArmDelay + time.Millisecond)
 	press(f, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	if d, ok := runnerDecision(r); !ok || d != agent.AllowOnce {
+	if d, ok := runnerDecision(r); !ok || d != event.AllowOnce {
 		t.Fatalf("y after arm delay elapsed from typing: got decision=%v ok=%v, want AllowOnce", d, ok)
 	}
 }
@@ -338,11 +338,11 @@ func TestPermissionModalUppercaseDecisions(t *testing.T) {
 	// After arm delay:
 	cases := []struct {
 		key  rune
-		want agent.Decision
+		want event.Decision
 	}{
-		{'Y', agent.AllowOnce},
-		{'A', agent.AllowSession},
-		{'N', agent.Deny},
+		{'Y', event.AllowOnce},
+		{'A', event.AllowSession},
+		{'N', event.Deny},
 	}
 	for _, tc := range cases {
 		f, r := setupTestFeed(t)
@@ -369,7 +369,7 @@ func TestPermissionModalHintLineDimensions(t *testing.T) {
 			name := fmt.Sprintf("%dx%d", w, h)
 			t.Run(name, func(t *testing.T) {
 				m := newPermissionModal()
-				m.open(&agent.ToolCall{
+				m.open(&event.ToolCall{
 					ID:                  "dim1",
 					Name:                "write_file",
 					Args:                []byte(`"main.go"`),

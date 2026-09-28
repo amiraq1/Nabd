@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // fileSHA256 returns the SHA-256 hex of a file's current contents.
@@ -58,7 +58,7 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 			// target file's path and content hash match what was staged.
 			const stagedCredit = 7
 			beforeHash := fileSHA256(t, target)
-			r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
+			r.SetReadCredit(event.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
 
 			beforeMode := fileMode(t, target)
 
@@ -96,7 +96,7 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 					// prior subtest's invariant check resets the slot.
 					// Credit is bound to path+hash so it can only be consumed
 					// when the target file matches what was staged.
-					r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
+					r.SetReadCredit(event.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
 					var raw json.RawMessage = json.RawMessage(c.raw)
 					_, ok, err := r.Run(ctx, providerToolCall(name, raw))
 					if ok || err == nil {
@@ -121,7 +121,7 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 			}
 
 			// Restore credit for the directory-creation check.
-			r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
+			r.SetReadCredit(event.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
 			// Invariant 3 & 4: no directory created, MkdirAll not reached.
 			// A valid path under a non-existent subdirectory would trigger
 			// MkdirAll for write_file; an invalid request must not.
@@ -314,7 +314,7 @@ func TestWriteValidationRejectsCrossToolFields(t *testing.T) {
 			// the target file's path and content hash match what was staged.
 			const stagedCredit = 7
 			beforeHash := fileSHA256(t, target)
-			r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
+			r.SetReadCredit(event.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
 
 			beforeMode := fileMode(t, target)
 

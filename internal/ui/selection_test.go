@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -181,9 +181,9 @@ func TestPositionNeverDisplacesRunStatus(t *testing.T) {
 	m.running = true
 	m.busy = true
 	m.height = 10
-	m.statusProj.Apply(agent.Event{
-		Type: agent.ToolStart,
-		Call: &agent.ToolCall{ID: "c1", Name: "read_file"},
+	m.statusProj.Apply(event.Event{
+		Type: event.ToolStart,
+		Call: &event.ToolCall{ID: "c1", Name: "read_file"},
 	})
 	lm := m.computeLayout()
 	if !strings.Contains(lm.runtimeStatusLine, "Running read_file") {

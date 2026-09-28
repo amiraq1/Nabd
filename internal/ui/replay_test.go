@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -13,11 +13,11 @@ import (
 // of text, flushed by the next non-text event. README promises the live and
 // replayed views go through the same render path; this pins it.
 func TestReplayCoalescesDeltasLikeChat(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "x"},
-		{Seq: 2, Parent: 1, Type: agent.TextDelta, Text: "أقرأ "},
-		{Seq: 3, Parent: 2, Type: agent.TextDelta, Text: "main.go"},
-		{Seq: 4, Parent: 3, Type: agent.ToolStart, Call: &agent.ToolCall{Name: "read_file"}},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "x"},
+		{Seq: 2, Parent: 1, Type: event.TextDelta, Text: "أقرأ "},
+		{Seq: 3, Parent: 2, Type: event.TextDelta, Text: "main.go"},
+		{Seq: 4, Parent: 3, Type: event.ToolStart, Call: &event.ToolCall{Name: "read_file"}},
 	}
 	r := NewReplay(evs, 0)
 	// step 0 prints RunStart; steps 1,2 buffer; step 3 flushes + prints tool.
@@ -43,7 +43,7 @@ func TestReplayCoalescesDeltasLikeChat(t *testing.T) {
 // TestFlushJoinDeterministic asserts referential transparency: identical
 // buffer contents, event, and width produce identical joined output.
 func TestFlushJoinDeterministic(t *testing.T) {
-	e := agent.Event{Type: agent.Notice, Text: "n"}
+	e := event.Event{Type: event.Notice, Text: "n"}
 	a, b := "نص", "نص"
 	if flushJoin(&a, e, 50) != flushJoin(&b, e, 50) {
 		t.Fatal("flushJoin is not deterministic")
@@ -54,7 +54,7 @@ func TestFlushJoinDeterministic(t *testing.T) {
 // empty output when the terminating event has no printable representation.
 func TestFlushJoinEmptyBuffer(t *testing.T) {
 	empty := ""
-	if flushJoin(&empty, agent.Event{Type: agent.TurnEnd}, 50) != "" {
+	if flushJoin(&empty, event.Event{Type: event.TurnEnd}, 50) != "" {
 		t.Fatal("nothing to print should be empty")
 	}
 }
@@ -76,7 +76,7 @@ func TestPartialTail(t *testing.T) {
 }
 
 func TestReplayInitEmptyEventsQuitsImmediately(t *testing.T) {
-	r := NewReplay([]agent.Event{}, 0)
+	r := NewReplay([]event.Event{}, 0)
 	cmd := r.Init()
 	if cmd == nil {
 		t.Fatal("Init() returned nil for empty events; program would hang forever waiting for input")

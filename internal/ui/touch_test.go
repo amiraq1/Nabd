@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -511,12 +511,12 @@ func TestPTYTouchScrolling(t *testing.T) {
 	sess := StartPTYSessionWithTouch(t, 80, 24)
 
 	// Inject 60 lines of synthetic content to require scrolling.
-	var events []agent.Event
-	events = append(events, agent.Event{Seq: 1, Type: agent.RunStart})
+	var events []event.Event
+	events = append(events, event.Event{Seq: 1, Type: event.RunStart})
 	for i := 1; i <= 60; i++ {
-		events = append(events, agent.Event{
+		events = append(events, event.Event{
 			Seq:  i + 1,
-			Type: agent.UserMsg,
+			Type: event.UserMsg,
 			Text: fmt.Sprintf("Item %02d: touch scrolling regression test", i),
 		})
 	}

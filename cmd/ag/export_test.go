@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/redact"
 )
 
@@ -309,12 +309,12 @@ func TestExportSupportsLegacyJournals(t *testing.T) {
 
 // Sanity: the redacted export path emits the same encode as jsonlStdout.
 func TestExportRedactedMatchesJSONLSink(t *testing.T) {
-	events := []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "token sk-ant-abcdefgh12345678"},
+	events := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "token sk-ant-abcdefgh12345678"},
 	}
 
 	var want bytes.Buffer
-	sink := jsonlStdout{w: &want, redact: func(e agent.Event) agent.Event { return redactJournalEvent(e, nil) }}
+	sink := jsonlStdout{w: &want, redact: func(e event.Event) event.Event { return redactJournalEvent(e, nil) }}
 	for _, e := range events {
 		if err := sink.Emit(e); err != nil {
 			t.Fatalf("sink.Emit: %v", err)

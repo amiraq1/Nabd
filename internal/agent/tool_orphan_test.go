@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"encoding/json"
+	"nabd/internal/event"
 	"strings"
 	"testing"
 
@@ -15,14 +16,14 @@ import (
 // and must keep the error text whole: dropping it hides from the model that
 // the tool is unknown and it will re-invoke it forever.
 func TestOrphanToolEndReconstructed(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "run bash"},
+	evs := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "run bash"},
 		// No ToolStart for this call — orphan.
-		{Seq: 2, Parent: 1, Type: agent.ToolEnd, Call: &agent.ToolCall{
+		{Seq: 2, Parent: 1, Type: event.ToolEnd, Call: &event.ToolCall{
 			ID: "call_bash", Name: "bash",
 			Output: "refused to run bash: unknown tool", OK: false,
 		}},
-		{Seq: 3, Parent: 2, Type: agent.TurnEnd},
+		{Seq: 3, Parent: 2, Type: event.TurnEnd},
 	}
 	ms := agent.Messages(evs)
 
@@ -54,13 +55,13 @@ func TestOrphanToolEndReconstructed(t *testing.T) {
 // tool_call_id values must be unique. A duplicated ID breaks the provider
 // pairing invariant (two results answered by one call).
 func TestToolCallIDsUniquePerMessage(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "call twice"},
-		{Seq: 2, Parent: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "dup", Name: "read_file", Args: json.RawMessage(`{"path":"a.go"}`)}},
-		{Seq: 3, Parent: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "dup", Name: "read_file", Args: json.RawMessage(`{"path":"b.go"}`)}},
-		{Seq: 4, Parent: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "dup", Name: "read_file", Output: "a", OK: true}},
-		{Seq: 5, Parent: 4, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "dup", Name: "read_file", Output: "b", OK: true}},
-		{Seq: 6, Parent: 5, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "call twice"},
+		{Seq: 2, Parent: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "dup", Name: "read_file", Args: json.RawMessage(`{"path":"a.go"}`)}},
+		{Seq: 3, Parent: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "dup", Name: "read_file", Args: json.RawMessage(`{"path":"b.go"}`)}},
+		{Seq: 4, Parent: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "dup", Name: "read_file", Output: "a", OK: true}},
+		{Seq: 5, Parent: 4, Type: event.ToolEnd, Call: &event.ToolCall{ID: "dup", Name: "read_file", Output: "b", OK: true}},
+		{Seq: 6, Parent: 5, Type: event.TurnEnd},
 	}
 	ms := agent.Messages(evs)
 	for _, m := range ms {

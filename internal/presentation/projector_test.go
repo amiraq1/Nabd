@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 	"nabd/internal/store"
 )
@@ -26,10 +26,10 @@ func TestBuildEmpty(t *testing.T) {
 
 // TestBuildSingleUserMsg verifies a single user message.
 func TestBuildSingleUserMsg(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "start"},
-		{Seq: 2, Type: agent.UserMsg, Text: "hi"},
-		{Seq: 3, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "start"},
+		{Seq: 2, Type: event.UserMsg, Text: "hi"},
+		{Seq: 3, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	items, err := p.Build(evs)
@@ -49,11 +49,11 @@ func TestBuildSingleUserMsg(t *testing.T) {
 
 // TestBuildAssistantNonStreamed verifies a complete assistant message.
 func TestBuildAssistantNonStreamed(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.UserMsg, Text: "q"},
-		{Seq: 3, Type: agent.TextDelta, Text: "hello world"},
-		{Seq: 4, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.UserMsg, Text: "q"},
+		{Seq: 3, Type: event.TextDelta, Text: "hello world"},
+		{Seq: 4, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	items, err := p.Build(evs)
@@ -77,13 +77,13 @@ func TestBuildAssistantNonStreamed(t *testing.T) {
 
 // TestBuildMultipleTextDeltasMerge verifies several deltas collapse into one.
 func TestBuildMultipleTextDeltasMerge(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.UserMsg, Text: "q"},
-		{Seq: 3, Type: agent.TextDelta, Text: "Hello "},
-		{Seq: 4, Type: agent.TextDelta, Text: "world"},
-		{Seq: 5, Type: agent.TextDelta, Text: "!"},
-		{Seq: 6, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.UserMsg, Text: "q"},
+		{Seq: 3, Type: event.TextDelta, Text: "Hello "},
+		{Seq: 4, Type: event.TextDelta, Text: "world"},
+		{Seq: 5, Type: event.TextDelta, Text: "!"},
+		{Seq: 6, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	items, err := p.Build(evs)
@@ -107,14 +107,14 @@ func TestBuildMultipleTextDeltasMerge(t *testing.T) {
 
 // TestBuildTwoSeparateMessagesDoNotMerge verifies distinct turns stay separate.
 func TestBuildTwoSeparateMessagesDoNotMerge(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.UserMsg, Text: "first"},
-		{Seq: 3, Type: agent.TextDelta, Text: "reply one"},
-		{Seq: 4, Type: agent.TurnEnd},
-		{Seq: 5, Type: agent.UserMsg, Text: "second"},
-		{Seq: 6, Type: agent.TextDelta, Text: "reply two"},
-		{Seq: 7, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.UserMsg, Text: "first"},
+		{Seq: 3, Type: event.TextDelta, Text: "reply one"},
+		{Seq: 4, Type: event.TurnEnd},
+		{Seq: 5, Type: event.UserMsg, Text: "second"},
+		{Seq: 6, Type: event.TextDelta, Text: "reply two"},
+		{Seq: 7, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	items, err := p.Build(evs)
@@ -140,11 +140,11 @@ func TestBuildTwoSeparateMessagesDoNotMerge(t *testing.T) {
 
 // TestBuildToolLifecycle verifies tool start → end transitions.
 func TestBuildToolLifecycle(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "read_file", Args: []byte(`{"path":"a.go"}`)}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "read_file", Output: "content", OK: true}},
-		{Seq: 4, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "read_file", Args: []byte(`{"path":"a.go"}`)}},
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "read_file", Output: "content", OK: true}},
+		{Seq: 4, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	items, err := p.Build(evs)
@@ -174,11 +174,11 @@ func TestBuildToolLifecycle(t *testing.T) {
 
 // TestBuildToolFailure verifies failed tool status.
 func TestBuildToolFailure(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: []byte(`{"cmd":"bad"}`)}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash", OK: false, Exit: 1}},
-		{Seq: 4, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "bash", Args: []byte(`{"cmd":"bad"}`)}},
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "bash", OK: false, Exit: 1}},
+		{Seq: 4, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	items, err := p.Build(evs)
@@ -202,11 +202,11 @@ func TestBuildToolFailure(t *testing.T) {
 
 // TestBuildPermissionAllow verifies permission request → allow.
 func TestBuildPermissionAllow(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: []byte(`{"cmd":"ls"}`)}},
-		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
-		{Seq: 4, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "bash", Args: []byte(`{"cmd":"ls"}`)}},
+		{Seq: 3, Type: event.PermReply, Call: &event.ToolCall{ID: "c1"}, Decision: event.AllowOnce, RawDecision: event.AllowOnce},
+		{Seq: 4, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	items, err := p.Build(evs)
@@ -230,11 +230,11 @@ func TestBuildPermissionAllow(t *testing.T) {
 
 // TestBuildPermissionDeny verifies permission request → deny.
 func TestBuildPermissionDeny(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
-		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, RawDecision: agent.Deny},
-		{Seq: 4, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "bash"}},
+		{Seq: 3, Type: event.PermReply, Call: &event.ToolCall{ID: "c1"}, Decision: event.Deny, RawDecision: event.Deny},
+		{Seq: 4, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	items, err := p.Build(evs)
@@ -260,11 +260,11 @@ func TestBuildPermissionDeny(t *testing.T) {
 // raw_decision "session" and decision "once" maps to
 // PermCard.Decision = AllowSession (requested) and PermCard.Effective = AllowOnce (applied).
 func TestBuildPermissionDowngradeMapping(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
-		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowSession},
-		{Seq: 4, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "bash"}},
+		{Seq: 3, Type: event.PermReply, Call: &event.ToolCall{ID: "c1"}, Decision: event.AllowOnce, RawDecision: event.AllowSession},
+		{Seq: 4, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	items, err := p.Build(evs)
@@ -281,21 +281,21 @@ func TestBuildPermissionDowngradeMapping(t *testing.T) {
 	if perm == nil {
 		t.Fatal("no permission item found")
 	}
-	if perm.Perm.Decision != agent.AllowSession {
+	if perm.Perm.Decision != event.AllowSession {
 		t.Errorf("perm Decision (requested) = %v, want AllowSession", perm.Perm.Decision)
 	}
-	if perm.Perm.Effective != agent.AllowOnce {
+	if perm.Perm.Effective != event.AllowOnce {
 		t.Errorf("perm Effective (applied) = %v, want AllowOnce", perm.Perm.Effective)
 	}
 }
 
 // TestBuildNoticeAndError verifies notice and error items.
 func TestBuildNoticeAndError(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.Notice, Text: "calibrated"},
-		{Seq: 3, Type: agent.RunError, Err: "boom"},
-		{Seq: 4, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.Notice, Text: "calibrated"},
+		{Seq: 3, Type: event.RunError, Err: "boom"},
+		{Seq: 4, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	items, err := p.Build(evs)
@@ -321,11 +321,11 @@ func TestBuildNoticeAndError(t *testing.T) {
 
 // TestBuildUnknownEventNoPanic verifies unknown events are skipped safely.
 func TestBuildUnknownEventNoPanic(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.EventType("future_event"), Text: "unknown"},
-		{Seq: 3, Type: agent.UserMsg, Text: "hi"},
-		{Seq: 4, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.EventType("future_event"), Text: "unknown"},
+		{Seq: 3, Type: event.UserMsg, Text: "hi"},
+		{Seq: 4, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	items, err := p.Build(evs)
@@ -340,15 +340,15 @@ func TestBuildUnknownEventNoPanic(t *testing.T) {
 
 // TestBuildVsApplyEquivalence verifies Build(all) == sequential Apply.
 func TestBuildVsApplyEquivalence(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "start"},
-		{Seq: 2, Type: agent.UserMsg, Text: "hi"},
-		{Seq: 3, Type: agent.TextDelta, Text: "Hello "},
-		{Seq: 4, Type: agent.TextDelta, Text: "there"},
-		{Seq: 5, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "read_file", Args: []byte(`{"path":"a.go"}`)}},
-		{Seq: 6, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "read_file", Output: "ok", OK: true}},
-		{Seq: 7, Type: agent.TurnEnd},
-		{Seq: 8, Type: agent.RunEnd, Text: "done"},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "start"},
+		{Seq: 2, Type: event.UserMsg, Text: "hi"},
+		{Seq: 3, Type: event.TextDelta, Text: "Hello "},
+		{Seq: 4, Type: event.TextDelta, Text: "there"},
+		{Seq: 5, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "read_file", Args: []byte(`{"path":"a.go"}`)}},
+		{Seq: 6, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "read_file", Output: "ok", OK: true}},
+		{Seq: 7, Type: event.TurnEnd},
+		{Seq: 8, Type: event.RunEnd, Text: "done"},
 	}
 
 	p1 := presentation.NewProjector()
@@ -377,10 +377,10 @@ func TestBuildVsApplyEquivalence(t *testing.T) {
 
 // TestItemsImmutable verifies callers cannot mutate internal state via Items().
 func TestItemsImmutable(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.UserMsg, Text: "hi"},
-		{Seq: 3, Type: agent.TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.UserMsg, Text: "hi"},
+		{Seq: 3, Type: event.TurnEnd},
 	}
 	p := presentation.NewProjector()
 	if _, err := p.Build(evs); err != nil {
@@ -430,14 +430,14 @@ func TestReplayFromFixture(t *testing.T) {
 // during streaming deltas does not strand assistant text due to stale slice pointers.
 func TestSliceReallocationStrandsAssistantText(t *testing.T) {
 	p := presentation.NewProjector()
-	_ = p.Apply(agent.Event{Seq: 1, Type: agent.TextDelta, Text: "part1 "})
+	_ = p.Apply(event.Event{Seq: 1, Type: event.TextDelta, Text: "part1 "})
 	// Force slice reallocation by appending many notices
 	for i := 0; i < 100; i++ {
-		_ = p.Apply(agent.Event{Seq: 10 + i, Type: agent.Notice, Text: "n"})
+		_ = p.Apply(event.Event{Seq: 10 + i, Type: event.Notice, Text: "n"})
 	}
 	// Append another delta to the same assistant message
-	_ = p.Apply(agent.Event{Seq: 200, Type: agent.TextDelta, Text: "part2"})
-	_ = p.Apply(agent.Event{Seq: 201, Type: agent.TurnEnd})
+	_ = p.Apply(event.Event{Seq: 200, Type: event.TextDelta, Text: "part2"})
+	_ = p.Apply(event.Event{Seq: 201, Type: event.TurnEnd})
 
 	items := p.Items()
 	var asst *presentation.FeedItem
@@ -459,20 +459,20 @@ func TestSliceReallocationStrandsAssistantText(t *testing.T) {
 // even after many intervening events force slice reallocations.
 func TestSliceReallocationToolEnd(t *testing.T) {
 	p := presentation.NewProjector()
-	_ = p.Apply(agent.Event{
+	_ = p.Apply(event.Event{
 		Seq:  1,
-		Type: agent.ToolStart,
-		Call: &agent.ToolCall{ID: "call_realloc_1", Name: "bash", Args: []byte(`{"cmd":"ls"}`)},
+		Type: event.ToolStart,
+		Call: &event.ToolCall{ID: "call_realloc_1", Name: "bash", Args: []byte(`{"cmd":"ls"}`)},
 	})
 	// Force slice reallocation
 	for i := 0; i < 150; i++ {
-		_ = p.Apply(agent.Event{Seq: 10 + i, Type: agent.Notice, Text: "n"})
+		_ = p.Apply(event.Event{Seq: 10 + i, Type: event.Notice, Text: "n"})
 	}
 	// ToolEnd for the initial tool call
-	_ = p.Apply(agent.Event{
+	_ = p.Apply(event.Event{
 		Seq:  300,
-		Type: agent.ToolEnd,
-		Call: &agent.ToolCall{ID: "call_realloc_1", Name: "bash", Output: "done_ls", OK: true},
+		Type: event.ToolEnd,
+		Call: &event.ToolCall{ID: "call_realloc_1", Name: "bash", Output: "done_ls", OK: true},
 	})
 
 	items := p.Items()
@@ -498,22 +498,22 @@ func TestSliceReallocationToolEnd(t *testing.T) {
 // even after many intervening events force slice reallocations.
 func TestSliceReallocationPermReply(t *testing.T) {
 	p := presentation.NewProjector()
-	_ = p.Apply(agent.Event{
+	_ = p.Apply(event.Event{
 		Seq:  1,
-		Type: agent.PermAsk,
-		Call: &agent.ToolCall{ID: "perm_realloc_1", Name: "bash", Args: []byte(`{"cmd":"rm"}`)},
+		Type: event.PermAsk,
+		Call: &event.ToolCall{ID: "perm_realloc_1", Name: "bash", Args: []byte(`{"cmd":"rm"}`)},
 	})
 	// Force slice reallocation
 	for i := 0; i < 150; i++ {
-		_ = p.Apply(agent.Event{Seq: 10 + i, Type: agent.Notice, Text: "n"})
+		_ = p.Apply(event.Event{Seq: 10 + i, Type: event.Notice, Text: "n"})
 	}
 	// PermReply
-	_ = p.Apply(agent.Event{
+	_ = p.Apply(event.Event{
 		Seq:         300,
-		Type:        agent.PermReply,
-		Call:        &agent.ToolCall{ID: "perm_realloc_1", Name: "bash"},
-		Decision:    agent.AllowOnce,
-		RawDecision: agent.AllowOnce,
+		Type:        event.PermReply,
+		Call:        &event.ToolCall{ID: "perm_realloc_1", Name: "bash"},
+		Decision:    event.AllowOnce,
+		RawDecision: event.AllowOnce,
 	})
 
 	items := p.Items()
@@ -536,15 +536,15 @@ func TestSliceReallocationPermReply(t *testing.T) {
 // returned by Items() does not mutate the projector's internal state.
 func TestItemsDeepCopyToolAndPerm(t *testing.T) {
 	p := presentation.NewProjector()
-	_ = p.Apply(agent.Event{
+	_ = p.Apply(event.Event{
 		Seq:  1,
-		Type: agent.ToolStart,
-		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+		Type: event.ToolStart,
+		Call: &event.ToolCall{ID: "c1", Name: "bash"},
 	})
-	_ = p.Apply(agent.Event{
+	_ = p.Apply(event.Event{
 		Seq:  2,
-		Type: agent.PermAsk,
-		Call: &agent.ToolCall{ID: "c2", Name: "bash"},
+		Type: event.PermAsk,
+		Call: &event.ToolCall{ID: "c2", Name: "bash"},
 	})
 	items := p.Items()
 	for i := range items {
@@ -571,8 +571,8 @@ func TestItemsDeepCopyToolAndPerm(t *testing.T) {
 func TestSortBySeqStableOrder(t *testing.T) {
 	p := presentation.NewProjector()
 	// Insert item with "z_id" first, then "a_id", with same Seq
-	_ = p.Apply(agent.Event{Seq: 10, Type: agent.Notice, Text: "first_inserted"})
-	_ = p.Apply(agent.Event{Seq: 10, Type: agent.Notice, Text: "second_inserted"})
+	_ = p.Apply(event.Event{Seq: 10, Type: event.Notice, Text: "first_inserted"})
+	_ = p.Apply(event.Event{Seq: 10, Type: event.Notice, Text: "second_inserted"})
 
 	items := p.Items()
 	if len(items) != 2 {
@@ -587,15 +587,15 @@ func TestSortBySeqStableOrder(t *testing.T) {
 func TestIsTruncatedRealMarker(t *testing.T) {
 	p := presentation.NewProjector()
 	output := "some output\n...[truncated 100 bytes]"
-	_ = p.Apply(agent.Event{
+	_ = p.Apply(event.Event{
 		Seq:  1,
-		Type: agent.ToolStart,
-		Call: &agent.ToolCall{ID: "c_trunc", Name: "bash"},
+		Type: event.ToolStart,
+		Call: &event.ToolCall{ID: "c_trunc", Name: "bash"},
 	})
-	_ = p.Apply(agent.Event{
+	_ = p.Apply(event.Event{
 		Seq:  2,
-		Type: agent.ToolEnd,
-		Call: &agent.ToolCall{ID: "c_trunc", Name: "bash", Output: output, OK: true},
+		Type: event.ToolEnd,
+		Call: &event.ToolCall{ID: "c_trunc", Name: "bash", Output: output, OK: true},
 	})
 	items := p.Items()
 	var tool *presentation.FeedItem
@@ -619,15 +619,15 @@ func TestIsTruncatedRealMarker(t *testing.T) {
 // TestCallErrMeaningfulMessage verifies that tool failure populates Tool.Err with a meaningful message.
 func TestCallErrMeaningfulMessage(t *testing.T) {
 	p := presentation.NewProjector()
-	_ = p.Apply(agent.Event{
+	_ = p.Apply(event.Event{
 		Seq:  1,
-		Type: agent.ToolStart,
-		Call: &agent.ToolCall{ID: "c_err", Name: "bash"},
+		Type: event.ToolStart,
+		Call: &event.ToolCall{ID: "c_err", Name: "bash"},
 	})
-	_ = p.Apply(agent.Event{
+	_ = p.Apply(event.Event{
 		Seq:  2,
-		Type: agent.ToolEnd,
-		Call: &agent.ToolCall{ID: "c_err", Name: "bash", Output: "command not found: abc\nexit status 127", OK: false, Exit: 127},
+		Type: event.ToolEnd,
+		Call: &event.ToolCall{ID: "c_err", Name: "bash", Output: "command not found: abc\nexit status 127", OK: false, Exit: 127},
 	})
 	items := p.Items()
 	var tool *presentation.FeedItem
@@ -652,10 +652,10 @@ func TestProjectorProviderRoutePositiveBehavior(t *testing.T) {
 	p := presentation.NewProjector()
 
 	// 1. failed attempt 1 -> visible
-	err := p.Apply(agent.Event{
+	err := p.Apply(event.Event{
 		Seq:  1,
-		Type: agent.EventProviderRoute,
-		Route: &agent.ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			Provider: "groq",
 			Model:    "llama-3",
 			Attempt:  1,
@@ -685,10 +685,10 @@ func TestProjectorProviderRoutePositiveBehavior(t *testing.T) {
 	}
 
 	// 2. selected attempt 1 -> hidden
-	err = p.Apply(agent.Event{
+	err = p.Apply(event.Event{
 		Seq:  2,
-		Type: agent.EventProviderRoute,
-		Route: &agent.ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			Provider: "groq",
 			Model:    "llama-3",
 			Attempt:  1,
@@ -703,10 +703,10 @@ func TestProjectorProviderRoutePositiveBehavior(t *testing.T) {
 	}
 
 	// 3. selected attempt 2 -> visible
-	err = p.Apply(agent.Event{
+	err = p.Apply(event.Event{
 		Seq:  3,
-		Type: agent.EventProviderRoute,
-		Route: &agent.ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			Provider: "anthropic",
 			Model:    "claude-3-5-sonnet",
 			Attempt:  2,
@@ -725,10 +725,10 @@ func TestProjectorProviderRoutePositiveBehavior(t *testing.T) {
 	}
 
 	// 4. attempted -> hidden
-	err = p.Apply(agent.Event{
+	err = p.Apply(event.Event{
 		Seq:  4,
-		Type: agent.EventProviderRoute,
-		Route: &agent.ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			Provider: "nvidia",
 			Model:    "nemotron",
 			Attempt:  1,
@@ -743,10 +743,10 @@ func TestProjectorProviderRoutePositiveBehavior(t *testing.T) {
 	}
 
 	// 5. exhausted -> hidden
-	err = p.Apply(agent.Event{
+	err = p.Apply(event.Event{
 		Seq:  5,
-		Type: agent.EventProviderRoute,
-		Route: &agent.ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			Provider: "nvidia",
 			Model:    "nemotron",
 			Attempt:  2,
@@ -761,9 +761,9 @@ func TestProjectorProviderRoutePositiveBehavior(t *testing.T) {
 	}
 
 	// 6. nil Route -> hidden, no panic
-	err = p.Apply(agent.Event{
+	err = p.Apply(event.Event{
 		Seq:   6,
-		Type:  agent.EventProviderRoute,
+		Type:  event.EventProviderRoute,
 		Route: nil,
 	})
 	if err != nil {
@@ -774,10 +774,10 @@ func TestProjectorProviderRoutePositiveBehavior(t *testing.T) {
 	}
 
 	// 7. unknown status -> hidden, no panic
-	err = p.Apply(agent.Event{
+	err = p.Apply(event.Event{
 		Seq:  7,
-		Type: agent.EventProviderRoute,
-		Route: &agent.ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			Status: "future_unknown",
 		},
 	})
@@ -789,19 +789,19 @@ func TestProjectorProviderRoutePositiveBehavior(t *testing.T) {
 	}
 
 	// UnhandledEventTypes must NEVER be incremented for EventProviderRoute
-	if p.UnhandledEventTypes != nil && p.UnhandledEventTypes[agent.EventProviderRoute] > 0 {
-		t.Fatalf("EventProviderRoute should not increment UnhandledEventTypes, got count %d", p.UnhandledEventTypes[agent.EventProviderRoute])
+	if p.UnhandledEventTypes != nil && p.UnhandledEventTypes[event.EventProviderRoute] > 0 {
+		t.Fatalf("EventProviderRoute should not increment UnhandledEventTypes, got count %d", p.UnhandledEventTypes[event.EventProviderRoute])
 	}
 }
 
 // TestProjectorProviderRouteSequenceAndOrdering verifies the visible ordering
 // of a realistic multi-attempt fallback sequence and verifies Build vs Apply equivalence.
 func TestProjectorProviderRouteSequenceAndOrdering(t *testing.T) {
-	evs := []agent.Event{
+	evs := []event.Event{
 		{
 			Seq:  1,
-			Type: agent.EventProviderRoute,
-			Route: &agent.ProviderRoute{
+			Type: event.EventProviderRoute,
+			Route: &event.ProviderRoute{
 				Provider: "groq",
 				Model:    "llama-3",
 				Attempt:  1,
@@ -810,8 +810,8 @@ func TestProjectorProviderRouteSequenceAndOrdering(t *testing.T) {
 		},
 		{
 			Seq:  2,
-			Type: agent.EventProviderRoute,
-			Route: &agent.ProviderRoute{
+			Type: event.EventProviderRoute,
+			Route: &event.ProviderRoute{
 				Provider: "groq",
 				Model:    "llama-3",
 				Attempt:  1,
@@ -821,8 +821,8 @@ func TestProjectorProviderRouteSequenceAndOrdering(t *testing.T) {
 		},
 		{
 			Seq:  3,
-			Type: agent.EventProviderRoute,
-			Route: &agent.ProviderRoute{
+			Type: event.EventProviderRoute,
+			Route: &event.ProviderRoute{
 				Provider: "nvidia",
 				Model:    "nemotron",
 				Attempt:  2,
@@ -831,8 +831,8 @@ func TestProjectorProviderRouteSequenceAndOrdering(t *testing.T) {
 		},
 		{
 			Seq:  4,
-			Type: agent.EventProviderRoute,
-			Route: &agent.ProviderRoute{
+			Type: event.EventProviderRoute,
+			Route: &event.ProviderRoute{
 				Provider: "nvidia",
 				Model:    "nemotron",
 				Attempt:  2,
@@ -842,8 +842,8 @@ func TestProjectorProviderRouteSequenceAndOrdering(t *testing.T) {
 		},
 		{
 			Seq:  5,
-			Type: agent.EventProviderRoute,
-			Route: &agent.ProviderRoute{
+			Type: event.EventProviderRoute,
+			Route: &event.ProviderRoute{
 				Provider: "anthropic",
 				Model:    "claude-3-5-sonnet",
 				Attempt:  3,
@@ -852,8 +852,8 @@ func TestProjectorProviderRouteSequenceAndOrdering(t *testing.T) {
 		},
 		{
 			Seq:  6,
-			Type: agent.EventProviderRoute,
-			Route: &agent.ProviderRoute{
+			Type: event.EventProviderRoute,
+			Route: &event.ProviderRoute{
 				Provider: "anthropic",
 				Model:    "claude-3-5-sonnet",
 				Attempt:  3,
@@ -916,10 +916,10 @@ func TestProjectorProviderRouteSequenceAndOrdering(t *testing.T) {
 // TestProjectorProviderRouteImmutabilityAndSerialization proves that projecting
 // an event does not mutate the event or its Route pointer, and preserves exact serialization bytes.
 func TestProjectorProviderRouteImmutabilityAndSerialization(t *testing.T) {
-	ev := agent.Event{
+	ev := event.Event{
 		Seq:  42,
-		Type: agent.EventProviderRoute,
-		Route: &agent.ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			StreamID: "test-stream-id-999",
 			Provider: "groq",
 			Model:    "llama-3-8b",
@@ -944,7 +944,7 @@ func TestProjectorProviderRouteImmutabilityAndSerialization(t *testing.T) {
 	if err := p.Apply(ev); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	_, err = p.Build([]agent.Event{ev})
+	_, err = p.Build([]event.Event{ev})
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -968,8 +968,8 @@ func TestProjectorProviderRouteImmutabilityAndSerialization(t *testing.T) {
 // TestUnhandledEventTypesCounter verifies that unknown event types are tracked in UnhandledEventTypes.
 func TestUnhandledEventTypesCounter(t *testing.T) {
 	p := presentation.NewProjector()
-	unk := agent.EventType("future_unknown_event")
-	err := p.Apply(agent.Event{
+	unk := event.EventType("future_unknown_event")
+	err := p.Apply(event.Event{
 		Seq:  1,
 		Type: unk,
 	})

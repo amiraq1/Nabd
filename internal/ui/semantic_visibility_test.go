@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -42,8 +42,8 @@ func TestDimensionMatrixSectionF(t *testing.T) {
 
 			// 2. Feed with content
 			for i := 1; i <= 20; i++ {
-				f.Update(agentEventBatchMsg{Events: []agent.Event{
-					{Seq: i, Type: agent.UserMsg, Text: fmt.Sprintf("msg_%02d", i)},
+				f.Update(agentEventBatchMsg{Events: []event.Event{
+					{Seq: i, Type: event.UserMsg, Text: fmt.Sprintf("msg_%02d", i)},
 				}})
 			}
 			v = f.View()
@@ -58,16 +58,16 @@ func TestDimensionMatrixSectionF(t *testing.T) {
 			}
 
 			// 3. Tool running state
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 21, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c_mat", Name: "bash", Args: json.RawMessage(`"make"`)}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 21, Type: event.ToolStart, Call: &event.ToolCall{ID: "c_mat", Name: "bash", Args: json.RawMessage(`"make"`)}},
 			}})
 			v = f.View()
 			assertViewBounds(t, dim.name+"-tool-running", v, dim.width, dim.height)
 
 			// 4. Clean completion
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 22, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c_mat", Name: "bash", Output: "build ok", OK: true}},
-				{Seq: 23, Type: agent.TurnEnd},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 22, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c_mat", Name: "bash", Output: "build ok", OK: true}},
+				{Seq: 23, Type: event.TurnEnd},
 			}})
 			v = f.View()
 			assertViewBounds(t, dim.name+"-tool-done", v, dim.width, dim.height)
@@ -92,8 +92,8 @@ func TestSemanticVisibilityFollowAndScrolled(t *testing.T) {
 			f := newFeedAt(t, dim.w, dim.h)
 			const total = 40
 			for i := 1; i <= total; i++ {
-				f.Update(agentEventBatchMsg{Events: []agent.Event{
-					{Seq: i, Type: agent.UserMsg, Text: fmt.Sprintf("semantic_line_%03d", i)},
+				f.Update(agentEventBatchMsg{Events: []event.Event{
+					{Seq: i, Type: event.UserMsg, Text: fmt.Sprintf("semantic_line_%03d", i)},
 				}})
 			}
 
@@ -136,8 +136,8 @@ func TestSemanticVisibilityModalOnAllSizes(t *testing.T) {
 	for _, dim := range sectionFDimensions {
 		t.Run(dim.name, func(t *testing.T) {
 			f := newFeedAt(t, dim.width, dim.height)
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "p1", Name: "write_file", Args: json.RawMessage(`"main.go"`)}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "p1", Name: "write_file", Args: json.RawMessage(`"main.go"`)}},
 			}})
 
 			if !f.permModal.visible {

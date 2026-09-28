@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // idleTestRunner simulates an agent loop runner connected to a Batcher.
@@ -52,23 +52,23 @@ func (r *idleTestRunner) Run(ctx context.Context, text string) error {
 	}
 
 	// 1. Emit UserMsg (non-sensitive)
-	r.batcher.Add(agent.Event{
+	r.batcher.Add(event.Event{
 		Seq:  r.nextSeq(),
-		Type: agent.UserMsg,
+		Type: event.UserMsg,
 		Text: text,
 	})
 
 	// 2. Emit TextDelta (non-sensitive)
-	r.batcher.Add(agent.Event{
+	r.batcher.Add(event.Event{
 		Seq:  r.nextSeq(),
-		Type: agent.TextDelta,
+		Type: event.TextDelta,
 		Text: reply,
 	})
 
 	// 3. Emit TurnEnd (non-sensitive)
-	r.batcher.Add(agent.Event{
+	r.batcher.Add(event.Event{
 		Seq:  r.nextSeq(),
-		Type: agent.TurnEnd,
+		Type: event.TurnEnd,
 	})
 
 	return nil
@@ -83,7 +83,7 @@ func TestFeedLiveDeliveryAfterStartupIdle(t *testing.T) {
 	emptyFlushed := make(chan struct{}, 20)
 	interval := 20 * time.Millisecond
 
-	batcher := NewBatcher(interval, 128, func(batch []agent.Event) {
+	batcher := NewBatcher(interval, 128, func(batch []event.Event) {
 		sess.Feed.SendBatch(batch)
 	})
 	batcher.emptyFlushHook = func() {
@@ -146,7 +146,7 @@ func TestFeedLiveDeliveryAfterIdleArabicMultiTurn(t *testing.T) {
 	emptyFlushed := make(chan struct{}, 50)
 	interval := 20 * time.Millisecond
 
-	batcher := NewBatcher(interval, 128, func(batch []agent.Event) {
+	batcher := NewBatcher(interval, 128, func(batch []event.Event) {
 		sess.Feed.SendBatch(batch)
 	})
 	batcher.emptyFlushHook = func() {

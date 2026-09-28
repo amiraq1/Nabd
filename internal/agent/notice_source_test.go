@@ -224,8 +224,18 @@ func sortedSourceNames(files map[string]*ast.File) []string {
 }
 
 func isEventLiteral(lit *ast.CompositeLit) bool {
-	id, ok := lit.Type.(*ast.Ident)
-	return ok && id.Name == "Event"
+	// The event type now lives in internal/event, so production literals are
+	// written event.Event{...} (a selector); the bare form is kept for
+	// robustness against a future move back.
+	if id, ok := lit.Type.(*ast.Ident); ok && id.Name == "Event" {
+		return true
+	}
+	if sel, ok := lit.Type.(*ast.SelectorExpr); ok {
+		if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "event" && sel.Sel.Name == "Event" {
+			return true
+		}
+	}
+	return false
 }
 
 func literalField(lit *ast.CompositeLit, name string) ast.Expr {
@@ -242,11 +252,16 @@ func literalField(lit *ast.CompositeLit, name string) ast.Expr {
 }
 
 func literalIdentValue(lit *ast.CompositeLit, name string) string {
-	id, ok := literalField(lit, name).(*ast.Ident)
-	if !ok {
-		return ""
+	v := literalField(lit, name)
+	if id, ok := v.(*ast.Ident); ok {
+		return id.Name
 	}
-	return id.Name
+	// Categories moved to internal/event and are written as selectors
+	// (event.NoticeCategoryUndoResult); the selector's Sel carries the name.
+	if sel, ok := v.(*ast.SelectorExpr); ok {
+		return sel.Sel.Name
+	}
+	return ""
 }
 
 // carriesField reports whether the literal sets name to something other than nil.

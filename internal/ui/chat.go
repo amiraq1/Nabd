@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 	"nabd/internal/providercmd"
 
@@ -18,14 +18,14 @@ type Runner interface {
 	Run(ctx context.Context, text string) error
 }
 
-type evMsg agent.Event
+type evMsg event.Event
 type doneMsg struct{ err error }
 
 // Chat is a single-line prompt with a scrollback of printed events.
 // Deliberately not a textarea: one line, one hand, one thumb.
 type Chat struct {
 	runner         Runner
-	events         <-chan agent.Event
+	events         <-chan event.Event
 	width          int
 	input          string
 	buf            string
@@ -34,14 +34,14 @@ type Chat struct {
 	status         string
 	statusProj     *presentation.StatusProjector
 	Approve        *Approver
-	pending        *agent.ToolCall
+	pending        *event.ToolCall
 	callbacks      SessionCallbacks
 	secretPrompt   bool
 	secretProvider string
 	secretKey      string
 }
 
-func NewChat(r Runner, events <-chan agent.Event) *Chat {
+func NewChat(r Runner, events <-chan event.Event) *Chat {
 	return &Chat{runner: r, events: events, width: DefaultWidth, Approve: NewApprover(), statusProj: presentation.NewStatusProjector()}
 }
 
@@ -56,7 +56,7 @@ func (m *Chat) Init() tea.Cmd { return waitEvent(m.events) }
 
 // waitEvent pumps one event per command: Bubble Tea owns the goroutine,
 // so nothing in the UI touches a channel outside Update.
-func waitEvent(ch <-chan agent.Event) tea.Cmd {
+func waitEvent(ch <-chan event.Event) tea.Cmd {
 	return func() tea.Msg {
 		e, ok := <-ch
 		if !ok {
@@ -80,19 +80,19 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case evMsg:
-		e := agent.Event(msg)
+		e := event.Event(msg)
 		if m.statusProj == nil {
 			m.statusProj = presentation.NewStatusProjector()
 		}
 		m.statusProj.Apply(e)
-		if e.Type == agent.TextDelta {
+		if e.Type == event.TextDelta {
 			m.buf += e.Text
 			return m, waitEvent(m.events)
 		}
 		switch e.Type {
-		case agent.PermAsk:
+		case event.PermAsk:
 			m.pending = e.Call
-		case agent.PermReply, agent.Interrupted:
+		case event.PermReply, event.Interrupted:
 			m.pending = nil
 		}
 		var cmds []tea.Cmd
@@ -148,18 +148,18 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch k.String() {
 		case "y", "Y":
 			m.pending = nil
-			m.Approve.Reply(agent.AllowOnce)
+			m.Approve.Reply(event.AllowOnce)
 			return m, nil
 		case "a", "A":
 			if !sessionGrantAllowed(m.pending) {
 				return m, nil
 			}
 			m.pending = nil
-			m.Approve.Reply(agent.AllowSession)
+			m.Approve.Reply(event.AllowSession)
 			return m, nil
 		case "n", "N", "esc":
 			m.pending = nil
-			m.Approve.Reply(agent.Deny)
+			m.Approve.Reply(event.Deny)
 			return m, nil
 		case "ctrl+c":
 			if m.running && m.cancel != nil {

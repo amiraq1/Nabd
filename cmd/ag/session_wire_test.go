@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
@@ -182,10 +182,10 @@ func TestSessionGateWiresSessionGrantPolicy(t *testing.T) {
 		t.Fatalf("newInteractiveSession failed: %v", err)
 	}
 
-	var permAsks []*agent.ToolCall
+	var permAsks []*event.ToolCall
 	sess.loop.Human = silentAsker{}
-	sess.loop.Sink = yoloSink(func(e agent.Event) error {
-		if e.Type == agent.PermAsk && e.Call != nil {
+	sess.loop.Sink = yoloSink(func(e event.Event) error {
+		if e.Type == event.PermAsk && e.Call != nil {
 			cp := *e.Call
 			permAsks = append(permAsks, &cp)
 		}

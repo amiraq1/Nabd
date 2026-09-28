@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"nabd/internal/event"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -54,8 +55,8 @@ func (noTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, erro
 	return "", false, nil
 }
 func (noTools) Check(tool string) (agent.Verdict, string)              { return agent.VerdictDeny, "no" }
-func (noTools) Record(tool string, d agent.Decision)                   {}
-func (noTools) Effective(tool string, d agent.Decision) agent.Decision { return d }
-func (noTools) Ask(ctx context.Context, c agent.ToolCall) agent.Decision {
-	return agent.Deny
+func (noTools) Record(tool string, d event.Decision)                   {}
+func (noTools) Effective(tool string, d event.Decision) event.Decision { return d }
+func (noTools) Ask(ctx context.Context, c event.ToolCall) event.Decision {
+	return event.Deny
 }

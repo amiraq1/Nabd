@@ -2,7 +2,7 @@ package ui
 
 import (
 	"encoding/json"
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"strings"
 	"testing"
 )
@@ -13,16 +13,16 @@ func TestHostilePayload(t *testing.T) {
 	f.width = 80
 	f.height = 24
 	args := json.RawMessage(`{"test":"` + hostile + `"}`)
-	events := []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: hostile},
-		{Seq: 2, Type: agent.UserMsg, Text: hostile},
-		{Seq: 3, Type: agent.TextDelta, Text: hostile},
-		{Seq: 4, Type: agent.TurnEnd},
-		{Seq: 5, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "call_1", Name: hostile, Args: args}},
-		{Seq: 6, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "call_1", Name: hostile, Args: args, Output: hostile, Signal: hostile, MS: 10}},
-		{Seq: 7, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "call_2", Name: hostile, Args: args}},
-		{Seq: 8, Type: agent.Notice, Text: hostile},
-		{Seq: 9, Type: agent.RunError, Err: hostile},
+	events := []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: hostile},
+		{Seq: 2, Type: event.UserMsg, Text: hostile},
+		{Seq: 3, Type: event.TextDelta, Text: hostile},
+		{Seq: 4, Type: event.TurnEnd},
+		{Seq: 5, Type: event.ToolStart, Call: &event.ToolCall{ID: "call_1", Name: hostile, Args: args}},
+		{Seq: 6, Type: event.ToolEnd, Call: &event.ToolCall{ID: "call_1", Name: hostile, Args: args, Output: hostile, Signal: hostile, MS: 10}},
+		{Seq: 7, Type: event.PermAsk, Call: &event.ToolCall{ID: "call_2", Name: hostile, Args: args}},
+		{Seq: 8, Type: event.Notice, Text: hostile},
+		{Seq: 9, Type: event.RunError, Err: hostile},
 	}
 	f.BuildFromEvents(events)
 	f.addDiagnostic(hostile)

@@ -5,18 +5,18 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestBatcherDeliveryAfterStartupIdle reproduces the failure where an idle period
 // immediately after batcher startup consumes the initial one-shot timer without rearming it,
 // causing subsequent ordinary (non-sensitive, below maxSize) events to never be delivered.
 func TestBatcherDeliveryAfterStartupIdle(t *testing.T) {
-	delivered := make(chan []agent.Event, 10)
+	delivered := make(chan []event.Event, 10)
 	emptyFlushed := make(chan struct{}, 10)
 	interval := 10 * time.Millisecond
 
-	b := NewBatcher(interval, 100, func(batch []agent.Event) {
+	b := NewBatcher(interval, 100, func(batch []event.Event) {
 		delivered <- batch
 	})
 	b.emptyFlushHook = func() {
@@ -38,8 +38,8 @@ func TestBatcherDeliveryAfterStartupIdle(t *testing.T) {
 	}
 
 	// 2. Add an ordinary event (below maxSize, non-sensitive).
-	event := agent.Event{Seq: 1, Type: agent.TextDelta, Text: "hello"}
-	b.Add(event)
+	ev := event.Event{Seq: 1, Type: event.TextDelta, Text: "hello"}
+	b.Add(ev)
 
 	// 3. Assert onFlush receives it automatically via timer without any Stop, manual Flush,
 	// sensitive event, or maxSize trigger.
@@ -57,11 +57,11 @@ func TestBatcherDeliveryAfterStartupIdle(t *testing.T) {
 // following a successful delivery consumes the timer on an empty queue without rearming it,
 // causing subsequent ordinary turns to hang indefinitely.
 func TestBatcherDeliveryAfterIdlePostDelivery(t *testing.T) {
-	delivered := make(chan []agent.Event, 10)
+	delivered := make(chan []event.Event, 10)
 	emptyFlushed := make(chan struct{}, 10)
 	interval := 10 * time.Millisecond
 
-	b := NewBatcher(interval, 100, func(batch []agent.Event) {
+	b := NewBatcher(interval, 100, func(batch []event.Event) {
 		delivered <- batch
 	})
 	b.emptyFlushHook = func() {
@@ -75,11 +75,11 @@ func TestBatcherDeliveryAfterIdlePostDelivery(t *testing.T) {
 	defer b.Stop()
 
 	// 1. Deliver and observe an initial RunStart batch.
-	b.Add(agent.Event{Seq: 1, Type: agent.RunStart, Text: "session started"})
+	b.Add(event.Event{Seq: 1, Type: event.RunStart, Text: "session started"})
 
 	select {
 	case batch := <-delivered:
-		if len(batch) != 1 || batch[0].Type != agent.RunStart {
+		if len(batch) != 1 || batch[0].Type != event.RunStart {
 			t.Fatalf("expected initial RunStart batch, got: %+v", batch)
 		}
 	case <-time.After(2 * time.Second):
@@ -95,12 +95,12 @@ func TestBatcherDeliveryAfterIdlePostDelivery(t *testing.T) {
 	}
 
 	// 3. Add ordinary events (UserMsg and TextDelta - both non-sensitive, below maxSize).
-	b.Add(agent.Event{Seq: 2, Type: agent.UserMsg, Text: "how are you?"})
-	b.Add(agent.Event{Seq: 3, Type: agent.TextDelta, Text: "I am fine."})
+	b.Add(event.Event{Seq: 2, Type: event.UserMsg, Text: "how are you?"})
+	b.Add(event.Event{Seq: 3, Type: event.TextDelta, Text: "I am fine."})
 
 	// 4. Assert automatic delivery across one or more batches. The timer may flush between
 	// the two Add calls or after both; both are valid behaviors as long as all events arrive in order.
-	var received []agent.Event
+	var received []event.Event
 	deadline := time.After(500 * time.Millisecond)
 	for len(received) < 2 {
 		select {
@@ -119,11 +119,11 @@ func TestBatcherDeliveryAfterIdlePostDelivery(t *testing.T) {
 // TestBatcherDeliveryMultipleIdleCycles verifies that the batcher can undergo multiple consecutive
 // idle cycles (queue empty, timer fires and re-arms) and successfully deliver events during each active period.
 func TestBatcherDeliveryMultipleIdleCycles(t *testing.T) {
-	delivered := make(chan []agent.Event, 20)
+	delivered := make(chan []event.Event, 20)
 	emptyFlushed := make(chan struct{}, 20)
 	interval := 10 * time.Millisecond
 
-	b := NewBatcher(interval, 100, func(batch []agent.Event) {
+	b := NewBatcher(interval, 100, func(batch []event.Event) {
 		delivered <- batch
 	})
 	b.emptyFlushHook = func() {
@@ -147,7 +147,7 @@ func TestBatcherDeliveryMultipleIdleCycles(t *testing.T) {
 
 		// Add ordinary event
 		expectedSeq := seq
-		b.Add(agent.Event{Seq: expectedSeq, Type: agent.TextDelta, Text: "payload"})
+		b.Add(event.Event{Seq: expectedSeq, Type: event.TextDelta, Text: "payload"})
 		seq++
 
 		// Assert automatic delivery via re-armed timer
@@ -178,7 +178,7 @@ func TestBatcherNeverEmitsEmptyCallbacks(t *testing.T) {
 	totalBatchesCount := 0
 
 	interval := 5 * time.Millisecond
-	b := NewBatcher(interval, 100, func(batch []agent.Event) {
+	b := NewBatcher(interval, 100, func(batch []event.Event) {
 		mu.Lock()
 		defer mu.Unlock()
 		totalBatchesCount++
@@ -221,17 +221,17 @@ func TestBatcherNeverEmitsEmptyCallbacks(t *testing.T) {
 // TestBatcherStopFlushesPendingWithoutTimerResurrection verifies that Stop() flushes pending events
 // and terminates the loop without re-arming or resurrecting the timer.
 func TestBatcherStopFlushesPendingWithoutTimerResurrection(t *testing.T) {
-	delivered := make(chan []agent.Event, 10)
+	delivered := make(chan []event.Event, 10)
 	interval := 10 * time.Millisecond
 
-	b := NewBatcher(interval, 100, func(batch []agent.Event) {
+	b := NewBatcher(interval, 100, func(batch []event.Event) {
 		delivered <- batch
 	})
 
 	b.Start()
 
 	// Add an event
-	b.Add(agent.Event{Seq: 1, Type: agent.TextDelta, Text: "pending"})
+	b.Add(event.Event{Seq: 1, Type: event.TextDelta, Text: "pending"})
 
 	// Stop immediately to flush pending
 	b.Stop()
@@ -255,7 +255,7 @@ func TestBatcherStopFlushesPendingWithoutTimerResurrection(t *testing.T) {
 	}
 
 	// Further Add should be ignored and no panic
-	b.Add(agent.Event{Seq: 2, Type: agent.TextDelta, Text: "after stop"})
+	b.Add(event.Event{Seq: 2, Type: event.TextDelta, Text: "after stop"})
 	b.Flush()
 
 	select {
@@ -270,10 +270,10 @@ func TestBatcherStopFlushesPendingWithoutTimerResurrection(t *testing.T) {
 // preserve all added events without drops, corruptions, or deadlocks.
 func TestBatcherConcurrentAddAndFlush(t *testing.T) {
 	var mu sync.Mutex
-	var allDelivered []agent.Event
+	var allDelivered []event.Event
 
 	interval := 5 * time.Millisecond
-	b := NewBatcher(interval, 50, func(batch []agent.Event) {
+	b := NewBatcher(interval, 50, func(batch []event.Event) {
 		mu.Lock()
 		allDelivered = append(allDelivered, batch...)
 		mu.Unlock()
@@ -292,11 +292,11 @@ func TestBatcherConcurrentAddAndFlush(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < eventsPerProducer; i++ {
 				seq := pID*1000 + i
-				evType := agent.TextDelta
+				evType := event.TextDelta
 				if i%10 == 0 {
-					evType = agent.ToolStart
+					evType = event.ToolStart
 				}
-				b.Add(agent.Event{Seq: seq, Type: evType, Text: "data"})
+				b.Add(event.Event{Seq: seq, Type: evType, Text: "data"})
 				time.Sleep(100 * time.Microsecond)
 			}
 		}(p)
@@ -339,7 +339,7 @@ func TestBatcherConcurrentAddAndFlush(t *testing.T) {
 // while multiple producers and flushers are actively running concurrently is safe:
 // it must not panic, deadlock, or produce data races.
 func TestBatcherConcurrentAddFlushStopInterleaved(t *testing.T) {
-	b := NewBatcher(2*time.Millisecond, 20, func(batch []agent.Event) {
+	b := NewBatcher(2*time.Millisecond, 20, func(batch []event.Event) {
 		// onFlush executes safely under concurrency
 	})
 	b.Start()
@@ -359,7 +359,7 @@ func TestBatcherConcurrentAddFlushStopInterleaved(t *testing.T) {
 					return
 				default:
 					seq++
-					b.Add(agent.Event{Seq: seq, Type: agent.TextDelta, Text: "concurrent"})
+					b.Add(event.Event{Seq: seq, Type: event.TextDelta, Text: "concurrent"})
 					time.Sleep(50 * time.Microsecond)
 				}
 			}
@@ -394,6 +394,6 @@ func TestBatcherConcurrentAddFlushStopInterleaved(t *testing.T) {
 	wg.Wait()
 
 	// Verify post-stop idempotence and safety
-	b.Add(agent.Event{Seq: 999999, Type: agent.TextDelta, Text: "post-stop"})
+	b.Add(event.Event{Seq: 999999, Type: event.TextDelta, Text: "post-stop"})
 	b.Stop()
 }

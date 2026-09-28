@@ -5,17 +5,14 @@
 package agent
 
 import (
-	"errors"
 	"math"
 	"strconv"
 	"sync"
-	"unicode"
 
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/provider"
 )
-
-var ErrSpendBudget = errors.New("run token spend budget exhausted")
 
 // SpendBudget bounds estimated or provider-reported tokens across every
 // attempt in one run. Unknown usage is charged conservatively.
@@ -51,7 +48,7 @@ func (b *SpendBudget) Charge(prompt, completion, unknown int) error {
 	defer b.mu.Unlock()
 	charge := prompt + completion + unknown
 	if b.Used+charge > b.Limit {
-		return ErrSpendBudget
+		return event.ErrSpendBudget
 	}
 	b.Used += charge
 	return nil
@@ -67,33 +64,19 @@ func (b *SpendBudget) Exhausted() bool {
 }
 
 const (
-	runesPerTokASCII = 4.0
-	runesPerTokOther = 1.6 // Arabic sits near 1.8; 1.6 leans safe
-	perMessage       = 8   // role framing, delimiters
-	perToolCall      = 20
+	perMessage  = 8 // role framing, delimiters
+	perToolCall = 20
 )
-
-func EstimateText(s string) int {
-	var a, o int
-	for _, r := range s {
-		if r < unicode.MaxASCII {
-			a++
-			continue
-		}
-		o++
-	}
-	return int(float64(a)/runesPerTokASCII + float64(o)/runesPerTokOther)
-}
 
 func EstimateMessages(ms []provider.Message) int {
 	n := 0
 	for _, m := range ms {
-		n += perMessage + EstimateText(m.Text)
+		n += perMessage + event.EstimateText(m.Text)
 		for _, c := range m.ToolCalls {
-			n += perToolCall + EstimateText(c.Name) + EstimateText(string(c.Input))
+			n += perToolCall + event.EstimateText(c.Name) + event.EstimateText(string(c.Input))
 		}
 		for _, r := range m.ToolResults {
-			n += perMessage + EstimateText(r.Output)
+			n += perMessage + event.EstimateText(r.Output)
 		}
 	}
 	return n

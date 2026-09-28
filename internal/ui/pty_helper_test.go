@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -113,7 +113,7 @@ type PTYSession struct {
 type TestApprover struct {
 	*Approver
 	mu        sync.Mutex
-	decisions []agent.Decision
+	decisions []event.Decision
 	stopCh    chan struct{}
 }
 
@@ -146,15 +146,15 @@ func (a *TestApprover) Count() int {
 	return len(a.decisions)
 }
 
-func (a *TestApprover) Decisions() []agent.Decision {
+func (a *TestApprover) Decisions() []event.Decision {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	cp := make([]agent.Decision, len(a.decisions))
+	cp := make([]event.Decision, len(a.decisions))
 	copy(cp, a.decisions)
 	return cp
 }
 
-func (a *TestApprover) LastDecision() (agent.Decision, error) {
+func (a *TestApprover) LastDecision() (event.Decision, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if len(a.decisions) == 0 {
@@ -492,7 +492,7 @@ func (s *PTYSession) Resize(width, height int) {
 }
 
 // InjectBatch delivers an event batch directly to the feed model through Bubble Tea's event loop.
-func (s *PTYSession) InjectBatch(events []agent.Event) {
+func (s *PTYSession) InjectBatch(events []event.Event) {
 	s.Feed.testSyncDispatch = true
 	s.Feed.SendBatch(events)
 }

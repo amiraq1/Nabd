@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"nabd/internal/event"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,9 +13,9 @@ import (
 	"nabd/internal/provider"
 )
 
-type recSink struct{ events []Event }
+type recSink struct{ events []event.Event }
 
-func (s *recSink) Emit(e Event) error {
+func (s *recSink) Emit(e event.Event) error {
 	s.events = append(s.events, e)
 	return nil
 }
@@ -50,30 +51,30 @@ func TestRunUsesInjectedContextFields(t *testing.T) {
 	}
 	readOut := strings.Repeat("سطر طويل\n", 400)
 	for i := 0; i < 4; i++ {
-		l.emit(Event{Type: UserMsg, Text: fmt.Sprintf("سؤال %d", i)})
+		l.emit(event.Event{Type: event.UserMsg, Text: fmt.Sprintf("سؤال %d", i)})
 		id := fmt.Sprintf("r%d", i)
-		l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: id, Name: "read_file", Args: json.RawMessage(`{"path":"big.go"}`)}})
-		l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: id, OK: true, Output: readOut}})
-		l.emit(Event{Type: TurnEnd})
+		l.emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: id, Name: "read_file", Args: json.RawMessage(`{"path":"big.go"}`)}})
+		l.emit(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: id, OK: true, Output: readOut}})
+		l.emit(event.Event{Type: event.TurnEnd})
 	}
 	if err := l.Run(context.Background(), "تحليل"); err != nil {
 		t.Fatal(err)
 	}
 
 	var (
-		compact         *Event
+		compact         *event.Event
 		compactedNotice bool
 		resumeSeq       int
 	)
 	for i := range sink.events {
 		e := sink.events[i]
-		if e.Type == Compact {
+		if e.Type == event.Compact {
 			compact = &sink.events[i]
 		}
-		if e.Type == Notice && strings.Contains(e.Text, "context compacted") {
+		if e.Type == event.Notice && strings.Contains(e.Text, "context compacted") {
 			compactedNotice = true
 		}
-		if e.Type == UserMsg && e.Text == "تحليل" {
+		if e.Type == event.UserMsg && e.Text == "تحليل" {
 			resumeSeq = e.Seq
 		}
 	}

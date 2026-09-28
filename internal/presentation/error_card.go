@@ -1,6 +1,9 @@
 package presentation
 
-import "nabd/internal/agent"
+import (
+	"nabd/internal/agent"
+	"nabd/internal/event"
+)
 
 type RetryScope string
 
@@ -11,7 +14,7 @@ const (
 )
 
 type ErrorCard struct {
-	Code         agent.ErrorCode
+	Code         event.ErrorCode
 	Title        string
 	Message      string
 	ActionText   string
@@ -30,10 +33,10 @@ type ErrorCard struct {
 
 // ErrorCardFromEvent is a pure mapping from persisted facts. Empty legacy
 // codes are unknown and are never inferred from message text.
-func ErrorCardFromEvent(e agent.Event) *ErrorCard {
-	code := agent.ErrorCode(e.ErrorCode)
+func ErrorCardFromEvent(e event.Event) *ErrorCard {
+	code := event.ErrorCode(e.ErrorCode)
 	if code == "" {
-		code = agent.ErrCodeUnknown
+		code = event.ErrCodeUnknown
 	}
 	card := NewErrorCard(code, e.Err, e.JournalPath)
 	card.WaitSeconds = e.RetryAfter
@@ -44,42 +47,42 @@ func ErrorCardFromError(err error) *ErrorCard {
 	if err == nil {
 		return nil
 	}
-	return NewErrorCard(agent.ErrorCodeOf(err), err.Error(), agent.JournalPathOf(err))
+	return NewErrorCard(agent.ErrorCodeOf(err), err.Error(), event.JournalPathOf(err))
 }
 
-func NewErrorCard(code agent.ErrorCode, message, journalPath string) *ErrorCard {
+func NewErrorCard(code event.ErrorCode, message, journalPath string) *ErrorCard {
 	card := &ErrorCard{Code: code, Message: message, JournalPath: journalPath, RetryScope: RetryNone}
 	switch code {
-	case agent.ErrCodeProviderTemporary:
+	case event.ErrCodeProviderTemporary:
 		card.Title = "Could not reach provider"
 		card.ActionText = "retry provider request"
 		card.Retryable = true
 		card.RetryScope = RetryProviderTurn
-	case agent.ErrCodeProviderAuth:
+	case event.ErrCodeProviderAuth:
 		card.Title = "Provider rejected authentication"
 		card.ActionText = "check provider settings or key"
-	case agent.ErrCodePersist:
+	case event.ErrCodePersist:
 		card.Title = "Session event was not saved"
 		card.ActionText = "inspect the journal before continuing"
-	case agent.ErrCodeBudget:
+	case event.ErrCodeBudget:
 		card.Title = "Run budget reached"
 		card.ActionText = "start a new session or change the limit"
 		card.RetryScope = RetryNewMessage
-	case agent.ErrCodeMaxTurns:
+	case event.ErrCodeMaxTurns:
 		card.Title = "Maximum turns reached"
 		card.ActionText = "send a shorter follow-up or rephrase"
 		card.Retryable = true
 		card.RetryScope = RetryNewMessage
-	case agent.ErrCodeCanceled:
+	case event.ErrCodeCanceled:
 		card.Title = "Run canceled"
 		card.ActionText = "start a new message"
 		card.RetryScope = RetryNewMessage
-	case agent.ErrCodeEndpointRefused:
+	case event.ErrCodeEndpointRefused:
 		card.Title = "Endpoint refused by policy"
 		card.ActionText = "review endpoint policy or proxy settings"
 		card.Remedy = RemedyEndpointRefused
 	default:
-		card.Code = agent.ErrCodeUnknown
+		card.Code = event.ErrCodeUnknown
 		card.Title = "Unexpected error"
 		card.ActionText = "review details before continuing"
 	}

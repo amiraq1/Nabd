@@ -15,6 +15,7 @@ import (
 	"nabd/internal/agent"
 	"nabd/internal/build"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
@@ -41,19 +42,19 @@ var (
 // silentAsker never blocks and never reads a tty. Decision(0)==Deny.
 type silentAsker struct{}
 
-func (silentAsker) Ask(context.Context, agent.ToolCall) agent.Decision {
-	return agent.Deny
+func (silentAsker) Ask(context.Context, event.ToolCall) event.Decision {
+	return event.Deny
 }
 
 type noticeStderr struct{ w io.Writer }
 
-func (s noticeStderr) Emit(e agent.Event) error {
+func (s noticeStderr) Emit(e event.Event) error {
 	switch e.Type {
-	case agent.Notice:
+	case event.Notice:
 		if e.Text != "" {
 			fmt.Fprintln(s.w, e.Text)
 		}
-	case agent.RunError:
+	case event.RunError:
 		if e.Err != "" {
 			fmt.Fprintln(s.w, e.Err)
 		} else if e.Text != "" {
@@ -68,7 +69,7 @@ type jsonlStdout struct {
 	redact store.EventRedactor
 }
 
-func (s jsonlStdout) Emit(e agent.Event) error {
+func (s jsonlStdout) Emit(e event.Event) error {
 	output := e
 	if s.redact != nil {
 		output = s.redact(e)
@@ -94,11 +95,11 @@ type headlessConfig struct {
 	provider provider.Provider
 }
 
-func finalAssistantText(evs []agent.Event) string {
-	evs = agent.Live(evs)
+func finalAssistantText(evs []event.Event) string {
+	evs = event.Live(evs)
 	lastStart := -1
 	for i, e := range evs {
-		if e.Type == agent.TurnStart {
+		if e.Type == event.TurnStart {
 			lastStart = i
 		}
 	}
@@ -107,25 +108,25 @@ func finalAssistantText(evs []agent.Event) string {
 	}
 	var b strings.Builder
 	for _, e := range evs[lastStart:] {
-		if e.Type == agent.ToolStart {
+		if e.Type == event.ToolStart {
 			return ""
 		}
-		if e.Type == agent.TextDelta {
+		if e.Type == event.TextDelta {
 			b.WriteString(e.Text)
 		}
-		if e.Type == agent.TurnEnd {
+		if e.Type == event.TurnEnd {
 			break
 		}
 	}
 	return b.String()
 }
 
-func deniedAndStuck(evs []agent.Event, text string) bool {
+func deniedAndStuck(evs []event.Event, text string) bool {
 	if strings.TrimSpace(text) != "" {
 		return false
 	}
-	for _, e := range agent.Live(evs) {
-		if e.Type == agent.PermReply && e.Decision == agent.Deny {
+	for _, e := range event.Live(evs) {
+		if e.Type == event.PermReply && e.Decision == event.Deny {
 			return true
 		}
 	}
@@ -139,10 +140,10 @@ func mapHeadlessExit(err error) int {
 	if errors.Is(err, errInterrupted) {
 		return exitInterrupted
 	}
-	if errors.Is(err, agent.ErrMaxTurns) {
+	if errors.Is(err, event.ErrMaxTurns) {
 		return exitMaxTurns
 	}
-	if errors.Is(err, agent.ErrRateLimitBudget) {
+	if errors.Is(err, event.ErrRateLimitBudget) {
 		return exitRateLimit
 	}
 	if errors.Is(err, errPermissionStuck) {
@@ -307,7 +308,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 	endFmt := statusSessionEnded
 	if interrupted || errors.Is(err, errInterrupted) {
 		endFmt = statusSessionStopped
-	} else if err != nil && !errors.Is(err, agent.ErrMaxTurns) {
+	} else if err != nil && !errors.Is(err, event.ErrMaxTurns) {
 		endFmt = statusSessionFailed
 	}
 	endErr := loop.End(fmt.Sprintf(endFmt, filepath.Base(journalPath)))

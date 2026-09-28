@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -20,8 +20,8 @@ func TestNoDuplicateUserFeedItem(t *testing.T) {
 	f.SetRunner(runnerFunc(func(string) error { return nil }))
 
 	// A previous run boundary exists in the feed.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "start"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "start"},
 	}})
 
 	// Send a message through the real key path.
@@ -48,8 +48,8 @@ func TestNoDuplicateUserFeedItem(t *testing.T) {
 	}
 
 	// The loop emits user_msg through the event pipeline.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.UserMsg, Text: "my question"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.UserMsg, Text: "my question"},
 	}})
 
 	// Exactly one ItemUserMsg now, with the right text.
@@ -81,8 +81,8 @@ func TestRejectedBusySendNotDuplicatedInFeed(t *testing.T) {
 		t.Fatal("busy send must not produce a run command")
 	}
 	// No user_msg was ever emitted by the loop for the rejected message.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.UserMsg, Text: "first run"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.UserMsg, Text: "first run"},
 	}})
 	count := 0
 	for _, it := range f.proj.Items() {

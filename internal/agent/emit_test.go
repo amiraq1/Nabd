@@ -1,16 +1,17 @@
 package agent
 
 import (
+	"nabd/internal/event"
 	"sync"
 	"testing"
 )
 
 type sliceSink struct {
 	mu  sync.Mutex
-	evs []Event
+	evs []event.Event
 }
 
-func (s *sliceSink) Emit(e Event) error {
+func (s *sliceSink) Emit(e event.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.evs = append(s.evs, e)
@@ -26,7 +27,7 @@ func TestEmitRaceOrder(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			l.emit(Event{Type: TextDelta, Text: "test"})
+			l.emit(event.Event{Type: event.TextDelta, Text: "test"})
 		}(i)
 	}
 	wg.Wait()

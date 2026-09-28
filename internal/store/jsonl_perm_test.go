@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // permBits returns the permission bits of path, masking off the file-type bits.
@@ -75,7 +75,7 @@ func TestNewJSONL_AppendAndReadAfterHarden(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.jsonl")
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	first := agent.Event{Seq: 1, Time: base, Type: agent.RunStart, Text: "prior"}
+	first := event.Event{Seq: 1, Time: base, Type: event.RunStart, Text: "prior"}
 
 	// Produce a legacy 0o644 file with one event.
 	{
@@ -96,7 +96,7 @@ func TestNewJSONL_AppendAndReadAfterHarden(t *testing.T) {
 		t.Fatalf("NewJSONL: %v", err)
 	}
 
-	second := agent.Event{Seq: 2, Parent: 1, Time: base.Add(time.Second), Type: agent.UserMsg, Text: "مرحبا"}
+	second := event.Event{Seq: 2, Parent: 1, Time: base.Add(time.Second), Type: event.UserMsg, Text: "مرحبا"}
 	if err := j.Append(second); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestNewJSONLRepairsTruncatedFinalLine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONL tail recovery: %v", err)
 	}
-	if err := j.Append(agent.Event{Seq: 2, Type: agent.RunEnd}); err != nil {
+	if err := j.Append(event.Event{Seq: 2, Type: event.RunEnd}); err != nil {
 		t.Fatalf("Append after tail recovery: %v", err)
 	}
 	if err := j.Close(); err != nil {
@@ -311,7 +311,7 @@ func TestNewJSONLSeparatesValidFinalLineWithoutNewline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewJSONL: %v", err)
 	}
-	if err := j.Append(agent.Event{Seq: 2, Type: agent.RunEnd}); err != nil {
+	if err := j.Append(event.Event{Seq: 2, Type: event.RunEnd}); err != nil {
 		t.Fatalf("Append: %v", err)
 	}
 	if err := j.Close(); err != nil {

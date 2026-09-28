@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 type Verdict uint8
@@ -153,14 +153,14 @@ func (p *Policy) Check(tool string) (Verdict, string) {
 // CheckReason is Check plus a stable language-neutral reason. Text is an
 // English compatibility fallback for old readers; presentation translates the
 // reason for current user interfaces.
-func (p *Policy) CheckReason(tool string) (Verdict, agent.PermissionReason, string) {
+func (p *Policy) CheckReason(tool string) (Verdict, event.PermissionReason, string) {
 	if strings.TrimSpace(tool) == "" {
-		return Deny, agent.PermissionReasonToolNoName, "tool with no name"
+		return Deny, event.PermissionReasonToolNoName, "tool with no name"
 	}
 
 	class, known := p.cls.Class(tool)
 	if !known {
-		return Deny, agent.PermissionReasonUnknownTool, "unknown tool"
+		return Deny, event.PermissionReasonUnknownTool, "unknown tool"
 	}
 	if class == ReadOnly {
 		return Allow, "", ""
@@ -173,25 +173,25 @@ func (p *Policy) CheckReason(tool string) (Verdict, agent.PermissionReason, stri
 	p.mu.Unlock()
 
 	if mode == ModePlan {
-		return Deny, agent.PermissionReasonPlanReadOnly, "plan mode: read-only"
+		return Deny, event.PermissionReasonPlanReadOnly, "plan mode: read-only"
 	}
 	if class == Mutating && granted {
-		return Allow, agent.PermissionReasonSessionGrant, "allowed for this session"
+		return Allow, event.PermissionReasonSessionGrant, "allowed for this session"
 	}
 	if mode == ModeDeny || mode == ModeAllowReads {
-		return Deny, agent.PermissionReasonPolicyDenied, "denied by policy"
+		return Deny, event.PermissionReasonPolicyDenied, "denied by policy"
 	}
 	if yolo && class == Mutating {
 		return Allow, "", ""
 	}
-	return Ask, agent.PermissionReasonRequired, "permission required"
+	return Ask, event.PermissionReasonRequired, "permission required"
 }
 
 // Record applies the user's answer. Only Mutating tools can leave a
 // standing grant behind; a session-wide yes to a shell is dropped to a
 // one-time yes, silently and by design.
-func (p *Policy) Record(tool string, d agent.Decision) {
-	if d != agent.AllowSession {
+func (p *Policy) Record(tool string, d event.Decision) {
+	if d != event.AllowSession {
 		return
 	}
 	class, known := p.cls.Class(tool)
@@ -206,12 +206,12 @@ func (p *Policy) Record(tool string, d agent.Decision) {
 // Effective reports what a decision actually means once the policy has
 // had its say, so the journal records the grant that was given rather
 // than the one that was clicked.
-func (p *Policy) Effective(tool string, d agent.Decision) agent.Decision {
-	if d != agent.AllowSession {
+func (p *Policy) Effective(tool string, d event.Decision) event.Decision {
+	if d != event.AllowSession {
 		return d
 	}
 	if class, known := p.cls.Class(tool); !known || class != Mutating {
-		return agent.AllowOnce
+		return event.AllowOnce
 	}
 	return d
 }

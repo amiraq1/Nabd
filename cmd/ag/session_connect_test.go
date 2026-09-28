@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/providercmd"
 	"nabd/internal/ui"
 
@@ -112,7 +113,7 @@ func TestConnectSecretNeverEntersTheJournal(t *testing.T) {
 	// -------------------------------------------------------------------------
 	// 3. Chat frontend path
 	// -------------------------------------------------------------------------
-	chatEvents := make(chan agent.Event, 10)
+	chatEvents := make(chan event.Event, 10)
 	chat := ui.NewChat(sess.loop, chatEvents)
 	chat.SetCallbacks(cb)
 
@@ -160,14 +161,14 @@ func TestConnectSecretNeverEntersTheJournal(t *testing.T) {
 		}
 	}
 
-	for _, ev := range agent.Live(sess.loop.Hist()) {
+	for _, ev := range event.Live(sess.loop.Hist()) {
 		evJSON, _ := json.Marshal(ev)
 		if strings.Contains(string(evJSON), canarySecret) {
 			t.Fatalf("secret leaked into live session history event: %s", string(evJSON))
 		}
 	}
 
-	for _, m := range agent.Messages(agent.Live(sess.loop.Hist())) {
+	for _, m := range agent.Messages(event.Live(sess.loop.Hist())) {
 		if strings.Contains(m.Text, canarySecret) {
 			t.Fatalf("secret leaked into model message text: %q", m.Text)
 		}
@@ -245,7 +246,7 @@ func TestSessionProviderAndModelsCommands(t *testing.T) {
 	cb := sess.callbacks()
 
 	// 1. Test /provider in Chat and Feed
-	chat := ui.NewChat(sess.loop, make(chan agent.Event, 1))
+	chat := ui.NewChat(sess.loop, make(chan event.Event, 1))
 	chat.SetCallbacks(cb)
 	chatProvRes := chat.Command("/provider")
 	if !strings.Contains(chatProvRes, "mockserver") || !strings.Contains(chatProvRes, "openai") {

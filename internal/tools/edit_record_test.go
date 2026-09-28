@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestEditRecordEmitted verifies STEP 1 of P0-2: a read → write cycle
@@ -116,12 +117,12 @@ func TestEditRecordCreationHasEmptyHashBefore(t *testing.T) {
 // TestEditRecordNotInMessages: Messages() must never carry the patch — the
 // model hears summaries, not diffs.
 func TestEditRecordNotInMessages(t *testing.T) {
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.EventEdit, Edit: &agent.EditRecord{
+	evs := []event.Event{
+		{Seq: 1, Type: event.EventEdit, Edit: &event.EditRecord{
 			Path: "x.md", HashBefore: "a", HashAfter: "b",
 			Patch: "--- a/x.md\n+++ b/x.md\n-secret\n+public\n", ReadLines: 3,
 		}},
-		{Seq: 2, Type: agent.UserMsg, Text: "بعد التعديل"},
+		{Seq: 2, Type: event.UserMsg, Text: "بعد التعديل"},
 	}
 	msgs := agent.Messages(evs)
 	for _, m := range msgs {

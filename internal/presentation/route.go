@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"nabd/internal/agent"
 	"nabd/internal/display"
+	"nabd/internal/event"
 )
 
 // FormatRouteNotice formats a provider-route event for user presentation.
@@ -30,7 +30,7 @@ import (
 //   - Reason is not appended to "selected" notices.
 //   - Empty or effectively blank fields are replaced with safe placeholders.
 //   - Output is strictly a single logical line without newlines or terminal controls.
-func FormatRouteNotice(r *agent.ProviderRoute) (string, bool) {
+func FormatRouteNotice(r *event.ProviderRoute) (string, bool) {
 	if r == nil {
 		return "", false
 	}

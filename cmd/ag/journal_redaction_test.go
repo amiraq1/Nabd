@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/redact"
 	"nabd/internal/store"
 )
@@ -84,7 +84,7 @@ func TestRedactJournalEventCopiesAndRedactsSensitiveFields(t *testing.T) {
 		`{"authorization":"` + secret + `","path":"safe.txt"}`,
 	)
 
-	original := agent.Event{
+	original := event.Event{
 		ProjectRoot:   "/project/" + secret,
 		Text:          "user text " + secret,
 		Err:           "provider error " + secret,
@@ -92,17 +92,17 @@ func TestRedactJournalEventCopiesAndRedactsSensitiveFields(t *testing.T) {
 		JournalPath:   "/sessions/" + secret + ".jsonl",
 		RawMessage:    `{"error":"` + secret + `"}`,
 		RawRetryAfter: "retry " + secret,
-		Call: &agent.ToolCall{
+		Call: &event.ToolCall{
 			ID:     "call-" + secret,
 			Name:   "tool-" + secret,
 			Args:   args,
 			Output: "tool output " + secret,
 			Signal: "SIGTERM-" + secret,
 		},
-		Read: &agent.ReadRecord{
+		Read: &event.ReadRecord{
 			Path: "/read/" + secret,
 		},
-		Edit: &agent.EditRecord{
+		Edit: &event.EditRecord{
 			Path:       "/edit/" + secret,
 			HashBefore: "before-" + secret,
 			HashAfter:  "after-" + secret,
@@ -110,7 +110,7 @@ func TestRedactJournalEventCopiesAndRedactsSensitiveFields(t *testing.T) {
 			BlobAfter:  "blob-after-" + secret,
 			Patch:      "patch " + secret,
 		},
-		Route: &agent.ProviderRoute{
+		Route: &event.ProviderRoute{
 			StreamID: "stream-" + secret,
 			Provider: "provider-" + secret,
 			Model:    "model-" + secret,
@@ -255,7 +255,7 @@ func TestJournalEventRedactorEnabled(t *testing.T) {
 		t.Fatal("enabled journal redactor is nil")
 	}
 
-	got := fn(agent.Event{
+	got := fn(event.Event{
 		Text: "token sk-or-abcdefgh12345678",
 	})
 	if strings.Contains(got.Text, "sk-or-abcdefgh12345678") {
@@ -274,9 +274,9 @@ func TestOpenSessionJournalUsesEnabledRedaction(t *testing.T) {
 	}
 
 	const secret = "sk-or-abcdefgh12345678"
-	if err := journal.Append(agent.Event{
+	if err := journal.Append(event.Event{
 		Seq:  1,
-		Type: agent.UserMsg,
+		Type: event.UserMsg,
 		Text: "continued " + secret,
 	}); err != nil {
 		t.Fatalf("Append: %v", err)
@@ -312,9 +312,9 @@ func TestNewSessionJournalUsesEnabledRedactionAndWarning(t *testing.T) {
 	}
 
 	const secret = "gsk_abcdefgh12345678"
-	if err := journal.Append(agent.Event{
+	if err := journal.Append(event.Event{
 		Seq:  1,
-		Type: agent.UserMsg,
+		Type: event.UserMsg,
 		Text: secret,
 	}); err != nil {
 		t.Fatalf("Append: %v", err)
@@ -347,13 +347,13 @@ func TestJSONLStdoutFollowsEnabledJournalRedaction(t *testing.T) {
 	var stdout bytes.Buffer
 	sink := jsonlStdout{
 		w:      &stdout,
-		redact: func(e agent.Event) agent.Event { return redactJournalEvent(e, nil) },
+		redact: func(e event.Event) event.Event { return redactJournalEvent(e, nil) },
 	}
 
-	original := agent.Event{
+	original := event.Event{
 		Seq:  1,
-		Type: agent.ToolEnd,
-		Call: &agent.ToolCall{
+		Type: event.ToolEnd,
+		Call: &event.ToolCall{
 			ID:     "call-1",
 			Name:   "read_file",
 			Output: secret,
@@ -365,7 +365,7 @@ func TestJSONLStdoutFollowsEnabledJournalRedaction(t *testing.T) {
 		t.Fatalf("Emit: %v", err)
 	}
 
-	var persisted agent.Event
+	var persisted event.Event
 	if err := json.Unmarshal(stdout.Bytes(), &persisted); err != nil {
 		t.Fatalf("stdout is not valid journal JSONL: %v; %q",
 			err,

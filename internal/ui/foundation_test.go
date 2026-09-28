@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 func itemAtLinear(m *Feed, line int) int {
@@ -27,22 +27,22 @@ func feedWithItems(t *testing.T, count, width, linesPerItem int) *Feed {
 	t.Helper()
 	m := NewFeed()
 	m.width = width
-	events := make([]agent.Event, 0, count*2)
+	events := make([]event.Event, 0, count*2)
 	for i := 0; i < count; i++ {
 		var lines []string
 		for j := 0; j < linesPerItem; j++ {
 			lines = append(lines, fmt.Sprintf("item %d line %d", i, j))
 		}
 		events = append(events,
-			agent.Event{
+			event.Event{
 				Seq:  i*2 + 1,
-				Type: agent.ToolStart,
-				Call: &agent.ToolCall{ID: fmt.Sprintf("c%d", i), Name: "bash", Args: []byte(`"echo test"`)},
+				Type: event.ToolStart,
+				Call: &event.ToolCall{ID: fmt.Sprintf("c%d", i), Name: "bash", Args: []byte(`"echo test"`)},
 			},
-			agent.Event{
+			event.Event{
 				Seq:  i*2 + 2,
-				Type: agent.ToolEnd,
-				Call: &agent.ToolCall{ID: fmt.Sprintf("c%d", i), Name: "bash", Output: strings.Join(lines, "\n"), OK: true},
+				Type: event.ToolEnd,
+				Call: &event.ToolCall{ID: fmt.Sprintf("c%d", i), Name: "bash", Output: strings.Join(lines, "\n"), OK: true},
 			},
 		)
 	}
@@ -97,15 +97,15 @@ func TestItemAtBoundRetentionTrimming(t *testing.T) {
 	m := NewFeed()
 	m.width = 80
 	// Create two items with many lines exceeding maxRenderedFeedLines (12000)
-	events := []agent.Event{
+	events := []event.Event{
 		{
 			Seq:  1,
-			Type: agent.UserMsg,
+			Type: event.UserMsg,
 			Text: strings.Repeat("item 0 line\n", 8000),
 		},
 		{
 			Seq:  2,
-			Type: agent.UserMsg,
+			Type: event.UserMsg,
 			Text: strings.Repeat("item 1 line\n", 8000),
 		},
 	}
@@ -235,9 +235,9 @@ func TestParallelToolsReportedByCount(t *testing.T) {
 	m := NewFeed()
 	m.running, m.busy = true, true
 	for _, id := range []string{"c1", "c2"} {
-		m.statusProj.Apply(agent.Event{
-			Type: agent.ToolStart,
-			Call: &agent.ToolCall{ID: id, Name: "bash"},
+		m.statusProj.Apply(event.Event{
+			Type: event.ToolStart,
+			Call: &event.ToolCall{ID: id, Name: "bash"},
 		})
 	}
 	if got := m.runtimeStatusText(); !strings.Contains(got, "2 tools") {
@@ -248,9 +248,9 @@ func TestParallelToolsReportedByCount(t *testing.T) {
 func TestSingleToolNamedInStatus(t *testing.T) {
 	m := NewFeed()
 	m.running, m.busy = true, true
-	m.statusProj.Apply(agent.Event{
-		Type: agent.ToolStart,
-		Call: &agent.ToolCall{ID: "c1", Name: "read_file"},
+	m.statusProj.Apply(event.Event{
+		Type: event.ToolStart,
+		Call: &event.ToolCall{ID: "c1", Name: "read_file"},
 	})
 	if got := m.runtimeStatusText(); !strings.Contains(got, "read_file") {
 		t.Fatalf("single tool not named: %q", got)
@@ -261,17 +261,17 @@ func TestProgressRequiresLiveRun(t *testing.T) {
 	m := NewFeed()
 	// 1. Tool starts during run
 	m.running, m.busy = true, true
-	m.statusProj.Apply(agent.Event{
-		Type: agent.ToolStart,
-		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+	m.statusProj.Apply(event.Event{
+		Type: event.ToolStart,
+		Call: &event.ToolCall{ID: "c1", Name: "bash"},
 	})
 	if got := m.runtimeStatusText(); !strings.Contains(got, "Running bash") {
 		t.Fatalf("expected running tool during live run, got %q", got)
 	}
 
 	// 2. Interrupted arrives: run canceled
-	m.statusProj.Apply(agent.Event{
-		Type: agent.Interrupted,
+	m.statusProj.Apply(event.Event{
+		Type: event.Interrupted,
 	})
 	m.markRunFailed()
 
@@ -289,8 +289,8 @@ func TestProgressRequiresLiveRun(t *testing.T) {
 
 func TestCompactionReportedOutsideRunGate(t *testing.T) {
 	m := NewFeed()
-	m.statusProj.Apply(agent.Event{
-		Type: agent.Compact,
+	m.statusProj.Apply(event.Event{
+		Type: event.Compact,
 	})
 	if got := m.runtimeStatusText(); got != "Compacting context…" {
 		t.Fatalf("compaction not reported on idle feed: %q", got)

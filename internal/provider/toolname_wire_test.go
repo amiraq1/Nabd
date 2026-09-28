@@ -21,7 +21,7 @@ func fencedForName(toolName, raw string) string {
 }
 
 // wireMessages builds the provider messages for one tool call whose name is
-// callName, exactly as agent.Messages() does for a known tool: an assistant
+// callName, exactly as event.Messages() does for a known tool: an assistant
 // tool_call and the matching tool_result.
 func wireMessages(callName string) []Message {
 	return []Message{
