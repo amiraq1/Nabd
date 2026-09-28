@@ -207,13 +207,16 @@ func runHeadlessErr(cfg headlessConfig) error {
 			return err
 		}
 	}
+	// Exact configured secrets, collected once: pattern redaction alone cannot
+	// cover custom providers whose key format matches no known shape.
+	exactKeys := provider.ExactKeys(prov)
 
 	root, err := tools.NewRoot("")
 	if err != nil {
 		return err
 	}
 
-	journal, journalPath, err := newSessionJournalWithWarning(cfg.sessDir, cfg.stderr)
+	journal, journalPath, err := newSessionJournalWithWarning(cfg.sessDir, cfg.stderr, exactKeys)
 	if err != nil {
 		return err
 	}
@@ -242,7 +245,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 	if cfg.json {
 		sinks = append(sinks, jsonlStdout{
 			w:      cfg.stdout,
-			redact: journalEventRedactor(),
+			redact: journalEventRedactor(exactKeys),
 		})
 	}
 
@@ -260,7 +263,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 		return sections
 	}
 	loop.SkillInventory = skill.JournalRecords(allSkills)
-	loop.Sink = newStreamRedactSink(sinks)
+	loop.Sink = newStreamRedactSink(sinks, exactKeys)
 	loop.MaxTurns = cfg.maxTurns
 
 	cwd, _ := os.Getwd()

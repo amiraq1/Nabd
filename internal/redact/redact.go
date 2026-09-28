@@ -10,23 +10,39 @@ import (
 const (
 	Token        = "[REDACTED]"
 	MaxBodyBytes = 4 * 1024
+	// MinExactKeyLen is the minimum length for an exact configured key to be
+	// honored. A shorter value (a 2-3 character custom key, or a common word)
+	// would corrupt every output it is applied to, so it is dropped instead.
+	MinExactKeyLen = 8
 )
 
 // secretPatternSources is one credential format per line. Each entry targets a
 // literal prefix rather than arbitrary high-entropy text, reducing false
 // positives in ordinary output and model IDs. Redaction is best effort: it
-// removes recognized formats and cannot find an unrecognized secret, one split
-// across two streamed events, or one that matches no shape below. Inline flags
-// are scoped with (?i:...) so they cannot leak into a neighbouring alternative
-// once the sources are joined.
+// removes recognized formats and cannot find an unrecognized secret or one
+// that matches no shape below. Chunked input is joined by Stream, which holds
+// back a bounded trailing run so a credential split across two streamed events
+// is redacted as one value. Inline flags are scoped with (?i:...) so they
+// cannot leak into a neighbouring alternative once the sources are joined.
 var secretPatternSources = []string{
 	`sk-ant-[A-Za-z0-9_\-]{8,}`,
 	`sk-or-[A-Za-z0-9_\-]{8,}`,
 	`sk-proj-[A-Za-z0-9_\-]{20,}`,
+	// Modern OpenAI keys put the dash early (sk-svcacct-…, sk-admin-…), which
+	// the generic sk- shape below would not match; keep the dedicated shapes
+	// before it.
+	`sk-(?:svcacct|admin)-[A-Za-z0-9_\-]{8,}`,
 	// The long minimum keeps ordinary words such as sk-learn from matching.
 	`sk-[A-Za-z0-9]{32,}`,
+	// Stripe-style keys: sk_live_…, sk_test_….
+	`sk_[A-Za-z0-9_]{16,}`,
+	// Hugging Face tokens: hf_….
+	`hf_[A-Za-z0-9]{16,}`,
 	`gsk_[A-Za-z0-9_]{8,}`,
 	`nvapi-[A-Za-z0-9_\-]{8,}`,
+	`xai-[A-Za-z0-9_\-]{8,}`,
+	// Google API keys have a fixed shape: AIza + 35 token characters.
+	`AIza[0-9A-Za-z_\-]{35}`,
 	`\b(AKIA|ASIA)[0-9A-Z]{16}\b`,
 	`(?i:Bearer\s+[A-Za-z0-9_\-\.]{8,})`,
 	`(?i:authorization[:\s]+[A-Za-z0-9_\-\.]{8,})`,
@@ -61,10 +77,11 @@ func Redact(s string) string {
 
 // RedactExactKeys replaces exact configured credential values.
 // Empty values are ignored because replacing an empty string would corrupt
-// every boundary in the input.
+// every boundary in the input. Values shorter than MinExactKeyLen are ignored
+// for the same reason: a tiny custom key would redact ordinary prose.
 func RedactExactKeys(s string, keys []string) string {
 	for _, key := range keys {
-		if key == "" {
+		if len(key) < MinExactKeyLen {
 			continue
 		}
 		s = strings.ReplaceAll(s, key, Token)

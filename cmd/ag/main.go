@@ -193,6 +193,9 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 	if err != nil {
 		return err
 	}
+	// Exact configured secrets, collected once: pattern redaction alone cannot
+	// cover custom providers whose key format matches no known shape.
+	exactKeys := provider.ExactKeys(prov)
 
 	sess, err := newInteractiveSession(prov)
 	if err != nil {
@@ -208,12 +211,12 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 		if err != nil {
 			return err
 		}
-		journal, err = openSessionJournal(journalPath)
+		journal, err = openSessionJournal(journalPath, exactKeys)
 		if err == nil {
-			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions().Redact != nil)
+			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions(exactKeys).Redact != nil)
 		}
 	} else {
-		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
+		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr, exactKeys)
 	}
 	if err != nil {
 		return err
@@ -232,7 +235,7 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 	}
 
 	uiSink := newUISink()
-	sess.loop.Sink = newStreamRedactSink(agent.Fanout{journal, uiSink})
+	sess.loop.Sink = newStreamRedactSink(agent.Fanout{journal, uiSink}, exactKeys)
 	if cont {
 		sess.loop.Seed(prevEvs)
 	}
@@ -286,6 +289,9 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 	if err != nil {
 		return err
 	}
+	// Exact configured secrets, collected once: pattern redaction alone cannot
+	// cover custom providers whose key format matches no known shape.
+	exactKeys := provider.ExactKeys(prov)
 
 	sess, err := newInteractiveSession(prov)
 	if err != nil {
@@ -301,12 +307,12 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 		if err != nil {
 			return err
 		}
-		journal, err = openSessionJournal(journalPath)
+		journal, err = openSessionJournal(journalPath, exactKeys)
 		if err == nil {
-			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions().Redact != nil)
+			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions(exactKeys).Redact != nil)
 		}
 	} else {
-		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
+		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr, exactKeys)
 	}
 	if err != nil {
 		return err
@@ -339,7 +345,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 	})
 	batcher.Start()
 
-	sess.loop.Sink = newStreamRedactSink(agent.Fanout{journal, feedSink{batcher: batcher}})
+	sess.loop.Sink = newStreamRedactSink(agent.Fanout{journal, feedSink{batcher: batcher}}, exactKeys)
 
 	feed.SetRunner(sess.loop)
 	feed.SetApprover(sess.ap)

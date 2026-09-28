@@ -23,6 +23,39 @@ func (o *OpenAICompat) SecretKeys() []string {
 	return []string{o.Key}
 }
 
+// SecretKeys aggregates the exact secret values of every route client,
+// deduplicated. It lets session-level redaction (journal, stream sink, export)
+// cover all configured routes instead of only the route that happened to fail.
+func (r *Router) SecretKeys() []string {
+	if r == nil {
+		return nil
+	}
+	var out []string
+	seen := make(map[string]struct{})
+	for _, re := range r.routes {
+		for _, k := range exactKeys(re.Client) {
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// ExactKeys returns the exact configured secret values exposed by p, or nil
+// when p exposes none. A *Router contributes the keys of every route client.
+func ExactKeys(p Provider) []string {
+	if p == nil {
+		return nil
+	}
+	if skp, ok := p.(SecretKeyProvider); ok {
+		return skp.SecretKeys()
+	}
+	return nil
+}
+
 const (
 	redactedToken     = redact.Token
 	maxBodyBytes      = redact.MaxBodyBytes

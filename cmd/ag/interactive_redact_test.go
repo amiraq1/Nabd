@@ -39,7 +39,7 @@ func TestInteractiveFeedRedactsStreamedSecret(t *testing.T) {
 
 	// The exact production decorator, wrapped around the feed's Update intake.
 	feed := ui.NewFeed()
-	sink := newStreamRedactSink(feedUpdateSink{feed: feed})
+	sink := newStreamRedactSink(feedUpdateSink{feed: feed}, nil)
 	for _, e := range run {
 		if err := sink.Emit(e); err != nil {
 			t.Fatal(err)

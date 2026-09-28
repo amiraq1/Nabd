@@ -166,3 +166,54 @@ func TestSanitizeBodyRedactsBeforeTruncation(t *testing.T) {
 		t.Fatalf("truncation marker missing")
 	}
 }
+
+func TestRedactNewProviderPatterns(t *testing.T) {
+	tests := []struct {
+		name   string
+		secret string
+	}{
+		{"xai", "xai-abcdefgh12345678"},
+		{"google-fixed", "AIza" + strings.Repeat("a", 35)},
+		{"openai-svcacct", "sk-svcacct-abcdefgh12345678"},
+		{"openai-admin", "sk-admin-abcdefgh12345678"},
+		{"stripe-live", "sk_live_abcdefgh12345678"},
+		{"stripe-test", "sk_test_abcdefgh12345678"},
+		{"huggingface", "hf_abcdefgh12345678"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Redact("before " + tc.secret + " after")
+			if strings.Contains(got, tc.secret) {
+				t.Fatalf("credential remained after redaction: %q", got)
+			}
+			if !strings.Contains(got, Token) {
+				t.Fatalf("replacement token missing: %q", got)
+			}
+		})
+	}
+}
+
+func TestRedactExactKeysMinimumLength(t *testing.T) {
+	// Keys shorter than MinExactKeyLen must be ignored: honoring a 2-3
+	// character custom key would corrupt every output it is applied to.
+	const short = "ab"
+	got := RedactExactKeys("say ab out loud", []string{short})
+	if got != "say ab out loud" {
+		t.Fatalf("short key must be ignored, got %q", got)
+	}
+
+	// The boundary itself (exactly MinExactKeyLen) is honored.
+	boundary := strings.Repeat("k", MinExactKeyLen)
+	got = RedactExactKeys("before "+boundary+" after", []string{boundary})
+	if strings.Contains(got, boundary) {
+		t.Fatalf("boundary-length key remained: %q", got)
+	}
+
+	// NewStream applies the same floor.
+	s := NewStream([]string{short, boundary})
+	out := s.Write("before " + boundary + " and ab after")
+	if strings.Contains(out+s.Flush(), boundary) {
+		t.Fatalf("stream kept boundary-length key: %q", out)
+	}
+}

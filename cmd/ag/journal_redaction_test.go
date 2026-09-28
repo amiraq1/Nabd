@@ -72,7 +72,7 @@ func TestJournalRedactionReadsV1Config(t *testing.T) {
 func TestJournalEventRedactorEnabledByDefault(t *testing.T) {
 	isolateJournalConfig(t)
 	t.Setenv(journalRedactionEnv, "")
-	if got := journalEventRedactor(); got == nil {
+	if got := journalEventRedactor(nil); got == nil {
 		t.Fatal("default journal redactor must be enabled")
 	}
 }
@@ -119,7 +119,7 @@ func TestRedactJournalEventCopiesAndRedactsSensitiveFields(t *testing.T) {
 		},
 	}
 
-	got := redactJournalEvent(original)
+	got := redactJournalEvent(original, nil)
 
 	for name, value := range map[string]string{
 		"Text":          got.Text,
@@ -250,7 +250,7 @@ func TestJournalEventRedactorEnabled(t *testing.T) {
 	isolateJournalConfig(t)
 	t.Setenv(journalRedactionEnv, "1")
 
-	fn := journalEventRedactor()
+	fn := journalEventRedactor(nil)
 	if fn == nil {
 		t.Fatal("enabled journal redactor is nil")
 	}
@@ -268,7 +268,7 @@ func TestOpenSessionJournalUsesEnabledRedaction(t *testing.T) {
 	t.Setenv(journalRedactionEnv, "1")
 
 	path := filepath.Join(t.TempDir(), "continued.jsonl")
-	journal, err := openSessionJournal(path)
+	journal, err := openSessionJournal(path, nil)
 	if err != nil {
 		t.Fatalf("openSessionJournal: %v", err)
 	}
@@ -305,6 +305,7 @@ func TestNewSessionJournalUsesEnabledRedactionAndWarning(t *testing.T) {
 	journal, path, err := newSessionJournalWithWarning(
 		t.TempDir(),
 		&warnings,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("newSessionJournalWithWarning: %v", err)
@@ -346,7 +347,7 @@ func TestJSONLStdoutFollowsEnabledJournalRedaction(t *testing.T) {
 	var stdout bytes.Buffer
 	sink := jsonlStdout{
 		w:      &stdout,
-		redact: redactJournalEvent,
+		redact: func(e agent.Event) agent.Event { return redactJournalEvent(e, nil) },
 	}
 
 	original := agent.Event{

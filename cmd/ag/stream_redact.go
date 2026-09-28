@@ -30,12 +30,14 @@ type streamRedactSink struct {
 }
 
 // newStreamRedactSink wraps next. When journal redaction is off the wrapper
-// forwards every event unchanged, matching the existing opt-out.
-func newStreamRedactSink(next agent.Sink) *streamRedactSink {
+// forwards every event unchanged, matching the existing opt-out. The exactKeys
+// are the configured provider secrets collected at session start, so custom
+// providers are redacted even when their key format matches no known pattern.
+func newStreamRedactSink(next agent.Sink, exactKeys []string) *streamRedactSink {
 	return &streamRedactSink{
 		next:    next,
 		enabled: journalRedactionEnabled(),
-		stream:  redact.NewStream(nil),
+		stream:  redact.NewStream(exactKeys),
 	}
 }
 

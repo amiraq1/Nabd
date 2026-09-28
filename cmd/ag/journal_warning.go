@@ -17,8 +17,8 @@ const (
 // bypasses agent sinks and therefore never becomes a journal event.
 //
 // A warning-write failure does not invalidate an otherwise usable journal.
-func newSessionJournalWithWarning(dir string, warnings io.Writer) (*store.JSONL, string, error) {
-	opts := journalStoreOptions()
+func newSessionJournalWithWarning(dir string, warnings io.Writer, exactKeys []string) (*store.JSONL, string, error) {
+	opts := journalStoreOptions(exactKeys)
 
 	journal, path, err := newSessionJournalWithOptions(dir, opts)
 	if err != nil {
