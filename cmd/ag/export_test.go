@@ -314,7 +314,7 @@ func TestExportRedactedMatchesJSONLSink(t *testing.T) {
 	}
 
 	var want bytes.Buffer
-	sink := jsonlStdout{w: &want, redact: redactJournalEvent}
+	sink := jsonlStdout{w: &want, redact: func(e agent.Event) agent.Event { return redactJournalEvent(e, nil) }}
 	for _, e := range events {
 		if err := sink.Emit(e); err != nil {
 			t.Fatalf("sink.Emit: %v", err)

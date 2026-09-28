@@ -387,7 +387,7 @@ func TestLiveRewindThenContinueKeepsJournalChain(t *testing.T) {
 	pol.SetMode(perm.ModeDeny)
 
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	journal, err := store.NewJSONLWithOptions(path, journalStoreOptions())
+	journal, err := store.NewJSONLWithOptions(path, journalStoreOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestLiveRewindThenContinueKeepsJournalChain(t *testing.T) {
 		{chunks: []string{"turn two"}},
 		{chunks: []string{"turn three"}},
 	}}, reg, gate{pol}, silentAsker{})
-	loop.Sink = newStreamRedactSink(agent.Fanout{journal})
+	loop.Sink = newStreamRedactSink(agent.Fanout{journal}, nil)
 
 	if err := loop.Start("t", root.Dir()); err != nil {
 		t.Fatal(err)
@@ -512,7 +512,7 @@ func TestRewindToReusedParentKeepsChainResolvable(t *testing.T) {
 	pol.SetMode(perm.ModeDeny)
 
 	path := filepath.Join(t.TempDir(), "s.jsonl")
-	journal, err := store.NewJSONLWithOptions(path, journalStoreOptions())
+	journal, err := store.NewJSONLWithOptions(path, journalStoreOptions(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -527,7 +527,7 @@ func TestRewindToReusedParentKeepsChainResolvable(t *testing.T) {
 		{chunks: []string{"two"}},
 		{chunks: []string{"three"}},
 	}}, reg, gate{pol}, silentAsker{})
-	loop.Sink = newStreamRedactSink(agent.Fanout{journal})
+	loop.Sink = newStreamRedactSink(agent.Fanout{journal}, nil)
 
 	if err := loop.Start("t", root.Dir()); err != nil {
 		t.Fatal(err)

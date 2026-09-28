@@ -21,42 +21,57 @@ func journalRedactionEnabled() bool {
 
 // journalEventRedactor returns nil only for an explicit opt-out. A nil
 // function lets storage retain its existing raw behavior without an
-// unnecessary event copy.
-func journalEventRedactor() func(agent.Event) agent.Event {
+// unnecessary event copy. The exactKeys are the configured provider secrets
+// collected at session start; pattern redaction alone cannot cover custom
+// providers whose key format matches no known shape.
+func journalEventRedactor(exactKeys []string) func(agent.Event) agent.Event {
 	if !journalRedactionEnabled() {
 		return nil
 	}
-	return redactJournalEvent
+	return func(e agent.Event) agent.Event {
+		return redactJournalEvent(e, exactKeys)
+	}
 }
 
 // redactJournalEvent returns a redacted copy without mutating the event held in
 // the live loop history. Structural identifiers, paths, hashes, blob addresses,
-// decision values, and replay metadata remain unchanged.
-func redactJournalEvent(e agent.Event) agent.Event {
-	e.Text = redact.Redact(e.Text)
-	e.Err = redact.Redact(e.Err)
-	e.RawMessage = redact.Redact(e.RawMessage)
-	e.RawRetryAfter = redact.Redact(e.RawRetryAfter)
+// decision values, and replay metadata remain unchanged. Exact keys are
+// redacted before pattern matching so custom-provider secrets are covered too.
+func redactJournalEvent(e agent.Event, exactKeys []string) agent.Event {
+	redactText := func(s string) string {
+		return redact.Redact(redact.RedactExactKeys(s, exactKeys))
+	}
+
+	e.Text = redactText(e.Text)
+	e.Err = redactText(e.Err)
+	e.RawMessage = redactText(e.RawMessage)
+	e.RawRetryAfter = redactText(e.RawRetryAfter)
 
 	if e.Call != nil {
 		call := *e.Call
 		call.Args = json.RawMessage(
-			redact.Redact(string(call.Args)),
+			redactText(string(call.Args)),
 		)
-		call.Output = redact.Redact(call.Output)
+		call.Output = redactText(call.Output)
 		e.Call = &call
 	}
 
 	if e.Edit != nil {
 		edit := *e.Edit
-		edit.Patch = redact.Redact(edit.Patch)
+		edit.Patch = redactText(edit.Patch)
 		e.Edit = &edit
 	}
 
 	if e.Route != nil {
 		route := *e.Route
-		route.Reason = redact.Redact(route.Reason)
+		route.Reason = redactText(route.Reason)
 		e.Route = &route
+	}
+
+	if e.SkillBody != nil {
+		body := *e.SkillBody
+		body.Body = redactText(body.Body)
+		e.SkillBody = &body
 	}
 
 	return e
@@ -64,14 +79,14 @@ func redactJournalEvent(e agent.Event) agent.Event {
 
 // journalStoreOptions converts the process-level policy into explicit storage
 // options. Store itself never reads process environment variables.
-func journalStoreOptions() store.Options {
+func journalStoreOptions(exactKeys []string) store.Options {
 	return store.Options{
-		Redact: journalEventRedactor(),
+		Redact: journalEventRedactor(exactKeys),
 	}
 }
 
 // openSessionJournal opens an existing journal for --continue using the same
 // redaction policy as newly created journals.
-func openSessionJournal(path string) (*store.JSONL, error) {
-	return store.NewJSONLWithOptions(path, journalStoreOptions())
+func openSessionJournal(path string, exactKeys []string) (*store.JSONL, error) {
+	return store.NewJSONLWithOptions(path, journalStoreOptions(exactKeys))
 }
