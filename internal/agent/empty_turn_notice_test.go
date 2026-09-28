@@ -8,14 +8,15 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/provider"
 )
 
 type recordSink struct {
-	events []agent.Event
+	events []event.Event
 }
 
-func (s *recordSink) Emit(e agent.Event) error {
+func (s *recordSink) Emit(e event.Event) error {
 	s.events = append(s.events, e)
 	return nil
 }
@@ -47,10 +48,10 @@ func TestEmptyTurnEmitsNotice(t *testing.T) {
 
 		var foundNotice bool
 		for _, ev := range sink.events {
-			if ev.Type == agent.Notice {
+			if ev.Type == event.Notice {
 				if strings.Contains(ev.Text, "NABD_MAX_TOKENS") && strings.Contains(ev.Text, "1024") {
 					foundNotice = true
-					if ev.NoticeCategory != agent.NoticeCategoryLengthLimit {
+					if ev.NoticeCategory != event.NoticeCategoryLengthLimit {
 						t.Errorf("expected NoticeCategoryLengthLimit, got %v", ev.NoticeCategory)
 					}
 					if strings.Contains(ev.Text, "upstream issue") {
@@ -92,7 +93,7 @@ func TestEmptyTurnEmitsNotice(t *testing.T) {
 
 		var foundNotice bool
 		for _, ev := range sink.events {
-			if ev.Type == agent.Notice {
+			if ev.Type == event.Notice {
 				if strings.Contains(ev.Text, "provider returned an empty response (upstream issue)") {
 					foundNotice = true
 					if strings.Contains(ev.Text, "NABD_MAX_TOKENS") {
@@ -140,7 +141,7 @@ func TestEmptyTurnEmitsNoticeWithCustomMaxTokens(t *testing.T) {
 
 	var foundNotice bool
 	for _, ev := range sink.events {
-		if ev.Type == agent.Notice {
+		if ev.Type == event.Notice {
 			if strings.Contains(ev.Text, "NABD_MAX_TOKENS") && strings.Contains(ev.Text, "2048") {
 				foundNotice = true
 				break

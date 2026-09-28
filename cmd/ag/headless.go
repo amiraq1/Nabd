@@ -134,17 +134,17 @@ func deniedAndStuck(evs []event.Event, text string) bool {
 	return false
 }
 
-func emptyResponse(evs []agent.Event, text string) bool {
+func emptyResponse(evs []event.Event, text string) bool {
 	if strings.TrimSpace(text) != "" {
 		return false
 	}
-	for _, e := range agent.Live(evs) {
-		if e.Type == agent.ToolStart || e.Type == agent.ToolEnd {
+	for _, e := range event.Live(evs) {
+		if e.Type == event.ToolStart || e.Type == event.ToolEnd {
 			return false
 		}
 	}
-	for _, e := range agent.Live(evs) {
-		if e.Type == agent.Notice && (strings.Contains(e.Text, "empty response") || strings.Contains(e.Text, "NABD_MAX_TOKENS") || e.NoticeCategory == agent.NoticeCategoryLengthLimit) {
+	for _, e := range event.Live(evs) {
+		if e.Type == event.Notice && (strings.Contains(e.Text, "empty response") || strings.Contains(e.Text, "NABD_MAX_TOKENS") || e.NoticeCategory == event.NoticeCategoryLengthLimit) {
 			return true
 		}
 	}
