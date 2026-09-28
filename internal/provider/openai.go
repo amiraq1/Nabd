@@ -220,14 +220,24 @@ func parseWaitDuration(retryAfterHeader, body string, now time.Time) (time.Durat
 }
 
 func parseTPMFullCounts(body string) (limit, used, requested int) {
-	if m := reTPMFull.FindStringSubmatch(body); len(m) == 4 {
-		limit, _ = strconv.Atoi(m[1])
-		used, _ = strconv.Atoi(m[2])
-		requested, _ = strconv.Atoi(m[3])
-		return
+	m := reTPMFull.FindStringSubmatch(body)
+	if len(m) != 4 {
+		l, r := parseTPMCounts(body)
+		return l, 0, r
 	}
-	l, r := parseTPMCounts(body)
-	return l, 0, r
+	// The groups are \d+ by construction; a parse failure degrades to the
+	// same zeros the no-match path returns.
+	var err error
+	if limit, err = strconv.Atoi(m[1]); err != nil {
+		return 0, 0, 0
+	}
+	if used, err = strconv.Atoi(m[2]); err != nil {
+		return 0, 0, 0
+	}
+	if requested, err = strconv.Atoi(m[3]); err != nil {
+		return 0, 0, 0
+	}
+	return limit, used, requested
 }
 
 // run performs the request and reports the result.

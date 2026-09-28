@@ -145,11 +145,11 @@ func TestYOLOVerdictMatrix(t *testing.T) {
 		if mode == ModePlan {
 			return Deny
 		}
-		if yolo && class == Mutating {
-			return Allow
-		}
 		if mode == ModeDeny || mode == ModeAllowReads {
 			return Deny
+		}
+		if yolo && class == Mutating {
+			return Allow
 		}
 		return Ask
 	}

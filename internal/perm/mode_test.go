@@ -98,3 +98,27 @@ func TestParseModeRoundTrip(t *testing.T) {
 		t.Fatal("bogus mode accepted")
 	}
 }
+
+// TestModeDenyOverridesYOLO: a deny mode is the session's explicit policy — a
+// blanket YOLO flag must not auto-approve mutating tools under it. An explicit
+// per-tool session grant still stands.
+func TestModeDenyOverridesYOLO(t *testing.T) {
+	for _, mode := range []Mode{ModeDeny, ModeAllowReads} {
+		cls := fakeClassifier{"write_file": Mutating, "read_file": ReadOnly}
+		p := New(cls)
+		p.SetMode(mode)
+		p.SetYOLO(true)
+
+		if v, why := p.Check("write_file"); v != Deny {
+			t.Fatalf("mode %v let a yolo write through: %v (%q)", mode, v, why)
+		}
+		if v, _ := p.Check("read_file"); v != Allow {
+			t.Fatalf("mode %v denied a read: %v", mode, v)
+		}
+
+		p.Record("write_file", agent.AllowSession)
+		if v, _ := p.Check("write_file"); v != Allow {
+			t.Fatalf("mode %v ignored an explicit session grant: %v", mode, v)
+		}
+	}
+}

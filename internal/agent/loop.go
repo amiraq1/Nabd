@@ -8,6 +8,7 @@ import (
 	"math"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"nabd/internal/config"
@@ -21,6 +22,13 @@ import (
 type Sink interface {
 	Emit(Event) error
 }
+
+// A Sink must be non-reentrant with respect to the Loop: Emit is invoked
+// while the loop holds its history lock (see emitLocked), so an Emit
+// implementation must never call back into the same Loop — calling emit,
+// emitAt, Note, Compact, or Rewind from inside Emit deadlocks. Sinks that
+// need to originate events must hand them to the loop through another
+// channel (e.g. queue them for the next turn) instead.
 
 // DurableSink flushes an already-emitted event to durable storage. The loop
 // uses it only for safety-critical events; ordinary display and telemetry
@@ -108,7 +116,10 @@ type Loop struct {
 	// real wall clock; tests inject a fake so they can prove escalation
 	// without sleeping.
 	now    func() time.Time
-	warned bool
+	// warned tracks whether the 60% context-pressure notice was already
+	// shown. Atomic because the loop's turn machinery may observe it from
+	// more than one goroutine; it is not covered by mu.
+	warned atomic.Bool
 	ended  bool // true once End() has been called; guards against double RunEnd
 
 	mu        sync.Mutex
@@ -390,6 +401,10 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 
 		ms := Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
 		if p := l.pressure(ms); p > 0.75 {
+			// Notice emits below intentionally drop the error: a context-
+			// pressure status line is not safety-critical, and aborting the
+			// session on a journal/UI blip is worse than losing the line —
+			// the same rationale as Note.
 			if err := l.Compact(ctx, l.compactTarget()); err != nil {
 				if !errors.Is(err, ErrHistoryMutationInProgress) {
 					l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryContextPressure, Text: "compact failed: " + err.Error()})
@@ -398,10 +413,10 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 				ms = Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
 				l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryContextPressure, Text: fmt.Sprintf("context compacted · %d%% → %d%%",
 					int(p*100), int(l.Budget.Pressure(ms)*100))})
-				l.warned = false
+				l.warned.Store(false)
 			}
-		} else if p > 0.6 && !l.warned {
-			l.warned = true
+		} else if p > 0.6 && !l.warned.Load() {
+			l.warned.Store(true)
 			l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryContextPressure, Text: fmt.Sprintf("context %d%%", int(p*100))})
 		}
 
@@ -814,7 +829,9 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		if !l.knownTool(c.Name) {
 			msg := fmt.Sprintf("unknown tool %q · available: %s", c.Name, strings.Join(l.toolNames(), ", "))
 			ac.OK, ac.Output = false, msg
-			l.emit(Event{Type: ToolEnd, Call: &ac})
+			if err := l.emit(Event{Type: ToolEnd, Call: &ac}); err != nil {
+				return false, WrapToolCallError(ac, err)
+			}
 			continue
 		}
 
@@ -825,7 +842,9 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 				msg += ": " + why
 			}
 			ac.OK, ac.Output = false, msg
-			l.emit(Event{Type: ToolEnd, Call: &ac})
+			if err := l.emit(Event{Type: ToolEnd, Call: &ac}); err != nil {
+				return false, WrapToolCallError(ac, err)
+			}
 			if err := l.checkLoop(c.Name, c.Input, false, msg); err != nil {
 				return false, err
 			}
