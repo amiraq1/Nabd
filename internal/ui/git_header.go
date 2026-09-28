@@ -17,10 +17,23 @@ import (
 type gitStatusMsg struct {
 	branch string
 	dirty  int
-	err    error
+	// sig is the repository signature (see gitRepoSig) captured when the
+	// message was produced. unchanged reports that the signature matched the
+	// previous poll, so no git subprocess ran and branch/dirty are stale by
+	// construction — the handler must keep its cached values.
+	sig       string
+	unchanged bool
+	err       error
 }
 
-const gitHeaderInterval = 1 * time.Second
+// gitHeaderInterval is the cadence of header polls. Repository-side changes
+// (commits, staging, branch switches) are detected between polls via
+// gitRepoSig, which skips spawning git subprocesses when nothing changed;
+// every gitForcePollEvery-th poll still runs git to bound working-tree
+// staleness for edits made outside the session.
+const gitHeaderInterval = 5 * time.Second
+
+const gitForcePollEvery = 6
 
 // The header must not describe files outside the granted root.
 // A parent repository is out of bounds even though git would answer.
@@ -91,19 +104,64 @@ func gitConfigDefinesCommands(ctx context.Context, dir string, env []string) (bo
 	return repoConfigDefinesCommands(out), nil
 }
 
+// gitRepoSig summarizes the repository metadata a header poll depends on:
+// HEAD (branch switches, commits) and the index (staging). The header skips
+// spawning its two git subprocesses while the signature is unchanged, which
+// is what makes the 5s poll cadence cheap when the session is idle.
+//
+// It deliberately does NOT cover working-tree edits: those are caught by the
+// periodic forced poll (every gitForcePollEvery-th tick) and by clearing the
+// feed's stored signature when a tool that can write files completes.
+func gitRepoSig(dir string) string {
+	gitDir := filepath.Join(dir, ".git")
+	// Resolve worktree/submodule pointer files ("gitdir: <path>").
+	if fi, err := os.Stat(gitDir); err == nil && !fi.IsDir() {
+		if data, err := os.ReadFile(gitDir); err == nil {
+			if target, ok := strings.CutPrefix(string(data), "gitdir: "); ok {
+				target = strings.TrimSpace(target)
+				if target != "" && !filepath.IsAbs(target) {
+					target = filepath.Join(dir, target)
+				}
+				if target != "" {
+					gitDir = filepath.Clean(target)
+				}
+			}
+		}
+	}
+	var b strings.Builder
+	for _, p := range []string{filepath.Join(gitDir, "HEAD"), filepath.Join(gitDir, "index")} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			b.WriteString("x;")
+			continue
+		}
+		fmt.Fprintf(&b, "%d/%d;", fi.ModTime().UnixNano(), fi.Size())
+	}
+	return b.String()
+}
+
 // gitStatusCmd shells out off the render path. View must never call git.
-func gitStatusCmd(dir string) tea.Cmd {
+//
+// When force is false and lastSig matches the current repository signature,
+// no subprocess runs and the message reports unchanged: true. The caller
+// passes the feed's stored signature and requests force=true for the first
+// poll, for retries after failures, and for the periodic forced poll.
+func gitStatusCmd(dir, lastSig string, force bool) tea.Cmd {
 	return func() tea.Msg {
+		sig := gitRepoSig(dir)
+		if !force && lastSig != "" && sig == lastSig {
+			return gitStatusMsg{unchanged: true, sig: sig}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 		defer cancel()
 		env := gitChildEnv(os.Environ())
 
 		defines, err := gitConfigDefinesCommands(ctx, dir, env)
 		if err != nil {
-			return gitStatusMsg{err: err} // fail closed, silent: the header is a hint
+			return gitStatusMsg{err: err, sig: sig} // fail closed, silent: the header is a hint
 		}
 		if defines {
-			return gitStatusMsg{err: errGitConfigDefinesCommands}
+			return gitStatusMsg{err: errGitConfigDefinesCommands, sig: sig}
 		}
 
 		args := append(append([]string{}, gitHardeningArgs...),
@@ -115,9 +173,11 @@ func gitStatusCmd(dir string) tea.Cmd {
 		}
 		out, err := cmd.Output()
 		if err != nil {
-			return gitStatusMsg{err: err}
+			return gitStatusMsg{err: err, sig: sig}
 		}
-		return parseGitStatus(string(out))
+		msg := parseGitStatus(string(out))
+		msg.sig = sig
+		return msg
 	}
 }
 
@@ -211,6 +271,18 @@ func gitHeaderCandidates(branch string, dirty int) []string {
 	}
 }
 
+// scheduleGitPoll arms the next header poll. force=true runs the real git
+// subprocesses even when the repository signature is unchanged (first poll,
+// retry after failure, periodic forced poll).
+func (m *Feed) scheduleGitPoll(force bool) tea.Cmd {
+	m.gitPolls++
+	nextForce := force || m.gitPolls%gitForcePollEvery == 0
+	dir, lastSig := m.gitDir, m.gitRepoSig
+	return tea.Tick(gitHeaderInterval, func(time.Time) tea.Msg {
+		return gitStatusCmd(dir, lastSig, nextForce)()
+	})
+}
+
 // handleGitStatus updates the feed's git state and manages periodic rescheduling.
 func (m *Feed) handleGitStatus(msg gitStatusMsg) (tea.Model, tea.Cmd) {
 	if msg.err != nil {
@@ -219,16 +291,16 @@ func (m *Feed) handleGitStatus(msg gitStatusMsg) (tea.Model, tea.Cmd) {
 			// Stop rescheduling permanently after two consecutive failures.
 			return m, nil
 		}
-		dir := m.gitDir
-		return m, tea.Tick(gitHeaderInterval, func(time.Time) tea.Msg {
-			return gitStatusCmd(dir)()
-		})
+		// Retry the real poll (not the signature shortcut): the failure may
+		// be transient, and the stored signature is left alone so a later
+		// success re-syncs it.
+		return m, m.scheduleGitPoll(true)
 	}
 	m.gitFailures = 0
-	m.gitBranch = msg.branch
-	m.gitDirty = msg.dirty
-	dir := m.gitDir
-	return m, tea.Tick(gitHeaderInterval, func(time.Time) tea.Msg {
-		return gitStatusCmd(dir)()
-	})
+	if !msg.unchanged {
+		m.gitBranch = msg.branch
+		m.gitDirty = msg.dirty
+		m.gitRepoSig = msg.sig
+	}
+	return m, m.scheduleGitPoll(false)
 }

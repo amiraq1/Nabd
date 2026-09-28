@@ -96,6 +96,8 @@ type Feed struct {
 	gitDirty         int
 	gitFailures      int
 	gitDir           string
+	gitRepoSig       string
+	gitPolls         int
 
 	// Callbacks wired by the CLI.
 	callbacks SessionCallbacks
@@ -317,7 +319,7 @@ func NewFeed() *Feed {
 func (m *Feed) Init() tea.Cmd {
 	if m.gitHeaderEnabled && isGitRepo(m.gitDir) {
 		dir := m.gitDir
-		return gitStatusCmd(dir)
+		return gitStatusCmd(dir, "", true)
 	}
 	return nil
 }
@@ -446,6 +448,17 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 		}
 		m.statusProj.Apply(e)
 		m.trackState(e)
+		if e.Type == agent.ToolEnd && e.Call != nil {
+			// Tools that can write files may have dirtied the working tree,
+			// which the git header's repository signature does not cover:
+			// drop the signature so the next header poll runs the real git
+			// subprocesses. Provably read-only tools keep it.
+			switch e.Call.Name {
+			case "read_file", "glob", "grep":
+			default:
+				m.gitRepoSig = ""
+			}
+		}
 		if e.Seq > m.lastSeq {
 			m.lastSeq = e.Seq
 		}

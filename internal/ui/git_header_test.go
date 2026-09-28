@@ -2,12 +2,14 @@ package ui
 
 import (
 	"errors"
+	"nabd/internal/agent"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseGitStatusTable(t *testing.T) {
@@ -312,7 +314,7 @@ func TestGitHeaderIgnoresRepoFsmonitor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_ = gitStatusCmd(dir)()
+	_ = gitStatusCmd(dir, "", true)()
 	if markerExists(marker) {
 		t.Fatal("git header executed core.fsmonitor from repository config")
 	}
@@ -339,7 +341,7 @@ func TestGitHeaderSkipsRepoCleanFilter(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msg := gitStatusCmd(dir)()
+	msg := gitStatusCmd(dir, "", true)()
 	if markerExists(marker) {
 		t.Fatal("git header executed filter.x.clean from repository config")
 	}
@@ -353,7 +355,7 @@ func TestGitHeaderStillWorksOnPlainRepo(t *testing.T) {
 	requireGit(t)
 	dir := t.TempDir()
 	setupGit(t, dir, "init", "-q")
-	msg := gitStatusCmd(dir)()
+	msg := gitStatusCmd(dir, "", true)()
 	if st, ok := msg.(gitStatusMsg); ok && st.err != nil {
 		t.Fatalf("plain repo must still produce a header, got %v", st.err)
 	}
@@ -391,5 +393,151 @@ func TestRepoConfigDefinesCommands(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// TestGitRepoSigTracksRepoMetadata verifies the M12 signature: stable while
+// HEAD/index are untouched, sensitive to staging/branch changes, and
+// deliberately blind to working-tree edits (those are caught by the forced
+// poll and by tool-completion invalidation).
+func TestGitRepoSigTracksRepoMetadata(t *testing.T) {
+	dir := t.TempDir()
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.Mkdir(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	head := filepath.Join(gitDir, "HEAD")
+	index := filepath.Join(gitDir, "index")
+	mustWrite(t, head, "ref: refs/heads/main\n")
+	mustWrite(t, index, "idx")
+
+	base := gitRepoSig(dir)
+	if base == "" {
+		t.Fatal("empty signature")
+	}
+	if got := gitRepoSig(dir); got != base {
+		t.Fatal("signature not stable across calls")
+	}
+	// A working-tree edit does not move the signature (documented limit).
+	mustWrite(t, filepath.Join(dir, "work.txt"), "edit\n")
+	if got := gitRepoSig(dir); got != base {
+		t.Fatal("working-tree edit must not change the repo signature")
+	}
+	// Touching the index does.
+	past := base
+	if err := os.Chtimes(index, pastTime(), pastTime()); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitRepoSig(dir); got == past {
+		t.Fatal("index mtime change did not change the signature")
+	}
+	// Touching HEAD does too.
+	past = gitRepoSig(dir)
+	if err := os.Chtimes(head, pastTime(), pastTime()); err != nil {
+		t.Fatal(err)
+	}
+	if got := gitRepoSig(dir); got == past {
+		t.Fatal("HEAD mtime change did not change the signature")
+	}
+}
+
+func pastTime() (t time.Time) {
+	return time.Now().Add(-time.Hour).Truncate(time.Second)
+}
+
+// TestGitStatusCmdSkipsUnchangedRepo verifies the M12 fast path: with a
+// matching signature and no force, no git subprocess runs.
+func TestGitStatusCmdSkipsUnchangedRepo(t *testing.T) {
+	dir := t.TempDir()
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.Mkdir(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(gitDir, "HEAD"), "ref: refs/heads/main\n")
+	mustWrite(t, filepath.Join(gitDir, "index"), "idx")
+
+	sig := gitRepoSig(dir)
+	msg := gitStatusCmd(dir, sig, false)()
+	st, ok := msg.(gitStatusMsg)
+	if !ok {
+		t.Fatalf("unexpected message type %T", msg)
+	}
+	if !st.unchanged {
+		t.Fatal("matching signature without force must report unchanged")
+	}
+	if st.err != nil {
+		t.Fatalf("unchanged poll must not error: %v", st.err)
+	}
+	// A stale signature forces the real poll, which fails here (not a repo).
+	msg = gitStatusCmd(dir, "stale", false)()
+	st = msg.(gitStatusMsg)
+	if st.unchanged {
+		t.Fatal("stale signature must not report unchanged")
+	}
+	if st.err == nil {
+		t.Fatal("expected git to fail in a non-repository")
+	}
+	// force=true ignores a matching signature.
+	msg = gitStatusCmd(dir, sig, true)()
+	st = msg.(gitStatusMsg)
+	if st.unchanged {
+		t.Fatal("force=true must run the real poll")
+	}
+}
+
+// TestHandleGitStatusUnchangedKeepsCache ensures an unchanged poll neither
+// clobbers the cached branch/dirty values nor the stored signature, and
+// still reschedules.
+func TestHandleGitStatusUnchangedKeepsCache(t *testing.T) {
+	f := NewFeed()
+	f.gitDir = t.TempDir()
+	f.gitBranch = "main"
+	f.gitDirty = 3
+	f.gitRepoSig = "sig"
+
+	_, cmd := f.handleGitStatus(gitStatusMsg{unchanged: true, sig: "sig"})
+	if cmd == nil {
+		t.Fatal("unchanged poll must reschedule")
+	}
+	if f.gitBranch != "main" || f.gitDirty != 3 || f.gitRepoSig != "sig" {
+		t.Fatalf("unchanged poll clobbered cache: %+v", f)
+	}
+
+	_, cmd = f.handleGitStatus(gitStatusMsg{branch: "dev", dirty: 0, sig: "sig2"})
+	if cmd == nil {
+		t.Fatal("real poll must reschedule")
+	}
+	if f.gitBranch != "dev" || f.gitDirty != 0 || f.gitRepoSig != "sig2" {
+		t.Fatalf("real poll did not update cache: branch=%q dirty=%d sig=%q",
+			f.gitBranch, f.gitDirty, f.gitRepoSig)
+	}
+}
+
+// TestToolEndInvalidatesGitSig ensures tools that can write files drop the
+// header signature (so the next poll re-runs git), while provably read-only
+// tools keep the cheap path.
+func TestToolEndInvalidatesGitSig(t *testing.T) {
+	f := NewFeed()
+	f.width, f.height = 80, 24
+	f.gitRepoSig = "sig"
+
+	f.applyBatch([]agent.Event{
+		{Seq: 1, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "r", Name: "read_file", OK: true}},
+	})
+	if f.gitRepoSig != "sig" {
+		t.Fatal("read_file ToolEnd must keep the git signature")
+	}
+	f.applyBatch([]agent.Event{
+		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "w", Name: "write_file", OK: true}},
+	})
+	if f.gitRepoSig != "" {
+		t.Fatal("write_file ToolEnd must invalidate the git signature")
+	}
+	f.gitRepoSig = "sig"
+	f.applyBatch([]agent.Event{
+		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "b", Name: "bash", OK: true}},
+	})
+	if f.gitRepoSig != "" {
+		t.Fatal("bash ToolEnd must invalidate the git signature")
 	}
 }
