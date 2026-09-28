@@ -33,7 +33,6 @@ func ParseAuthData(data []byte) (AuthFile, error) {
 		return nil, errors.New("auth: trailing JSON content")
 	}
 
-	keys := make([]string, 0, len(af))
 	for id, cfg := range af {
 		if err := validateProviderID(id); err != nil {
 			return nil, redactError(fmt.Errorf("auth provider ID: %w", err))
@@ -41,11 +40,7 @@ func ParseAuthData(data []byte) (AuthFile, error) {
 		if cfg.Type != "" && cfg.Type != "api" {
 			return nil, redactError(fmt.Errorf("auth provider %q: unsupported auth type %q (expected 'api')", id, cfg.Type))
 		}
-		if cfg.Key != "" {
-			keys = append(keys, cfg.Key)
-		}
 	}
-	_ = keys
 	return af, nil
 }
 
@@ -63,6 +58,19 @@ func ParseAuthFile(path string) (AuthFile, error) {
 }
 
 // WriteAuthFile writes credentials to path with strict 0600 permissions.
+//
+// The write is atomic and symlink-safe:
+//   - Data goes to a randomly-named temp file in the same directory, created
+//     with O_CREAT|O_EXCL, so a pre-planted file or symlink at the temp name
+//     fails closed instead of being followed or truncated. An fstat guard
+//     confirms the open descriptor is still the regular file we created.
+//   - Permissions are tightened to 0600 on the open descriptor, so a hostile
+//     umask cannot widen the file between creation and chmod.
+//   - Content is fsynced before rename; rename(2) then atomically swaps the
+//     destination without ever following a symlink at path.
+//   - The directory is fsynced afterwards on a best-effort basis so the
+//     rename itself survives a crash (ignored where directory sync is
+//     unsupported).
 func WriteAuthFile(path string, af AuthFile) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -73,19 +81,50 @@ func WriteAuthFile(path string, af AuthFile) error {
 		return redactError(err)
 	}
 	data = append(data, '\n')
-	// Write with 0600 permissions.
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+
+	tmpf, err := os.CreateTemp(dir, ".auth-*.tmp")
+	if err != nil {
 		return redactError(err)
 	}
-	// Explicit chmod in case umask widened the file.
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		_ = os.Remove(tmp)
+	tmpName := tmpf.Name()
+	// On any failure the temp file is removed; on success the rename below
+	// consumes it.
+	removeTmp := true
+	defer func() {
+		if removeTmp {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if err := tmpf.Chmod(0o600); err != nil {
+		_ = tmpf.Close()
 		return redactError(err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	if st, err := tmpf.Stat(); err != nil {
+		_ = tmpf.Close()
 		return redactError(err)
+	} else if !st.Mode().IsRegular() {
+		_ = tmpf.Close()
+		return redactError(errors.New("auth: temp file is not a regular file"))
+	}
+	if _, err := tmpf.Write(data); err != nil {
+		_ = tmpf.Close()
+		return redactError(err)
+	}
+	if err := tmpf.Sync(); err != nil {
+		_ = tmpf.Close()
+		return redactError(err)
+	}
+	if err := tmpf.Close(); err != nil {
+		return redactError(err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return redactError(err)
+	}
+	removeTmp = false
+	if dirf, err := os.Open(dir); err == nil {
+		_ = dirf.Sync()
+		_ = dirf.Close()
 	}
 	return nil
 }

@@ -44,6 +44,9 @@ type JSONL struct {
 //
 // Security contract (NBD-306):
 //   - New files are created with mode 0o600 (owner read/write only).
+//   - The append target is opened with O_NOFOLLOW: a symlink at the journal
+//     path fails closed instead of redirecting a continued session's appends
+//     into an attacker-chosen file.
 //   - Existing files that are wider than 0o600 are hardened via Fchmod before
 //     any data is written. If Fchmod fails the file is closed and an error is
 //     returned; we never continue with an exposed journal.
@@ -63,11 +66,22 @@ func NewJSONLWithOptions(path string, opts Options) (*JSONL, error) {
 	if err := ensurePrivateParent(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
+	// Fail closed before touching the target: a symlink at the journal path
+	// must never be followed for reading, tail recovery, or appending. The
+	// opens below additionally use O_NOFOLLOW to cover a symlink planted in
+	// the (tiny) window after this check.
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("store: journal path is a symlink: %s", path)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	needsSeparator, err := prepareExistingJournal(path)
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := openAppendFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -229,7 +243,7 @@ func recoverTornTail(path string, data []byte, validBytes int) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	f, err := openFileNoFollow(path, os.O_WRONLY, 0)
 	if err != nil {
 		return fmt.Errorf("store: open journal for tail recovery: %w", err)
 	}
