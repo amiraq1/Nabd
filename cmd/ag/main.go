@@ -212,6 +212,9 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 		if err != nil {
 			return err
 		}
+		if _, rerr := maybeRotateOversizedJournal(journalPath, os.Stderr); rerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: journal rotation skipped: %v\n", rerr)
+		}
 		journal, err = openSessionJournal(journalPath, exactKeys)
 		if err == nil {
 			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions(exactKeys).Redact != nil)
@@ -225,14 +228,16 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 
 	var prevEvs []agent.Event
 	if cont {
-		evs, err := store.Read(journalPath)
+		// Stream only the live branch: a huge journal no longer loads
+		// wholesale into memory on resume.
+		liveEvs, totalEvs, _, err := store.ReadLiveBranch(journalPath, false)
 		if err != nil {
 			journal.Close()
 			return err
 		}
-		prevEvs = agent.Live(evs)
+		prevEvs = liveEvs
 		fmt.Printf("resumed %s · %d live events of %d\n",
-			filepath.Base(journalPath), len(prevEvs), len(evs))
+			filepath.Base(journalPath), len(prevEvs), totalEvs)
 	}
 
 	uiSink := newUISink()
@@ -309,6 +314,9 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 		if err != nil {
 			return err
 		}
+		if _, rerr := maybeRotateOversizedJournal(journalPath, os.Stderr); rerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: journal rotation skipped: %v\n", rerr)
+		}
 		journal, err = openSessionJournal(journalPath, exactKeys)
 		if err == nil {
 			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions(exactKeys).Redact != nil)
@@ -322,14 +330,16 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 
 	var prevEvs []agent.Event
 	if cont {
-		evs, err := store.Read(journalPath)
+		// Stream only the live branch: a huge journal no longer loads
+		// wholesale into memory on resume.
+		liveEvs, totalEvs, _, err := store.ReadLiveBranch(journalPath, false)
 		if err != nil {
 			journal.Close()
 			return err
 		}
-		prevEvs = agent.Live(evs)
+		prevEvs = liveEvs
 		fmt.Printf("resumed %s · %d live events of %d\n",
-			filepath.Base(journalPath), len(prevEvs), len(evs))
+			filepath.Base(journalPath), len(prevEvs), totalEvs)
 	}
 
 	feed := ui.NewFeed()

@@ -66,19 +66,12 @@ func exportJournal(path string, redactOutput bool, stdout, stderr io.Writer) err
 		return copyJournalBytes(path, stdout)
 	}
 
-	events, err := store.Read(path)
-	if err != nil {
-		return err
-	}
+	// Stream the journal instead of loading it: a long session's export no
+	// longer costs O(journal) memory.
 	sink := jsonlStdout{w: stdout, redact: func(e agent.Event) agent.Event {
 		return redactJournalEvent(e, exportExactKeys(redactOutput))
 	}}
-	for _, e := range events {
-		if err := sink.Emit(e); err != nil {
-			return err
-		}
-	}
-	return nil
+	return store.Scan(path, sink.Emit)
 }
 
 // exportExactKeys resolves the currently configured provider's exact secret

@@ -158,8 +158,34 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 		},
 	}
 	emitErr := l.emitLocked(l.parent, compactEvent)
+	if emitErr == nil {
+		// The compaction succeeded: events before firstKept are unreachable
+		// to Live() (only the Compact event itself and Seq >= firstKept are
+		// kept), so drop them from memory. The journal on disk keeps the full
+		// history for replay; this only bounds the live process footprint.
+		// Without the trim, l.hist grows without bound and every turn's
+		// Live() scan costs O(history) — O(n^2) over a session.
+		l.trimHistoryLocked(firstKept)
+	}
 	l.mu.Unlock()
 	return emitErr
+}
+
+// trimHistoryLocked drops in-memory events that Live() can no longer reach
+// after a compaction: every event with Seq < firstKept is invisible to the
+// live branch, while the Compact event itself (Seq > firstKept) is retained.
+// The caller must hold l.mu. The on-disk journal is untouched — replay,
+// export, and --continue still see the full history.
+func (l *Loop) trimHistoryLocked(firstKept int) {
+	kept := make([]Event, 0, len(l.hist))
+	for _, e := range l.hist {
+		if e.Seq >= firstKept {
+			kept = append(kept, e)
+		}
+	}
+	// A fresh slice (not an in-place filter) lets the GC reclaim the dropped
+	// prefix instead of pinning the whole backing array.
+	l.hist = kept
 }
 
 func countReadStubs(ms []provider.Message) int {

@@ -99,7 +99,19 @@ type FeedItem struct {
 	RunBoundary string     `json:"run_boundary,omitempty"`
 }
 
-func (it FeedItem) key() string { return fmt.Sprintf("%s:%s", it.Type, it.ID) }
+// ItemKey identifies a feed item across projector updates. It is a struct
+// (not a formatted string) so map lookups on the hot render path allocate
+// nothing.
+type ItemKey struct {
+	Type ItemType
+	ID   string
+}
+
+func (it FeedItem) key() ItemKey { return ItemKey{Type: it.Type, ID: it.ID} }
+
+// Key identifies the item across projector updates. The UI uses it to cache
+// per-item fingerprints and to match the projector's touched set.
+func (it FeedItem) Key() ItemKey { return it.key() }
 
 func (it FeedItem) Fingerprint() uint64 {
 	var h uint64 = 1469598103934665603

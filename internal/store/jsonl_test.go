@@ -311,3 +311,165 @@ func TestEncodedBytesCalculatedPreForStore(t *testing.T) {
 		t.Fatalf("in-memory event output was mutated: %d", len(ev.Call.Output))
 	}
 }
+
+func writeTestJournal(t *testing.T, lines []string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "sess.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func marshalLine(t *testing.T, e agent.Event) string {
+	t.Helper()
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// branchedFixture builds a journal with a compaction and a rewind, so the
+// live branch is a strict subset of the file.
+func branchedFixture(t *testing.T) (string, []agent.Event) {
+	t.Helper()
+	evs := []agent.Event{
+		{Seq: 1, Parent: 0, Type: agent.UserMsg, Text: "q1"},
+		{Seq: 2, Parent: 1, Type: agent.TextDelta, Text: "a1"},
+		{Seq: 3, Parent: 2, Type: agent.UserMsg, Text: "q2"},
+		{Seq: 4, Parent: 3, Type: agent.TextDelta, Text: "a2"},
+		{Seq: 5, Parent: 4, Type: agent.Compact, FirstKept: 3, Text: "summary"},
+		{Seq: 6, Parent: 5, Type: agent.UserMsg, Text: "q3"},
+		{Seq: 7, Parent: 6, Type: agent.TextDelta, Text: "a3"},
+		// Rewind the last turn: seq 8's parent points back before seq 6,
+		// making seqs 6-7 unreachable to Live().
+		{Seq: 8, Parent: 5, Type: agent.Rewind, Text: "rewound 1 turns"},
+		{Seq: 9, Parent: 8, Type: agent.UserMsg, Text: "q3 retry"},
+		{Seq: 10, Parent: 9, Type: agent.TextDelta, Text: "a3 retry"},
+	}
+	lines := make([]string, 0, len(evs))
+	for _, e := range evs {
+		lines = append(lines, marshalLine(t, e))
+	}
+	return writeTestJournal(t, lines), evs
+}
+
+func TestReadLiveBranchMatchesLive(t *testing.T) {
+	path, evs := branchedFixture(t)
+	live, raw, total, err := ReadLiveBranch(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw != nil {
+		t.Fatal("keepRaw=false must not return raw lines")
+	}
+	if total != len(evs) {
+		t.Fatalf("total=%d, want %d", total, len(evs))
+	}
+	want := agent.Live(evs)
+	if len(live) != len(want) {
+		t.Fatalf("live=%d events, want %d", len(live), len(want))
+	}
+	for i := range want {
+		if live[i].Seq != want[i].Seq {
+			t.Fatalf("live[%d].Seq=%d, want %d", i, live[i].Seq, want[i].Seq)
+		}
+	}
+	// The rewound turn (6,7) must be excluded, the pre-compact q1 (1,2) too.
+	for _, e := range live {
+		if e.Seq == 1 || e.Seq == 2 || e.Seq == 6 || e.Seq == 7 {
+			t.Fatalf("unreachable event seq=%d in live branch", e.Seq)
+		}
+	}
+}
+
+func TestReadLiveBranchRawPreservesBytes(t *testing.T) {
+	path, evs := branchedFixture(t)
+	// Inject an unknown field into one live line: rotation must preserve it.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	var tmp []string
+	for _, ln := range lines {
+		var e agent.Event
+		if err := json.Unmarshal([]byte(ln), &e); err != nil {
+			t.Fatal(err)
+		}
+		if e.Seq == 9 {
+			ln = strings.TrimSuffix(ln, "}") + `,"future_field":"keepme"}`
+		}
+		tmp = append(tmp, ln)
+	}
+	path = writeTestJournal(t, tmp)
+
+	live, raw, total, err := ReadLiveBranch(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != len(evs) {
+		t.Fatalf("total=%d, want %d", total, len(evs))
+	}
+	if len(raw) != len(live) {
+		t.Fatalf("raw lines=%d, live events=%d", len(raw), len(live))
+	}
+	for i, e := range live {
+		var re agent.Event
+		if err := json.Unmarshal(raw[i], &re); err != nil {
+			t.Fatalf("raw[%d] does not parse: %v", i, err)
+		}
+		if re.Seq != e.Seq {
+			t.Fatalf("raw[%d].Seq=%d, want %d", i, re.Seq, e.Seq)
+		}
+		if e.Seq == 9 && !strings.Contains(string(raw[i]), `"future_field":"keepme"`) {
+			t.Fatal("rotation raw lines must preserve unknown fields")
+		}
+		if !strings.HasSuffix(string(raw[i]), "\n") {
+			t.Fatalf("raw[%d] missing trailing newline", i)
+		}
+	}
+}
+
+func TestReadLiveBranchNoCompactFallsBack(t *testing.T) {
+	evs := []agent.Event{
+		{Seq: 1, Parent: 0, Type: agent.UserMsg, Text: "q1"},
+		{Seq: 2, Parent: 1, Type: agent.TextDelta, Text: "a1"},
+	}
+	var lines []string
+	for _, e := range evs {
+		lines = append(lines, marshalLine(t, e))
+	}
+	path := writeTestJournal(t, lines)
+	live, _, total, err := ReadLiveBranch(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(live) != 2 {
+		t.Fatalf("total=%d live=%d, want 2/2", total, len(live))
+	}
+}
+
+func TestScanStreamsEvents(t *testing.T) {
+	path, evs := branchedFixture(t)
+	var count, seqSum int
+	err := Scan(path, func(e agent.Event) error {
+		count++
+		seqSum += e.Seq
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != len(evs) {
+		t.Fatalf("scanned %d events, want %d", count, len(evs))
+	}
+	wantSum := 0
+	for _, e := range evs {
+		wantSum += e.Seq
+	}
+	if seqSum != wantSum {
+		t.Fatalf("seq sum=%d, want %d", seqSum, wantSum)
+	}
+}
