@@ -21,6 +21,27 @@ gh repo edit amiraq1/Nabd \
   --add-topic termux
 ```
 
+## 0b. One-time release protection (GitHub settings, not in this repo)
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`, which publishes a
+**signed** release. Two settings gates keep a stray or malicious tag push
+from cutting a release on its own; both live in the GitHub UI and cannot be
+expressed as repository files:
+
+1. **Protected environment.** The `goreleaser` job declares
+   `environment: release`. In Settings → Environments, create (or select)
+   the `release` environment and add **required reviewers** — the release job
+   then waits for an approval after the tag push before it runs. Until the
+   environment is configured, the declaration is a no-op label: the job runs
+   unimpeded.
+2. **Tag protection ruleset.** In Settings → Rules → Rulesets, add a tag
+   ruleset for `v*` that restricts who can create/push tags (e.g. admins and
+   the release manager only), so a compromised or over-permissioned token
+   cannot mint a release tag.
+
+Verify both before the first signed release; re-verify after any transfer
+of repository ownership.
+
 ## 1. Gates on the commit you will tag
 
 ```sh

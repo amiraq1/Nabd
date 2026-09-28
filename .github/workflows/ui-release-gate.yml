@@ -2,7 +2,7 @@ name: UI release gate
 
 on:
   pull_request:
-    branches: [master, main, feat/secure-permission-experience]
+    branches: [master, main]
   workflow_dispatch:
 
 permissions:
