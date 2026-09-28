@@ -48,6 +48,12 @@ Ambiguity in which configuration file is active presents a serious security risk
 **Migration:**
 To migrate from v1 to v2, create `~/.ag/config.v2.json` and remove or archive `~/.ag/config`.
 
+**Diagnosing:**
+`nabd config path` prints which configuration file is active (and its source),
+`nabd config validate` checks the active file without starting a session, and
+`nabd config show --redacted` prints the effective configuration with secrets
+masked.
+
 ---
 
 ## 3. Security Invariants and Hardening
@@ -308,7 +314,7 @@ positional arguments. Diagnostics go to stderr; stdout is JSONL only.
 User-defined providers live in `~/.ag/providers.json`; the path can be
 overridden with `NABD_PROVIDERS_FILE`. API keys are not stored here — they live
 in `~/.ag/auth.json` (override `NABD_AUTH_FILE`) and are enrolled with
-`nabd connect` or `nabd provider add`. The file is optional, and its document is
+`nabd connect`. The file is optional, and its document is
 a single object keyed by `provider`, whose keys are your provider IDs:
 
 ```json
