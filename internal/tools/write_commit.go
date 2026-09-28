@@ -211,13 +211,24 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 		}
 		prepared = true
 	}
-	if err := writeFromRoot(root, relative, absPath, data, mode); err != nil {
-		if prepared && !safefs.WasPublished(err) && reg != nil && reg.OnMutationAborted != nil {
-			if abortErr := reg.OnMutationAborted(rec, err); abortErr != nil {
-				return before, after, errors.Join(err, abortErr)
+	// Re-verify the pre-mutation hash immediately before publishing. The
+	// before-state was captured before the (potentially slow) diff above;
+	// if the file changed under us since, writing now would record a stale
+	// before-state in the journal and make /undo restore the wrong content.
+	// A verification failure joins the publish-failure path below: the
+	// mutation never reached the disk, so the abort record keeps the same
+	// shape (and the same after-blob) in both cases.
+	publishErr := verifyUnchanged(sh, root, relative, absPath, before)
+	if publishErr == nil {
+		publishErr = writeFromRoot(root, relative, absPath, data, mode)
+	}
+	if publishErr != nil {
+		if prepared && !safefs.WasPublished(publishErr) && reg != nil && reg.OnMutationAborted != nil {
+			if abortErr := reg.OnMutationAborted(rec, publishErr); abortErr != nil {
+				return before, after, errors.Join(publishErr, abortErr)
 			}
 		}
-		return before, after, err
+		return before, after, publishErr
 	}
 	// From here the disk has already changed. Every exit below must leave a
 	// record behind, or /undo goes blind exactly when it is needed most.
@@ -232,6 +243,27 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 		return before, after, errors.New("write did not verify on disk as-is")
 	}
 	return before, after, nil
+}
+
+// verifyUnchanged re-captures the current on-disk state through the same
+// secure path used for the before-state and compares content hashes. A
+// mismatch means the file changed between capture and write; the write is
+// aborted so the journal never records a stale before-state. The re-capture
+// is a point check, not a lock — it shrinks the race to the instant before
+// publication and turns silent staleness into a loud, retryable error.
+func verifyUnchanged(sh *snap.Shadow, root *Root, relative, absolute string, before snap.State) error {
+	current, err := captureFromRoot(sh, root, relative, absolute)
+	if err != nil {
+		return err
+	}
+	if !snap.Unchanged(before, current) {
+		// The re-captured blob is unreferenced garbage; drop it. (When the
+		// states are unchanged, current.Blob == before.Blob — the blob the
+		// EditRecord keeps for /undo — so it must NOT be discarded.)
+		_ = sh.Discard(current.Blob)
+		return errors.New("file changed since it was read; re-read and retry the write")
+	}
+	return nil
 }
 
 // buildRecord fingerprints one mutation for the journal: SHA-256 of the

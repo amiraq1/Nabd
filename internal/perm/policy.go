@@ -136,11 +136,14 @@ func (p *Policy) YOLO() bool {
 //  2. ReadOnly → Allow in every mode, including plan.
 //  3. ModePlan → Deny for Mutating/Executing, ignoring YOLO and standing
 //     grants. Plan mode is read-only, full stop.
-//  4. YOLO and Mutating → Allow. YOLO is consent to change the world; it is
+//  4. Mutating and a standing session grant → Allow. An explicit per-tool
+//     grant is deliberate in-session consent; it stands even under a deny
+//     mode, which only suppresses asking.
+//  5. ModeDeny / ModeAllowReads → Deny (never wait). A deny mode is the
+//     session's explicit policy; a blanket YOLO flag must not override it.
+//  6. YOLO and Mutating → Allow. YOLO is consent to change the world; it is
 //     not consent to run arbitrary code, so Executing tools are never
 //     auto-approved and fall through to the ordinary path below.
-//  5. Mutating and a standing session grant → Allow.
-//  6. ModeDeny / ModeAllowReads → Deny (never wait).
 //  7. Otherwise → Ask.
 func (p *Policy) Check(tool string) (Verdict, string) {
 	v, _, text := p.CheckReason(tool)
@@ -172,14 +175,14 @@ func (p *Policy) CheckReason(tool string) (Verdict, agent.PermissionReason, stri
 	if mode == ModePlan {
 		return Deny, agent.PermissionReasonPlanReadOnly, "plan mode: read-only"
 	}
-	if yolo && class == Mutating {
-		return Allow, "", ""
-	}
 	if class == Mutating && granted {
 		return Allow, agent.PermissionReasonSessionGrant, "allowed for this session"
 	}
 	if mode == ModeDeny || mode == ModeAllowReads {
 		return Deny, agent.PermissionReasonPolicyDenied, "denied by policy"
+	}
+	if yolo && class == Mutating {
+		return Allow, "", ""
 	}
 	return Ask, agent.PermissionReasonRequired, "permission required"
 }

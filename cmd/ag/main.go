@@ -201,6 +201,7 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 	if err != nil {
 		return err
 	}
+	defer sess.Close()
 	sess.SetMode(mode)
 	root := sess.root
 
@@ -297,6 +298,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 	if err != nil {
 		return err
 	}
+	defer sess.Close()
 	sess.SetMode(mode)
 	root := sess.root
 
@@ -445,12 +447,15 @@ func fileUndo(loop *agent.Loop, reg *tools.Registry, n int) string {
 	return ""
 }
 
-func chatOnCompact(loop *agent.Loop) string {
+func chatOnCompact(ctx context.Context, loop *agent.Loop) string {
 	if loop == nil {
 		return "compact not supported"
 	}
+	// The summarisation round-trip derives from the session lifecycle
+	// context: quitting mid-compact cancels the provider call instead of
+	// leaving it running on context.Background() past shutdown.
 	go func() {
-		if err := loop.Compact(context.Background(), loop.Budget.Usable()*4/10); err != nil {
+		if err := loop.Compact(ctx, loop.Budget.Usable()*4/10); err != nil {
 			loop.Note("compact failed: " + err.Error())
 		}
 	}()

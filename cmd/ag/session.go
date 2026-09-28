@@ -33,6 +33,12 @@ type interactiveSession struct {
 	pol  *perm.Policy
 	ap   *ui.Approver
 	loop *agent.Loop
+	// ctx is the session lifecycle context: background work started by
+	// slash commands (e.g. /compact summarisation) derives from it so it
+	// is cancelled when the session ends instead of running on
+	// context.Background() past shutdown.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func loadSessionSkills(root *tools.Root) ([]skill.Skill, []skill.Diagnostic, error) {
@@ -84,7 +90,16 @@ func newInteractiveSession(prov provider.Provider) (*interactiveSession, error) 
 		return sections
 	}
 	loop.SkillInventory = skill.JournalRecords(allSkills)
-	return &interactiveSession{root: root, reg: reg, pol: pol, ap: ap, loop: loop}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	return &interactiveSession{root: root, reg: reg, pol: pol, ap: ap, loop: loop, ctx: ctx, cancel: cancel}, nil
+}
+
+// Close ends the session lifecycle, cancelling background work such as an
+// in-flight /compact summarisation. Safe to call more than once.
+func (s *interactiveSession) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
 }
 
 // wirePathRule installs the session ignore rule on the policy and hands the same
@@ -112,7 +127,7 @@ func (s *interactiveSession) SetMode(m perm.Mode) {
 func (s *interactiveSession) callbacks() *ui.SessionCallbacks {
 	return &ui.SessionCallbacks{
 		OnUndo:     func(n int) string { return fileUndo(s.loop, s.reg, n) },
-		OnCompact:  func() string { return chatOnCompact(s.loop) },
+		OnCompact:  func() string { return chatOnCompact(s.ctx, s.loop) },
 		OnRewind:   func(n int) (string, string) { return rewindSummary(s.loop, n) },
 		OnCtx:      func() string { return ctxSummary(s.loop) },
 		OnEdits:    func() string { return editsSummary(s.loop) },

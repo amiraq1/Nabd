@@ -171,6 +171,24 @@ var headlessInterruptContext = func() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
+// maxStdinPromptBytes caps a "-" stdin prompt. Overflow is a hard error,
+// not a silent truncation: silently cutting a prompt mid-instruction would
+// change what the model was asked to do without the operator noticing.
+const maxStdinPromptBytes = 1 << 20
+
+// readStdinPrompt reads a "-" stdin prompt, failing closed when it exceeds
+// maxStdinPromptBytes instead of truncating it silently.
+func readStdinPrompt(r io.Reader) (string, error) {
+	b, err := io.ReadAll(io.LimitReader(r, maxStdinPromptBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(b) > maxStdinPromptBytes {
+		return "", fmt.Errorf("stdin prompt exceeds %d bytes", maxStdinPromptBytes)
+	}
+	return string(b), nil
+}
+
 func runHeadlessErr(cfg headlessConfig) error {
 	if cfg.stdout == nil {
 		cfg.stdout = os.Stdout
@@ -184,11 +202,11 @@ func runHeadlessErr(cfg headlessConfig) error {
 		if r == nil {
 			r = os.Stdin
 		}
-		b, err := io.ReadAll(r)
+		b, err := readStdinPrompt(r)
 		if err != nil {
 			return err
 		}
-		prompt = string(b)
+		prompt = b
 	}
 	prompt = strings.TrimRight(prompt, "\n")
 	if strings.TrimSpace(prompt) == "" {
