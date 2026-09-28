@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -17,13 +17,13 @@ import (
 // doneMsg can ever arrive to clear it.
 func TestFeedCancelAfterResumeReturnsToIdleWithinDeadline(t *testing.T) {
 	f := NewFeed()
-	f.BuildFromEvents([]agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "nabd test"},
-		{Seq: 2, Type: agent.UserMsg, Text: "q"},
-		{Seq: 3, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
+	f.BuildFromEvents([]event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "nabd test"},
+		{Seq: 2, Type: event.UserMsg, Text: "q"},
+		{Seq: 3, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "bash"}},
 		// Deliberately no ToolEnd and no TurnEnd: the previous process died
 		// mid-tool, which is exactly the resume case that hung.
-		{Seq: 4, Type: agent.RunEnd, Text: "session ended"},
+		{Seq: 4, Type: event.RunEnd, Text: "session ended"},
 	})
 
 	inherited := f.running || f.busy
@@ -66,15 +66,15 @@ func TestFeedLiveRunStaysBusyWhileToolRunsAndIdlesAfterDoneMsg(t *testing.T) {
 		t.Fatalf("after send: running=%v busy=%v, want both true", f.running, f.busy)
 	}
 
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "bash"}},
 	}})
 	if !f.busy || f.runningTool != "bash" {
 		t.Fatalf("during tool run: busy=%v runningTool=%q, want busy with bash", f.busy, f.runningTool)
 	}
 
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "bash"}},
 	}})
 	if !f.busy {
 		t.Fatal("ToolEnd opened the send gate; only doneMsg may end the run")

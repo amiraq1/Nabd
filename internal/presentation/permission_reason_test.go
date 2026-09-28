@@ -3,22 +3,22 @@ package presentation
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 func TestPermissionReasonCatalogCoversClosedVocabulary(t *testing.T) {
-	reasons := []agent.PermissionReason{
-		agent.PermissionReasonToolNoName,
-		agent.PermissionReasonUnknownTool,
-		agent.PermissionReasonPlanReadOnly,
-		agent.PermissionReasonSessionGrant,
-		agent.PermissionReasonPolicyDenied,
-		agent.PermissionReasonRequired,
-		agent.PermissionReasonUnknownOrForbidden,
-		agent.PermissionReasonNoPrompt,
+	reasons := []event.PermissionReason{
+		event.PermissionReasonToolNoName,
+		event.PermissionReasonUnknownTool,
+		event.PermissionReasonPlanReadOnly,
+		event.PermissionReasonSessionGrant,
+		event.PermissionReasonPolicyDenied,
+		event.PermissionReasonRequired,
+		event.PermissionReasonUnknownOrForbidden,
+		event.PermissionReasonNoPrompt,
 	}
 	for _, reason := range reasons {
-		got := PermissionReasonText(agent.Event{Reason: reason, Text: "english fallback"})
+		got := PermissionReasonText(event.Event{Reason: reason, Text: "english fallback"})
 		if got == "" || got == "english fallback" {
 			t.Fatalf("reason %q has no localized catalog entry: %q", reason, got)
 		}
@@ -27,11 +27,11 @@ func TestPermissionReasonCatalogCoversClosedVocabulary(t *testing.T) {
 
 func TestPermissionReasonTextLegacyAndUnknownBehavior(t *testing.T) {
 	const legacy = "مسموح قديم"
-	if got := PermissionReasonText(agent.Event{Text: legacy}); got != legacy {
+	if got := PermissionReasonText(event.Event{Text: legacy}); got != legacy {
 		t.Fatalf("legacy text = %q, want %q", got, legacy)
 	}
-	if got := PermissionReasonText(agent.Event{
-		Reason: agent.PermissionReason("future_unreviewed_reason"),
+	if got := PermissionReasonText(event.Event{
+		Reason: event.PermissionReason("future_unreviewed_reason"),
 		Text:   "must not become authoritative",
 	}); got != "" {
 		t.Fatalf("unknown reason rendered %q, want fail-closed empty text", got)
@@ -40,12 +40,12 @@ func TestPermissionReasonTextLegacyAndUnknownBehavior(t *testing.T) {
 
 func TestProjectorCarriesLocalizedPermissionReason(t *testing.T) {
 	p := NewProjector()
-	items, err := p.Build([]agent.Event{{
+	items, err := p.Build([]event.Event{{
 		Seq:    1,
-		Type:   agent.PermAsk,
-		Call:   &agent.ToolCall{ID: "c1", Name: "bash"},
+		Type:   event.PermAsk,
+		Call:   &event.ToolCall{ID: "c1", Name: "bash"},
 		Text:   "permission required",
-		Reason: agent.PermissionReasonRequired,
+		Reason: event.PermissionReasonRequired,
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -53,7 +53,7 @@ func TestProjectorCarriesLocalizedPermissionReason(t *testing.T) {
 	if len(items) != 1 || items[0].Perm == nil {
 		t.Fatalf("items = %#v", items)
 	}
-	if items[0].Perm.Reason != permissionReasonArabic[agent.PermissionReasonRequired] {
+	if items[0].Perm.Reason != permissionReasonArabic[event.PermissionReasonRequired] {
 		t.Fatalf("card reason = %q", items[0].Perm.Reason)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestThroughputDoesNotWriteStatus proves the core architectural invariant:
@@ -238,11 +238,11 @@ func TestThroughputBatchUsesEventTime(t *testing.T) {
 	m.busy = true
 
 	t0 := time.Now().Add(-5 * time.Second)
-	events := []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Time: t0},
-		{Seq: 2, Type: agent.TurnStart, Time: t0.Add(100 * time.Millisecond)},
-		{Seq: 3, Type: agent.TextDelta, Text: "hello world ", Time: t0.Add(500 * time.Millisecond)},
-		{Seq: 4, Type: agent.TextDelta, Text: "streaming text ", Time: t0.Add(1500 * time.Millisecond)},
+	events := []event.Event{
+		{Seq: 1, Type: event.RunStart, Time: t0},
+		{Seq: 2, Type: event.TurnStart, Time: t0.Add(100 * time.Millisecond)},
+		{Seq: 3, Type: event.TextDelta, Text: "hello world ", Time: t0.Add(500 * time.Millisecond)},
+		{Seq: 4, Type: event.TextDelta, Text: "streaming text ", Time: t0.Add(1500 * time.Millisecond)},
 	}
 
 	// Apply all events in one batch (executed in microseconds).
@@ -278,16 +278,16 @@ func TestThroughputMultiTurnIsolation(t *testing.T) {
 	t0 := time.Now().Add(-10 * time.Second)
 
 	// Turn 1:
-	m.trackState(agent.Event{Seq: 1, Type: agent.RunStart, Time: t0})
-	m.trackState(agent.Event{Seq: 2, Type: agent.TurnStart, Time: t0.Add(100 * time.Millisecond)})
-	m.trackState(agent.Event{Seq: 3, Type: agent.TextDelta, Text: "1234567890123456", Time: t0.Add(600 * time.Millisecond)})
-	m.trackState(agent.Event{Seq: 4, Type: agent.TextDelta, Text: "1234567890123456", Time: t0.Add(1600 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 1, Type: event.RunStart, Time: t0})
+	m.trackState(event.Event{Seq: 2, Type: event.TurnStart, Time: t0.Add(100 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 3, Type: event.TextDelta, Text: "1234567890123456", Time: t0.Add(600 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 4, Type: event.TextDelta, Text: "1234567890123456", Time: t0.Add(1600 * time.Millisecond)})
 	// Turn 1 completes:
-	m.trackState(agent.Event{
+	m.trackState(event.Event{
 		Seq:  5,
-		Type: agent.EventProviderUsage,
+		Type: event.EventProviderUsage,
 		Time: t0.Add(1700 * time.Millisecond),
-		Usage: &agent.ProviderUsage{
+		Usage: &event.ProviderUsage{
 			CompletionTokens: 51, // 50 tokens / 1.0s => 50.0 tok/s
 		},
 	})
@@ -298,12 +298,12 @@ func TestThroughputMultiTurnIsolation(t *testing.T) {
 	}
 
 	// Tool execution between turns:
-	m.trackState(agent.Event{Seq: 6, Type: agent.ToolStart, Time: t0.Add(2000 * time.Millisecond), Call: &agent.ToolCall{Name: "bash"}})
-	m.trackState(agent.Event{Seq: 7, Type: agent.ToolEnd, Time: t0.Add(3000 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 6, Type: event.ToolStart, Time: t0.Add(2000 * time.Millisecond), Call: &event.ToolCall{Name: "bash"}})
+	m.trackState(event.Event{Seq: 7, Type: event.ToolEnd, Time: t0.Add(3000 * time.Millisecond)})
 
 	// Turn 2 begins: TurnStart
 	tTurn2 := t0.Add(3100 * time.Millisecond)
-	m.trackState(agent.Event{Seq: 8, Type: agent.TurnStart, Time: tTurn2})
+	m.trackState(event.Event{Seq: 8, Type: event.TurnStart, Time: tTurn2})
 
 	// Turn 1 usage MUST be cleared! Turn 2 has not streamed deltas yet, so throughput is empty.
 	if got := m.runtimeThroughputText(80); got != "" {
@@ -311,8 +311,8 @@ func TestThroughputMultiTurnIsolation(t *testing.T) {
 	}
 
 	// Turn 2 streams deltas:
-	m.trackState(agent.Event{Seq: 9, Type: agent.TextDelta, Text: "abcd", Time: tTurn2.Add(500 * time.Millisecond)})
-	m.trackState(agent.Event{Seq: 10, Type: agent.TextDelta, Text: "efgh", Time: tTurn2.Add(1500 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 9, Type: event.TextDelta, Text: "abcd", Time: tTurn2.Add(500 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 10, Type: event.TextDelta, Text: "efgh", Time: tTurn2.Add(1500 * time.Millisecond)})
 
 	turn2Live := m.runtimeThroughputText(80)
 	// Must be LIVE estimate ("est "), NOT Turn 1's measured 50.0 tok/s or 51 tok!
@@ -324,11 +324,11 @@ func TestThroughputMultiTurnIsolation(t *testing.T) {
 	}
 
 	// Turn 2 provider usage arrives:
-	m.trackState(agent.Event{
+	m.trackState(event.Event{
 		Seq:  11,
-		Type: agent.EventProviderUsage,
+		Type: event.EventProviderUsage,
 		Time: tTurn2.Add(1600 * time.Millisecond),
-		Usage: &agent.ProviderUsage{
+		Usage: &event.ProviderUsage{
 			CompletionTokens: 101, // 100 tokens / 1.0s => 100.0 tok/s
 		},
 	})
@@ -350,19 +350,19 @@ func TestThroughputToolOnlyTurnDoesNotCorruptNextTurn(t *testing.T) {
 	t0 := time.Now().Add(-10 * time.Second)
 
 	// Run starts, Turn 1 starts:
-	m.trackState(agent.Event{Seq: 1, Type: agent.RunStart, Time: t0})
-	m.trackState(agent.Event{Seq: 2, Type: agent.TurnStart, Time: t0.Add(50 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 1, Type: event.RunStart, Time: t0})
+	m.trackState(event.Event{Seq: 2, Type: event.TurnStart, Time: t0.Add(50 * time.Millisecond)})
 	// Turn 1 produces tool call only:
-	m.trackState(agent.Event{Seq: 3, Type: agent.ToolStart, Time: t0.Add(100 * time.Millisecond), Call: &agent.ToolCall{Name: "read_file"}})
+	m.trackState(event.Event{Seq: 3, Type: event.ToolStart, Time: t0.Add(100 * time.Millisecond), Call: &event.ToolCall{Name: "read_file"}})
 	// Tool takes 5 seconds:
-	m.trackState(agent.Event{Seq: 4, Type: agent.ToolEnd, Time: t0.Add(5100 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 4, Type: event.ToolEnd, Time: t0.Add(5100 * time.Millisecond)})
 
 	// Turn 2 starts at t0 + 5200ms:
 	tTurn2 := t0.Add(5200 * time.Millisecond)
-	m.trackState(agent.Event{Seq: 5, Type: agent.TurnStart, Time: tTurn2})
+	m.trackState(event.Event{Seq: 5, Type: event.TurnStart, Time: tTurn2})
 
 	// First delta of Turn 2 arrives 800ms later:
-	m.trackState(agent.Event{Seq: 6, Type: agent.TextDelta, Text: "Here is the content", Time: tTurn2.Add(800 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 6, Type: event.TextDelta, Text: "Here is the content", Time: tTurn2.Add(800 * time.Millisecond)})
 
 	got := m.runtimeThroughputText(80)
 	// TTFT for this turn must be 0.80s, NOT 6.00s!
@@ -381,16 +381,16 @@ func TestThroughputClearsOnCancellation(t *testing.T) {
 	m.running = true
 	m.busy = true
 	t0 := time.Now().Add(-2 * time.Second)
-	m.trackState(agent.Event{Seq: 1, Type: agent.RunStart, Time: t0})
-	m.trackState(agent.Event{Seq: 2, Type: agent.TurnStart, Time: t0.Add(100 * time.Millisecond)})
-	m.trackState(agent.Event{Seq: 3, Type: agent.TextDelta, Text: "streaming text", Time: t0.Add(500 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 1, Type: event.RunStart, Time: t0})
+	m.trackState(event.Event{Seq: 2, Type: event.TurnStart, Time: t0.Add(100 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 3, Type: event.TextDelta, Text: "streaming text", Time: t0.Add(500 * time.Millisecond)})
 
 	if got := m.runtimeThroughputText(80); got == "" {
 		t.Fatal("precondition: expected non-empty throughput while streaming")
 	}
 
 	// Interrupted arrives:
-	m.trackState(agent.Event{Seq: 4, Type: agent.Interrupted, Time: t0.Add(600 * time.Millisecond)})
+	m.trackState(event.Event{Seq: 4, Type: event.Interrupted, Time: t0.Add(600 * time.Millisecond)})
 
 	if got := m.runtimeThroughputText(80); got != "" {
 		t.Fatalf("expected empty throughput after Interrupted, got: %q", got)
@@ -409,9 +409,9 @@ func TestThroughputEventTimeZeroFallback(t *testing.T) {
 	m.busy = true
 
 	// Send events with zero Time:
-	m.trackState(agent.Event{Seq: 1, Type: agent.RunStart})
-	m.trackState(agent.Event{Seq: 2, Type: agent.TurnStart})
-	m.trackState(agent.Event{Seq: 3, Type: agent.TextDelta, Text: "hello world"})
+	m.trackState(event.Event{Seq: 1, Type: event.RunStart})
+	m.trackState(event.Event{Seq: 2, Type: event.TurnStart})
+	m.trackState(event.Event{Seq: 3, Type: event.TextDelta, Text: "hello world"})
 
 	if m.streamFirstDeltaAt.IsZero() {
 		t.Fatal("streamFirstDeltaAt should be populated even with zero-time event")

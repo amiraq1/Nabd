@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -17,7 +17,7 @@ func feedWithTools(t *testing.T, count, width int) *Feed {
 	m := NewFeed()
 	m.width = width
 	m.height = 10
-	events := make([]agent.Event, 0, count*2)
+	events := make([]event.Event, 0, count*2)
 	for i := 0; i < count; i++ {
 		lines := []string{
 			fmt.Sprintf("output line 1 for tool %d", i),
@@ -30,15 +30,15 @@ func feedWithTools(t *testing.T, count, width int) *Feed {
 			fmt.Sprintf("output line 8 for tool %d", i),
 		}
 		events = append(events,
-			agent.Event{
+			event.Event{
 				Seq:  i*2 + 1,
-				Type: agent.ToolStart,
-				Call: &agent.ToolCall{ID: fmt.Sprintf("call-%d", i), Name: "bash", Args: []byte(`"echo test"`)},
+				Type: event.ToolStart,
+				Call: &event.ToolCall{ID: fmt.Sprintf("call-%d", i), Name: "bash", Args: []byte(`"echo test"`)},
 			},
-			agent.Event{
+			event.Event{
 				Seq:  i*2 + 2,
-				Type: agent.ToolEnd,
-				Call: &agent.ToolCall{ID: fmt.Sprintf("call-%d", i), Name: "bash", Output: strings.Join(lines, "\n"), OK: true},
+				Type: event.ToolEnd,
+				Call: &event.ToolCall{ID: fmt.Sprintf("call-%d", i), Name: "bash", Output: strings.Join(lines, "\n"), OK: true},
 			},
 		)
 	}
@@ -423,9 +423,9 @@ func TestExplicitlyOpenedCardSurvivesToolEnd(t *testing.T) {
 	f.height = 24
 
 	// Start two tools: c1 and c2
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"make build"`)}},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c2", Name: "read_file", Args: json.RawMessage(`"main.go"`)}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"make build"`)}},
+		{Seq: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "c2", Name: "read_file", Args: json.RawMessage(`"main.go"`)}},
 	}})
 
 	// 1. Both running tools are expanded by default
@@ -459,9 +459,9 @@ func TestExplicitlyOpenedCardSurvivesToolEnd(t *testing.T) {
 	}
 
 	// 3. ToolEnd arrives for both tools with output
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash", Output: "build success\nartifacts created", OK: true, MS: 120}},
-		{Seq: 4, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c2", Name: "read_file", Output: "package main\nfunc main() {}\n", OK: true, MS: 45}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "bash", Output: "build success\nartifacts created", OK: true, MS: 120}},
+		{Seq: 4, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c2", Name: "read_file", Output: "package main\nfunc main() {}\n", OK: true, MS: 45}},
 	}})
 
 	// 4. The decisive test:
@@ -494,8 +494,8 @@ func TestCtrlOToggleDoesNotCollapseRunningTool(t *testing.T) {
 	f.height = 24
 
 	// Start a running tool
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"sleep 10"`)}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"sleep 10"`)}},
 	}})
 
 	// 1. Tool starts expanded by default while running

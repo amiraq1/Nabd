@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"nabd/internal/event"
 	"strings"
 
 	"nabd/internal/provider"
@@ -38,7 +39,7 @@ Do not apologise, do not greet, do not invent what did not happen. Leave out poi
 // provider-rejected — not an orphaned tool_result. See messages.go's ToolEnd case.
 // locateBoundary returns the index of the event whose Seq equals firstKept in
 // live, or -1 when no such event remains.
-func locateBoundary(live []Event, firstKept int) int {
+func locateBoundary(live []event.Event, firstKept int) int {
 	for i, e := range live {
 		if e.Seq == firstKept {
 			return i
@@ -64,7 +65,7 @@ func locateBoundary(live []Event, firstKept int) int {
 //     Compact's doc comment for why it is unreachable under current ordering.
 //
 // Callers must hold l.mu (or otherwise own live) while acting on the result.
-func validateBoundary(live []Event, firstKept int) (int, error) {
+func validateBoundary(live []event.Event, firstKept int) (int, error) {
 	boundary := locateBoundary(live, firstKept)
 	if boundary < 0 {
 		return -1, fmt.Errorf("%w: boundary seq %d absent from live branch (%d events)",
@@ -86,7 +87,7 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 	// Phase 1: take a snapshot of the live branch to pick a boundary.
 	// l.mu is held only briefly so that the provider call does not block it.
 	l.mu.Lock()
-	live := Live(l.hist)
+	live := event.Live(l.hist)
 	l.mu.Unlock()
 
 	firstKept, dropped, ok := chooseBoundaryWith(live, target, l.estimateMessages)
@@ -126,7 +127,7 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 	// Phase 3: re-acquire l.mu and atomically validate the boundary against the
 	// current history, then append if and only if the projection is safe.
 	l.mu.Lock()
-	freshLive := Live(l.hist)
+	freshLive := event.Live(l.hist)
 
 	boundary, err := validateBoundary(freshLive, firstKept)
 	if err != nil {
@@ -140,11 +141,11 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 	freshBefore := Messages(freshLive) // full current projection before compaction
 	keptMsgs := Messages(retained)
 	after := Squeeze(keptMsgs, l.keepFullRounds())
-	compactEvent := Event{
-		Type:      Compact,
+	compactEvent := event.Event{
+		Type:      event.Compact,
 		FirstKept: firstKept,
 		Text:      sum,
-		Compact: &CompactionStats{
+		Compact: &event.CompactionStats{
 			MessagesBefore: len(freshBefore),
 			MessagesAfter:  len(after),
 			TokensBefore:   l.estimateMessages(freshBefore),
@@ -177,7 +178,7 @@ func (l *Loop) Compact(ctx context.Context, target int) error {
 // The caller must hold l.mu. The on-disk journal is untouched — replay,
 // export, and --continue still see the full history.
 func (l *Loop) trimHistoryLocked(firstKept int) {
-	kept := make([]Event, 0, len(l.hist))
+	kept := make([]event.Event, 0, len(l.hist))
 	for _, e := range l.hist {
 		if e.Seq >= firstKept {
 			kept = append(kept, e)
@@ -206,14 +207,14 @@ func countReadStubs(ms []provider.Message) int {
 // then synthesises a fabricated tool_use for it instead of surfacing a call the
 // model really made. (The wire payload stays valid — the harm is fabrication,
 // not rejection; see Compact's own doc comment.)
-func chooseBoundary(live []Event, target int) (int, []Event, bool) {
+func chooseBoundary(live []event.Event, target int) (int, []event.Event, bool) {
 	return chooseBoundaryWith(live, target, EstimateMessages)
 }
 
-func chooseBoundaryWith(live []Event, target int, estimate MessageEstimator) (int, []Event, bool) {
+func chooseBoundaryWith(live []event.Event, target int, estimate MessageEstimator) (int, []event.Event, bool) {
 	var idx []int
 	for i, e := range live {
-		if e.Type == UserMsg {
+		if e.Type == event.UserMsg {
 			idx = append(idx, i)
 		}
 	}
@@ -234,7 +235,7 @@ func chooseBoundaryWith(live []Event, target int, estimate MessageEstimator) (in
 	return live[best].Seq, live[:best], true
 }
 
-func (l *Loop) summarise(ctx context.Context, dropped []Event) string {
+func (l *Loop) summarise(ctx context.Context, dropped []event.Event) string {
 	mech := mechanicalSummary(dropped)
 	if l.Provider == nil {
 		return mech
@@ -281,19 +282,19 @@ func argSummaryPath(args json.RawMessage) string {
 // mechanicalSummary is the floor: no network, no model, always available.
 // The verbatim user turns matter most — intent is the one thing a paraphrase
 // is most likely to bend.
-func mechanicalSummary(evs []Event) string {
+func mechanicalSummary(evs []event.Event) string {
 	var asks []string
 	files := map[string]bool{}
 	errs := 0
 	for _, e := range evs {
 		switch e.Type {
-		case UserMsg:
+		case event.UserMsg:
 			t := e.Text
 			if len(t) > 160 {
 				t = t[:160] + "…"
 			}
 			asks = append(asks, "- "+t)
-		case ToolEnd:
+		case event.ToolEnd:
 			if e.Call == nil {
 				continue
 			}

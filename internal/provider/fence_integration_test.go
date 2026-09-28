@@ -8,7 +8,7 @@ import (
 )
 
 // fenced replicates the agent envelope format, used here to build provider
-// messages the way agent.Messages() would: tool output wrapped in markers
+// messages the way event.Messages() would: tool output wrapped in markers
 // that label it untrusted data. Keeping the format string in sync with
 // internal/agent/fence.go (including the per-call nonce) is the contract
 // this test enforces.

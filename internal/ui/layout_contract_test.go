@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -94,7 +94,7 @@ func TestMenuRowAccounting(t *testing.T) {
 				f := newFeedAt(t, 80, h)
 				f.menu.open(tc.items)
 				if tc.modal {
-					f.permModal.open(&agent.ToolCall{ID: "m1", Name: "bash"})
+					f.permModal.open(&event.ToolCall{ID: "m1", Name: "bash"})
 					f.modalVisible = true
 				}
 				lm := f.computeLayout()
@@ -138,7 +138,7 @@ func TestModalRowAccounting(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newPermissionModal()
-			call := &agent.ToolCall{ID: "call_1", Name: "write_file"}
+			call := &event.ToolCall{ID: "call_1", Name: "write_file"}
 			if tc.args != "" {
 				call.Args = json.RawMessage(tc.args)
 			}
@@ -189,7 +189,7 @@ func TestFrameNeverOverflows(t *testing.T) {
 					f.menu.open(tc.items)
 				}
 				if tc.modal {
-					f.permModal.open(&agent.ToolCall{ID: "m1", Name: "bash"})
+					f.permModal.open(&event.ToolCall{ID: "m1", Name: "bash"})
 					f.modalVisible = true
 				}
 				v := f.View()
@@ -243,7 +243,7 @@ func TestFrameHeightExact(t *testing.T) {
 					f.menu.open(tc.items)
 				}
 				if tc.modal {
-					f.permModal.open(&agent.ToolCall{ID: "m1", Name: "bash"})
+					f.permModal.open(&event.ToolCall{ID: "m1", Name: "bash"})
 					f.modalVisible = true
 				}
 				v := f.View()
@@ -317,7 +317,7 @@ func TestClampNeverFires(t *testing.T) {
 					f := newFeedAt(t, w, h)
 					f.menu.open(tc.items)
 					if tc.modal {
-						f.permModal.open(&agent.ToolCall{ID: "m1", Name: "bash"})
+						f.permModal.open(&event.ToolCall{ID: "m1", Name: "bash"})
 						f.modalVisible = true
 					}
 					if h < requiredFloor(f) {

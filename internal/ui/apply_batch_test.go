@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestApplyBatchNoChange verifies that a batch with only Compact/Rewind
@@ -15,9 +15,9 @@ func TestApplyBatchNoChange(t *testing.T) {
 	f.height = 24
 	f.SetTouch(false)
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
-		{Seq: 2, Type: agent.TurnEnd},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
+		{Seq: 2, Type: event.TurnEnd},
 	})
 
 	before := strings.Join(f.lines, "\n")
@@ -26,8 +26,8 @@ func TestApplyBatchNoChange(t *testing.T) {
 	unseenBefore := f.unseen
 
 	// Compact and Rewind are intentionally not shown in the feed.
-	f.applyBatch([]agent.Event{
-		{Seq: 3, Type: agent.Compact},
+	f.applyBatch([]event.Event{
+		{Seq: 3, Type: event.Compact},
 	})
 
 	after := strings.Join(f.lines, "\n")
@@ -52,15 +52,15 @@ func TestApplyBatchStreamingGrowth(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "say hello"},
-		{Seq: 2, Type: agent.TextDelta, Text: "hel"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "say hello"},
+		{Seq: 2, Type: event.TextDelta, Text: "hel"},
 	})
 
 	before := strings.Join(f.lines, "\n")
 
-	f.applyBatch([]agent.Event{
-		{Seq: 3, Type: agent.TextDelta, Text: "lo world"},
+	f.applyBatch([]event.Event{
+		{Seq: 3, Type: event.TextDelta, Text: "lo world"},
 	})
 
 	after := strings.Join(f.lines, "\n")
@@ -79,10 +79,10 @@ func TestApplyBatchPreservesScrollWhenNotFollowing(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	events := make([]agent.Event, 0, 100)
+	events := make([]event.Event, 0, 100)
 	for i := 0; i < 50; i++ {
-		events = append(events, agent.Event{Seq: 2*i + 1, Type: agent.UserMsg, Text: "user message"})
-		events = append(events, agent.Event{Seq: 2*i + 2, Type: agent.TextDelta, Text: "assistant reply that is long enough to wrap and take up multiple lines in the viewport for scrolling purposes"})
+		events = append(events, event.Event{Seq: 2*i + 1, Type: event.UserMsg, Text: "user message"})
+		events = append(events, event.Event{Seq: 2*i + 2, Type: event.TextDelta, Text: "assistant reply that is long enough to wrap and take up multiple lines in the viewport for scrolling purposes"})
 	}
 	f.applyBatch(events)
 
@@ -90,8 +90,8 @@ func TestApplyBatchPreservesScrollWhenNotFollowing(t *testing.T) {
 	f.scrollTop = 0
 	scrollTopBefore := f.scrollTop
 
-	f.applyBatch([]agent.Event{
-		{Seq: 200, Type: agent.TextDelta, Text: "more streaming text"},
+	f.applyBatch([]event.Event{
+		{Seq: 200, Type: event.TextDelta, Text: "more streaming text"},
 	})
 
 	if f.scrollTop != scrollTopBefore {
@@ -112,17 +112,17 @@ func TestApplyBatchSticksToBottomWhenFollowing(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
-		{Seq: 2, Type: agent.TextDelta, Text: "world"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
+		{Seq: 2, Type: event.TextDelta, Text: "world"},
 	})
 
 	f.follow = true
 	f.scrollToEnd()
 	bottomBefore := f.scrollTop
 
-	f.applyBatch([]agent.Event{
-		{Seq: 3, Type: agent.TextDelta, Text: " more text that grows the feed"},
+	f.applyBatch([]event.Event{
+		{Seq: 3, Type: event.TextDelta, Text: " more text that grows the feed"},
 	})
 
 	if !f.follow {
@@ -140,15 +140,15 @@ func TestApplyBatchUnseenDuringModal(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
 	})
 
 	f.modalVisible = true
 	unseenBefore := f.unseen
 
-	f.applyBatch([]agent.Event{
-		{Seq: 2, Type: agent.TextDelta, Text: "streaming behind modal"},
+	f.applyBatch([]event.Event{
+		{Seq: 2, Type: event.TextDelta, Text: "streaming behind modal"},
 	})
 
 	if f.unseen <= unseenBefore {
@@ -164,9 +164,9 @@ func TestApplyBatchEventOrdering(t *testing.T) {
 	f.height = 24
 
 	callID := "tool-1"
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: callID, Name: "bash"}},
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: callID, Name: "bash", Output: "done", OK: true}},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: callID, Name: "bash"}},
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: callID, Name: "bash", Output: "done", OK: true}},
 	})
 
 	items := f.proj.Items()
@@ -188,15 +188,15 @@ func TestApplyBatchEmptyBatch(t *testing.T) {
 	f.width = 80
 	f.height = 24
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
 	})
 
 	before := strings.Join(f.lines, "\n")
 	scrollTopBefore := f.scrollTop
 	unseenBefore := f.unseen
 
-	f.applyBatch([]agent.Event{})
+	f.applyBatch([]event.Event{})
 
 	after := strings.Join(f.lines, "\n")
 	if before != after {

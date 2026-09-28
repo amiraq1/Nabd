@@ -7,7 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -121,20 +121,20 @@ func TestVisualHeightNeverExceedsTerminal(t *testing.T) {
 	}{
 		{"idle", func(f *Feed) {}},
 		{"streaming", func(f *Feed) {
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.TextDelta, Text: fix.arabicMsg},
-				{Seq: 2, Type: agent.TextDelta, Text: fix.emojiSimple},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.TextDelta, Text: fix.arabicMsg},
+				{Seq: 2, Type: event.TextDelta, Text: fix.emojiSimple},
 			}})
 		}},
 		{"long-output", func(f *Feed) {
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
-				{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
+				{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
 			}})
 		}},
 		{"modal", func(f *Feed) {
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "m1", Name: "bash", Args: json.RawMessage(`"rm -rf /tmp/test"`)}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "m1", Name: "bash", Args: json.RawMessage(`"rm -rf /tmp/test"`)}},
 			}})
 		}},
 		{"slash-menu", func(f *Feed) {
@@ -164,14 +164,14 @@ func TestRenderedLinesNeverExceedTerminalWidth(t *testing.T) {
 	for _, sz := range allTermSizes {
 		t.Run(sz.name, func(t *testing.T) {
 			f := newFeedAt(t, sz.width, sz.height)
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.UserMsg, Text: fix.longUserMsg},
-				{Seq: 2, Type: agent.TextDelta, Text: fix.arabicMsg},
-				{Seq: 3, Type: agent.TextDelta, Text: fix.emojiComplex},
-				{Seq: 4, Type: agent.TextDelta, Text: fix.arabicCombine},
-				{Seq: 5, Type: agent.TurnEnd},
-				{Seq: 6, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
-				{Seq: 7, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.UserMsg, Text: fix.longUserMsg},
+				{Seq: 2, Type: event.TextDelta, Text: fix.arabicMsg},
+				{Seq: 3, Type: event.TextDelta, Text: fix.emojiComplex},
+				{Seq: 4, Type: event.TextDelta, Text: fix.arabicCombine},
+				{Seq: 5, Type: event.TurnEnd},
+				{Seq: 6, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
+				{Seq: 7, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
 			}})
 			v := f.View()
 			for i, l := range strings.Split(v, "\n") {
@@ -193,11 +193,11 @@ func TestComposerRemainsVisibleAfterViewportFills(t *testing.T) {
 			f := newFeedAt(t, sz.width, sz.height)
 
 			// Fill with 300 lines
-			var evs []agent.Event
+			var evs []event.Event
 			for i := 1; i <= 300; i++ {
-				evs = append(evs, agent.Event{
+				evs = append(evs, event.Event{
 					Seq:  i,
-					Type: agent.TextDelta,
+					Type: event.TextDelta,
 					Text: fmt.Sprintf("Item %d: output content line", i),
 				})
 			}
@@ -237,10 +237,10 @@ func TestLongUnicodeLinesRespectViewportWidth(t *testing.T) {
 			tag := sz.name + "/" + txt.name
 			t.Run(tag, func(t *testing.T) {
 				f := newFeedAt(t, sz.width, sz.height)
-				f.Update(agentEventBatchMsg{Events: []agent.Event{
-					{Seq: 1, Type: agent.UserMsg, Text: txt.text},
-					{Seq: 2, Type: agent.TextDelta, Text: txt.text},
-					{Seq: 3, Type: agent.TurnEnd},
+				f.Update(agentEventBatchMsg{Events: []event.Event{
+					{Seq: 1, Type: event.UserMsg, Text: txt.text},
+					{Seq: 2, Type: event.TextDelta, Text: txt.text},
+					{Seq: 3, Type: event.TurnEnd},
 				}})
 				v := f.View()
 				for i, l := range strings.Split(v, "\n") {
@@ -272,18 +272,18 @@ func TestMobileLongWrappedOutputKeepsComposerVisible(t *testing.T) {
 			f := newFeedAt(t, sz.width, sz.height)
 
 			// Load long ls-la output with Arabic and emoji
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.RunStart, Text: "session"},
-				{Seq: 2, Type: agent.UserMsg, Text: "نفّذ أمر ls -la وعاين الملفات"},
-				{Seq: 3, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
-				{Seq: 4, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash", Output: fix.longLsOutput, OK: true}},
-				{Seq: 5, Type: agent.TextDelta, Text: "هذه قائمة الملفات في المجلد الحالي 🚀"},
-				{Seq: 6, Type: agent.TurnEnd},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.RunStart, Text: "session"},
+				{Seq: 2, Type: event.UserMsg, Text: "نفّذ أمر ls -la وعاين الملفات"},
+				{Seq: 3, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
+				{Seq: 4, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "bash", Output: fix.longLsOutput, OK: true}},
+				{Seq: 5, Type: event.TextDelta, Text: "هذه قائمة الملفات في المجلد الحالي 🚀"},
+				{Seq: 6, Type: event.TurnEnd},
 			}})
 
 			// Open permission modal
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 7, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c2", Name: "bash", Args: json.RawMessage(`"rm -rf /tmp/test"`)}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 7, Type: event.PermAsk, Call: &event.ToolCall{ID: "c2", Name: "bash", Args: json.RawMessage(`"rm -rf /tmp/test"`)}},
 			}})
 
 			vModal := f.View()
@@ -297,8 +297,8 @@ func TestMobileLongWrappedOutputKeepsComposerVisible(t *testing.T) {
 
 			// Answer modal and type
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 8, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c2"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 8, Type: event.PermReply, Call: &event.ToolCall{ID: "c2"}, Decision: event.AllowOnce, RawDecision: event.AllowOnce},
 			}})
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
@@ -349,8 +349,8 @@ func TestPermissionModalPreservesComposerSlot(t *testing.T) {
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("i")})
 
 			// Open modal
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "m1", Name: "bash"}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "m1", Name: "bash"}},
 			}})
 
 			v := f.View()
@@ -364,8 +364,8 @@ func TestPermissionModalPreservesComposerSlot(t *testing.T) {
 
 			// Close modal
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "m1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 2, Type: event.PermReply, Call: &event.ToolCall{ID: "m1"}, Decision: event.AllowOnce, RawDecision: event.AllowOnce},
 			}})
 
 			vClosed := f.View()
@@ -409,13 +409,13 @@ func TestTwentyByTwelveDegradationIsDeterministic(t *testing.T) {
 	}{
 		{"idle", func(f *Feed) {}},
 		{"long-output", func(f *Feed) {
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
 			}})
 		}},
 		{"modal", func(f *Feed) {
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "m1", Name: "bash"}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "m1", Name: "bash"}},
 			}})
 		}},
 		{"slash-menu", func(f *Feed) {
@@ -448,9 +448,9 @@ func TestTwentyByTwelveDegradationIsDeterministic(t *testing.T) {
 
 func TestResizeRecomputesAllLayoutMetrics(t *testing.T) {
 	f := newFeedAt(t, 80, 24)
-	var evs []agent.Event
+	var evs []event.Event
 	for i := 1; i <= 50; i++ {
-		evs = append(evs, agent.Event{Seq: i, Type: agent.TextDelta, Text: fmt.Sprintf("line %d content here", i)})
+		evs = append(evs, event.Event{Seq: i, Type: event.TextDelta, Text: fmt.Sprintf("line %d content here", i)})
 	}
 	f.Update(agentEventBatchMsg{Events: evs})
 
@@ -596,9 +596,9 @@ func TestLongToolOutputFixtureActuallyProducesLongOutput(t *testing.T) {
 	fix := newTestFixtures()
 	f := newFeedAt(t, 80, 24)
 	f.SetToolsExpanded(true)
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
 	}})
 	items := f.proj.Items()
 	if len(items) == 0 || items[0].Tool == nil || items[0].Tool.Output == "" {

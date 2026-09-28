@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"nabd/internal/event"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -29,18 +30,18 @@ func TestLengthCutMarkedInMessage(t *testing.T) {
 
 	var mu sync.Mutex
 	var notices []string
-	var events []agent.Event
+	var events []event.Event
 	l := &agent.Loop{
 		Provider: prov,
 		Tools:    noTools{},
 		Budget:   agent.NewBudget(),
 		Gate:     noTools{},
 		Human:    noTools{},
-		Sink: sinkFn3(func(e agent.Event) error {
+		Sink: sinkFn3(func(e event.Event) error {
 			mu.Lock()
 			defer mu.Unlock()
 			events = append(events, e)
-			if e.Type == agent.Notice {
+			if e.Type == event.Notice {
 				notices = append(notices, e.Text)
 			}
 			return nil
@@ -57,7 +58,7 @@ func TestLengthCutMarkedInMessage(t *testing.T) {
 	}
 	// The stored assistant message must contain the cut marker.
 	var assistant string
-	for _, m := range agent.Messages(agent.Live(events)) {
+	for _, m := range agent.Messages(event.Live(events)) {
 		if m.Role == provider.Assistant && m.Text != "" {
 			assistant += m.Text
 		}
@@ -69,6 +70,6 @@ func TestLengthCutMarkedInMessage(t *testing.T) {
 	t.Logf("assistant text: %q", assistant)
 }
 
-type sinkFn3 func(agent.Event) error
+type sinkFn3 func(event.Event) error
 
-func (f sinkFn3) Emit(e agent.Event) error { return f(e) }
+func (f sinkFn3) Emit(e event.Event) error { return f(e) }

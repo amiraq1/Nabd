@@ -1,6 +1,9 @@
 package agent
 
-import "fmt"
+import (
+	"fmt"
+	"nabd/internal/event"
+)
 
 // ReadStatus records the current read state of a file within a turn.
 type ReadStatus struct {
@@ -27,7 +30,7 @@ func NewReadTracker() *ReadTracker {
 }
 
 // Record updates the tracking state for a file with a new ReadRecord.
-func (rt *ReadTracker) Record(rec ReadRecord) {
+func (rt *ReadTracker) Record(rec event.ReadRecord) {
 	if rec.Path == "" {
 		return
 	}
@@ -100,10 +103,10 @@ func (rt *ReadTracker) IncompleteReads() []ReadStatus {
 
 // EvaluateTruncatedReads inspects a sequence of events and returns the list of
 // files that had truncated reads that were never completed.
-func EvaluateTruncatedReads(events []Event) []ReadStatus {
+func EvaluateTruncatedReads(events []event.Event) []ReadStatus {
 	tracker := NewReadTracker()
 	for _, e := range events {
-		if e.Type == EventRead && e.Read != nil {
+		if e.Type == event.EventRead && e.Read != nil {
 			tracker.Record(*e.Read)
 		}
 	}

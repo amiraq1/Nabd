@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	"github.com/charmbracelet/x/ansi"
@@ -168,16 +168,16 @@ func liveStreamingFeed(t testing.TB) *Feed {
 	f.streamedChars = 180
 
 	for i := 1; i <= 19; i++ {
-		_ = f.proj.Apply(agent.Event{
+		_ = f.proj.Apply(event.Event{
 			Seq:  i,
-			Type: agent.UserMsg,
+			Type: event.UserMsg,
 			Text: fmt.Sprintf("message %d", i),
 		})
 	}
-	_ = f.proj.Apply(agent.Event{
+	_ = f.proj.Apply(event.Event{
 		Seq:  20,
-		Type: agent.ToolStart,
-		Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+		Type: event.ToolStart,
+		Call: &event.ToolCall{ID: "c1", Name: "bash"},
 	})
 	f.refresh()
 	return f

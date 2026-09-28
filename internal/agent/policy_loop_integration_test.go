@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"nabd/internal/event"
 	"testing"
 
 	"nabd/internal/agent"
@@ -23,8 +24,8 @@ func (g gate) Check(tool string) (agent.Verdict, string) {
 	}
 	return agent.VerdictAsk, why
 }
-func (g gate) Record(tool string, d agent.Decision) { g.p.Record(tool, d) }
-func (g gate) Effective(tool string, d agent.Decision) agent.Decision {
+func (g gate) Record(tool string, d event.Decision) { g.p.Record(tool, d) }
+func (g gate) Effective(tool string, d event.Decision) event.Decision {
 	return g.p.Effective(tool, d)
 }
 func (g gate) SessionGrantAllowed(tool string) bool {
@@ -32,10 +33,10 @@ func (g gate) SessionGrantAllowed(tool string) bool {
 }
 
 type fakeHuman struct {
-	answer agent.Decision
+	answer event.Decision
 }
 
-func (f *fakeHuman) Ask(ctx context.Context, call agent.ToolCall) agent.Decision {
+func (f *fakeHuman) Ask(ctx context.Context, call event.ToolCall) event.Decision {
 	return f.answer
 }
 
@@ -49,9 +50,9 @@ func (f fakeProvider) Stream(ctx context.Context, req provider.Request) (<-chan 
 	return ch, nil
 }
 
-type testSink func(agent.Event) error
+type testSink func(event.Event) error
 
-func (s testSink) Emit(e agent.Event) error { return s(e) }
+func (s testSink) Emit(e event.Event) error { return s(e) }
 
 func TestLoopWithRealPolicy(t *testing.T) {
 	root, _ := tools.NewRoot(t.TempDir())
@@ -59,7 +60,7 @@ func TestLoopWithRealPolicy(t *testing.T) {
 	reg := tools.NewRegistry(root, sh)
 	policy := perm.New(reg)
 
-	human := &fakeHuman{answer: agent.AllowSession}
+	human := &fakeHuman{answer: event.AllowSession}
 
 	loop := &agent.Loop{
 		Provider: fakeProvider{},
@@ -70,8 +71,8 @@ func TestLoopWithRealPolicy(t *testing.T) {
 		Tools:    reg,
 	}
 
-	events := []agent.Event{}
-	sink := func(e agent.Event) error {
+	events := []event.Event{}
+	sink := func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	}
@@ -80,9 +81,9 @@ func TestLoopWithRealPolicy(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	loop.Sink = testSink(func(e agent.Event) error {
+	loop.Sink = testSink(func(e event.Event) error {
 		events = append(events, e)
-		if e.Type == agent.PermReply {
+		if e.Type == event.PermReply {
 			cancel() // abort the loop so it doesn't infinite loop
 		}
 		return nil
@@ -90,9 +91,9 @@ func TestLoopWithRealPolicy(t *testing.T) {
 
 	_ = loop.Run(ctx, "hello")
 
-	var firstReply *agent.Event
+	var firstReply *event.Event
 	for i, e := range events {
-		if e.Type == agent.PermReply {
+		if e.Type == event.PermReply {
 			firstReply = &events[i]
 			break
 		}
@@ -100,10 +101,10 @@ func TestLoopWithRealPolicy(t *testing.T) {
 	if firstReply == nil {
 		t.Fatalf("no PermReply emitted")
 	}
-	if firstReply.Decision != agent.AllowOnce {
+	if firstReply.Decision != event.AllowOnce {
 		t.Errorf("expected effective Decision=AllowOnce, got %v", firstReply.Decision)
 	}
-	if firstReply.RawDecision != agent.AllowSession {
+	if firstReply.RawDecision != event.AllowSession {
 		t.Errorf("expected RawDecision=AllowSession, got %v", firstReply.RawDecision)
 	}
 }

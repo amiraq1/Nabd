@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -20,18 +20,18 @@ func TestRunWithEventStream(t *testing.T) {
 
 	// The fake runner emits events into a channel the test drains into the
 	// feed (mimicking the batcher flush callback).
-	var events []agent.Event
+	var events []event.Event
 	var mu sync.Mutex
-	emit := func(e agent.Event) {
+	emit := func(e event.Event) {
 		mu.Lock()
 		events = append(events, e)
 		mu.Unlock()
 	}
 	f.SetRunner(runnerFunc(func(text string) error {
-		emit(agent.Event{Seq: 1, Type: agent.UserMsg, Text: text})
-		emit(agent.Event{Seq: 2, Type: agent.TextDelta, Text: "رد "})
-		emit(agent.Event{Seq: 3, Type: agent.TextDelta, Text: "المساعد"})
-		emit(agent.Event{Seq: 4, Type: agent.TurnEnd})
+		emit(event.Event{Seq: 1, Type: event.UserMsg, Text: text})
+		emit(event.Event{Seq: 2, Type: event.TextDelta, Text: "رد "})
+		emit(event.Event{Seq: 3, Type: event.TextDelta, Text: "المساعد"})
+		emit(event.Event{Seq: 4, Type: event.TurnEnd})
 		return nil
 	}))
 
@@ -48,11 +48,11 @@ func TestRunWithEventStream(t *testing.T) {
 	// Run the command synchronously (fake runner returns immediately).
 	done := cmd().(doneMsg)
 	mu.Lock()
-	evs := append([]agent.Event(nil), events...)
+	evs := append([]event.Event(nil), events...)
 	mu.Unlock()
 	// Deliver events to the feed.
 	for _, e := range evs {
-		_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{e}})
+		_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{e}})
 	}
 	// Deliver the done message.
 	_, _ = f.Update(done)
@@ -95,8 +95,8 @@ func TestTypingDuringRunKeepsText(t *testing.T) {
 		t.Fatal("send must start a run")
 	}
 	// The run is now "in flight" (busy). Text events arrive.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.TextDelta, Text: "assistant streaming"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.TextDelta, Text: "assistant streaming"},
 	}})
 	// The composer is empty (the draft was sent) and stays empty.
 	if v := f.composer.value(); v != "" {

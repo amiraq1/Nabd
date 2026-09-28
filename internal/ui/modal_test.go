@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -21,8 +21,8 @@ func TestModalRenderingAndChoices(t *testing.T) {
 	f.height = 24
 
 	// Open modal for mutating tool (supports session)
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{
 			ID:                  "c1",
 			Name:                "write_file",
 			Args:                json.RawMessage(`"test.go"`),
@@ -53,8 +53,8 @@ func TestModalRenderingAndChoices(t *testing.T) {
 	f2, _ := feedWithRunner(t)
 	f2.width = 80
 	f2.height = 24
-	f2.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c2", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
+	f2.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "c2", Name: "bash", Args: json.RawMessage(`"ls -la"`)}},
 	}})
 	view2 := f2.View()
 	if strings.Contains(view2, "Allow Session") || strings.Contains(view2, "a session") {
@@ -73,8 +73,8 @@ func TestBashSessionKeyNeitherShownNorAccepted(t *testing.T) {
 	f.SetApprover(ap)
 
 	// 1. Open modal for bash
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c_bash", Name: "bash", Args: json.RawMessage(`"echo hi"`)}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "c_bash", Name: "bash", Args: json.RawMessage(`"echo hi"`)}},
 	}})
 	if !f.modalVisible {
 		t.Fatal("modal must be visible for bash tool call")
@@ -121,7 +121,7 @@ func TestBashSessionKeyNeitherShownNorAccepted(t *testing.T) {
 	}
 	select {
 	case d := <-ap.reply:
-		if d != agent.AllowOnce {
+		if d != event.AllowOnce {
 			t.Fatalf("approver received %v, want AllowOnce", d)
 		}
 	default:
@@ -136,14 +136,14 @@ func TestFeedPermReplyDowngradeFormatting(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	f.width = 80
 	f.height = 24
-	permEv := agent.Event{
+	permEv := event.Event{
 		Seq:         2,
-		Type:        agent.PermReply,
-		Call:        &agent.ToolCall{ID: "c_bash", Name: "bash"},
-		Decision:    agent.AllowOnce,
-		RawDecision: agent.AllowSession,
+		Type:        event.PermReply,
+		Call:        &event.ToolCall{ID: "c_bash", Name: "bash"},
+		Decision:    event.AllowOnce,
+		RawDecision: event.AllowSession,
 	}
-	f.Update(agentEventBatchMsg{Events: []agent.Event{permEv}})
+	f.Update(agentEventBatchMsg{Events: []event.Event{permEv}})
 
 	view := f.View()
 	if !strings.Contains(view, "requested session, applied once") {
@@ -192,11 +192,11 @@ func TestModalDefaultSelectionIsDeny(t *testing.T) {
 	if f.permModal.selected != denyIndex() {
 		t.Fatalf("initial selected = %d, want denyIndex=%d", f.permModal.selected, denyIndex())
 	}
-	if f.permModal.currentDecision() != agent.Deny {
+	if f.permModal.currentDecision() != event.Deny {
 		t.Fatalf("currentDecision = %v, want Deny", f.permModal.currentDecision())
 	}
 	choices := f.permModal.choices()
-	if choices[f.permModal.selected].Decision != agent.Deny {
+	if choices[f.permModal.selected].Decision != event.Deny {
 		t.Fatalf("selected choice has Decision=%v, want Deny", choices[f.permModal.selected].Decision)
 	}
 }
@@ -249,7 +249,7 @@ func TestModalVisibleSelectionMatchesDecision(t *testing.T) {
 			}
 
 			// currentDecision must agree with the default Deny.
-			if f.permModal.currentDecision() != agent.Deny {
+			if f.permModal.currentDecision() != event.Deny {
 				t.Fatalf("maxRows=%d: currentDecision=%v, want Deny", maxRows, f.permModal.currentDecision())
 			}
 		})
@@ -265,7 +265,7 @@ func TestModalInvalidSelectionFallsBackToDeny(t *testing.T) {
 			openModal(f)
 			f.permModal.selected = sel
 
-			if f.permModal.currentDecision() != agent.Deny {
+			if f.permModal.currentDecision() != event.Deny {
 				t.Fatalf("selected=%d: currentDecision=%v, want Deny", sel, f.permModal.currentDecision())
 			}
 
@@ -298,7 +298,7 @@ func TestModalReopenResetsToDeny(t *testing.T) {
 	if f.permModal.selected != denyIndex() {
 		t.Fatalf("after reopen, selected=%d, want denyIndex=%d", f.permModal.selected, denyIndex())
 	}
-	if f.permModal.currentDecision() != agent.Deny {
+	if f.permModal.currentDecision() != event.Deny {
 		t.Fatalf("after reopen, currentDecision=%v, want Deny", f.permModal.currentDecision())
 	}
 }
@@ -309,15 +309,15 @@ func TestModalReopenResetsToDeny(t *testing.T) {
 // denyIndex() returns -1 and currentDecision() still yields Deny.
 func TestChoiceIndexReturnsMinusOneForMissingDecision(t *testing.T) {
 	got := choiceIndex([]PermissionChoice{
-		{Decision: agent.AllowOnce},
-		{Decision: agent.AllowSession},
-	}, agent.Deny)
+		{Decision: event.AllowOnce},
+		{Decision: event.AllowSession},
+	}, event.Deny)
 	if got != -1 {
 		t.Fatalf("choiceIndex(Deny absent) = %d, want -1", got)
 	}
 
 	// Sanity: present decisions are found correctly.
-	if idx := choiceIndex((&PermissionModal{}).choices(), agent.Deny); idx < 0 {
+	if idx := choiceIndex((&PermissionModal{}).choices(), event.Deny); idx < 0 {
 		t.Fatalf("choiceIndex(Deny present) = %d, want >= 0", idx)
 	}
 	if denyIndex() < 0 {
@@ -367,8 +367,8 @@ func TestModalFollowRestorationOnlyOnTransition(t *testing.T) {
 	f.follow = false // user was scrolled up
 
 	// Open modal: false -> true saves followBeforeModal = false
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "bash"}},
 	}})
 	if f.followBeforeModal != false {
 		t.Fatalf("followBeforeModal = %v, want false", f.followBeforeModal)
@@ -376,16 +376,16 @@ func TestModalFollowRestorationOnlyOnTransition(t *testing.T) {
 
 	// Queued/second ask while already visible must NOT overwrite followBeforeModal
 	f.follow = true // simulate follow state mutation
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c2", Name: "bash"}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.PermAsk, Call: &event.ToolCall{ID: "c2", Name: "bash"}},
 	}})
 	if f.followBeforeModal != false {
 		t.Fatalf("queued ask must not overwrite followBeforeModal, got %v", f.followBeforeModal)
 	}
 
 	// Close modal: restores follow = false
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 3, Type: event.PermReply, Call: &event.ToolCall{ID: "c1"}, Decision: event.AllowOnce, RawDecision: event.AllowOnce},
 	}})
 	if f.follow != false {
 		t.Fatalf("after modal close follow = %v, want false", f.follow)
@@ -448,8 +448,8 @@ func TestModalTermuxSnapshotDimensions(t *testing.T) {
 			f.Update(tea.WindowSizeMsg{Width: d.width, Height: d.height})
 
 			// 1. Open modal with bash command
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c_snap", Name: "bash", Args: json.RawMessage(`"pwd"`)}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "c_snap", Name: "bash", Args: json.RawMessage(`"pwd"`)}},
 			}})
 
 			// 2. Render view during active modal
@@ -485,8 +485,8 @@ func TestModalTermuxSnapshotDimensions(t *testing.T) {
 			// Invariant E: Answer modal -> verify composer is restored
 			f.permModal.armedAt = time.Time{} // armed
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c_snap"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 2, Type: event.PermReply, Call: &event.ToolCall{ID: "c_snap"}, Decision: event.AllowOnce, RawDecision: event.AllowOnce},
 			}})
 
 			vClosed := f.View()
@@ -510,7 +510,7 @@ func TestModalTermuxSnapshotDimensions(t *testing.T) {
 func TestModalDroppedArgsDisclosed(t *testing.T) {
 	t.Run("present at width 120", func(t *testing.T) {
 		m := newPermissionModal()
-		m.open(&agent.ToolCall{
+		m.open(&event.ToolCall{
 			ID:          "c1",
 			Name:        "bash",
 			Args:        json.RawMessage(`{"cmd":"ls"}`),
@@ -524,7 +524,7 @@ func TestModalDroppedArgsDisclosed(t *testing.T) {
 
 	t.Run("present and truncated at width 24", func(t *testing.T) {
 		m := newPermissionModal()
-		m.open(&agent.ToolCall{
+		m.open(&event.ToolCall{
 			ID:          "c2",
 			Name:        "bash",
 			Args:        json.RawMessage(`{"cmd":"ls"}`),
@@ -551,7 +551,7 @@ func TestModalDroppedArgsDisclosed(t *testing.T) {
 
 	t.Run("absent produces no dropped row", func(t *testing.T) {
 		m := newPermissionModal()
-		m.open(&agent.ToolCall{
+		m.open(&event.ToolCall{
 			ID:   "c3",
 			Name: "bash",
 			Args: json.RawMessage(`{"cmd":"ls"}`),

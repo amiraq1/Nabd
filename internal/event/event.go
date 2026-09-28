@@ -1,6 +1,11 @@
-// Package agent defines the event contract. It is the only thing every
+// Package event defines the event contract. It is the only thing every
 // other package agrees on: if it is not an Event, it did not happen.
-package agent
+//
+// It is a leaf package by design: it imports nothing from the rest of the
+// binary except internal/skill (for the skill inventory fields), so storage,
+// presentation, permissions, and payload can depend on the contract without
+// dragging the agent coordinator's provider tree with it.
+package event
 
 import (
 	"encoding/json"
@@ -274,11 +279,11 @@ type NoticeData struct {
 	LoopLimit *LoopLimitNotice `json:"loop_limit,omitempty"`
 }
 
-// validate reports whether n carries exactly the payload its category
+// Validate reports whether n carries exactly the payload its category
 // declares. Fail-closed: a mismatched or missing payload is refused, so an
 // emitter that sets the wrong field loses the notice instead of reaching the
 // model with a rendering built from the wrong shape.
-func (n *NoticeData) validate(cat NoticeCategory) bool {
+func (n *NoticeData) Validate(cat NoticeCategory) bool {
 	if n == nil {
 		return false
 	}

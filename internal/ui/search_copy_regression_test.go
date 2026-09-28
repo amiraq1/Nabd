@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 func TestStripCardGutterPreservesSingleSpaceArabic(t *testing.T) {
@@ -78,8 +78,8 @@ func TestOversizedCopyUsesTooLargeNotice(t *testing.T) {
 	m := NewFeed()
 	m.width = 80
 	m.height = 20
-	m.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: huge},
+	m.applyBatch([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: huge},
 	})
 	m.enterNavigation()
 	m.selectItem(0)

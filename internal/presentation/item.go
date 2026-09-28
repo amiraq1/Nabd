@@ -16,7 +16,7 @@ import (
 	"math"
 	"sort"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 type ItemType string
@@ -84,8 +84,8 @@ type PermCard struct {
 	Args      string
 	Reason    string
 	Status    PermStatus
-	Decision  agent.Decision
-	Effective agent.Decision
+	Decision  event.Decision
+	Effective event.Decision
 }
 
 type FeedItem struct {
@@ -189,7 +189,7 @@ func sortBySeq(items []FeedItem) {
 	})
 }
 
-func callArgs(c *agent.ToolCall) string {
+func callArgs(c *event.ToolCall) string {
 	if c == nil {
 		return ""
 	}

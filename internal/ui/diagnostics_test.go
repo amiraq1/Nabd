@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -12,9 +12,9 @@ import (
 
 func TestDiagnosticsIsWidthBoundedAndPrivate(t *testing.T) {
 	f := NewFeed()
-	f.BuildFromEvents([]agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "secret-prompt-value"},
-		{Seq: 2, Type: agent.TextDelta, Text: "secret-output-value"},
+	f.BuildFromEvents([]event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "secret-prompt-value"},
+		{Seq: 2, Type: event.TextDelta, Text: "secret-output-value"},
 	})
 	f.addDiagnostic("secret-diagnostic-value")
 	for _, width := range []int{20, 39, 40, 79, 80, 120} {
@@ -34,7 +34,7 @@ func TestDiagnosticsIsWidthBoundedAndPrivate(t *testing.T) {
 
 func TestDiagnosticsSnapshotIsPure(t *testing.T) {
 	f := NewFeed()
-	f.BuildFromEvents([]agent.Event{{Seq: 1, Type: agent.UserMsg, Text: "hello"}})
+	f.BuildFromEvents([]event.Event{{Seq: 1, Type: event.UserMsg, Text: "hello"}})
 	beforeLines := strings.Join(f.lines, "\n")
 	beforeNotices := len(f.notices)
 	first := f.Diagnostics(80)

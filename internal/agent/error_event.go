@@ -1,46 +1,53 @@
 package agent
 
 import (
-	"context"
 	"errors"
-	"fmt"
 
+	"nabd/internal/event"
 	"nabd/internal/provider"
 )
 
-// ErrorCode is the single machine-readable error vocabulary shared by the
-// journal, presentation projector, and UI.
-type ErrorCode string
-
-const (
-	ErrCodeProviderTemporary ErrorCode = "provider_temporary"
-	ErrCodeProviderAuth      ErrorCode = "provider_auth"
-	ErrCodePersist           ErrorCode = "persist"
-	ErrCodeBudget            ErrorCode = "budget"
-	ErrCodeMaxTurns          ErrorCode = "max_turns"
-	ErrCodeCanceled          ErrorCode = "canceled"
-	ErrCodeLoopDetected      ErrorCode = "loop_detected"
-	ErrCodeEndpointRefused   ErrorCode = "endpoint_refused"
-	ErrCodeUnknown           ErrorCode = "unknown"
-)
-
-// RemedyEndpointRefused is the canonical guidance string when an endpoint is refused by policy.
-const RemedyEndpointRefused = "set NABD_ENDPOINT_POLICY=loopback for a local proxy, or use an https endpoint"
-
-// PersistError marks a journal/sink failure. It is returned without mutating
-// Loop history, so callers can enter safe-stop instead of reporting success.
-type PersistError struct {
-	Path string
-	Err  error
+// ErrorCodeOf classifies errors from typed values only. It never parses error
+// strings, HTTP text, or provider messages.
+//
+// The classifier itself lives in the event package so storage and
+// presentation do not import the coordinator; this wrapper only supplies the
+// provider layer's error kind.
+func ErrorCodeOf(err error) event.ErrorCode {
+	return event.ErrorCodeOf(err, event.ProviderErrorKind(provider.ErrorKindOf(err)))
 }
 
-func (e *PersistError) Error() string {
-	if e.Path == "" {
-		return fmt.Sprintf("session event was not saved: %v", e.Err)
+// RunErrorEvent preserves a machine-readable error code while keeping legacy
+// journals valid. Presentation must use ErrorCode and treat an empty value as
+// unknown rather than guessing from the message text.
+//
+// When the error carries tool-call attribution, it is reported through the
+// event's existing Call field rather than a new one: the journal already
+// describes a tool call that way on ToolStart, ToolEnd, PermAsk, and PermReply,
+// so a reader and every existing decoder already know how to read it. Only the
+// identity is copied — no output, no arguments, no exit status — because the
+// failing call produced no result to report.
+func RunErrorEvent(err error) event.Event {
+	if err == nil {
+		err = errors.New("unknown run error")
 	}
-	return fmt.Sprintf("session event was not saved (%s): %v", e.Path, e.Err)
+	e := event.Event{Type: event.RunError, Err: err.Error(), ErrorCode: string(ErrorCodeOf(err)), JournalPath: event.JournalPathOf(err)}
+	// Preserve the router's structured retry-after as a first-class field rather
+	// than leaving it inside the free-text error string. The error card hides its
+	// details line below 40 columns and truncates it to the terminal width above
+	// that, so a number that lives only in the message disappears exactly where
+	// it is needed. If the run-level error is a RouterExhaustedError, its shortest
+	// positive retry-after is the one piece of information the user acts on, so
+	// it travels to the card as a field.
+	var ree *provider.RouterExhaustedError
+	if errors.As(err, &ree) && ree.RetryAfter > 0 {
+		e.RetryAfter = ree.RetryAfter.Seconds()
+	}
+	if id, name, ok := ToolCallOf(err); ok {
+		e.Call = &event.ToolCall{ID: id, Name: name}
+	}
+	return e
 }
-func (e *PersistError) Unwrap() error { return e.Err }
 
 func sinkJournalPath(s Sink) string {
 	if p, ok := s.(interface{ JournalPath() string }); ok {
@@ -54,86 +61,4 @@ func sinkJournalPath(s Sink) string {
 		}
 	}
 	return ""
-}
-
-func NewPersistError(err error, path string) error {
-	if err == nil {
-		return nil
-	}
-	var existing *PersistError
-	if errors.As(err, &existing) {
-		return err
-	}
-	return &PersistError{Path: path, Err: err}
-}
-
-func JournalPathOf(err error) string {
-	var persist *PersistError
-	if errors.As(err, &persist) {
-		return persist.Path
-	}
-	return ""
-}
-
-// ErrorCodeOf classifies errors from typed values only. It never parses error
-// strings, HTTP text, or provider messages.
-func ErrorCodeOf(err error) ErrorCode {
-	switch {
-	case err == nil:
-		return ErrCodeUnknown
-	case errors.As(err, new(*PersistError)):
-		return ErrCodePersist
-	case errors.Is(err, ErrSpendBudget):
-		return ErrCodeBudget
-	case errors.Is(err, ErrMaxTurns):
-		return ErrCodeMaxTurns
-	case errors.Is(err, ErrToolLoop):
-		return ErrCodeLoopDetected
-	case errors.Is(err, context.Canceled):
-		return ErrCodeCanceled
-	case errors.Is(err, ErrRateLimitBudget):
-		return ErrCodeProviderTemporary
-	}
-	switch provider.ErrorKindOf(err) {
-	case provider.ErrorKindAuth:
-		return ErrCodeProviderAuth
-	case provider.ErrorKindTemporary:
-		return ErrCodeProviderTemporary
-	case provider.ErrorKindEndpointRefused:
-		return ErrCodeEndpointRefused
-	default:
-		return ErrCodeUnknown
-	}
-}
-
-// RunErrorEvent preserves a machine-readable error code while keeping legacy
-// journals valid. Presentation must use ErrorCode and treat an empty value as
-// unknown rather than guessing from the message text.
-//
-// When the error carries tool-call attribution, it is reported through the
-// event's existing Call field rather than a new one: the journal already
-// describes a tool call that way on ToolStart, ToolEnd, PermAsk, and PermReply,
-// so a reader and every existing decoder already know how to read it. Only the
-// identity is copied — no output, no arguments, no exit status — because the
-// failing call produced no result to report.
-func RunErrorEvent(err error) Event {
-	if err == nil {
-		err = errors.New("unknown run error")
-	}
-	e := Event{Type: RunError, Err: err.Error(), ErrorCode: string(ErrorCodeOf(err)), JournalPath: JournalPathOf(err)}
-	// Preserve the router's structured retry-after as a first-class field rather
-	// than leaving it inside the free-text error string. The error card hides its
-	// details line below 40 columns and truncates it to the terminal width above
-	// that, so a number that lives only in the message disappears exactly where
-	// it is needed. If the run-level error is a RouterExhaustedError, its shortest
-	// positive retry-after is the one piece of information the user acts on, so
-	// it travels to the card as a field.
-	var ree *provider.RouterExhaustedError
-	if errors.As(err, &ree) && ree.RetryAfter > 0 {
-		e.RetryAfter = ree.RetryAfter.Seconds()
-	}
-	if id, name, ok := ToolCallOf(err); ok {
-		e.Call = &ToolCall{ID: id, Name: name}
-	}
-	return e
 }

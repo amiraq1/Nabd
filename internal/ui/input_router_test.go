@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -47,7 +47,7 @@ type runnerRecorder struct {
 	released   bool
 	done       bool
 	msgs       []tea.Msg
-	decisionCh chan agent.Decision
+	decisionCh chan event.Decision
 }
 
 func newBlockingRunner() *runnerRecorder {
@@ -56,7 +56,7 @@ func newBlockingRunner() *runnerRecorder {
 		release:    make(chan struct{}),
 		returned:   make(chan struct{}),
 		blocking:   true,
-		decisionCh: make(chan agent.Decision, 10),
+		decisionCh: make(chan event.Decision, 10),
 	}
 }
 
@@ -124,11 +124,11 @@ func (r *runnerRecorder) takeMsg() (tea.Msg, bool) {
 }
 
 // decisions exposes the channel the permission gate reads from.
-func (r *runnerRecorder) decisions() <-chan agent.Decision { return r.decisionCh }
+func (r *runnerRecorder) decisions() <-chan event.Decision { return r.decisionCh }
 
 // decisionIsAllow adapts to the real decision type.
-func decisionIsAllow(d agent.Decision) bool {
-	return d == agent.AllowOnce || d == agent.AllowSession
+func decisionIsAllow(d event.Decision) bool {
+	return d == event.AllowOnce || d == event.AllowSession
 }
 
 // sendAndRun accepts a message through the real key path and executes the
@@ -168,8 +168,8 @@ func updateCmd(f *Feed, cmd tea.Cmd) *Feed {
 
 // openModal simulates a PermAsk arriving through the event stream.
 func openModal(f *Feed) {
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "bash"}},
 	}})
 }
 
@@ -260,9 +260,9 @@ func TestModalFeedKeepsUpdating(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	openModal(f)
 	// Assistant text arrives behind the modal.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.TextDelta, Text: "work continues"},
-		{Seq: 3, Type: agent.TurnEnd},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.TextDelta, Text: "work continues"},
+		{Seq: 3, Type: event.TurnEnd},
 	}})
 	items := f.proj.Items()
 	var asst bool
@@ -578,9 +578,9 @@ func TestComposerNeverExceedsMaxHeight(t *testing.T) {
 func TestStreamingDoesNotStealFocus(t *testing.T) {
 	f, _ := feedWithRunner(t)
 	typeIntoFeed(t, f, "partial")
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.TextDelta, Text: "assistant"},
-		{Seq: 2, Type: agent.TurnEnd},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.TextDelta, Text: "assistant"},
+		{Seq: 2, Type: event.TurnEnd},
 	}})
 	if !f.composer.focused() {
 		t.Fatal("streaming text must not steal composer focus")

@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
@@ -55,16 +55,16 @@ func (b bashTool) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 	return o.Text, o.OK, err
 }
 
-func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.Outcome, error) {
+func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (event.Outcome, error) {
 	var a struct {
 		Cmd string `json:"cmd"`
 		T   int    `json:"timeout_s"`
 	}
 	if err := decodeStrict(raw, &a); err != nil {
-		return agent.Outcome{}, fmt.Errorf("invalid args: %w", err)
+		return event.Outcome{}, fmt.Errorf("invalid args: %w", err)
 	}
 	if strings.TrimSpace(a.Cmd) == "" {
-		return agent.Outcome{}, errors.New("empty command")
+		return event.Outcome{}, errors.New("empty command")
 	}
 	to := bashDefaultTimeout
 	if a.T > 0 {
@@ -76,7 +76,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 
 	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
-		return agent.Outcome{}, err
+		return event.Outcome{}, err
 	}
 	defer null.Close()
 
@@ -85,7 +85,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	// still holds the write end. StdoutPipe would deadlock on exactly that.
 	pr, pw, err := os.Pipe()
 	if err != nil {
-		return agent.Outcome{}, err
+		return event.Outcome{}, err
 	}
 	defer pr.Close()
 
@@ -116,7 +116,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	started := time.Now()
 	if err := cmd.Start(); err != nil {
 		pw.Close()
-		return agent.Outcome{}, err
+		return event.Outcome{}, err
 	}
 	pw.Close() // the parent's copy, or the reader never sees EOF
 	pgid := cmd.Process.Pid
@@ -153,7 +153,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	case <-time.After(bashDrainGrace):
 	}
 
-	out := agent.Outcome{Text: buf.String(), OK: werr == nil}
+	out := event.Outcome{Text: buf.String(), OK: werr == nil}
 	if ee, ok := werr.(*exec.ExitError); ok {
 		if ws, ok := ee.Sys().(syscall.WaitStatus); ok {
 			out.Exit = ws.ExitStatus()

@@ -6,7 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	"github.com/charmbracelet/x/ansi"
 )
@@ -26,7 +26,7 @@ func setModalClock(fn func() time.Time) {
 
 // PermissionChoice represents an selectable action in the permission modal.
 type PermissionChoice struct {
-	Decision agent.Decision
+	Decision event.Decision
 	Label    string
 	KeyHint  string
 }
@@ -34,7 +34,7 @@ type PermissionChoice struct {
 // PermissionModal manages state and visual rendering of the permission modal.
 type PermissionModal struct {
 	visible         bool
-	call            *agent.ToolCall
+	call            *event.ToolCall
 	reason          string
 	selected        int
 	decisionPending bool
@@ -44,7 +44,7 @@ type PermissionModal struct {
 // choiceIndex returns the index of the given decision in choices, or -1 if
 // the decision is absent. This is the single source of truth for locating a
 // decision's position without assuming ordering.
-func choiceIndex(choices []PermissionChoice, decision agent.Decision) int {
+func choiceIndex(choices []PermissionChoice, decision event.Decision) int {
 	for i, c := range choices {
 		if c.Decision == decision {
 			return i
@@ -58,14 +58,14 @@ func choiceIndex(choices []PermissionChoice, decision agent.Decision) int {
 // a fail-closed default: selected=-1 combined with currentDecision()'s -1 guard
 // yields Deny both in logic and in display.
 func denyIndex() int {
-	return choiceIndex((&PermissionModal{}).choices(), agent.Deny)
+	return choiceIndex((&PermissionModal{}).choices(), event.Deny)
 }
 
 // fallbackChoice returns an explicit Deny choice for display when the Deny
 // option is absent from choices(). This keeps rendering fail-closed without
 // picking an arbitrary element.
 func fallbackChoice() PermissionChoice {
-	return PermissionChoice{Decision: agent.Deny, Label: "Deny", KeyHint: "n / esc"}
+	return PermissionChoice{Decision: event.Deny, Label: "Deny", KeyHint: "n / esc"}
 }
 
 func newPermissionModal() *PermissionModal {
@@ -74,7 +74,7 @@ func newPermissionModal() *PermissionModal {
 	}
 }
 
-func (m *PermissionModal) open(call *agent.ToolCall, reasons ...string) {
+func (m *PermissionModal) open(call *event.ToolCall, reasons ...string) {
 	m.visible = true
 	m.call = call
 	m.reason = ""
@@ -119,7 +119,7 @@ func (m *PermissionModal) toolName() string {
 // for the given tool call. Executing tools (such as bash) are strictly excluded:
 // the UI must neither show nor accept a session grant choice for them under any
 // circumstances.
-func sessionGrantAllowed(call *agent.ToolCall) bool {
+func sessionGrantAllowed(call *event.ToolCall) bool {
 	if call == nil || call.Name == "bash" {
 		return false
 	}
@@ -131,11 +131,11 @@ func sessionGrantAllowed(call *agent.ToolCall) bool {
 
 func (m *PermissionModal) choices() []PermissionChoice {
 	choices := []PermissionChoice{
-		{Decision: agent.AllowOnce, Label: "Allow Once", KeyHint: "y"},
-		{Decision: agent.Deny, Label: "Deny", KeyHint: "n / esc"},
+		{Decision: event.AllowOnce, Label: "Allow Once", KeyHint: "y"},
+		{Decision: event.Deny, Label: "Deny", KeyHint: "n / esc"},
 	}
 	if sessionGrantAllowed(m.call) {
-		choices = append(choices[:1], append([]PermissionChoice{{Decision: agent.AllowSession, Label: "Allow Session", KeyHint: "a"}}, choices[1:]...)...)
+		choices = append(choices[:1], append([]PermissionChoice{{Decision: event.AllowSession, Label: "Allow Session", KeyHint: "a"}}, choices[1:]...)...)
 	}
 	return choices
 }
@@ -162,10 +162,10 @@ func (m *PermissionModal) toolScopeLine(tool string) string {
 	return line + " · " + m.scopeText()
 }
 
-func (m *PermissionModal) currentDecision() agent.Decision {
+func (m *PermissionModal) currentDecision() event.Decision {
 	ch := m.choices()
 	if m.selected < 0 || m.selected >= len(ch) {
-		return agent.Deny
+		return event.Deny
 	}
 	return ch[m.selected].Decision
 }
@@ -400,7 +400,7 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 		idx := m.selected
 		if idx < 0 || idx >= len(ch) {
 			// selected is invalid: try Deny, then render an explicit fallback.
-			idx = choiceIndex(ch, agent.Deny)
+			idx = choiceIndex(ch, event.Deny)
 			if idx < 0 {
 				return fallbackChoice()
 			}

@@ -2,7 +2,7 @@ package ui
 
 import (
 	"errors"
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -521,21 +521,21 @@ func TestToolEndInvalidatesGitSig(t *testing.T) {
 	f.width, f.height = 80, 24
 	f.gitRepoSig = "sig"
 
-	f.applyBatch([]agent.Event{
-		{Seq: 1, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "r", Name: "read_file", OK: true}},
+	f.applyBatch([]event.Event{
+		{Seq: 1, Type: event.ToolEnd, Call: &event.ToolCall{ID: "r", Name: "read_file", OK: true}},
 	})
 	if f.gitRepoSig != "sig" {
 		t.Fatal("read_file ToolEnd must keep the git signature")
 	}
-	f.applyBatch([]agent.Event{
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "w", Name: "write_file", OK: true}},
+	f.applyBatch([]event.Event{
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "w", Name: "write_file", OK: true}},
 	})
 	if f.gitRepoSig != "" {
 		t.Fatal("write_file ToolEnd must invalidate the git signature")
 	}
 	f.gitRepoSig = "sig"
-	f.applyBatch([]agent.Event{
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "b", Name: "bash", OK: true}},
+	f.applyBatch([]event.Event{
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "b", Name: "bash", OK: true}},
 	})
 	if f.gitRepoSig != "" {
 		t.Fatal("bash ToolEnd must invalidate the git signature")

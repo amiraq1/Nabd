@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestReadCreditCompositeKeyStructure verifies that read_file returns a complete
@@ -72,7 +72,7 @@ func TestReadCreditCompositeKeyStructure(t *testing.T) {
 	if consumed != 3 {
 		t.Errorf("r.ConsumeLinesRead(path, hash) = %d, want 3", consumed)
 	}
-	if empty := r.ReadCredit(); empty != (agent.ReadCredit{}) {
+	if empty := r.ReadCredit(); empty != (event.ReadCredit{}) {
 		t.Errorf("after consume, r.ReadCredit() = %+v, want empty", empty)
 	}
 
@@ -133,7 +133,7 @@ func TestReadCreditCrossFileRejection(t *testing.T) {
 		}
 
 		// Invariant: Staged credit must have been consumed/cleared, so no leak to next write
-		if empty := r.ReadCredit(); empty != (agent.ReadCredit{}) {
+		if empty := r.ReadCredit(); empty != (event.ReadCredit{}) {
 			t.Errorf("r.ReadCredit() not cleared after cross-file mutation: %+v", empty)
 		}
 	})
@@ -359,13 +359,13 @@ func TestReadCreditClearReadState(t *testing.T) {
 	}
 	r.SetReadCredit(out.ReadCredit)
 
-	if r.ReadCredit() == (agent.ReadCredit{}) {
+	if r.ReadCredit() == (event.ReadCredit{}) {
 		t.Fatal("expected staged credit before ClearReadState")
 	}
 
 	r.ClearReadState()
 
-	if r.ReadCredit() != (agent.ReadCredit{}) {
+	if r.ReadCredit() != (event.ReadCredit{}) {
 		t.Errorf("r.ReadCredit() after ClearReadState = %+v, want empty", r.ReadCredit())
 	}
 

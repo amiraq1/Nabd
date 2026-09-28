@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 func metaFeed(t *testing.T, width int) *Feed {
@@ -14,13 +14,13 @@ func metaFeed(t *testing.T, width int) *Feed {
 	f.width = width
 	f.height = 24
 	f.running = true
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.TurnStart},
-		{Seq: 3, Type: agent.EventProviderRoute, Route: &agent.ProviderRoute{
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.TurnStart},
+		{Seq: 3, Type: event.EventProviderRoute, Route: &event.ProviderRoute{
 			Status: "selected", Provider: "nvidia", Model: "moonshotai/kimi-k2.6", Attempt: 2,
 		}},
-		{Seq: 4, Type: agent.EventProviderUsage, Usage: &agent.ProviderUsage{
+		{Seq: 4, Type: event.EventProviderUsage, Usage: &event.ProviderUsage{
 			PromptTokens: 6000, CompletionTokens: 605,
 		}},
 	}})
@@ -91,7 +91,7 @@ func TestStatusRowTimesTheLiveRunNotTheSession(t *testing.T) {
 	f.height = 24
 	f.running = true
 	f.reqStartedAt = time.Now().Add(-90 * time.Second)
-	f.statusProj.Apply(agent.Event{Seq: 1, Type: agent.RunStart, Time: time.Now().Add(-2 * time.Hour)})
+	f.statusProj.Apply(event.Event{Seq: 1, Type: event.RunStart, Time: time.Now().Add(-2 * time.Hour)})
 
 	line := f.statusLineWithMeta("Generating…", 78)
 	if !strings.Contains(line, "1m30s") {

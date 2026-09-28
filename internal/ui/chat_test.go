@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -31,18 +31,18 @@ func asChat(t *testing.T, mdl tea.Model) *Chat {
 // not need its own flush. This is the runtime proof that removing the
 // doneMsg flush did not drop the final paragraph.
 func TestBufFlushViaEventChannel(t *testing.T) {
-	ch := make(chan agent.Event, 8)
+	ch := make(chan event.Event, 8)
 	m := asChat(t, NewChat(runnerStub{}, ch))
 
 	// Delta 1: accumulates, no print, buffer holds it.
-	mdl, _ := m.Update(evMsg(agent.Event{Type: agent.TextDelta, Text: "فقرة أولى "}))
+	mdl, _ := m.Update(evMsg(event.Event{Type: event.TextDelta, Text: "فقرة أولى "}))
 	m = asChat(t, mdl)
 	if m.buf != "فقرة أولى " {
 		t.Fatalf("after delta 1: buf=%q, want %q", m.buf, "فقرة أولى ")
 	}
 
 	// Delta 2: accumulates more.
-	mdl, _ = m.Update(evMsg(agent.Event{Type: agent.TextDelta, Text: "فقرة ثانية"}))
+	mdl, _ = m.Update(evMsg(event.Event{Type: event.TextDelta, Text: "فقرة ثانية"}))
 	m = asChat(t, mdl)
 	if m.buf != "فقرة أولى فقرة ثانية" {
 		t.Fatalf("after delta 2: buf=%q", m.buf)
@@ -50,7 +50,7 @@ func TestBufFlushViaEventChannel(t *testing.T) {
 
 	// Interrupted arrives through the channel: the evMsg path flushes the
 	// buffer (that is the whole mechanism — the event carries the flush).
-	mdl, _ = m.Update(evMsg(agent.Event{Type: agent.Interrupted, Text: "ctrl+c"}))
+	mdl, _ = m.Update(evMsg(event.Event{Type: event.Interrupted, Text: "ctrl+c"}))
 	m = asChat(t, mdl)
 	if m.buf != "" {
 		t.Fatalf("after interrupted: buf=%q, want empty (must be flushed)", m.buf)
@@ -72,18 +72,18 @@ func TestBufFlushViaEventChannel(t *testing.T) {
 // TurnEnd event (rendered as "" but still a non-delta event) flushes the
 // buffer through the evMsg path.
 func TestBufFlushOnTurnEnd(t *testing.T) {
-	ch := make(chan agent.Event, 8)
+	ch := make(chan event.Event, 8)
 	m := asChat(t, NewChat(runnerStub{}, ch))
 
-	mdl, _ := m.Update(evMsg(agent.Event{Type: agent.TextDelta, Text: "كلمة "}))
+	mdl, _ := m.Update(evMsg(event.Event{Type: event.TextDelta, Text: "كلمة "}))
 	m = asChat(t, mdl)
-	mdl, _ = m.Update(evMsg(agent.Event{Type: agent.TextDelta, Text: "أخرى"}))
+	mdl, _ = m.Update(evMsg(event.Event{Type: event.TextDelta, Text: "أخرى"}))
 	m = asChat(t, mdl)
 	if m.buf != "كلمة أخرى" {
 		t.Fatalf("before turn end: buf=%q", m.buf)
 	}
 
-	mdl, _ = m.Update(evMsg(agent.Event{Type: agent.TurnEnd}))
+	mdl, _ = m.Update(evMsg(event.Event{Type: event.TurnEnd}))
 	m = asChat(t, mdl)
 	if m.buf != "" {
 		t.Fatalf("after turn end: buf=%q, want empty", m.buf)
@@ -93,15 +93,15 @@ func TestBufFlushOnTurnEnd(t *testing.T) {
 // TestChatBashSessionKeyRejected asserts that Chat neither displays the session
 // grant hint for bash nor accepts 'a' or 'A' to reply with AllowSession.
 func TestChatBashSessionKeyRejected(t *testing.T) {
-	ch := make(chan agent.Event, 8)
+	ch := make(chan event.Event, 8)
 	chat := asChat(t, NewChat(runnerStub{}, ch))
 	ap := NewApprover()
 	chat.Approve = ap
 
 	// Ask permission for bash
-	mdl, _ := chat.Update(evMsg(agent.Event{
-		Type: agent.PermAsk,
-		Call: &agent.ToolCall{ID: "c_bash", Name: "bash"},
+	mdl, _ := chat.Update(evMsg(event.Event{
+		Type: event.PermAsk,
+		Call: &event.ToolCall{ID: "c_bash", Name: "bash"},
 	}))
 	chat = asChat(t, mdl)
 
@@ -140,7 +140,7 @@ func TestChatBashSessionKeyRejected(t *testing.T) {
 	}
 	select {
 	case d := <-ap.reply:
-		if d != agent.AllowOnce {
+		if d != event.AllowOnce {
 			t.Fatalf("chat approver received %v, want AllowOnce", d)
 		}
 	default:

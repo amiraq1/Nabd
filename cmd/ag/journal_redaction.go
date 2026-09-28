@@ -3,8 +3,8 @@ package main
 import (
 	"encoding/json"
 
-	"nabd/internal/agent"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/redact"
 	"nabd/internal/store"
 )
@@ -24,11 +24,11 @@ func journalRedactionEnabled() bool {
 // unnecessary event copy. The exactKeys are the configured provider secrets
 // collected at session start; pattern redaction alone cannot cover custom
 // providers whose key format matches no known shape.
-func journalEventRedactor(exactKeys []string) func(agent.Event) agent.Event {
+func journalEventRedactor(exactKeys []string) func(event.Event) event.Event {
 	if !journalRedactionEnabled() {
 		return nil
 	}
-	return func(e agent.Event) agent.Event {
+	return func(e event.Event) event.Event {
 		return redactJournalEvent(e, exactKeys)
 	}
 }
@@ -37,7 +37,7 @@ func journalEventRedactor(exactKeys []string) func(agent.Event) agent.Event {
 // the live loop history. Structural identifiers, paths, hashes, blob addresses,
 // decision values, and replay metadata remain unchanged. Exact keys are
 // redacted before pattern matching so custom-provider secrets are covered too.
-func redactJournalEvent(e agent.Event, exactKeys []string) agent.Event {
+func redactJournalEvent(e event.Event, exactKeys []string) event.Event {
 	redactText := func(s string) string {
 		return redact.Redact(redact.RedactExactKeys(s, exactKeys))
 	}

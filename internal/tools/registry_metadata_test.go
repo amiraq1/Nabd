@@ -10,13 +10,13 @@ import (
 	"sync"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/snap"
 )
 
 // writeVia runs a write through the real Registry and returns the recorded
 // EditRecord, exercising the read→write metadata handoff end to end.
-func writeVia(t *testing.T, r *Registry, name, content string) *agent.EditRecord {
+func writeVia(t *testing.T, r *Registry, name, content string) *event.EditRecord {
 	t.Helper()
 	raw, _ := json.Marshal(map[string]any{"path": name, "content": content})
 	if _, ok, err := r.Run(context.Background(), providerToolCall("write_file", raw)); err != nil || !ok {
@@ -230,8 +230,8 @@ func TestConcurrentToolMetadataIsInvocationScoped(t *testing.T) {
 	var (
 		mu       sync.Mutex
 		problems []string
-		readAOut agent.Outcome
-		readBOut agent.Outcome
+		readAOut event.Outcome
+		readBOut event.Outcome
 	)
 	gate := make(chan struct{})
 	var wg sync.WaitGroup
@@ -285,7 +285,7 @@ func TestConcurrentToolMetadataIsInvocationScoped(t *testing.T) {
 	gate2 := make(chan struct{})
 	var (
 		wg2     sync.WaitGroup
-		readOut agent.Outcome
+		readOut event.Outcome
 		writeOK bool
 	)
 	wg2.Add(2)

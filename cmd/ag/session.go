@@ -8,6 +8,7 @@ import (
 
 	"nabd/internal/agent"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/ignorefile"
 	"nabd/internal/payload"
 	"nabd/internal/perm"
@@ -193,14 +194,14 @@ func rewindSummary(loop *agent.Loop, n int) (string, string) {
 
 // ctxSummary reports the current context pressure and budget.
 func ctxSummary(loop *agent.Loop) string {
-	ms := agent.Squeeze(agent.Messages(agent.Live(loop.Hist())), agent.KeepFullRounds)
+	ms := agent.Squeeze(agent.Messages(event.Live(loop.Hist())), agent.KeepFullRounds)
 	p := loop.Budget.Pressure(ms)
 	return fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
 }
 
 // editsSummary lists the edits that /undo can still reverse.
 func editsSummary(loop *agent.Loop) string {
-	p := editRecords(agent.Live(loop.Hist()))
+	p := editRecords(event.Live(loop.Hist()))
 	if len(p) == 0 {
 		return "no reversible edits pending"
 	}

@@ -17,7 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/safefs"
 	"nabd/internal/snap"
 )
@@ -60,8 +60,8 @@ func mutationID() string {
 //
 // eventEnvelopeAllowance: the journal (agent.Loop.emitAt) stamps Seq, Parent,
 // and Time on the Event before serializing — fields that boundEditEvent does
-// not set when it marshals agent.Event{Type, Edit: rec} for the baseline.
-// Measured directly by field (see internal/agent/event.go for the JSON tags):
+// not set when it marshals event.Event{Type, Edit: rec} for the baseline.
+// Measured directly by field (see internal/event/event.go for the JSON tags):
 //
 //	Seq    int       json:"seq"              → "seq":9223372036854775807 = 18 B
 //	Parent int       json:"parent,omitempty" → ,"parent":9223372036854775806 = 29 B (omitted when 0)
@@ -85,7 +85,7 @@ type Edit struct {
 	Rel    string
 	Before snap.State
 	After  snap.State
-	Record *agent.EditRecord // persisted fingerprint, emitted as an event
+	Record *event.EditRecord // persisted fingerprint, emitted as an event
 }
 
 type editLog struct {
@@ -185,7 +185,7 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 
 	// The diff (LCS matrix allocation) runs here — BEFORE the write. If it
 	// aborts (budget exceeded, ctx cancelled), the project file is untouched.
-	var rec *agent.EditRecord
+	var rec *event.EditRecord
 	var rerr error
 	if reg != nil && reg.isPathExcluded(relative) {
 		rec, rerr = buildExcludedRecord(sh, before, after, data, readLines)
@@ -276,8 +276,8 @@ func verifyUnchanged(sh *snap.Shadow, root *Root, relative, absolute string, bef
 // event stays within the configured budget (dropping only Patch if needed).
 // If the event still exceeds the budget after dropping Patch, an error is
 // returned so commit() can abort before WriteAtomic.
-func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*agent.EditRecord, error) {
-	rec := &agent.EditRecord{
+func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*event.EditRecord, error) {
+	rec := &event.EditRecord{
 		MutationID: mutationID(),
 		Path:       after.Rel,
 		HashAfter:  sha256hex(data),
@@ -306,8 +306,8 @@ func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, befor
 // buildExcludedRecord fingerprints a mutation on an excluded path without computing
 // a unified diff, guaranteeing that excluded content is never disclosed in diffs
 // while retaining shadow blobs and hashes so /undo reversibility remains guaranteed.
-func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*agent.EditRecord, error) {
-	rec := &agent.EditRecord{
+func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*event.EditRecord, error) {
+	rec := &event.EditRecord{
 		MutationID: mutationID(),
 		Path:       after.Rel,
 		HashAfter:  sha256hex(data),
@@ -331,7 +331,7 @@ func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte,
 //
 // The measurement accounts for the journal envelope: emitAt (in the agent
 // loop) adds Seq, Parent, and Time to the Event before serializing, fields
-// absent from the bare agent.Event{Type, Edit: rec} that this function
+// absent from the bare event.Event{Type, Edit: rec} that this function
 // marshals. The eventEnvelopeAllowance constant covers those fields. The
 // Patch contribution is estimated with jsonEscapeWorstCaseFactor (6x, the
 // worst case for \uXXXX encoding) rather than fully serialized, so the phone
@@ -341,7 +341,7 @@ func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte,
 // After dropping Patch, the size is re-checked: if the bare record still
 // exceeds the budget, an error is returned so commit() can abort before
 // WriteAtomic instead of writing an oversized event.
-func boundEditEvent(rec *agent.EditRecord) (*agent.EditRecord, error) {
+func boundEditEvent(rec *event.EditRecord) (*event.EditRecord, error) {
 	if maxEventBytes <= 0 {
 		return rec, nil
 	}
@@ -351,7 +351,7 @@ func boundEditEvent(rec *agent.EditRecord) (*agent.EditRecord, error) {
 	// non-patch portion.
 	bare := *rec
 	bare.Patch = ""
-	baseline, err := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: &bare})
+	baseline, err := json.Marshal(event.Event{Type: event.EventEdit, Edit: &bare})
 	if err != nil {
 		return rec, nil
 	}

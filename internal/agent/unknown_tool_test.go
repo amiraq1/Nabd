@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"nabd/internal/event"
 	"strings"
 	"testing"
 	"unicode"
@@ -59,8 +60,8 @@ func TestUnknownToolNamesAlternatives(t *testing.T) {
 		Gate:     loopTools{reg},
 		Human:    loopTools{reg},
 	}
-	var events []agent.Event
-	l.Sink = sinkFunc(func(e agent.Event) error {
+	var events []event.Event
+	l.Sink = sinkFunc(func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -70,10 +71,10 @@ func TestUnknownToolNamesAlternatives(t *testing.T) {
 
 	msg := ""
 	for _, e := range events {
-		if e.Type == agent.ToolEnd && e.Call != nil && e.Call.Name == "shell" {
+		if e.Type == event.ToolEnd && e.Call != nil && e.Call.Name == "shell" {
 			msg = e.Call.Output
 		}
-		if e.Type == agent.PermAsk || e.Type == agent.PermReply {
+		if e.Type == event.PermAsk || e.Type == event.PermReply {
 			t.Fatalf("unknown tool reached the permission gate: %s", e.Type)
 		}
 	}

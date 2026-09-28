@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"nabd/internal/event"
 	"sync"
 	"testing"
 
@@ -42,20 +43,20 @@ func (m mockTools) Check(tool string) (Verdict, string) {
 func (m mockTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
 	return "mock output", true, nil
 }
-func (m mockTools) Record(string, Decision)                    {}
-func (m mockTools) Effective(tool string, d Decision) Decision { return d }
-func (m mockTools) Ask(ctx context.Context, c ToolCall) Decision {
+func (m mockTools) Record(string, event.Decision)                          {}
+func (m mockTools) Effective(tool string, d event.Decision) event.Decision { return d }
+func (m mockTools) Ask(ctx context.Context, c event.ToolCall) event.Decision {
 	if m.allowed {
-		return AllowOnce
+		return event.AllowOnce
 	}
-	return Deny
+	return event.Deny
 }
 
 type mockSink struct {
-	fn func(Event) error
+	fn func(event.Event) error
 }
 
-func (m mockSink) Emit(e Event) error {
+func (m mockSink) Emit(e event.Event) error {
 	if m.fn != nil {
 		return m.fn(e)
 	}
@@ -87,8 +88,8 @@ func TestToolStartEmission(t *testing.T) {
 				Human:  &mockTools{allowed: tt.allowed},
 			}
 
-			var events []Event
-			l.Sink = mockSink{fn: func(e Event) error {
+			var events []event.Event
+			l.Sink = mockSink{fn: func(e event.Event) error {
 				events = append(events, e)
 				return nil
 			}}
@@ -97,7 +98,7 @@ func TestToolStartEmission(t *testing.T) {
 
 			startSeen := false
 			for _, e := range events {
-				if e.Type == ToolStart {
+				if e.Type == event.ToolStart {
 					startSeen = true
 				}
 			}
@@ -134,8 +135,8 @@ func TestToolPairing(t *testing.T) {
 				Human:  &mockTools{allowed: tc.allowed},
 			}
 
-			var events []Event
-			l.Sink = mockSink{fn: func(e Event) error {
+			var events []event.Event
+			l.Sink = mockSink{fn: func(e event.Event) error {
 				events = append(events, e)
 				return nil
 			}}
@@ -144,11 +145,11 @@ func TestToolPairing(t *testing.T) {
 
 			var endFound bool
 			for i, e := range events {
-				if e.Type == ToolEnd {
+				if e.Type == event.ToolEnd {
 					endFound = true
 					startFound := false
 					for j := i - 1; j >= 0; j-- {
-						if events[j].Type == ToolStart && events[j].Call != nil && events[j].Call.ID == e.Call.ID {
+						if events[j].Type == event.ToolStart && events[j].Call != nil && events[j].Call.ID == e.Call.ID {
 							startFound = true
 							break
 						}
@@ -174,7 +175,7 @@ type errSink struct {
 	emitCount int
 }
 
-func (s *errSink) Emit(e Event) error {
+func (s *errSink) Emit(e event.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.emitCount >= s.allow {
@@ -251,26 +252,26 @@ func (r *textAfterRateLimitProvider) Stream(ctx context.Context, req provider.Re
 }
 
 // sinkFunc adapts a func to the agent.Sink interface.
-type sinkFunc func(Event) error
+type sinkFunc func(event.Event) error
 
-func (f sinkFunc) Emit(e Event) error { return f(e) }
+func (f sinkFunc) Emit(e event.Event) error { return f(e) }
 
 // TestFanoutOrderIsDeterministic proves that Fanout calls sinks in order
 // and stops at the first error.
 func TestFanoutOrderIsDeterministic(t *testing.T) {
 	order := []int{}
-	s1 := sinkFunc(func(e Event) error { order = append(order, 1); return nil })
-	s2 := sinkFunc(func(e Event) error { order = append(order, 2); return nil })
+	s1 := sinkFunc(func(e event.Event) error { order = append(order, 1); return nil })
+	s2 := sinkFunc(func(e event.Event) error { order = append(order, 2); return nil })
 	f := Fanout{s1, s2}
-	_ = f.Emit(Event{})
+	_ = f.Emit(event.Event{})
 	if len(order) != 2 || order[0] != 1 || order[1] != 2 {
 		t.Fatalf("fanout order = %v, want [1 2]", order)
 	}
 	// Second sink should not be called if first fails.
 	order = order[:0]
-	sFail := sinkFunc(func(e Event) error { return errors.New("boom") })
+	sFail := sinkFunc(func(e event.Event) error { return errors.New("boom") })
 	f = Fanout{sFail, s2}
-	_ = f.Emit(Event{})
+	_ = f.Emit(event.Event{})
 	if len(order) != 0 {
 		t.Fatalf("second sink called after first failed: %v", order)
 	}
@@ -296,7 +297,7 @@ func TestEndEmitsExactlyOneRunEnd(t *testing.T) {
 	var runEndCount int
 	var lastText string
 	for _, e := range sink.evs {
-		if e.Type == RunEnd {
+		if e.Type == event.RunEnd {
 			runEndCount++
 			lastText = e.Text
 		}

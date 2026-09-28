@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -17,11 +17,11 @@ func TestViewOutputLayout(t *testing.T) {
 	f.height = 16
 	_, _ = f.Update(tea.WindowSizeMsg{Width: 50, Height: 16})
 	f.SetHeader("nabd test header")
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "session"},
-		{Seq: 2, Type: agent.UserMsg, Text: "السؤال الأول"},
-		{Seq: 3, Type: agent.TextDelta, Text: "الجواب الأول يجري كتابته هنا"},
-		{Seq: 4, Type: agent.TurnEnd},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "session"},
+		{Seq: 2, Type: event.UserMsg, Text: "السؤال الأول"},
+		{Seq: 3, Type: event.TextDelta, Text: "الجواب الأول يجري كتابته هنا"},
+		{Seq: 4, Type: event.TurnEnd},
 	}})
 	typeIntoFeed(t, f, "رسالة متعددة")
 	_, _ = f.Update(tea.KeyMsg{Type: tea.KeyCtrlJ})

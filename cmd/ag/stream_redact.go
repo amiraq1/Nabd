@@ -2,6 +2,7 @@ package main
 
 import (
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/redact"
 )
 
@@ -17,7 +18,7 @@ import (
 //
 // A delta whose redacted output is empty is dropped (never an empty TextDelta),
 // and its sequence number is reused by the flush that eventually carries the
-// held bytes, so the journal keeps a valid Parent chain (agent.Live stops at a
+// held bytes, so the journal keeps a valid Parent chain (event.Live stops at a
 // missing parent) and no sequence number is assigned twice.
 type streamRedactSink struct {
 	next    agent.Sink
@@ -41,12 +42,12 @@ func newStreamRedactSink(next agent.Sink, exactKeys []string) *streamRedactSink 
 	}
 }
 
-func (s *streamRedactSink) Emit(e agent.Event) error {
+func (s *streamRedactSink) Emit(e event.Event) error {
 	if !s.enabled {
 		return s.next.Emit(e)
 	}
 
-	if e.Type == agent.TextDelta {
+	if e.Type == event.TextDelta {
 		out := s.stream.Write(e.Text)
 		// If a suffix is still held, withhold this prefix too: dropping the
 		// event keeps its sequence number free for the boundary flush, and
@@ -78,8 +79,8 @@ func (s *streamRedactSink) Emit(e agent.Event) error {
 	// the stream and ride the next delta rather than being dropped.
 	if s.lastDropped > s.lastEmitted {
 		if held := s.stream.Flush(); held != "" {
-			flush := agent.Event{
-				Type:   agent.TextDelta,
+			flush := event.Event{
+				Type:   event.TextDelta,
 				Text:   held,
 				Seq:    s.lastDropped,
 				Parent: s.lastEmitted,

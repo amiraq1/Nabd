@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
@@ -149,14 +149,14 @@ func TestHeadlessJSONEmitsJournal(t *testing.T) {
 		if line == "" {
 			continue
 		}
-		var e agent.Event
+		var e event.Event
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
 			t.Fatalf("not journal JSONL %q: %v", line, err)
 		}
 		switch e.Type {
-		case agent.UserMsg:
+		case event.UserMsg:
 			sawUser = true
-		case agent.TextDelta:
+		case event.TextDelta:
 			sawDelta = true
 		}
 	}
@@ -247,10 +247,10 @@ func TestMapHeadlessExit(t *testing.T) {
 	if mapHeadlessExit(nil) != 0 {
 		t.Fatal()
 	}
-	if mapHeadlessExit(agent.ErrMaxTurns) != 2 {
+	if mapHeadlessExit(event.ErrMaxTurns) != 2 {
 		t.Fatal()
 	}
-	if mapHeadlessExit(agent.ErrRateLimitBudget) != 3 {
+	if mapHeadlessExit(event.ErrRateLimitBudget) != 3 {
 		t.Fatal()
 	}
 	if mapHeadlessExit(errPermissionStuck) != 4 {
@@ -320,9 +320,9 @@ func TestRemovedBashKeysFailBeforeProviderOrTool(t *testing.T) {
 }
 
 // yoloSink records every event so the test can inspect the permission reply.
-type yoloSink func(agent.Event) error
+type yoloSink func(event.Event) error
 
-func (s yoloSink) Emit(e agent.Event) error { return s(e) }
+func (s yoloSink) Emit(e event.Event) error { return s(e) }
 
 // TestHeadlessYOLOBashDoesNotHang is the headless counterpart to the enforce
 // decision. Headless has no TTY: silentAsker is the Human and it answers Deny
@@ -350,8 +350,8 @@ func TestHeadlessYOLOBashDoesNotHang(t *testing.T) {
 	}}
 	loop := newSessionLoop(prov, reg, gate{pol}, silentAsker{})
 
-	var events []agent.Event
-	loop.Sink = yoloSink(func(e agent.Event) error {
+	var events []event.Event
+	loop.Sink = yoloSink(func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -367,7 +367,7 @@ func TestHeadlessYOLOBashDoesNotHang(t *testing.T) {
 
 	var denied bool
 	for _, e := range events {
-		if e.Type == agent.PermReply && e.Call != nil && e.Call.Name == "bash" && e.Decision == agent.Deny {
+		if e.Type == event.PermReply && e.Call != nil && e.Call.Name == "bash" && e.Decision == event.Deny {
 			denied = true
 		}
 	}
@@ -400,14 +400,14 @@ func TestHeadlessJSONAllLinesValidJSON(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
 			t.Fatalf("line %d on stdout is not valid JSON: %q (err: %v)", i, line, err)
 		}
-		var ev agent.Event
+		var ev event.Event
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			t.Fatalf("line %d on stdout cannot unmarshal into agent.Event: %q (err: %v)", i, line, err)
+			t.Fatalf("line %d on stdout cannot unmarshal into event.Event: %q (err: %v)", i, line, err)
 		}
-		if ev.Type == agent.RunError {
+		if ev.Type == event.RunError {
 			sawRunError = true
 		}
-		if ev.Type == agent.RunEnd {
+		if ev.Type == event.RunEnd {
 			sawRunEnd = true
 		}
 	}
@@ -438,10 +438,10 @@ func TestHeadlessRunEndReflectsFailureAfterRunError(t *testing.T) {
 		t.Fatalf("exit %d, want %d", code, exitError)
 	}
 
-	var runEndEvent *agent.Event
+	var runEndEvent *event.Event
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		var ev agent.Event
-		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+		var ev event.Event
+		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == event.RunEnd {
 			runEndEvent = &ev
 			break
 		}
@@ -504,10 +504,10 @@ func TestHeadlessRunEndReflectsStoppedAfterInterruption(t *testing.T) {
 		t.Fatalf("exit %d, want %d", code, exitInterrupted)
 	}
 
-	var runEndEvent *agent.Event
+	var runEndEvent *event.Event
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		var ev agent.Event
-		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+		var ev event.Event
+		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == event.RunEnd {
 			runEndEvent = &ev
 			break
 		}
@@ -541,10 +541,10 @@ func TestHeadlessRunEndNormalOnSuccessAndMaxTurns(t *testing.T) {
 			t.Fatalf("exit %d, want %d", code, exitSettled)
 		}
 
-		var runEndEvent *agent.Event
+		var runEndEvent *event.Event
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-			var ev agent.Event
-			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+			var ev event.Event
+			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == event.RunEnd {
 				runEndEvent = &ev
 				break
 			}
@@ -573,10 +573,10 @@ func TestHeadlessRunEndNormalOnSuccessAndMaxTurns(t *testing.T) {
 			t.Fatalf("exit %d, want %d", code, exitMaxTurns)
 		}
 
-		var runEndEvent *agent.Event
+		var runEndEvent *event.Event
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-			var ev agent.Event
-			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+			var ev event.Event
+			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == event.RunEnd {
 				runEndEvent = &ev
 				break
 			}

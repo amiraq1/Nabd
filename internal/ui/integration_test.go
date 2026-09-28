@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 )
 
@@ -16,23 +16,23 @@ func TestIntegrationFullPipeline(t *testing.T) {
 	feed.width = 80
 	feed.height = 24
 
-	var batches [][]agent.Event
-	batcher := NewBatcher(10*time.Millisecond, 100, func(batch []agent.Event) {
+	var batches [][]event.Event
+	batcher := NewBatcher(10*time.Millisecond, 100, func(batch []event.Event) {
 		batches = append(batches, batch)
 	})
 
 	// Scripted events mirroring a real session.
-	events := []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "nabd test"},
-		{Seq: 2, Type: agent.UserMsg, Text: "run inspection"},
-		{Seq: 3, Type: agent.TextDelta, Text: "Starting "},
-		{Seq: 4, Type: agent.TextDelta, Text: "inspection..."},
-		{Seq: 5, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "call_1", Name: "read_file", Args: []byte(`{"path":"main.go"}`)}},
-		{Seq: 6, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "call_1", Name: "read_file", Args: []byte(`{"path":"main.go"}`)}},
-		{Seq: 7, Type: agent.PermReply, Call: &agent.ToolCall{ID: "call_1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
-		{Seq: 8, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "call_1", Name: "read_file", Output: "file content here", OK: true}},
-		{Seq: 9, Type: agent.TurnEnd},
-		{Seq: 10, Type: agent.RunEnd, Text: "session complete"},
+	events := []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "nabd test"},
+		{Seq: 2, Type: event.UserMsg, Text: "run inspection"},
+		{Seq: 3, Type: event.TextDelta, Text: "Starting "},
+		{Seq: 4, Type: event.TextDelta, Text: "inspection..."},
+		{Seq: 5, Type: event.ToolStart, Call: &event.ToolCall{ID: "call_1", Name: "read_file", Args: []byte(`{"path":"main.go"}`)}},
+		{Seq: 6, Type: event.PermAsk, Call: &event.ToolCall{ID: "call_1", Name: "read_file", Args: []byte(`{"path":"main.go"}`)}},
+		{Seq: 7, Type: event.PermReply, Call: &event.ToolCall{ID: "call_1"}, Decision: event.AllowOnce, RawDecision: event.AllowOnce},
+		{Seq: 8, Type: event.ToolEnd, Call: &event.ToolCall{ID: "call_1", Name: "read_file", Output: "file content here", OK: true}},
+		{Seq: 9, Type: event.TurnEnd},
+		{Seq: 10, Type: event.RunEnd, Text: "session complete"},
 	}
 
 	// Feed events through the batcher.
@@ -101,15 +101,15 @@ func TestIntegrationFullPipeline(t *testing.T) {
 // TestIntegrationReplayThenIncremental verifies replay via Build followed by
 // incremental Apply produces the same result as Build on the final state.
 func TestIntegrationReplayThenIncremental(t *testing.T) {
-	allEvents := []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "start"},
-		{Seq: 2, Type: agent.UserMsg, Text: "first"},
-		{Seq: 3, Type: agent.TextDelta, Text: "reply one"},
-		{Seq: 4, Type: agent.TurnEnd},
-		{Seq: 5, Type: agent.UserMsg, Text: "second"},
-		{Seq: 6, Type: agent.TextDelta, Text: "reply two"},
-		{Seq: 7, Type: agent.TurnEnd},
-		{Seq: 8, Type: agent.RunEnd, Text: "end"},
+	allEvents := []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "start"},
+		{Seq: 2, Type: event.UserMsg, Text: "first"},
+		{Seq: 3, Type: event.TextDelta, Text: "reply one"},
+		{Seq: 4, Type: event.TurnEnd},
+		{Seq: 5, Type: event.UserMsg, Text: "second"},
+		{Seq: 6, Type: event.TextDelta, Text: "reply two"},
+		{Seq: 7, Type: event.TurnEnd},
+		{Seq: 8, Type: event.RunEnd, Text: "end"},
 	}
 
 	// Path 1: Build all at once.
@@ -147,14 +147,14 @@ func TestIntegrationReplayThenIncremental(t *testing.T) {
 // produce fewer Bubble Tea messages than events.
 func TestIntegrationBatcherReducesMessageCount(t *testing.T) {
 	const numEvents = 1000
-	var batches [][]agent.Event
-	batcher := NewBatcher(20*time.Millisecond, 128, func(batch []agent.Event) {
+	var batches [][]event.Event
+	batcher := NewBatcher(20*time.Millisecond, 128, func(batch []event.Event) {
 		batches = append(batches, batch)
 	})
 
 	// Emit 1000 text deltas rapidly.
 	for i := 0; i < numEvents; i++ {
-		batcher.Add(agent.Event{Seq: i + 1, Type: agent.TextDelta, Text: "x"})
+		batcher.Add(event.Event{Seq: i + 1, Type: event.TextDelta, Text: "x"})
 	}
 	// Allow at least one timer flush.
 	time.Sleep(30 * time.Millisecond)

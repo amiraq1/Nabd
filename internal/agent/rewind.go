@@ -6,6 +6,7 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"nabd/internal/event"
 	"time"
 )
 
@@ -21,12 +22,12 @@ func (l *Loop) Rewind(n int) (string, error) {
 		n = 1
 	}
 	l.mu.Lock()
-	live := Live(l.hist)
+	live := event.Live(l.hist)
 	l.mu.Unlock()
 
 	var idx []int
 	for i, e := range live {
-		if e.Type == UserMsg {
+		if e.Type == event.UserMsg {
 			idx = append(idx, i)
 		}
 	}
@@ -39,8 +40,8 @@ func (l *Loop) Rewind(n int) (string, error) {
 	cut := live[idx[len(idx)-n]] // the user message that dies, and all after it
 	dropped := len(live) - idx[len(idx)-n]
 
-	if err := l.emitAt(cut.Parent, Event{
-		Type: Rewind,
+	if err := l.emitAt(cut.Parent, event.Event{
+		Type: event.Rewind,
 		Text: fmt.Sprintf("rewound %d turns (%d events)", n, dropped),
 	}); err != nil {
 		return "", err
@@ -52,7 +53,7 @@ func (l *Loop) Rewind(n int) (string, error) {
 // to choose the parent event instead of using the current parent. A sink
 // failure is returned so callers can stop the loop instead of continuing
 // as if the event was durably recorded.
-func (l *Loop) emitAt(parent int, e Event) error {
+func (l *Loop) emitAt(parent int, e event.Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.emitLocked(parent, e)
@@ -65,7 +66,7 @@ func (l *Loop) emitAt(parent int, e Event) error {
 // WARNING: l.Sink.Emit is invoked while l.mu remains held. A Sink that calls
 // back into the same Loop (e.g. calling emit or emitAt) will deadlock
 // (pre-existing hazard noted in NOTES.md P0-1.5).
-func (l *Loop) emitLocked(parent int, e Event) error {
+func (l *Loop) emitLocked(parent int, e event.Event) error {
 	nextSeq := l.seq + 1
 	e.Seq, e.Parent = nextSeq, parent
 	if e.Time.IsZero() {
@@ -73,12 +74,12 @@ func (l *Loop) emitLocked(parent int, e Event) error {
 	}
 	if l.Sink != nil {
 		if err := l.Sink.Emit(e); err != nil {
-			return NewPersistError(err, sinkJournalPath(l.Sink))
+			return event.NewPersistError(err, sinkJournalPath(l.Sink))
 		}
 		if eventRequiresSync(e) {
 			if durable, ok := l.Sink.(DurableSink); ok {
 				if err := durable.Sync(); err != nil {
-					return NewPersistError(err, sinkJournalPath(l.Sink))
+					return event.NewPersistError(err, sinkJournalPath(l.Sink))
 				}
 			}
 		}

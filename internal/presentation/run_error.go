@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // maxRunErrorDetails caps how many per-route detail lines reach the screen.
@@ -32,7 +32,7 @@ type RunErrorView struct {
 // Safety: every line passes through cleanField, i.e. display sanitization
 // with redaction enabled, so a provider error body that echoes a key cannot
 // print it. Output lines are single logical lines with no terminal controls.
-func FormatRunError(e agent.Event) RunErrorView {
+func FormatRunError(e event.Event) RunErrorView {
 	var kept []string
 	for _, line := range strings.Split(e.Err, "\n") {
 		if clean := cleanField(line, ""); clean != "" {

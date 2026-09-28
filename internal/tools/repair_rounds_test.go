@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/payload"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
@@ -368,8 +369,8 @@ func (g *recordingGate) Check(tool string) (agent.Verdict, string) {
 	*g.asked = append(*g.asked, tool)
 	return agent.VerdictAllow, ""
 }
-func (g *recordingGate) Record(string, agent.Decision) {}
-func (g *recordingGate) Effective(_ string, d agent.Decision) agent.Decision {
+func (g *recordingGate) Record(string, event.Decision) {}
+func (g *recordingGate) Effective(_ string, d event.Decision) event.Decision {
 	return d
 }
 
@@ -380,7 +381,7 @@ func TestRepairNoticeReachesTheJournal(t *testing.T) {
 	reg := newFixtureRegistry(t, dir)
 	sink := &recordingSink{}
 	reg.OnRepair = func(f Fix) {
-		_ = sink.Emit(agent.Event{Type: agent.Notice, Text: f.Notice()})
+		_ = sink.Emit(event.Event{Type: event.Notice, Text: f.Notice()})
 	}
 
 	prov := &repairRoundProvider{
@@ -401,10 +402,10 @@ func TestRepairNoticeReachesTheJournal(t *testing.T) {
 
 	var noticeIdx, toolEndIdx = -1, -1
 	for i, e := range sink.events {
-		if e.Type == agent.Notice && strings.Contains(e.Text, RuleToolAlias) && noticeIdx < 0 {
+		if e.Type == event.Notice && strings.Contains(e.Text, RuleToolAlias) && noticeIdx < 0 {
 			noticeIdx = i
 		}
-		if e.Type == agent.ToolEnd && toolEndIdx < 0 {
+		if e.Type == event.ToolEnd && toolEndIdx < 0 {
 			toolEndIdx = i
 		}
 	}

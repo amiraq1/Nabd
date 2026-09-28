@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -330,8 +330,8 @@ func TestCollapsibleTool_StreamingUpdatesNoDuplicates(t *testing.T) {
 	f.width = 60
 
 	// ToolStart: running tool is expanded by default (summary + running indicator)
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"make"`)}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"make"`)}},
 	}})
 	if len(f.lines) != 2 {
 		t.Fatalf("expected 2 lines for running tool (expanded by default), got %d: %v", len(f.lines), f.lines)
@@ -341,8 +341,8 @@ func TestCollapsibleTool_StreamingUpdatesNoDuplicates(t *testing.T) {
 	}
 
 	// ToolEnd: completed tool auto-collapses to single-line summary
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash", Output: "build complete", OK: true, MS: 50}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "bash", Output: "build complete", OK: true, MS: 50}},
 	}})
 	if len(f.lines) != 1 {
 		t.Fatalf("expected still exactly 1 line for completed tool (auto-collapsed), got %d: %v", len(f.lines), f.lines)
@@ -366,11 +366,11 @@ func TestCollapsibleTool_AnchorAndUnseenPreservation(t *testing.T) {
 		longOutput.WriteString(fmt.Sprintf("tool output row %02d\n", i))
 	}
 
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "message 1"},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "read_file", Args: json.RawMessage(`"a.go"`)}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "read_file", Output: longOutput.String(), OK: true}},
-		{Seq: 4, Type: agent.UserMsg, Text: "message 2"},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "message 1"},
+		{Seq: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file", Args: json.RawMessage(`"a.go"`)}},
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "read_file", Output: longOutput.String(), OK: true}},
+		{Seq: 4, Type: event.UserMsg, Text: "message 2"},
 	}})
 
 	// Follow active: expand and collapse keep follow = true
@@ -448,8 +448,8 @@ func TestCollapsibleTool_FooterHint(t *testing.T) {
 	f := newFeedAt(t, 80, 24)
 
 	// No tools initially
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
 	}})
 	v := f.View()
 	if strings.Contains(v, "Ctrl+O") || strings.Contains(v, "^O") {
@@ -457,9 +457,9 @@ func TestCollapsibleTool_FooterHint(t *testing.T) {
 	}
 
 	// Tool added (collapsed by default)
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", OK: true}},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash"}},
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "bash", OK: true}},
 	}})
 	v = f.View()
 	if !strings.Contains(v, "Ctrl+O details") && !strings.Contains(v, "^O details") {
@@ -485,10 +485,10 @@ func TestCollapsibleTool_PTYInteractive(t *testing.T) {
 		sb.WriteString(fmt.Sprintf("DETAILED_OUTPUT_ROW_%d\n", i))
 	}
 
-	sess.InjectBatch([]agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "read_file", Args: []byte(`{"path":"main.go"}`)}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "read_file", Output: sb.String(), OK: true, MS: 12}},
+	sess.InjectBatch([]event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file", Args: []byte(`{"path":"main.go"}`)}},
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "read_file", Output: sb.String(), OK: true, MS: 12}},
 	})
 
 	// 1. Initial collapsed state: summary line visible, details hidden

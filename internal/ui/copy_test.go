@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -95,16 +95,16 @@ func TestCopyNeverUsesRawJournalContent(t *testing.T) {
 	m.width = 80
 	m.height = 20
 	// Apply an event with a clean display output, but unprojected raw data
-	m.applyBatch([]agent.Event{
+	m.applyBatch([]event.Event{
 		{
 			Seq:  1,
-			Type: agent.ToolStart,
-			Call: &agent.ToolCall{ID: "call-1", Name: "bash"},
+			Type: event.ToolStart,
+			Call: &event.ToolCall{ID: "call-1", Name: "bash"},
 		},
 		{
 			Seq:  2,
-			Type: agent.ToolEnd,
-			Call: &agent.ToolCall{ID: "call-1", Name: "bash", Output: "projected display line", OK: true},
+			Type: event.ToolEnd,
+			Call: &event.ToolCall{ID: "call-1", Name: "bash", Output: "projected display line", OK: true},
 		},
 	})
 	m.toolsExpanded = true
@@ -135,10 +135,10 @@ func TestCopyRejectsRawErrorBodies(t *testing.T) {
 	m.width = 80
 	m.height = 20
 	// Add an error notice where the raw body contains unprojected details
-	m.applyBatch([]agent.Event{
+	m.applyBatch([]event.Event{
 		{
 			Seq:        1,
-			Type:       agent.RunError,
+			Type:       event.RunError,
 			Err:        "sanitized error description: connection failed",
 			RawMessage: rawStackOrBody,
 		},

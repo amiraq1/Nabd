@@ -9,15 +9,16 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
 	"nabd/internal/tools"
 )
 
 // recordingSink collects emitted events for assertions.
-type recordingSink struct{ evs []agent.Event }
+type recordingSink struct{ evs []event.Event }
 
-func (s *recordingSink) Emit(e agent.Event) error {
+func (s *recordingSink) Emit(e event.Event) error {
 	s.evs = append(s.evs, e)
 	return nil
 }
@@ -60,9 +61,9 @@ func setupUndoFixture(t *testing.T) (*agent.Loop, *tools.Registry, string, *reco
 	// EventEdit (what the journal would contain after the agent wrote).
 	sink := &recordingSink{}
 	loop := &agent.Loop{Sink: sink}
-	loop.Seed([]agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "s"},
-		{Seq: 2, Parent: 1, Type: agent.EventEdit, Edit: rec},
+	loop.Seed([]event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "s"},
+		{Seq: 2, Parent: 1, Type: event.EventEdit, Edit: rec},
 	})
 	return loop, reg, path, sink
 }
@@ -96,7 +97,7 @@ func TestFileUndoEmitsOneNoticeAndRestores(t *testing.T) {
 	// Exactly one Notice was emitted with the undo summary.
 	var notices int
 	for _, e := range sink.evs {
-		if e.Type == agent.Notice {
+		if e.Type == event.Notice {
 			notices++
 			if !strings.Contains(e.Text, "/undo 1") {
 				t.Fatalf("notice text = %q, want /undo summary", e.Text)
@@ -122,7 +123,7 @@ func TestFileUndoReturnsEmptyStatus(t *testing.T) {
 func TestFileUndoNoRecords(t *testing.T) {
 	sink := &recordingSink{}
 	loop := &agent.Loop{Sink: sink}
-	loop.Seed([]agent.Event{{Seq: 1, Type: agent.RunStart, Text: "s"}})
+	loop.Seed([]event.Event{{Seq: 1, Type: event.RunStart, Text: "s"}})
 	dir := t.TempDir()
 	root, err := tools.NewRoot(dir)
 	if err != nil {
@@ -138,7 +139,7 @@ func TestFileUndoNoRecords(t *testing.T) {
 		t.Fatal("fileUndo with no records must return a visible message")
 	}
 	for _, e := range sink.evs {
-		if e.Type == agent.Notice {
+		if e.Type == event.Notice {
 			t.Fatal("no-record undo must not emit a Notice")
 		}
 	}
@@ -152,15 +153,15 @@ func TestFileUndoNilGuard(t *testing.T) {
 }
 
 func TestEditRecordsRecoversPreparedIntent(t *testing.T) {
-	rec := &agent.EditRecord{
+	rec := &event.EditRecord{
 		MutationID: "m1",
 		Path:       "doc.md",
 		HashBefore: "before",
 		HashAfter:  "after",
 		BlobAfter:  "s256:after",
 	}
-	got := editRecords([]agent.Event{
-		{Seq: 1, Type: agent.EventEditIntent, Edit: rec},
+	got := editRecords([]event.Event{
+		{Seq: 1, Type: event.EventEditIntent, Edit: rec},
 	})
 	if len(got) != 1 || got[0].MutationID != "m1" {
 		t.Fatalf("editRecords(intent) = %+v, want one recoverable record", got)
@@ -168,16 +169,16 @@ func TestEditRecordsRecoversPreparedIntent(t *testing.T) {
 }
 
 func TestEditRecordsSkipsAbortedIntent(t *testing.T) {
-	rec := &agent.EditRecord{
+	rec := &event.EditRecord{
 		MutationID: "m2",
 		Path:       "doc.md",
 		HashBefore: "before",
 		HashAfter:  "after",
 		BlobAfter:  "s256:after",
 	}
-	got := editRecords([]agent.Event{
-		{Seq: 1, Type: agent.EventEditIntent, Edit: rec},
-		{Seq: 2, Type: agent.EventEditAbort, Edit: rec},
+	got := editRecords([]event.Event{
+		{Seq: 1, Type: event.EventEditIntent, Edit: rec},
+		{Seq: 2, Type: event.EventEditAbort, Edit: rec},
 	})
 	if len(got) != 0 {
 		t.Fatalf("editRecords(aborted intent) = %+v, want empty", got)

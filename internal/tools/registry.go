@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/skill"
@@ -86,7 +87,7 @@ func (r *Registry) isPathExcluded(rel string) bool {
 // tear or double-consume it.
 type metadata struct {
 	mu         sync.Mutex
-	credit     agent.ReadCredit // composite key: path + content hash + range + linesRead (NBD-034)
+	credit     event.ReadCredit // composite key: path + content hash + range + linesRead (NBD-034)
 	truncated  bool             // set by read_file, consumed by RunDetailed
 	nextOffset int              // set by read_file on truncation, consumed by RunDetailed
 }
@@ -109,10 +110,10 @@ type Registry struct {
 	// OnMutationPrepared is called after a mutation record is fully prepared
 	// but before the project file is published. Production wires it to the
 	// loop's durable mutation-intent event.
-	OnMutationPrepared func(*agent.EditRecord) error
+	OnMutationPrepared func(*event.EditRecord) error
 
 	// OnMutationAborted is called when a mutation fails before publication.
-	OnMutationAborted func(*agent.EditRecord, error) error
+	OnMutationAborted func(*event.EditRecord, error) error
 
 	// pathGate is the policy's path rule (see SetPathGate). Set once at startup,
 	// before any tool runs, and never swapped afterwards.
@@ -190,14 +191,14 @@ func AllTools(root *Root) []Tool {
 // SetReadCredit records the provenance and line count of a read_file call (NBD-034).
 // The next commit() validates this credit against the target file's path
 // and pre-mutation content hash.
-func (r *Registry) SetReadCredit(c agent.ReadCredit) {
+func (r *Registry) SetReadCredit(c event.ReadCredit) {
 	r.meta.mu.Lock()
 	r.meta.credit = c
 	r.meta.mu.Unlock()
 }
 
 // ReadCredit returns a copy of the currently staged read credit without consuming it.
-func (r *Registry) ReadCredit() agent.ReadCredit {
+func (r *Registry) ReadCredit() event.ReadCredit {
 	r.meta.mu.Lock()
 	defer r.meta.mu.Unlock()
 	return r.meta.credit
@@ -213,7 +214,7 @@ func (r *Registry) ConsumeLinesRead(abs, hashBefore string) int {
 	r.meta.mu.Lock()
 	defer r.meta.mu.Unlock()
 	credit := r.meta.credit
-	r.meta.credit = agent.ReadCredit{}
+	r.meta.credit = event.ReadCredit{}
 
 	if credit.Path != "" && credit.Path != abs {
 		return 0
@@ -253,7 +254,7 @@ func (r *Registry) ConsumeTruncated() (bool, int) {
 // call.
 func (r *Registry) ClearReadState() {
 	r.meta.mu.Lock()
-	r.meta.credit = agent.ReadCredit{}
+	r.meta.credit = event.ReadCredit{}
 	r.meta.truncated = false
 	r.meta.nextOffset = 0
 	r.meta.mu.Unlock()
@@ -261,7 +262,7 @@ func (r *Registry) ClearReadState() {
 
 // LastEdit returns the persisted record of the newest mutation, or nil if
 // nothing has been written yet.
-func (r *Registry) LastEdit() *agent.EditRecord {
+func (r *Registry) LastEdit() *event.EditRecord {
 	es := r.edits.all()
 	if len(es) == 0 {
 		return nil
@@ -292,7 +293,7 @@ const (
 // ReconcileMutation classifies an unresolved edit_intent against the current
 // descriptor-relative file state. The current bytes may be captured into the
 // existing shadow store for hashing, but no project file is changed.
-func (r *Registry) ReconcileMutation(rec *agent.EditRecord) (MutationRecoveryState, error) {
+func (r *Registry) ReconcileMutation(rec *event.EditRecord) (MutationRecoveryState, error) {
 	if rec == nil {
 		return "", fmt.Errorf("nil mutation record")
 	}
@@ -464,7 +465,7 @@ func skipDir(name string) bool {
 }
 
 type Detailed interface {
-	RunDetailed(context.Context, json.RawMessage) (agent.Outcome, error)
+	RunDetailed(context.Context, json.RawMessage) (event.Outcome, error)
 }
 
 // Compile-time assertions: these tools must keep implementing Detailed, or
@@ -477,7 +478,7 @@ var (
 	_ Detailed = (*bashTool)(nil)
 )
 
-func (r *Registry) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
+func (r *Registry) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (event.Outcome, error) {
 	fixed, _ := r.repairCall(provider.ToolCall{Name: name, Input: raw})
 	name, raw = fixed.Name, fixed.Input
 
@@ -485,11 +486,11 @@ func (r *Registry) RunDetailed(ctx context.Context, name string, raw json.RawMes
 	t, ok := r.byName[name]
 	r.toolsMu.RUnlock()
 	if !ok {
-		return agent.Outcome{}, fmt.Errorf("unknown tool: %s", name)
+		return event.Outcome{}, fmt.Errorf("unknown tool: %s", name)
 	}
 	if d, ok := t.(Detailed); ok {
 		return d.RunDetailed(ctx, raw)
 	}
 	txt, good, err := t.Run(ctx, raw)
-	return agent.Outcome{Text: txt, OK: good}, err
+	return event.Outcome{Text: txt, OK: good}, err
 }

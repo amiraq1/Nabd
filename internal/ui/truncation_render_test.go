@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestToolEndStatesTheLoss puts the cut where it is read. The in-payload
@@ -12,9 +12,9 @@ import (
 // few lines of that output, so the marker can be clipped away by the very
 // truncation it describes.
 func TestToolEndStatesTheLoss(t *testing.T) {
-	out := RenderEvent(agent.Event{
-		Type: agent.ToolEnd,
-		Call: &agent.ToolCall{
+	out := RenderEvent(event.Event{
+		Type: event.ToolEnd,
+		Call: &event.ToolCall{
 			ID:             "call_1",
 			Name:           "bash",
 			Output:         "last line of a long log",
@@ -33,9 +33,9 @@ func TestToolEndStatesTheLoss(t *testing.T) {
 }
 
 func TestToolEndSaysNothingWhenNothingWasCut(t *testing.T) {
-	out := RenderEvent(agent.Event{
-		Type: agent.ToolEnd,
-		Call: &agent.ToolCall{ID: "call_1", Name: "glob", Output: "three files", OK: true},
+	out := RenderEvent(event.Event{
+		Type: event.ToolEnd,
+		Call: &event.ToolCall{ID: "call_1", Name: "glob", Output: "three files", OK: true},
 	}, 66)
 	if strings.Contains(out, "✂") {
 		t.Fatalf("clean result claims truncation: %q", out)
@@ -44,9 +44,9 @@ func TestToolEndSaysNothingWhenNothingWasCut(t *testing.T) {
 
 func TestTruncatedToolRowRespectsWidth(t *testing.T) {
 	for _, width := range []int{20, 40, 66, 80} {
-		out := RenderEvent(agent.Event{
-			Type: agent.ToolEnd,
-			Call: &agent.ToolCall{
+		out := RenderEvent(event.Event{
+			Type: event.ToolEnd,
+			Call: &event.ToolCall{
 				ID:             "call_1",
 				Name:           "bash",
 				Output:         "tail",

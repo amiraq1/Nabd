@@ -25,7 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/charmbracelet/x/ansi"
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 type corpusItem struct {
@@ -263,11 +263,11 @@ func TestWidthContract_Invariant_ComposedFrameWithinBounds(t *testing.T) {
 				f := newFeedAt(t, sz.width, sz.height)
 
 				// Populate feed with complex events containing the test text
-				f.Update(agentEventBatchMsg{Events: []agent.Event{
-					{Seq: 1, Type: agent.UserMsg, Text: tc.text},
-					{Seq: 2, Type: agent.TextDelta, Text: tc.text},
-					{Seq: 3, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "tool", Output: tc.text}},
-					{Seq: 4, Type: agent.TurnEnd},
+				f.Update(agentEventBatchMsg{Events: []event.Event{
+					{Seq: 1, Type: event.UserMsg, Text: tc.text},
+					{Seq: 2, Type: event.TextDelta, Text: tc.text},
+					{Seq: 3, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "tool", Output: tc.text}},
+					{Seq: 4, Type: event.TurnEnd},
 				}})
 
 				// Set composer content to test text

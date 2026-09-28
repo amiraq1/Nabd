@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"nabd/internal/event"
 	"strings"
 	"testing"
 )
@@ -13,13 +14,13 @@ import (
 func TestMessagesPreservesSequentialSlices(t *testing.T) {
 	// read_file main.go offset=1  -> lines 1-53
 	// read_file main.go offset=54 -> lines 54-87
-	evs := []Event{
-		{Seq: 1, Type: UserMsg, Text: "read main.go in two slices"},
-		{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "c1", Name: "read_file", Args: json.RawMessage(`{"path":"main.go","offset":1}`)}},
-		{Seq: 3, Parent: 2, Type: ToolStart, Call: &ToolCall{ID: "c2", Name: "read_file", Args: json.RawMessage(`{"path":"main.go","offset":54}`)}},
-		{Seq: 4, Parent: 3, Type: ToolEnd, Call: &ToolCall{ID: "c1", Name: "read_file", Output: "lines 1-53 of main.go", OK: true}},
-		{Seq: 5, Parent: 4, Type: ToolEnd, Call: &ToolCall{ID: "c2", Name: "read_file", Output: "lines 54-87 of main.go", OK: true}},
-		{Seq: 6, Parent: 5, Type: TurnEnd},
+	evs := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "read main.go in two slices"},
+		{Seq: 2, Parent: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "read_file", Args: json.RawMessage(`{"path":"main.go","offset":1}`)}},
+		{Seq: 3, Parent: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "c2", Name: "read_file", Args: json.RawMessage(`{"path":"main.go","offset":54}`)}},
+		{Seq: 4, Parent: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "read_file", Output: "lines 1-53 of main.go", OK: true}},
+		{Seq: 5, Parent: 4, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c2", Name: "read_file", Output: "lines 54-87 of main.go", OK: true}},
+		{Seq: 6, Parent: 5, Type: event.TurnEnd},
 	}
 	ms := Messages(evs)
 	var results int

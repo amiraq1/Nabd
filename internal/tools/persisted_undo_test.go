@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/snap"
 	"nabd/internal/store"
 )
@@ -50,13 +50,13 @@ func TestPersistedUndoModesAndLegacy(t *testing.T) {
 
 	// Serialize and deserialize to ensure mode survives JSON
 
-	recs := []*agent.EditRecord{recAbsent, recReg, recExec}
+	recs := []*event.EditRecord{recAbsent, recReg, recExec}
 
 	// Write directly to a real journal file using store (simulating exact runtime)
 	journalPath := filepath.Join(dir, "journal.jsonl")
 	journal, _ := store.NewJSONL(journalPath)
 	for _, rec := range recs {
-		journal.Append(agent.Event{Type: "edit", Edit: rec})
+		journal.Append(event.Event{Type: "edit", Edit: rec})
 	}
 	journal.Close()
 
@@ -65,8 +65,8 @@ func TestPersistedUndoModesAndLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store read failed: %v", err)
 	}
-	// agent.Live(events) directly returns []agent.Event or we just use events
-	var loadedRecs []*agent.EditRecord
+	// event.Live(events) directly returns []event.Event or we just use events
+	var loadedRecs []*event.EditRecord
 	for _, ev := range events {
 		if ev.Edit != nil {
 			loadedRecs = append(loadedRecs, ev.Edit)
@@ -115,7 +115,7 @@ func TestPersistedUndoModesAndLegacy(t *testing.T) {
 	recLegacy.ModeBefore = 0
 
 	regD := NewRegistry(root, sh)
-	resLegacy := regD.PersistedUndo([]*agent.EditRecord{recLegacy}, 1)
+	resLegacy := regD.PersistedUndo([]*event.EditRecord{recLegacy}, 1)
 	if !resLegacy[0].OK {
 		t.Fatalf("legacy undo failed: %v", resLegacy[0].Note)
 	}
@@ -144,14 +144,14 @@ func TestPersistedUndoDiagnostics(t *testing.T) {
 
 	// case 1: changed target file -> user-change conflict
 	os.WriteFile(path, []byte("externally modified"), 0o644)
-	res := regA.PersistedUndo([]*agent.EditRecord{rec}, 1)
+	res := regA.PersistedUndo([]*event.EditRecord{rec}, 1)
 	if res[0].OK || res[0].Note != ErrUndoConflictChanged.Error() {
 		t.Errorf("expected ErrUndoConflictChanged, got note: %q", res[0].Note)
 	}
 
 	// case 2: missing target file -> user-change (missing) conflict
 	os.Remove(path)
-	res = regA.PersistedUndo([]*agent.EditRecord{rec}, 1)
+	res = regA.PersistedUndo([]*event.EditRecord{rec}, 1)
 	if res[0].OK || res[0].Note != ErrUndoConflictMissing.Error() {
 		t.Errorf("expected ErrUndoConflictMissing, got note: %q", res[0].Note)
 	}
@@ -163,14 +163,14 @@ func TestPersistedUndoDiagnostics(t *testing.T) {
 	blobPath := filepath.Join(sh.StoreDir(), rec.BlobBefore[5:7], rec.BlobBefore[7:])
 	os.Chmod(blobPath, 0644)
 	os.WriteFile(blobPath, []byte("corrupted data"), 0o600)
-	res = regA.PersistedUndo([]*agent.EditRecord{rec}, 1)
+	res = regA.PersistedUndo([]*event.EditRecord{rec}, 1)
 	if res[0].OK || res[0].Note != snap.ErrShadowCorruption.Error()+": blob "+rec.BlobBefore+" checksum mismatch" {
 		t.Errorf("expected ErrShadowCorruption, got note: %q", res[0].Note)
 	}
 
 	// case 4: missing shadow blob -> missing diagnostic
 	os.Remove(blobPath)
-	res = regA.PersistedUndo([]*agent.EditRecord{rec}, 1)
+	res = regA.PersistedUndo([]*event.EditRecord{rec}, 1)
 	if res[0].OK || res[0].Note != snap.ErrShadowMissing.Error()+": stat "+blobPath+": no such file or directory" {
 		// allow for OS error variation by only checking the prefix?
 		t.Logf("res note = %q", res[0].Note)

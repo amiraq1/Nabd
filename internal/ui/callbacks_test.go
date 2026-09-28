@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestUnifiedCallbacksContract pins the contract that the unification is
@@ -25,7 +25,7 @@ func TestUnifiedCallbacksContract(t *testing.T) {
 		t.Fatalf("Feed /rewind contract broken: %q", status)
 	}
 
-	c := NewChat(runnerStub{}, make(chan agent.Event, 1))
+	c := NewChat(runnerStub{}, make(chan event.Event, 1))
 	c.SetCallbacks(cb)
 	if _, status := c.callbacks.OnRewind(1); status != "rewound" {
 		t.Fatalf("Chat /rewind contract broken: %q", status)
@@ -35,7 +35,7 @@ func TestUnifiedCallbacksContract(t *testing.T) {
 // TestChatRewindSetsInput verifies the Chat-specific side-effect of /rewind:
 // the restored text is pushed into the composer, matching the Feed path.
 func TestChatRewindSetsInput(t *testing.T) {
-	c := NewChat(runnerStub{}, make(chan agent.Event, 1))
+	c := NewChat(runnerStub{}, make(chan event.Event, 1))
 	c.SetCallbacks(&SessionCallbacks{
 		OnRewind: func(n int) (string, string) { return "restored draft", "rewound" },
 	})
@@ -50,7 +50,7 @@ func TestChatRewindSetsInput(t *testing.T) {
 // TestChatRewindEmptyStatusFallsBack ensures an empty status still yields the
 // rewound fallback string rather than leaving the user on a blank line.
 func TestChatRewindEmptyStatusFallsBack(t *testing.T) {
-	c := NewChat(runnerStub{}, make(chan agent.Event, 1))
+	c := NewChat(runnerStub{}, make(chan event.Event, 1))
 	c.SetCallbacks(&SessionCallbacks{
 		OnRewind: func(n int) (string, string) { return "", "" },
 	})

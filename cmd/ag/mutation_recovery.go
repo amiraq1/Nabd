@@ -4,10 +4,11 @@ import (
 	"fmt"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/tools"
 )
 
-func mutationRecordKey(rec *agent.EditRecord) string {
+func mutationRecordKey(rec *event.EditRecord) string {
 	if rec == nil {
 		return ""
 	}
@@ -21,13 +22,13 @@ func mutationRecordKey(rec *agent.EditRecord) string {
 // committed edit or abort event. It is deliberately diagnostic only: a crash
 // may have happened before or after publication, so continuation must never
 // replay the mutation automatically.
-func unresolvedMutationIntents(evs []agent.Event) int {
+func unresolvedMutationIntents(evs []event.Event) int {
 	type state struct {
 		intent bool
 		closed bool
 	}
 	states := map[string]state{}
-	for _, e := range agent.Live(evs) {
+	for _, e := range event.Live(evs) {
 		if e.Edit == nil {
 			continue
 		}
@@ -37,9 +38,9 @@ func unresolvedMutationIntents(evs []agent.Event) int {
 		}
 		s := states[key]
 		switch e.Type {
-		case agent.EventEditIntent:
+		case event.EventEditIntent:
 			s.intent = true
-		case agent.EventEdit, agent.EventEditAbort:
+		case event.EventEdit, event.EventEditAbort:
 			s.closed = true
 		}
 		states[key] = s
@@ -53,14 +54,14 @@ func unresolvedMutationIntents(evs []agent.Event) int {
 	return count
 }
 
-func unresolvedMutationRecords(evs []agent.Event) []*agent.EditRecord {
+func unresolvedMutationRecords(evs []event.Event) []*event.EditRecord {
 	type state struct {
-		record *agent.EditRecord
+		record *event.EditRecord
 		intent bool
 		closed bool
 	}
 	states := map[string]state{}
-	for _, e := range agent.Live(evs) {
+	for _, e := range event.Live(evs) {
 		if e.Edit == nil {
 			continue
 		}
@@ -73,14 +74,14 @@ func unresolvedMutationRecords(evs []agent.Event) []*agent.EditRecord {
 			s.record = e.Edit
 		}
 		switch e.Type {
-		case agent.EventEditIntent:
+		case event.EventEditIntent:
 			s.intent = true
-		case agent.EventEdit, agent.EventEditAbort:
+		case event.EventEdit, event.EventEditAbort:
 			s.closed = true
 		}
 		states[key] = s
 	}
-	out := make([]*agent.EditRecord, 0)
+	out := make([]*event.EditRecord, 0)
 	for _, s := range states {
 		if s.intent && !s.closed {
 			out = append(out, s.record)
@@ -89,7 +90,7 @@ func unresolvedMutationRecords(evs []agent.Event) []*agent.EditRecord {
 	return out
 }
 
-func noteMutationRecovery(loop *agent.Loop, reg *tools.Registry, evs []agent.Event) {
+func noteMutationRecovery(loop *agent.Loop, reg *tools.Registry, evs []event.Event) {
 	recs := unresolvedMutationRecords(evs)
 	if len(recs) == 0 {
 		return

@@ -21,6 +21,7 @@ import (
 	"nabd/internal/agent"
 	"nabd/internal/build"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
@@ -226,7 +227,7 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 		return err
 	}
 
-	var prevEvs []agent.Event
+	var prevEvs []event.Event
 	if cont {
 		// Stream only the live branch: a huge journal no longer loads
 		// wholesale into memory on resume.
@@ -328,7 +329,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 		return err
 	}
 
-	var prevEvs []agent.Event
+	var prevEvs []event.Event
 	if cont {
 		// Stream only the live branch: a huge journal no longer loads
 		// wholesale into memory on resume.
@@ -352,7 +353,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 		sess.loop.Seed(prevEvs)
 	}
 
-	batcher := ui.NewBatcher(eventBatchInterval, maxEventBatchSize, func(batch []agent.Event) {
+	batcher := ui.NewBatcher(eventBatchInterval, maxEventBatchSize, func(batch []event.Event) {
 		feed.SendBatch(batch)
 	})
 	batcher.Start()
@@ -364,7 +365,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 	feed.SetCallbacks(sess.callbacks())
 
 	if len(prevEvs) > 0 {
-		feed.BuildFromEvents(agent.Live(prevEvs))
+		feed.BuildFromEvents(event.Live(prevEvs))
 	}
 
 	prog := tea.NewProgram(feed, feed.ProgramOptions()...)
@@ -421,7 +422,7 @@ type feedSink struct {
 	batcher *ui.Batcher
 }
 
-func (s feedSink) Emit(e agent.Event) error {
+func (s feedSink) Emit(e event.Event) error {
 	s.batcher.Add(e)
 	return nil
 }
@@ -430,7 +431,7 @@ func fileUndo(loop *agent.Loop, reg *tools.Registry, n int) string {
 	if loop == nil || reg == nil {
 		return "undo not supported"
 	}
-	recs := editRecords(agent.Live(loop.Hist()))
+	recs := editRecords(event.Live(loop.Hist()))
 	if len(recs) == 0 {
 		return "no edits to undo"
 	}
@@ -480,14 +481,14 @@ func chatOnCompact(ctx context.Context, loop *agent.Loop) string {
 // a fatal loop error. The drop count is surfaced as a journal Notice just
 // before RunEnd (see noteDrops).
 type chanSink struct {
-	ch      chan agent.Event
+	ch      chan event.Event
 	dropped atomic.Int64
 }
 
 // newUISink builds the interactive UI sink. Its buffer is the contract value
 // (uiEventBuffer); when it overflows, Emit drops instead of blocking.
 func newUISink() *chanSink {
-	return &chanSink{ch: make(chan agent.Event, uiEventBuffer)}
+	return &chanSink{ch: make(chan event.Event, uiEventBuffer)}
 }
 
 // reportSession prints the authoritative session path and routes a close
@@ -501,7 +502,7 @@ func reportSession(out, errOut io.Writer, path string, closeErr error) {
 	}
 }
 
-func (s *chanSink) Emit(e agent.Event) error {
+func (s *chanSink) Emit(e event.Event) error {
 	select {
 	case s.ch <- e:
 	default:
@@ -750,7 +751,7 @@ func (g gate) Check(tool string) (agent.Verdict, string) {
 	return mapVerdict(v), why
 }
 
-func (g gate) CheckReason(tool string) (agent.Verdict, agent.PermissionReason, string) {
+func (g gate) CheckReason(tool string) (agent.Verdict, event.PermissionReason, string) {
 	v, reason, why := g.p.CheckReason(tool)
 	return mapVerdict(v), reason, why
 }
@@ -765,13 +766,13 @@ func mapVerdict(v perm.Verdict) agent.Verdict {
 	return agent.VerdictAsk
 }
 
-func (g gate) Record(tool string, d agent.Decision) {
-	if d == agent.AllowSession {
-		g.p.Record(tool, agent.AllowSession)
+func (g gate) Record(tool string, d event.Decision) {
+	if d == event.AllowSession {
+		g.p.Record(tool, event.AllowSession)
 	}
 }
 
-func (g gate) Effective(tool string, d agent.Decision) agent.Decision {
+func (g gate) Effective(tool string, d event.Decision) event.Decision {
 	return g.p.Effective(tool, d)
 }
 
@@ -805,7 +806,7 @@ func latestSession(dir, projectRoot string) (string, error) {
 				continue
 			}
 			for _, ev := range events {
-				if ev.Type == agent.RunStart {
+				if ev.Type == event.RunStart {
 					if ev.ProjectRoot == "" {
 						continue
 					}
@@ -820,11 +821,11 @@ func latestSession(dir, projectRoot string) (string, error) {
 	return "", fmt.Errorf(errNoSessions, sessDir)
 }
 
-func editRecords(evs []agent.Event) []*agent.EditRecord {
-	var out []*agent.EditRecord
+func editRecords(evs []event.Event) []*event.EditRecord {
+	var out []*event.EditRecord
 	seen := map[string]bool{}
 	aborted := map[string]bool{}
-	key := func(rec *agent.EditRecord) string {
+	key := func(rec *event.EditRecord) string {
 		if rec == nil {
 			return ""
 		}
@@ -836,11 +837,11 @@ func editRecords(evs []agent.Event) []*agent.EditRecord {
 	for i := len(evs) - 1; i >= 0; i-- {
 		rec := evs[i].Edit
 		switch evs[i].Type {
-		case agent.EventEditAbort:
+		case event.EventEditAbort:
 			if rec != nil {
 				aborted[key(rec)] = true
 			}
-		case agent.EventEdit, agent.EventEditIntent:
+		case event.EventEdit, event.EventEditIntent:
 			if rec == nil {
 				continue
 			}

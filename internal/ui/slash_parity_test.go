@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -56,7 +56,7 @@ func TestSlashCommandParityBetweenFeedAndChat(t *testing.T) {
 
 	// Track Chat callbacks
 	chatCalls := make(map[string]bool)
-	c := NewChat(runnerStub{}, make(chan agent.Event, 1))
+	c := NewChat(runnerStub{}, make(chan event.Event, 1))
 	c.SetCallbacks(&SessionCallbacks{
 		OnUndo: func(n int) string {
 			chatCalls["/undo"] = true

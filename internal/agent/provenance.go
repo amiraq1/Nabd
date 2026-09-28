@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"nabd/internal/event"
 	"regexp"
 	"strings"
 )
@@ -10,7 +11,7 @@ var readGutterLine = regexp.MustCompile(`^\s*\d+\|`)
 // UncorroboratedReadLines returns assistant text lines that look like numbered
 // read_file output but were not returned by a read_file ToolEnd in the same
 // user round. It compares event provenance, not wording or prompt phrases.
-func UncorroboratedReadLines(evs []Event) []string {
+func UncorroboratedReadLines(evs []event.Event) []string {
 	var out []string
 	var toolOutput []string
 	var assistant strings.Builder
@@ -33,13 +34,13 @@ func UncorroboratedReadLines(evs []Event) []string {
 		toolOutput = nil
 		assistant.Reset()
 	}
-	for _, e := range Live(evs) {
+	for _, e := range event.Live(evs) {
 		switch e.Type {
-		case UserMsg:
+		case event.UserMsg:
 			flush()
-		case TextDelta:
+		case event.TextDelta:
 			assistant.WriteString(e.Text)
-		case ToolEnd:
+		case event.ToolEnd:
 			if e.Call != nil && e.Call.Name == "read_file" && e.Call.OK {
 				toolOutput = append(toolOutput, e.Call.Output)
 			}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"nabd/internal/event"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,7 +21,7 @@ import (
 // Sink receives every event. The journal is one; the UI is another.
 // Emit must not block for long: the loop waits on it.
 type Sink interface {
-	Emit(Event) error
+	Emit(event.Event) error
 }
 
 // A Sink must be non-reentrant with respect to the Loop: Emit is invoked
@@ -81,7 +82,7 @@ type GuardedOutcome interface {
 // no text channel: protected content and producer messages must not enter the
 // loop detector or ordinary tool output.
 type GuardedResult struct {
-	Event Event
+	Event event.Event
 	OK    bool
 }
 
@@ -115,7 +116,7 @@ type Loop struct {
 	// now is the clock the loop uses for rate-limit timing. nil means the
 	// real wall clock; tests inject a fake so they can prove escalation
 	// without sleeping.
-	now    func() time.Time
+	now func() time.Time
 	// warned tracks whether the 60% context-pressure notice was already
 	// shown. Atomic because the loop's turn machinery may observe it from
 	// more than one goroutine; it is not covered by mu.
@@ -126,7 +127,7 @@ type Loop struct {
 	historyMu sync.Mutex
 	seq       int
 	parent    int
-	hist      []Event
+	hist      []event.Event
 	// rateLimitState tracks consecutive 429s for the active Run().
 	// It is reset at the start of each Run() and after every successful turn.
 	rateLimitHits      int           // consecutive 429s since last success
@@ -175,18 +176,10 @@ func (l *Loop) pressure(ms []provider.Message) float64 {
 	return float64(estimated) / float64(usable)
 }
 
-// ErrMaxTurns means the model kept calling tools past the ceiling. It is
-// a bug guard, not a normal ending: a loop that never settles is a loop.
-var ErrMaxTurns = errors.New("turn ceiling reached")
-
 // DefaultMaxTurns is the shipped turn ceiling, named so a test or a document
 // can refer to it instead of repeating the number and drifting from it. The
 // reasoning behind the value is at its use in run().
 const DefaultMaxTurns = 40
-
-// ErrRateLimitBudget means too many 429s arrived in a single Run(). The
-// session is intact; the caller should wait before retrying.
-var ErrRateLimitBudget = errors.New("rate limit budget exhausted")
 
 // ErrCompactBoundaryStale is returned by Compact when the boundary chosen from
 // an earlier snapshot is no longer safe to apply to the history that exists at
@@ -233,15 +226,15 @@ var ErrHistoryMutationInProgress = errors.New("history mutation already in progr
 // Messages() still emits a tool_result with an empty id for it (see its ToolEnd
 // case). That is pre-existing behaviour, not introduced or worsened by this
 // check, and is recorded in the parking lot rather than fixed here.
-func rawPairingInvariantHolds(evs []Event) bool {
+func rawPairingInvariantHolds(evs []event.Event) bool {
 	seenStarts := make(map[string]bool)
 	for _, e := range evs {
 		switch e.Type {
-		case ToolStart:
+		case event.ToolStart:
 			if e.Call != nil && e.Call.ID != "" {
 				seenStarts[e.Call.ID] = true
 			}
-		case ToolEnd:
+		case event.ToolEnd:
 			if e.Call == nil || e.Call.ID == "" {
 				continue // skip malformed ToolEnd: not a pairing violation, preserves --continue compatibility
 			}
@@ -293,11 +286,11 @@ func rateLimitWait(retryAfter time.Duration, consecutiveHits int) time.Duration 
 }
 
 func (l *Loop) Start(banner, projectRoot string) error {
-	if err := l.emit(Event{Type: RunStart, Text: banner, ProjectRoot: projectRoot}); err != nil {
+	if err := l.emit(event.Event{Type: event.RunStart, Text: banner, ProjectRoot: projectRoot}); err != nil {
 		return err
 	}
 	if l.SkillInventory != nil {
-		return l.emit(Event{Type: EventSkills, Skills: append([]skill.EventSkills(nil), l.SkillInventory...)})
+		return l.emit(event.Event{Type: event.EventSkills, Skills: append([]skill.EventSkills(nil), l.SkillInventory...)})
 	}
 	return nil
 }
@@ -307,9 +300,9 @@ func (l *Loop) Start(banner, projectRoot string) error {
 // Interrupted event, because pretending it was never said is a lie.
 func (l *Loop) Run(ctx context.Context, userText string) error {
 	if l.SpendBudget != nil && l.SpendBudget.Exhausted() {
-		return ErrSpendBudget
+		return event.ErrSpendBudget
 	}
-	if err := l.emit(Event{Type: UserMsg, Text: userText}); err != nil {
+	if err := l.emit(event.Event{Type: event.UserMsg, Text: userText}); err != nil {
 		return err
 	}
 
@@ -367,18 +360,18 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 		// number of consecutive 429-aborted turns, must cap the run even if
 		// the hits ceiling is configured higher.
 		if totalWait >= maxRateLimitWait || attempts >= maxRateLimitAttempt {
-			_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryRateLimit, Text: fmt.Sprintf(
+			_ = l.emit(event.Event{Type: event.Notice, NoticeCategory: event.NoticeCategoryRateLimit, Text: fmt.Sprintf(
 				"rate limit absolute bound reached (%s waited, %d attempts) · wait and retry",
 				totalWait.Round(time.Second), attempts)})
-			_ = l.emit(Event{Type: RunError, Err: ErrRateLimitBudget.Error()})
-			return ErrRateLimitBudget
+			_ = l.emit(event.Event{Type: event.RunError, Err: event.ErrRateLimitBudget.Error()})
+			return event.ErrRateLimitBudget
 		}
 
 		if hits >= l.rateLimitCeiling() {
-			_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryRateLimit, Text: fmt.Sprintf(
+			_ = l.emit(event.Event{Type: event.Notice, NoticeCategory: event.NoticeCategoryRateLimit, Text: fmt.Sprintf(
 				"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits)})
-			_ = l.emit(RunErrorEvent(ErrRateLimitBudget))
-			return ErrRateLimitBudget
+			_ = l.emit(RunErrorEvent(event.ErrRateLimitBudget))
+			return event.ErrRateLimitBudget
 		}
 
 		// Wait before retrying after a 429. The agent is the sole owner of
@@ -392,14 +385,14 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 				remaining := wait - elapsed
 				select {
 				case <-ctx.Done():
-					_ = l.emit(Event{Type: Interrupted, Text: "ctrl+c"})
+					_ = l.emit(event.Event{Type: event.Interrupted, Text: "ctrl+c"})
 					return nil
 				case <-time.After(remaining):
 				}
 			}
 		}
 
-		ms := Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
+		ms := Squeeze(Messages(event.Live(l.hist)), l.keepFullRounds())
 		if p := l.pressure(ms); p > 0.75 {
 			// Notice emits below intentionally drop the error: a context-
 			// pressure status line is not safety-critical, and aborting the
@@ -407,23 +400,23 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			// the same rationale as Note.
 			if err := l.Compact(ctx, l.compactTarget()); err != nil {
 				if !errors.Is(err, ErrHistoryMutationInProgress) {
-					l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryContextPressure, Text: "compact failed: " + err.Error()})
+					l.emit(event.Event{Type: event.Notice, NoticeCategory: event.NoticeCategoryContextPressure, Text: "compact failed: " + err.Error()})
 				}
 			} else {
-				ms = Squeeze(Messages(Live(l.hist)), l.keepFullRounds())
-				l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryContextPressure, Text: fmt.Sprintf("context compacted · %d%% → %d%%",
+				ms = Squeeze(Messages(event.Live(l.hist)), l.keepFullRounds())
+				l.emit(event.Event{Type: event.Notice, NoticeCategory: event.NoticeCategoryContextPressure, Text: fmt.Sprintf("context compacted · %d%% → %d%%",
 					int(p*100), int(l.Budget.Pressure(ms)*100))})
 				l.warned.Store(false)
 			}
 		} else if p > 0.6 && !l.warned.Load() {
 			l.warned.Store(true)
-			l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryContextPressure, Text: fmt.Sprintf("context %d%%", int(p*100))})
+			l.emit(event.Event{Type: event.Notice, NoticeCategory: event.NoticeCategoryContextPressure, Text: fmt.Sprintf("context %d%%", int(p*100))})
 		}
 
 		calls, stop, err := l.streamTurn(ctx, ms)
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
-				_ = l.emit(Event{Type: Interrupted, Text: "ctrl+c"})
+				_ = l.emit(event.Event{Type: event.Interrupted, Text: "ctrl+c"})
 				return nil // an interruption is an outcome, not a failure
 			}
 			if errors.Is(err, errTurnRateLimited) {
@@ -433,15 +426,15 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 				// the appropriate amount, then retry.
 				continue
 			}
-			if errors.Is(err, ErrRateLimitBudget) {
+			if errors.Is(err, event.ErrRateLimitBudget) {
 				// CHECK B: mid-stream ceiling hit; emit and surface.
 				l.mu.Lock()
 				hits2 := l.rateLimitHits
 				l.mu.Unlock()
-				_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryRateLimit, Text: fmt.Sprintf(
+				_ = l.emit(event.Event{Type: event.Notice, NoticeCategory: event.NoticeCategoryRateLimit, Text: fmt.Sprintf(
 					"rate limit budget exhausted (%d/429s in this run) · wait and retry", hits2)})
-				_ = l.emit(RunErrorEvent(ErrRateLimitBudget))
-				return ErrRateLimitBudget
+				_ = l.emit(RunErrorEvent(event.ErrRateLimitBudget))
+				return event.ErrRateLimitBudget
 			}
 			// A 413 on Groq is a per-minute TPM violation, not a final
 			// failure: waiting a minute resolves it. The human must know,
@@ -451,7 +444,7 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			// was, so anyone who wants to act on the notice needs to know
 			// which ceiling it came from (NBD-404).
 			if notice, ok := tpmLimitNotice(err); ok {
-				_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryTPM, Text: l.tpmNoticeText(notice), Limit: notice.Limit, Requested: notice.Requested})
+				_ = l.emit(event.Event{Type: event.Notice, NoticeCategory: event.NoticeCategoryTPM, Text: l.tpmNoticeText(notice), Limit: notice.Limit, Requested: notice.Requested})
 			}
 			_ = l.emit(RunErrorEvent(err))
 			return err
@@ -476,15 +469,15 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			l.mu.Unlock()
 			if rt != nil {
 				for _, inc := range rt.IncompleteReads() {
-					_ = l.emit(Event{
-						Type:           Notice,
-						NoticeCategory: NoticeCategoryDisplay,
+					_ = l.emit(event.Event{
+						Type:           event.Notice,
+						NoticeCategory: event.NoticeCategoryDisplay,
 						Text:           FormatTruncatedReadWarning(inc),
 					})
 				}
 			}
 			if stop == "max_tokens" {
-				_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryLengthLimit, Text: "reached length limit · say \"continue\""})
+				_ = l.emit(event.Event{Type: event.Notice, NoticeCategory: event.NoticeCategoryLengthLimit, Text: "reached length limit · say \"continue\""})
 			}
 			return nil
 		}
@@ -497,13 +490,13 @@ func (l *Loop) Run(ctx context.Context, userText string) error {
 			return err
 		}
 		if interrupted {
-			_ = l.emit(Event{Type: Interrupted, Text: "ctrl+c"})
+			_ = l.emit(event.Event{Type: event.Interrupted, Text: "ctrl+c"})
 			return nil
 		}
 	}
 
-	_ = l.emit(RunErrorEvent(ErrMaxTurns))
-	return ErrMaxTurns
+	_ = l.emit(RunErrorEvent(event.ErrMaxTurns))
+	return event.ErrMaxTurns
 }
 
 func providerTurnContext(parent context.Context) (context.Context, context.CancelFunc) {
@@ -521,7 +514,7 @@ func providerTurnContext(parent context.Context) (context.Context, context.Cance
 // responded with a 429, so Run() can wait and retry instead of resetting
 // the consecutive-429 counter.
 func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provider.ToolCall, string, error) {
-	if err := l.emit(Event{Type: TurnStart}); err != nil {
+	if err := l.emit(event.Event{Type: event.TurnStart}); err != nil {
 		return nil, "", err
 	}
 
@@ -564,7 +557,7 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 		switch c.Kind {
 		case provider.ChunkText:
 			text += c.Text
-			if err := l.emit(Event{Type: TextDelta, Text: c.Text}); err != nil {
+			if err := l.emit(event.Event{Type: event.TextDelta, Text: c.Text}); err != nil {
 				return nil, "", err
 			}
 
@@ -594,12 +587,12 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 			// for this successful turn. These are the raw inputs needed to
 			// derive the charge model: prompt_tokens, completion_tokens,
 			// finish_reason, and the max_tokens the client requested.
-			_ = l.emit(Event{Type: EventCalib, Calib: &Calibration{
+			_ = l.emit(event.Event{Type: event.EventCalib, Calib: &event.Calibration{
 				EncodedBytes: c.EncodedBytes,
 				PromptTokens: c.PromptTokens,
 				Messages:     len(ms),
 			}})
-			_ = l.emit(Event{Type: EventProviderUsage, Usage: &ProviderUsage{
+			_ = l.emit(event.Event{Type: event.EventProviderUsage, Usage: &event.ProviderUsage{
 				PromptTokens:     c.PromptTokens,
 				CompletionTokens: c.CompletionTokens,
 				FinishReason:     c.FinishReason,
@@ -613,7 +606,7 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 				// is session-varying state, and the log must show which
 				// budget the agent worked under.
 				if l.Budget.Calibrate(c.PromptTokens, l.Budget.Estimate(ms)) {
-					_ = l.emit(Event{Type: Notice, NoticeCategory: NoticeCategoryCalibration, Calib: &Calibration{PromptTokens: c.PromptTokens}, Text: fmt.Sprintf("calibration: token ratio (observed prompt_tokens ÷ heuristic estimate) adopted %.2f · conservative ratchet, rises only (measured prompt_tokens=%d)", l.Budget.Ratio(), c.PromptTokens)})
+					_ = l.emit(event.Event{Type: event.Notice, NoticeCategory: event.NoticeCategoryCalibration, Calib: &event.Calibration{PromptTokens: c.PromptTokens}, Text: fmt.Sprintf("calibration: token ratio (observed prompt_tokens ÷ heuristic estimate) adopted %.2f · conservative ratchet, rises only (measured prompt_tokens=%d)", l.Budget.Ratio(), c.PromptTokens)})
 				}
 			}
 
@@ -641,8 +634,8 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 				attempts := l.rateLimitAttempts
 				l.mu.Unlock()
 
-				_ = l.emit(Event{
-					Type:       EventRateLimit,
+				_ = l.emit(event.Event{
+					Type:       event.EventRateLimit,
 					Code:       c.RateLimit.Code,
 					Limit:      c.RateLimit.Limit,
 					Used:       c.RateLimit.Used,
@@ -665,12 +658,12 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 				if totalWait >= 120*time.Second || attempts >= 8 {
 					for range ch {
 					} // drain so provider goroutine isn't blocked
-					return nil, "", ErrRateLimitBudget
+					return nil, "", event.ErrRateLimitBudget
 				}
 				if hits >= l.rateLimitCeiling() {
 					for range ch {
 					} // drain so provider goroutine isn't blocked
-					return nil, "", ErrRateLimitBudget
+					return nil, "", event.ErrRateLimitBudget
 				}
 				// The provider closes the channel after reporting the 429
 				// (it does not sleep or retry). The for-loop will exit and
@@ -679,9 +672,9 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 
 		case provider.ChunkTrace:
 			if c.RouteTrace != nil {
-				_ = l.emit(Event{
-					Type: EventProviderRoute,
-					Route: &ProviderRoute{
+				_ = l.emit(event.Event{
+					Type: event.EventProviderRoute,
+					Route: &event.ProviderRoute{
 						StreamID: c.RouteTrace.StreamID,
 						Provider: c.RouteTrace.Provider,
 						Model:    c.RouteTrace.Model,
@@ -710,11 +703,11 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 	// marker sits on its own line, fenced by blank lines, so it never lands
 	// inside a code block that the cut may have opened.
 	if stop == "max_tokens" && text != "" {
-		if err := l.emit(Event{Type: TextDelta, Text: "\n\n[CUT: reached length limit — say \"continue\" to resume]\n\n"}); err != nil {
+		if err := l.emit(event.Event{Type: event.TextDelta, Text: "\n\n[CUT: reached length limit — say \"continue\" to resume]\n\n"}); err != nil {
 			return nil, "", err
 		}
 	}
-	if err := l.emit(Event{Type: TurnEnd}); err != nil {
+	if err := l.emit(event.Event{Type: event.TurnEnd}); err != nil {
 		return nil, "", err
 	}
 	// If the provider reported a 429 this turn, signal Run() to wait and
@@ -751,7 +744,7 @@ func (l *Loop) knownTool(name string) bool {
 // loopInput is the value the repetition detector keys on for one call.
 // Guarded calls contribute nothing: the detector already has name+input, and
 // admitting producer text would make a body leak depend on producer behavior.
-func loopInput(out Outcome, guarded bool) string {
+func loopInput(out event.Outcome, guarded bool) string {
 	if guarded {
 		return ""
 	}
@@ -771,20 +764,20 @@ func (l *Loop) checkLoop(tool string, input []byte, ok bool, output string) erro
 	l.mu.Unlock()
 
 	if count == LoopNoticeThreshold {
-		_ = l.emit(Event{
-			Type:           Notice,
-			NoticeCategory: NoticeCategoryLoopLimit,
+		_ = l.emit(event.Event{
+			Type:           event.Notice,
+			NoticeCategory: event.NoticeCategoryLoopLimit,
 			Text:           fmt.Sprintf("loop detected: tool %q called %d times with identical arguments and outcome; please try a different approach", tool, count),
-			Notice:         &NoticeData{LoopLimit: &LoopLimitNotice{Tool: tool, Count: count}},
+			Notice:         &event.NoticeData{LoopLimit: &event.LoopLimitNotice{Tool: tool, Count: count}},
 		})
 	} else if count >= LoopAbortThreshold {
-		_ = l.emit(Event{
-			Type:           Notice,
-			NoticeCategory: NoticeCategoryLoopLimit,
+		_ = l.emit(event.Event{
+			Type:           event.Notice,
+			NoticeCategory: event.NoticeCategoryLoopLimit,
 			Text:           fmt.Sprintf("tool loop detected: %s repeated %d times with identical input and output · aborting", tool, count),
-			Notice:         &NoticeData{LoopLimit: &LoopLimitNotice{Tool: tool, Count: count, Aborted: true}},
+			Notice:         &event.NoticeData{LoopLimit: &event.LoopLimitNotice{Tool: tool, Count: count, Aborted: true}},
 		})
-		return ErrToolLoop
+		return event.ErrToolLoop
 	}
 	return nil
 }
@@ -815,9 +808,9 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 			c, dropped = rp.RepairCallWithDrops(c)
 		}
 
-		ac := ToolCall{ID: c.ID, Name: c.Name, Args: c.Input, DroppedArgs: dropped}
+		ac := event.ToolCall{ID: c.ID, Name: c.Name, Args: c.Input, DroppedArgs: dropped}
 
-		if err := l.emit(Event{Type: ToolStart, Call: &ac}); err != nil {
+		if err := l.emit(event.Event{Type: event.ToolStart, Call: &ac}); err != nil {
 			return false, WrapToolCallError(ac, err)
 		}
 
@@ -829,20 +822,20 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		if !l.knownTool(c.Name) {
 			msg := fmt.Sprintf("unknown tool %q · available: %s", c.Name, strings.Join(l.toolNames(), ", "))
 			ac.OK, ac.Output = false, msg
-			if err := l.emit(Event{Type: ToolEnd, Call: &ac}); err != nil {
+			if err := l.emit(event.Event{Type: event.ToolEnd, Call: &ac}); err != nil {
 				return false, WrapToolCallError(ac, err)
 			}
 			continue
 		}
 
 		d, why := l.decide(ctx, ac, l.emit)
-		if d == Deny {
+		if d == event.Deny {
 			msg := "refused to run " + c.Name
 			if why != "" {
 				msg += ": " + why
 			}
 			ac.OK, ac.Output = false, msg
-			if err := l.emit(Event{Type: ToolEnd, Call: &ac}); err != nil {
+			if err := l.emit(event.Event{Type: event.ToolEnd, Call: &ac}); err != nil {
 				return false, WrapToolCallError(ac, err)
 			}
 			if err := l.checkLoop(c.Name, c.Input, false, msg); err != nil {
@@ -852,9 +845,9 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		}
 
 		start := time.Now()
-		var out Outcome
+		var out event.Outcome
 		var err error
-		var guardedEvent *Event
+		var guardedEvent *event.Event
 		// A name the binary declares guarded but the active layer offers no
 		// guard for is broken wiring, not a fallback: l.exec would return the
 		// body as plain ToolEnd.Output. Refuse the call and abort the turn.
@@ -871,14 +864,14 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		case hasGuard:
 			result, gerr := guarded.GuardedResult(ctx, c.Input)
 			if gerr != nil {
-				out, err = Outcome{OK: false}, gerr
+				out, err = event.Outcome{OK: false}, gerr
 			} else {
-				guardedEvent, out = &result.Event, Outcome{OK: result.OK}
+				guardedEvent, out = &result.Event, event.Outcome{OK: result.OK}
 			}
 		case toolvocab.Guarded(c.Name):
 			guardRefusal = true
 			err = fmt.Errorf("tool %q is a guarded capability but the active tool layer provides no guarded outcome; refusing to fall back to plain execution", c.Name)
-			out = Outcome{OK: false}
+			out = event.Outcome{OK: false}
 		default:
 			out, err = l.exec(ctx, c)
 		}
@@ -891,7 +884,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		// and it runs sequentially, so there is no race window for a write to
 		// steal a credit it did not read.
 		if c.Name == "read_file" && out.OK {
-			if sc, ok := l.Tools.(interface{ SetReadCredit(ReadCredit) }); ok {
+			if sc, ok := l.Tools.(interface{ SetReadCredit(event.ReadCredit) }); ok {
 				sc.SetReadCredit(out.ReadCredit)
 			}
 		}
@@ -907,11 +900,11 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 			toolOutput = ""
 		}
 		loopOutcome := loopInput(out, guardedEvent != nil)
-		done := ToolCall{
+		done := event.ToolCall{
 			ID: c.ID, Name: c.Name, Output: toolOutput, OK: out.OK,
 			Exit: out.Exit, Signal: out.Signal, MS: ms,
 		}
-		if eerr := l.emit(Event{Type: ToolEnd, Call: &done}); eerr != nil {
+		if eerr := l.emit(event.Event{Type: event.ToolEnd, Call: &done}); eerr != nil {
 			return false, WrapToolCallError(done, eerr)
 		}
 		// The ToolEnd above keeps ToolStart/ToolEnd paired and carries the
@@ -928,9 +921,9 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		// only writer of Seq/Parent, so the EditRecord event is emitted here
 		// (not from inside tools, which must not reach into the journal).
 		if out.OK && (c.Name == "write_file" || c.Name == "edit_file") {
-			if er, ok := l.Tools.(interface{ LastEdit() *EditRecord }); ok {
+			if er, ok := l.Tools.(interface{ LastEdit() *event.EditRecord }); ok {
 				if rec := er.LastEdit(); rec != nil {
-					if eerr := l.emit(Event{Type: EventEdit, Edit: rec}); eerr != nil {
+					if eerr := l.emit(event.Event{Type: event.EventEdit, Edit: rec}); eerr != nil {
 						return false, WrapToolCallError(ac, eerr)
 					}
 				}
@@ -940,7 +933,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 		// A read_file call is journaled so replays and audit know what was seen,
 		// and the loop can track whether truncated reads were subsequently completed.
 		if out.OK && c.Name == "read_file" {
-			rec := ReadRecord{
+			rec := event.ReadRecord{
 				Path:       pathOf(c.Input),
 				Truncated:  out.Truncated,
 				NextOffset: out.NextOffset,
@@ -948,7 +941,7 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 				TotalLines: out.TotalLines,
 				Offset:     out.Offset,
 			}
-			if eerr := l.emit(Event{Type: EventRead, Read: &rec}); eerr != nil {
+			if eerr := l.emit(event.Event{Type: event.EventRead, Read: &rec}); eerr != nil {
 				return false, WrapToolCallError(ac, eerr)
 			}
 			l.mu.Lock()
@@ -964,23 +957,23 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 
 // exec isolates the tool from the loop: a panicking tool must not take
 // the conversation down with it.
-func (l *Loop) exec(ctx context.Context, c provider.ToolCall) (out Outcome, err error) {
+func (l *Loop) exec(ctx context.Context, c provider.ToolCall) (out event.Outcome, err error) {
 	if l.Tools == nil {
-		return Outcome{OK: false}, fmt.Errorf("no tools in this build: %s", c.Name)
+		return event.Outcome{OK: false}, fmt.Errorf("no tools in this build: %s", c.Name)
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			out = Outcome{OK: false}
+			out = event.Outcome{OK: false}
 			err = fmt.Errorf("panic in %s: %v", c.Name, r)
 		}
 	}()
 	if d, ok := l.Tools.(interface {
-		RunDetailed(context.Context, string, json.RawMessage) (Outcome, error)
+		RunDetailed(context.Context, string, json.RawMessage) (event.Outcome, error)
 	}); ok {
 		return d.RunDetailed(ctx, c.Name, c.Input)
 	}
 	txt, good, e := l.Tools.Run(ctx, c)
-	return Outcome{Text: txt, OK: good}, e
+	return event.Outcome{Text: txt, OK: good}, e
 }
 
 type tpmNotice struct {
@@ -1037,7 +1030,7 @@ func pathOf(raw []byte) string {
 // assigned here and nowhere else, which is what makes the journal a
 // tree rather than a pile. A sink failure is returned to the caller so the
 // loop does not continue as if the event was durably recorded.
-func (l *Loop) emit(e Event) error {
+func (l *Loop) emit(e event.Event) error {
 	l.mu.Lock()
 	parent := l.parent
 	l.mu.Unlock()
@@ -1050,7 +1043,7 @@ func (l *Loop) emit(e Event) error {
 // safety-critical event, and crashing the session on a UI blip is worse
 // than dropping a status line.
 func (l *Loop) Note(text string) {
-	_ = l.emit(Event{Type: Notice, Text: text})
+	_ = l.emit(event.Event{Type: event.Notice, Text: text})
 }
 
 // NoteUndo emits an /undo result notice that reaches the model, because
@@ -1058,11 +1051,11 @@ func (l *Loop) Note(text string) {
 // the human rendering and stays verbatim for display; reverted and failed are
 // the paths the undo touched, and they — not text — are what the model sees.
 func (l *Loop) NoteUndo(text string, reverted, failed []string) {
-	_ = l.emit(Event{
-		Type:           Notice,
+	_ = l.emit(event.Event{
+		Type:           event.Notice,
 		Text:           text,
-		NoticeCategory: NoticeCategoryUndoResult,
-		Notice:         &NoticeData{Undo: &UndoNotice{Reverted: reverted, Failed: failed}},
+		NoticeCategory: event.NoticeCategoryUndoResult,
+		Notice:         &event.NoticeData{Undo: &event.UndoNotice{Reverted: reverted, Failed: failed}},
 	})
 }
 
@@ -1077,37 +1070,37 @@ func (l *Loop) End(text string) error {
 	}
 	l.ended = true
 	l.mu.Unlock()
-	return l.emit(Event{Type: RunEnd, Text: text})
+	return l.emit(event.Event{Type: event.RunEnd, Text: text})
 }
 
 // PrepareMutation journals the recovery intent before a mutating tool
 // publishes bytes. A prepared intent is useful on its own: after a crash,
 // /undo can verify the target hash and either recover the mutation or refuse it
 // without guessing.
-func (l *Loop) PrepareMutation(rec *EditRecord) error {
+func (l *Loop) PrepareMutation(rec *event.EditRecord) error {
 	if rec == nil {
 		return errors.New("nil mutation record")
 	}
-	return l.emit(Event{Type: EventEditIntent, Edit: rec})
+	return l.emit(event.Event{Type: event.EventEditIntent, Edit: rec})
 }
 
 // AbortMutation records that a mutation did not publish. It is kept separate
 // from edit_record so recovery never treats a failed pre-publish attempt as a
 // committed edit.
-func (l *Loop) AbortMutation(rec *EditRecord, cause error) error {
+func (l *Loop) AbortMutation(rec *event.EditRecord, cause error) error {
 	if rec == nil {
 		return errors.New("nil mutation record")
 	}
-	e := Event{Type: EventEditAbort, Edit: rec}
+	e := event.Event{Type: event.EventEditAbort, Edit: rec}
 	if cause != nil {
 		e.Err = cause.Error()
 	}
 	return l.emit(e)
 }
 
-func eventRequiresSync(e Event) bool {
+func eventRequiresSync(e event.Event) bool {
 	switch e.Type {
-	case PermAsk, PermReply, EventEditIntent, EventEditAbort, EventEdit:
+	case event.PermAsk, event.PermReply, event.EventEditIntent, event.EventEditAbort, event.EventEdit:
 		return true
 	default:
 		return false
@@ -1118,7 +1111,7 @@ func eventRequiresSync(e Event) bool {
 // if the journal cannot be written, the UI should not pretend otherwise.
 type Fanout []Sink
 
-func (f Fanout) Emit(e Event) error {
+func (f Fanout) Emit(e event.Event) error {
 	for _, s := range f {
 		if s == nil {
 			continue
@@ -1147,7 +1140,7 @@ func (f Fanout) Sync() error {
 // starts empty on purpose: each session stays its own file and the tree is
 // reassembled in memory from the seeded events. Merging several journal
 // files into one is deliberately out of scope.
-func (l *Loop) Seed(evs []Event) {
+func (l *Loop) Seed(evs []event.Event) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.hist = append(l.hist, evs...)
@@ -1157,10 +1150,10 @@ func (l *Loop) Seed(evs []Event) {
 	}
 }
 
-func (l *Loop) Hist() []Event {
+func (l *Loop) Hist() []event.Event {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	out := make([]Event, len(l.hist))
+	out := make([]event.Event, len(l.hist))
 	copy(out, l.hist)
 	return out
 }

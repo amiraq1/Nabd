@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestFollowResumesAfterModalClose: while the modal is visible, visible
@@ -14,29 +14,29 @@ func TestFollowResumesAfterModalClose(t *testing.T) {
 	f.width = 80
 	f.height = 24
 	f.follow = true
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "start"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "start"},
 	}})
 
 	// Modal opens.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "bash"}},
 	}})
 	if !f.modalVisible {
 		t.Fatal("modal must be visible")
 	}
 	// Events behind the modal: unseen grows, follow stays true but scroll
 	// is paused.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 3, Type: agent.TextDelta, Text: "behind the modal"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 3, Type: event.TextDelta, Text: "behind the modal"},
 	}})
 	if f.unseen == 0 {
 		t.Fatal("unseen must grow while the modal pauses auto-scroll")
 	}
 
 	// The loop answers: PermReply event closes the modal.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 4, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 4, Type: event.PermReply, Call: &event.ToolCall{ID: "c1"}, Decision: event.AllowOnce, RawDecision: event.AllowOnce},
 	}})
 	if f.modalVisible {
 		t.Fatal("modal must close on PermReply")
@@ -58,15 +58,15 @@ func TestFocusRestoredFromEventPath(t *testing.T) {
 	f.width = 80
 	f.height = 24
 	// Open the modal (run not busy: a simulated standalone ask).
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "read_file"}},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "read_file"}},
 	}})
 	if f.composer.focused() {
 		t.Fatal("composer must blur while the modal is visible")
 	}
 	// Deny via the event stream (loop-side decision).
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, RawDecision: agent.Deny},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.PermReply, Call: &event.ToolCall{ID: "c1"}, Decision: event.Deny, RawDecision: event.Deny},
 	}})
 	if f.modalVisible {
 		t.Fatal("modal must close")

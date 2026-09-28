@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestBatcherStopIsIdempotent: calling Stop twice must not panic.
 func TestBatcherStopIsIdempotent(t *testing.T) {
-	b := NewBatcher(time.Hour, 10, func([]agent.Event) {})
+	b := NewBatcher(time.Hour, 10, func([]event.Event) {})
 	b.Start()
 
 	// First stop
@@ -28,7 +28,7 @@ func TestBatcherStopIsIdempotent(t *testing.T) {
 
 // TestBatcherStopBeforeStartDoesNotPanic: stopping an unstarted batcher must be safe.
 func TestBatcherStopBeforeStartDoesNotPanic(t *testing.T) {
-	b := NewBatcher(time.Hour, 10, func([]agent.Event) {})
+	b := NewBatcher(time.Hour, 10, func([]event.Event) {})
 	defer func() {
 		if r := recover(); r != nil {
 			t.Fatalf("Stop() before Start() panicked: %v", r)
@@ -53,7 +53,7 @@ func TestBatcherOnFlushNeverRunsConcurrently(t *testing.T) {
 	}
 	defer release()
 
-	b := NewBatcher(time.Hour, 2, func(batch []agent.Event) {
+	b := NewBatcher(time.Hour, 2, func(batch []event.Event) {
 		cur := atomic.AddInt32(&inFlush, 1)
 		if cur > 1 {
 			atomic.AddInt32(&concurrentCount, 1)
@@ -69,8 +69,8 @@ func TestBatcherOnFlushNeverRunsConcurrently(t *testing.T) {
 	doneG1 := make(chan struct{})
 	go func() {
 		defer close(doneG1)
-		b.Add(agent.Event{Seq: 1, Type: agent.TextDelta})
-		b.Add(agent.Event{Seq: 2, Type: agent.TextDelta})
+		b.Add(event.Event{Seq: 1, Type: event.TextDelta})
+		b.Add(event.Event{Seq: 2, Type: event.TextDelta})
 	}()
 
 	// Wait until Goroutine 1 enters onFlush
@@ -86,7 +86,7 @@ func TestBatcherOnFlushNeverRunsConcurrently(t *testing.T) {
 	go func() {
 		defer close(doneG2)
 		close(startedG2)
-		b.Add(agent.Event{Seq: 3, Type: agent.PermAsk})
+		b.Add(event.Event{Seq: 3, Type: event.PermAsk})
 	}()
 
 	select {
@@ -123,7 +123,7 @@ func TestBatcherOnFlushNeverRunsConcurrently(t *testing.T) {
 
 // TestBatcherAddAfterStopDoesNotPanic
 func TestBatcherAddAfterStopDoesNotPanic(t *testing.T) {
-	b := NewBatcher(time.Hour, 10, func([]agent.Event) {})
+	b := NewBatcher(time.Hour, 10, func([]event.Event) {})
 	b.Start()
 	b.Stop()
 
@@ -132,7 +132,7 @@ func TestBatcherAddAfterStopDoesNotPanic(t *testing.T) {
 			t.Fatalf("Add after Stop panicked: %v", r)
 		}
 	}()
-	b.Add(agent.Event{Seq: 1, Type: agent.TextDelta})
+	b.Add(event.Event{Seq: 1, Type: event.TextDelta})
 }
 
 // TestBatcherPreservesGlobalOrderAcrossTimerAndSensitiveFlush
@@ -140,7 +140,7 @@ func TestBatcherPreservesGlobalOrderAcrossTimerAndSensitiveFlush(t *testing.T) {
 	var mu sync.Mutex
 	var deliveredSeqs []int
 
-	b := NewBatcher(5*time.Millisecond, 100, func(batch []agent.Event) {
+	b := NewBatcher(5*time.Millisecond, 100, func(batch []event.Event) {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, e := range batch {
@@ -152,11 +152,11 @@ func TestBatcherPreservesGlobalOrderAcrossTimerAndSensitiveFlush(t *testing.T) {
 	// Produce interleaving of regular and sensitive events
 	total := 100
 	for i := 1; i <= total; i++ {
-		evType := agent.TextDelta
+		evType := event.TextDelta
 		if i%10 == 0 {
-			evType = agent.ToolStart
+			evType = event.ToolStart
 		}
-		b.Add(agent.Event{Seq: i, Type: evType})
+		b.Add(event.Event{Seq: i, Type: evType})
 	}
 	b.Stop()
 

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/redact"
 	"nabd/internal/ui"
 )
@@ -14,8 +14,8 @@ import (
 // Update). It stands in for the batcher so the test is deterministic.
 type feedUpdateSink struct{ feed *ui.Feed }
 
-func (s feedUpdateSink) Emit(e agent.Event) error {
-	s.feed.Update(ui.AgentEventBatch([]agent.Event{e}))
+func (s feedUpdateSink) Emit(e event.Event) error {
+	s.feed.Update(ui.AgentEventBatch([]event.Event{e}))
 	return nil
 }
 
@@ -30,12 +30,12 @@ func TestInteractiveFeedRedactsStreamedSecret(t *testing.T) {
 	// Split across three deltas so a per-chunk redactor would let it through;
 	// the stream redactor joins the chunks and redacts the joined value.
 	chunks := []string{"the key is ", secret[:15], secret[15:]}
-	run := make([]agent.Event, 0, len(chunks)+1)
+	run := make([]event.Event, 0, len(chunks)+1)
 	for i, chunk := range chunks {
-		run = append(run, agent.Event{Seq: i + 1, Type: agent.TextDelta, Text: chunk})
+		run = append(run, event.Event{Seq: i + 1, Type: event.TextDelta, Text: chunk})
 	}
 	// A non-delta event ends the text run and flushes the held bytes, redacted.
-	run = append(run, agent.Event{Seq: len(chunks) + 1, Type: agent.TurnEnd})
+	run = append(run, event.Event{Seq: len(chunks) + 1, Type: event.TurnEnd})
 
 	// The exact production decorator, wrapped around the feed's Update intake.
 	feed := ui.NewFeed()

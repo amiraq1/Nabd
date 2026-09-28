@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // 1. TestPTYLongOutputKeepsComposerVisible: verifies that streaming a large amount
@@ -19,9 +19,9 @@ func TestPTYLongOutputKeepsComposerVisible(t *testing.T) {
 		sb.WriteString(fmt.Sprintf("Feed line %02d: testing long output scrolling\n", i))
 	}
 
-	sess.InjectBatch([]agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.TextDelta, Text: sb.String()},
+	sess.InjectBatch([]event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.TextDelta, Text: sb.String()},
 	})
 
 	// Follow mode anchors to the newest lines (bottom), so the latest output lines
@@ -45,9 +45,9 @@ func TestPTYTypingAfterFeedFillAppearsInComposer(t *testing.T) {
 	for i := 1; i <= 40; i++ {
 		sb.WriteString(fmt.Sprintf("Feed line %02d: filling the viewport\n", i))
 	}
-	sess.InjectBatch([]agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.TextDelta, Text: sb.String()},
+	sess.InjectBatch([]event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.TextDelta, Text: sb.String()},
 	})
 
 	// Follow mode anchors to the newest lines (bottom), so line 40 is visible.
@@ -82,9 +82,9 @@ func TestPTYVisualRowsStayWithinTerminal(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
 
 	wideLine := strings.Repeat("عربى English 123 ", 8) // ~160 visual width
-	sess.InjectBatch([]agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.TextDelta, Text: wideLine},
+	sess.InjectBatch([]event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.TextDelta, Text: wideLine},
 	})
 
 	err := sess.WaitForCondition("wide text rendered", 3*time.Second, func(s ScreenSnapshot) bool {
@@ -106,11 +106,11 @@ func TestPTYVisualRowsStayWithinTerminal(t *testing.T) {
 func TestPTYPermissionModalAppears(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
 
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:  1,
-			Type: agent.PermAsk,
-			Call: &agent.ToolCall{ID: "c1", Name: "write_file", Args: []byte(`{"path":"secret.txt"}`)},
+			Type: event.PermAsk,
+			Call: &event.ToolCall{ID: "c1", Name: "write_file", Args: []byte(`{"path":"secret.txt"}`)},
 		},
 	})
 
@@ -136,11 +136,11 @@ func TestPTYPermissionModalAppears(t *testing.T) {
 func TestPTYPermissionAllowOnceRestoresComposer(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
 
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:  1,
-			Type: agent.PermAsk,
-			Call: &agent.ToolCall{ID: "c1", Name: "write_file", Args: []byte(`"test.txt"`)},
+			Type: event.PermAsk,
+			Call: &event.ToolCall{ID: "c1", Name: "write_file", Args: []byte(`"test.txt"`)},
 		},
 	})
 
@@ -156,18 +156,18 @@ func TestPTYPermissionAllowOnceRestoresComposer(t *testing.T) {
 		t.Fatalf("approver did not receive decision: %v", err)
 	}
 	d, _ := sess.Approver.LastDecision()
-	if d != agent.AllowOnce {
+	if d != event.AllowOnce {
 		t.Fatalf("approver received %v, want AllowOnce", d)
 	}
 
 	// Deliver PermReply to simulate core processing
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:         2,
-			Type:        agent.PermReply,
-			Call:        &agent.ToolCall{ID: "c1", Name: "write_file"},
-			Decision:    agent.AllowOnce,
-			RawDecision: agent.AllowOnce,
+			Type:        event.PermReply,
+			Call:        &event.ToolCall{ID: "c1", Name: "write_file"},
+			Decision:    event.AllowOnce,
+			RawDecision: event.AllowOnce,
 		},
 	})
 
@@ -190,15 +190,15 @@ func TestPTYPermissionAllowOnceRestoresComposer(t *testing.T) {
 }
 
 // 6. TestPTYPermissionDenyDoesNotExecuteTool: verifies that denying permission (via 'n' or 'esc')
-// records agent.Deny and does not execute the tool runner.
+// records event.Deny and does not execute the tool runner.
 func TestPTYPermissionDenyDoesNotExecuteTool(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
 
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:  1,
-			Type: agent.PermAsk,
-			Call: &agent.ToolCall{ID: "c_deny", Name: "delete_database", Args: []byte(`"all"`)},
+			Type: event.PermAsk,
+			Call: &event.ToolCall{ID: "c_deny", Name: "delete_database", Args: []byte(`"all"`)},
 		},
 	})
 
@@ -214,27 +214,27 @@ func TestPTYPermissionDenyDoesNotExecuteTool(t *testing.T) {
 		t.Fatalf("approver did not receive decision: %v", err)
 	}
 	d, _ := sess.Approver.LastDecision()
-	if d != agent.Deny {
+	if d != event.Deny {
 		t.Fatalf("approver received %v, want Deny", d)
 	}
 
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:         2,
-			Type:        agent.PermReply,
-			Call:        &agent.ToolCall{ID: "c_deny", Name: "delete_database"},
-			Decision:    agent.Deny,
-			RawDecision: agent.Deny,
+			Type:        event.PermReply,
+			Call:        &event.ToolCall{ID: "c_deny", Name: "delete_database"},
+			Decision:    event.Deny,
+			RawDecision: event.Deny,
 		},
 		{
 			Seq:  3,
-			Type: agent.ToolStart,
-			Call: &agent.ToolCall{ID: "c_deny", Name: "delete_database"},
+			Type: event.ToolStart,
+			Call: &event.ToolCall{ID: "c_deny", Name: "delete_database"},
 		},
 		{
 			Seq:  4,
-			Type: agent.ToolEnd,
-			Call: &agent.ToolCall{ID: "c_deny", Name: "delete_database", OK: false, Output: "refused to run delete_database"},
+			Type: event.ToolEnd,
+			Call: &event.ToolCall{ID: "c_deny", Name: "delete_database", OK: false, Output: "refused to run delete_database"},
 		},
 	})
 
@@ -257,11 +257,11 @@ func TestPTYPermissionDenyDoesNotExecuteTool(t *testing.T) {
 func TestPTYBashSessionKeyIgnoredAndDowngradeRendered(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
 
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:  1,
-			Type: agent.PermAsk,
-			Call: &agent.ToolCall{ID: "c_bash", Name: "bash", Args: []byte(`"echo dangerous"`)},
+			Type: event.PermAsk,
+			Call: &event.ToolCall{ID: "c_bash", Name: "bash", Args: []byte(`"echo dangerous"`)},
 		},
 	})
 
@@ -288,18 +288,18 @@ func TestPTYBashSessionKeyIgnoredAndDowngradeRendered(t *testing.T) {
 		t.Fatalf("approver did not receive decision after 'y': %v\nScreen:\n%s", err, sess.Snapshot().PlainText())
 	}
 	d, _ := sess.Approver.LastDecision()
-	if d != agent.AllowOnce {
+	if d != event.AllowOnce {
 		t.Fatalf("approver received %v, want AllowOnce", d)
 	}
 
 	// Presenting a downgraded decision: raw_decision=session, decision=once
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:         2,
-			Type:        agent.PermReply,
-			Call:        &agent.ToolCall{ID: "c_bash", Name: "bash"},
-			Decision:    agent.AllowOnce,
-			RawDecision: agent.AllowSession,
+			Type:        event.PermReply,
+			Call:        &event.ToolCall{ID: "c_bash", Name: "bash"},
+			Decision:    event.AllowOnce,
+			RawDecision: event.AllowSession,
 		},
 	})
 
@@ -317,11 +317,11 @@ func TestPTYBashSessionKeyIgnoredAndDowngradeRendered(t *testing.T) {
 func TestPTYRepeatedDecisionIsIdempotent(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
 
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:  1,
-			Type: agent.PermAsk,
-			Call: &agent.ToolCall{ID: "c_dup", Name: "write_file"},
+			Type: event.PermAsk,
+			Call: &event.ToolCall{ID: "c_dup", Name: "write_file"},
 		},
 	})
 
@@ -349,13 +349,13 @@ func TestPTYRepeatedDecisionIsIdempotent(t *testing.T) {
 		t.Fatalf("approver received %d decisions, want exactly 1", cnt)
 	}
 
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:         2,
-			Type:        agent.PermReply,
-			Call:        &agent.ToolCall{ID: "c_dup", Name: "write_file"},
-			Decision:    agent.AllowOnce,
-			RawDecision: agent.AllowOnce,
+			Type:        event.PermReply,
+			Call:        &event.ToolCall{ID: "c_dup", Name: "write_file"},
+			Decision:    event.AllowOnce,
+			RawDecision: event.AllowOnce,
 		},
 	})
 
@@ -373,11 +373,11 @@ func TestPTYRepeatedDecisionIsIdempotent(t *testing.T) {
 func TestPTYModalBlocksComposerInput(t *testing.T) {
 	sess := StartPTYSession(t, 80, 24)
 
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:  1,
-			Type: agent.PermAsk,
-			Call: &agent.ToolCall{ID: "c_block", Name: "format_disk"},
+			Type: event.PermAsk,
+			Call: &event.ToolCall{ID: "c_block", Name: "format_disk"},
 		},
 	})
 
@@ -400,7 +400,7 @@ func TestPTYModalBlocksComposerInput(t *testing.T) {
 		t.Fatalf("approver did not receive decision: %v", err)
 	}
 	d, _ := sess.Approver.LastDecision()
-	if d != agent.Deny {
+	if d != event.Deny {
 		t.Fatalf("expected Deny, got %v", d)
 	}
 	assertScreenBounds(t, sess.Snapshot())
@@ -417,11 +417,11 @@ func TestPTYModalRestoresDraftAndCursor(t *testing.T) {
 		t.Fatalf("initial draft failed to appear: %v", err)
 	}
 
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:  1,
-			Type: agent.PermAsk,
-			Call: &agent.ToolCall{ID: "c_draft", Name: "read_file"},
+			Type: event.PermAsk,
+			Call: &event.ToolCall{ID: "c_draft", Name: "read_file"},
 		},
 	})
 
@@ -436,13 +436,13 @@ func TestPTYModalRestoresDraftAndCursor(t *testing.T) {
 		t.Fatalf("approver did not receive decision: %v", err)
 	}
 
-	sess.InjectBatch([]agent.Event{
+	sess.InjectBatch([]event.Event{
 		{
 			Seq:         2,
-			Type:        agent.PermReply,
-			Call:        &agent.ToolCall{ID: "c_draft", Name: "read_file"},
-			Decision:    agent.AllowOnce,
-			RawDecision: agent.AllowOnce,
+			Type:        event.PermReply,
+			Call:        &event.ToolCall{ID: "c_draft", Name: "read_file"},
+			Decision:    event.AllowOnce,
+			RawDecision: event.AllowOnce,
 		},
 	})
 
@@ -477,9 +477,9 @@ func TestPTYResizeFilledFeedKeepsBottomChrome(t *testing.T) {
 	for i := 1; i <= 50; i++ {
 		sb.WriteString(fmt.Sprintf("Feed line %02d: resize testing\n", i))
 	}
-	sess.InjectBatch([]agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.TextDelta, Text: sb.String()},
+	sess.InjectBatch([]event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.TextDelta, Text: sb.String()},
 	})
 
 	// Follow mode anchors to the newest lines (bottom), so line 50 is visible.
@@ -515,10 +515,10 @@ func TestPTYResizeFilledFeedKeepsBottomChrome(t *testing.T) {
 func TestPTYTwentyByTwelveDoesNotOverflow(t *testing.T) {
 	sess := StartPTYSession(t, 20, 12)
 
-	sess.InjectBatch([]agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "ls"}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "ls", Output: "compact output", OK: true}},
+	sess.InjectBatch([]event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "ls"}},
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "ls", Output: "compact output", OK: true}},
 	})
 
 	err := sess.WaitForCondition("compact event rendered", 3*time.Second, func(s ScreenSnapshot) bool {
@@ -555,10 +555,10 @@ func TestPTYToolOutputControlPayloadDoesNotCorruptTerminal(t *testing.T) {
 		"\x1b]52;c;Y2F0Cg==\x07" + // OSC 52 clipboard hijacking
 		"Line 2: safe text after attacks\n"
 
-	sess.InjectBatch([]agent.Event{
-		{Seq: 1, Type: agent.RunStart},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: maliciousPayload, OK: true}},
+	sess.InjectBatch([]event.Event{
+		{Seq: 1, Type: event.RunStart},
+		{Seq: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash"}},
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "bash", Output: maliciousPayload, OK: true}},
 	})
 
 	// Wait for the tool summary row to appear, then expand details via Ctrl+O.
