@@ -25,6 +25,7 @@ type scriptTurn struct {
 	call       *provider.ToolCall
 	err        error
 	rateLimits int
+	stop       string
 }
 
 type scriptedProvider struct {
@@ -71,7 +72,11 @@ func (p *scriptedProvider) Stream(ctx context.Context, req provider.Request) (<-
 			ch <- provider.Chunk{Kind: provider.ChunkStop, Stop: "tool_use"}
 			return
 		}
-		ch <- provider.Chunk{Kind: provider.ChunkStop, Stop: "end_turn"}
+		stop := "end_turn"
+		if t.stop != "" {
+			stop = t.stop
+		}
+		ch <- provider.Chunk{Kind: provider.ChunkStop, Stop: stop}
 	}()
 	return ch, nil
 }
@@ -227,6 +232,43 @@ func TestHeadlessRateLimitBudget(t *testing.T) {
 	if code != exitRateLimit {
 		t.Fatalf("exit %d, want %d", code, exitRateLimit)
 	}
+}
+
+func TestHeadlessEmptyResponse(t *testing.T) {
+	t.Run("upstream empty response", func(t *testing.T) {
+		code, stdout, stderr := runHL(t, headlessConfig{
+			prompt:   "hello",
+			provider: &scriptedProvider{turns: []scriptTurn{{text: ""}}},
+		})
+		if code == 0 {
+			t.Fatalf("exit %d, want non-zero", code)
+		}
+		if stdout != "" {
+			t.Fatalf("expected empty stdout, got %q", stdout)
+		}
+		if !strings.Contains(stderr, "provider returned an empty response (upstream issue)") {
+			t.Fatalf("expected stderr to contain upstream issue notice, got %q", stderr)
+		}
+		if strings.Contains(stderr, "NABD_MAX_TOKENS") {
+			t.Fatalf("expected stderr NOT to blame NABD_MAX_TOKENS on upstream empty response, got %q", stderr)
+		}
+	})
+
+	t.Run("length cut empty response", func(t *testing.T) {
+		code, stdout, stderr := runHL(t, headlessConfig{
+			prompt:   "hello",
+			provider: &scriptedProvider{turns: []scriptTurn{{text: "", stop: "max_tokens"}}},
+		})
+		if code == 0 {
+			t.Fatalf("exit %d, want non-zero", code)
+		}
+		if stdout != "" {
+			t.Fatalf("expected empty stdout, got %q", stdout)
+		}
+		if !strings.Contains(stderr, "NABD_MAX_TOKENS") || !strings.Contains(stderr, "1024") {
+			t.Fatalf("expected stderr to contain NABD_MAX_TOKENS notice, got %q", stderr)
+		}
+	})
 }
 
 func TestParsePermMode(t *testing.T) {

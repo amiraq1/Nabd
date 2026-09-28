@@ -79,7 +79,7 @@ func toolSummaryMetadata(t *presentation.ToolCard) []string {
 func toolImportantMetadata(t *presentation.ToolCard) string {
 	switch t.Status {
 	case presentation.ToolPending:
-		return "pending"
+		return "awaiting approval"
 	case presentation.ToolRunning:
 		return "running"
 	case presentation.ToolDenied:

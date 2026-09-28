@@ -297,7 +297,27 @@ func (p *Projector) flushPendingReads() {
 	p.pendingReads = nil
 }
 
+func (p *Projector) findToolCard(e event.Event) (int, *ToolCard) {
+	id := toolID(e)
+	if idx, ok := p.byID[FeedItem{Type: ItemTool, ID: id}.key()]; ok && idx >= 0 && idx < len(p.items) {
+		return idx, p.items[idx].Tool
+	}
+	cid := callID(e)
+	if cid != "" {
+		for i := len(p.items) - 1; i >= 0; i-- {
+			if card := p.items[i].Tool; card != nil && card.CallID == cid {
+				return i, card
+			}
+		}
+	}
+	return -1, nil
+}
+
 func (p *Projector) appendPermAsk(e event.Event) error {
+	if idx, card := p.findToolCard(e); card != nil {
+		card.Status = ToolPending
+		p.touch(p.items[idx].key())
+	}
 	return p.append(FeedItem{Type: ItemPermission, ID: toolID(e), Seq: e.Seq, Perm: &PermCard{Name: toolName(e), Args: callArgs(e.Call), Reason: PermissionReasonText(e), Status: PermAsked}})
 }
 func (p *Projector) appendPermReply(e event.Event) error {
@@ -307,8 +327,17 @@ func (p *Projector) appendPermReply(e event.Event) error {
 		raw = e.Decision
 	}
 	effective := e.Decision
-	if e.Call != nil && (raw == event.Deny || effective == event.Deny) {
+	isDeny := raw == event.Deny || effective == event.Deny
+	if e.Call != nil && isDeny {
 		p.deniedCalls[e.Call.ID] = true
+	}
+	if toolIdx, card := p.findToolCard(e); card != nil {
+		if isDeny {
+			card.Status = ToolDenied
+		} else {
+			card.Status = ToolRunning
+		}
+		p.touch(p.items[toolIdx].key())
 	}
 	idx, ok := p.byID[FeedItem{Type: ItemPermission, ID: id}.key()]
 	if !ok || idx < 0 || idx >= len(p.items) {
