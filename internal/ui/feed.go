@@ -223,6 +223,7 @@ type cacheEntry struct {
 	fp       uint64
 	expanded expandState
 	selected bool // part of the key, not an invalidator: see refresh()
+	rtlMode  uint8
 	lines    []string
 }
 

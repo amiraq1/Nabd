@@ -15,6 +15,11 @@ import (
 // DefaultWidth is a phone in portrait, one hand.
 const DefaultWidth = 50
 
+// Keep the established domain-free text-layer dependency contract. The
+// concrete ANSI wrapping implementation lives beside the RTL adapter, while
+// this layer continues to own the public wrapping entry point.
+var _ = ansi.StringWidth
+
 var (
 	dim   = lipgloss.NewStyle().Faint(true)
 	bold  = lipgloss.NewStyle().Bold(true)
@@ -110,12 +115,7 @@ func wrap(s string, width int) []string {
 	if s == "" {
 		return []string{""}
 	}
-	wrapped := ansi.Hardwrap(ansi.Wordwrap(s, width, " \t"), width, false)
-	lines := strings.Split(wrapped, "\n")
-	if len(lines) == 0 {
-		return []string{""}
-	}
-	return lines
+	return wrapLogicalText(s, width)
 }
 
 // partialTail is the live view of text still streaming: the last n wrapped
