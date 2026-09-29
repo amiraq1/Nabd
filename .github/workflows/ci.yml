@@ -74,6 +74,10 @@ jobs:
         staticcheck ./...
     - name: Race detector on all packages
       run: go test ./... -race -count=1
+    - name: RTL engine race tests
+      run: go test -race -count=1 ./internal/rtl/...
+    - name: RTL Unicode conformance gates
+      run: go run ./cmd/rtlconformance --unicode internal/rtl/testdata/unicode/17.0.0
     - name: Nested bubbles race tests
       working-directory: third_party/bubbles
       run: go test ./... -race -count=1
