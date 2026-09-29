@@ -80,6 +80,7 @@ func (m *Feed) updateSearchMatches() {
 	}
 
 	var matches []searchMatch
+	matchedItems := make(map[int]bool)
 	for lineIdx, line := range m.lines {
 		// Clean off only the exact gutter marker emitted by the feed.
 		clean := stripCardGutter(line)
@@ -100,11 +101,43 @@ func (m *Feed) updateSearchMatches() {
 		for i := 0; i <= rLen-qRuneLen; i++ {
 			sub := string(runes[i : i+qRuneLen])
 			if strings.ToLower(sub) == qLower {
+				matchedItems[itemIdx] = true
 				matches = append(matches, searchMatch{
 					itemIndex: itemIdx,
 					lineIndex: lineIdx,
 					runeStart: offset + i,
 					runeEnd:   offset + i + qRuneLen,
+				})
+			}
+		}
+	}
+
+	// BiDi display order can make a logical Arabic query non-contiguous in
+	// m.lines. Search canonical projection text as the source of truth and
+	// map a source hit to the owning card's first visual row. The current UI
+	// selects/scrolls to matches rather than painting per-rune highlights, so
+	// the source range is retained as a rune offset for future highlighting.
+	items := m.navigationItems()
+	for itemIdx, it := range items {
+		if matchedItems[itemIdx] {
+			continue
+		}
+		source, ok := logicalCardText(it)
+		if !ok {
+			continue
+		}
+		sourceRunes := []rune(source)
+		for i := 0; i <= len(sourceRunes)-qRuneLen; i++ {
+			if strings.EqualFold(string(sourceRunes[i:i+qRuneLen]), m.search.query) {
+				lineIdx := 0
+				if itemIdx < len(m.offsets) {
+					lineIdx = m.offsets[itemIdx]
+				}
+				matches = append(matches, searchMatch{
+					itemIndex: itemIdx,
+					lineIndex: lineIdx,
+					runeStart: i,
+					runeEnd:   i + qRuneLen,
 				})
 			}
 		}

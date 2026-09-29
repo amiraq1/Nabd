@@ -163,7 +163,7 @@ func renderPerm(it presentation.FeedItem, width int) []string {
 	out := []string{truncateToWidth(head, width, "…")}
 	if p.Reason != "" {
 		reason := SanitizeForDisplay(p.Reason, DisplayPolicy{Redact: true})
-		out = append(out, dim.Render(truncateToWidth("  · "+reason, width, "…")))
+		out = append(out, dim.Render(truncateProseToWidth("  · "+reason, width, "…")))
 	}
 	if p.Status == presentation.PermAllow && p.Effective != p.Decision {
 		out = append(out, dim.Render(truncateToWidth(fmt.Sprintf("  · requested %s, applied %s", p.Decision, p.Effective), width, "…")))
@@ -180,7 +180,7 @@ func renderNotice(it presentation.FeedItem, width int) []string {
 		if i == 0 {
 			prefix = "⚑ "
 		}
-		out = append(out, warn.Render(truncateToWidth(prefix+raw, width, "…")))
+		out = append(out, warn.Render(truncateProseToWidth(prefix+raw, width, "…")))
 	}
 	return out
 }
@@ -192,10 +192,10 @@ func renderError(it presentation.FeedItem, width int) []string {
 	if text == "" {
 		text = "error"
 	}
-	return []string{bad.Render(truncateToWidth("✗ "+toolSummaryText(text), width, "…"))}
+	return []string{bad.Render(truncateProseToWidth("✗ "+toolSummaryText(text), width, "…"))}
 }
 func renderRunBoundary(it presentation.FeedItem, width int) []string {
-	return []string{dim.Render(truncateToWidth("── "+SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: false, Redact: false}), width, "…"))}
+	return []string{dim.Render(truncateProseToWidth("── "+SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: false, Redact: false}), width, "…"))}
 }
 func truncate(s string, max int) string {
 	if max <= 0 {
