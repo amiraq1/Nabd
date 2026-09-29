@@ -298,6 +298,7 @@ func (m *Feed) structSig(items []presentation.FeedItem) uint64 {
 		mix(0xff)
 	}
 	mix(uint64(m.width))
+	mix(uint64(rtlDisplayMode()))
 	if m.toolsExpanded {
 		mix(1)
 	}

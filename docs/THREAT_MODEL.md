@@ -95,7 +95,7 @@ the same uid.
 | Pointer input can select and expand cards, but never answers permissions or executes tools | GUARANTEED | Evidence: `TestPointerNeverAnswersPermission`, `TestPointerNeverExecutesATool` |
 | Permission modal ignores typeahead keystrokes during arm delay, resets delay on any non-decision key, and requires intentional confirmation | GUARANTEED | Evidence: `TestPermissionModalIgnoresTypeaheadDecisionKeys`, `TestPermissionModalAcceptsDecisionAfterArmDelay`, `TestPermissionModalArmDelayShowsHint`, `TestNavigationYNoLongerCopiesOrApproves`, `TestPermissionModalEnterNeverAllows`, `TestPermissionModalCtrlCDuringArmDelay`, `TestPermissionModalRapidTypingYesPleaseNoDecision`, `TestPermissionModalUppercaseDecisions`, `TestPermissionModalHintLineDimensions` |
 | Git status header inspects only the granted root and never traverses to a parent repository | GUARANTEED | `isGitRepo` checks `.git` strictly at the root; parent repos are out of bounds. Evidence: `TestIsGitRepoDetection` |
-| OSC 52 clipboard copy operates on projected cards only, after credential redaction and display sanitization | GUARANTEED | Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand` |
+| OSC 52 clipboard copy operates on canonical projected fields only, after credential redaction and display sanitization | GUARANTEED | Human-language cards bypass BiDi visual clusters when copied, so reordered Arabic and mirrored delimiters cannot replace logical source text. Tool cards retain their established projected/redacted summary and output contract. Raw journal bytes remain unavailable to the clipboard path. Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand`, `TestCopyUsesLogicalSourceWhenDisplayIsReordered` |
 | A bare `nabd` runs the feed UI, and `--feed=false` is the rollback that removes the `@` index | GUARANTEED | The `-feed` flag defaults to `true`, so the default interactive path is `doChatWithFeed` — the same path that calls `SetPickerRoot(root.Dir())` and therefore indexes the session root for `@`. `--feed=false` selects `doChat`, which wires no picker and performs no scan; the two entry points are mutually exclusive within one invocation, and the rollback needs no rebuild or reinstall. Evidence: `TestFeedIsTheDefaultInteractiveUI` |
 | Provider API keys never enter child environments or error output | GUARANTEED | `internal/provider/` constructor routes load keys from parsed config only, never through `os.Setenv`; `loadEnv` does not push credentials into the process environment that `bash` children inherit. Error bodies pass through `redact.Redact` before logging. Evidence: `TestConstructorsCarryKey`, `TestRouterRedactsBearerAuthorization`, `TestRouterFallsBackOnCredentialFailureWithRedactedLog`, `TestParseRoutesErrorMessagesContainNoSecrets` |
 | Recognized credential patterns are redacted from logs, journal, and display | REDUCED | `internal/redact/` matches Anthropic, OpenRouter, OpenAI (`sk-proj-`, long legacy `sk-`, `sk-svcacct-`, `sk-admin-`, `sk_`), xAI (`xai-`), Google (`AIza`), Hugging Face (`hf_`), Groq, NVIDIA, AWS access-key IDs (`AKIA`/`ASIA`), whole PEM private-key blocks (including an unterminated `BEGIN` line, redacted to end of input), bare JWTs, GitHub, GitLab, Slack, and `Bearer`/`authorization` patterns, replacing them with `[REDACTED]`; `SanitizeBody` runs redaction before truncation. Configured exact provider keys (min length 8) are also redacted across journal, stream, and export sinks. Pattern matching is best effort: only the listed formats are recognized and streamed hold-back is capped, so an unrecognized or over-cap secret can still survive; streamed chunks are joined before redaction. Evidence: `TestRedactRecognizedCredentials`, `TestRedactExactKeys`, `TestRedactIsIdempotent`, `TestRedactExtendedPatterns`, `TestRedactNewProviderPatterns`, `TestRedactExactKeysMinimumLength`, `TestStreamMatchesWholeEverySplit`, `TestStreamUnterminatedPEMRedactedOnFlush`, `TestSanitizeBodyRedactsBeforeTruncation` |
@@ -794,11 +794,14 @@ in `internal/goal/runner.go`.
 
 ### OSC 52 clipboard boundaries
 
-OSC 52 copy operates only on projected card content after recognized
-credential redaction and display sanitization. Raw journal bytes and raw
-error bodies are not clipboard sources. Unrecognized sensitive text
+OSC 52 copy operates only on canonical projected card content after recognized
+credential redaction and display sanitization. Human-language cards read their
+logical projection fields instead of BiDi display clusters, so visual
+reordering and mirrored punctuation cannot enter copied source. Tool cards
+retain their projected/redacted summary and output contract. Raw journal bytes
+and raw error bodies are not clipboard sources. Unrecognized sensitive text
 remains a residual risk.
-Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand`.
+Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand`, `TestCopyUsesLogicalSourceWhenDisplayIsReordered`.
 
 ### @ path picker root resolution
 

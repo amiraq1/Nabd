@@ -344,11 +344,8 @@ func (m *PermissionModal) view(width int, maxRows ...int) string {
 		if avail < 0 {
 			avail = 0
 		}
+		s = truncateProseToWidth(s, avail, "…")
 		sw := ansi.StringWidth(s)
-		if sw > avail {
-			s = ansi.Truncate(s, avail, "…")
-			sw = ansi.StringWidth(s)
-		}
 		pad := max(0, avail-sw)
 		return "| " + s + strings.Repeat(" ", pad) + " |"
 	}

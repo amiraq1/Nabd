@@ -391,5 +391,20 @@ On Termux (`android/arm64`), Go's standard library does not use system `libc` re
   - Border and separator lines: Unicode box-drawing character `─` becomes ASCII hyphen `-`.
 - **Preserves Arabic and content text:** `NABD_ASCII_ONLY` affects only decorative framing glyphs and punctuation markers. It does **not** strip or alter Arabic text, user input, assistant responses, or error message bodies.
 
+### `NABD_RTL`
+
+- **Environment-only variable:** `NABD_RTL` selects the terminal display
+  policy. It is not a v1 or v2 configuration-file key.
+- Unset, `off`, or `logical`: preserve logical source order. This is the
+  default and rollback mode.
+- `reorder`: apply Unicode BiDi visual ordering without mirroring.
+- `mirror`, `auto`, or `reorder-and-mirror`: apply visual ordering and
+  contextual mirroring.
+- Unknown values fail closed to `logical`.
+- The variable changes display layout only. Journal events, copying, search,
+  and replay source remain logical text.
+- Arabic cursive shaping is disabled in all modes. `NABD_RTL` does not enable
+  joining forms, Presentation Forms substitutions, or GSUB.
+
 
 
