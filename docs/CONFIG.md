@@ -150,7 +150,7 @@ A minimal valid `config.v2.json` file:
 
 ---
 
-## 5. Credential Separation in v2
+## 6. Credential Separation in v2
 
 Config v2 introduces explicit credential declarations, completely disabling implicit environment variable leakage:
 
@@ -190,7 +190,7 @@ In Config v1, any missing key fell back to `os.Getenv(key)`. In Config v2, **imp
 
 ---
 
-## 6. Multi-Provider Router Example
+## 7. Multi-Provider Router Example
 
 ```json
 {
@@ -227,7 +227,7 @@ In this example:
 
 ---
 
-## 7. Journal Redaction and Export (operational)
+## 8. Journal Redaction and Export (operational)
 
 `NABD_REDACT_JOURNAL` is a user-scoped Config v1 key in `~/.ag/config` (or the
 absolute path selected by `NABD_CONFIG`). The environment variable remains
@@ -309,7 +309,7 @@ mode (`-p`, `--continue`, `--replay`, `--feed`, `--feed-touch`, `--json`,
 `--dir`, `--version`, `--max-turns`, `--permission-mode`, `--speed`) or with
 positional arguments. Diagnostics go to stderr; stdout is JSONL only.
 
-## 8. Provider registry (`~/.ag/providers.json`)
+## 9. Provider registry (`~/.ag/providers.json`)
 
 User-defined providers live in `~/.ag/providers.json`; the path can be
 overridden with `NABD_PROVIDERS_FILE`. API keys are not stored here — they live
@@ -368,7 +368,7 @@ and v1 config (`PrecedenceDocumentation` in `internal/registry/registry.go`).
 
 ---
 
-## 9. Network and DNS Configuration (Environment Only)
+## 10. Network and DNS Configuration (Environment Only)
 
 ### `NABD_PUBLIC_DNS`
 
@@ -380,7 +380,7 @@ On Termux (`android/arm64`), Go's standard library does not use system `libc` re
 
 ---
 
-## 10. Display Configuration (Environment Only)
+## 11. Display Configuration (Environment Only)
 
 ### `NABD_ASCII_ONLY`
 
@@ -406,5 +406,45 @@ On Termux (`android/arm64`), Go's standard library does not use system `libc` re
 - Arabic cursive shaping is disabled in all modes. `NABD_RTL` does not enable
   joining forms, Presentation Forms substitutions, or GSUB.
 
+---
 
+## 12. Operational Environment Variables (Environment Only)
 
+The following variables are read from the process environment (`os.Getenv`) and
+**cannot** be set in `~/.ag/config` or `~/.ag/config.v2.json`.  Placing them
+in a config file has no effect (v1 ignores unknown keys with a warning; v2
+rejects the file outright).
+
+### Provider selection and routing
+
+| Variable | Purpose |
+|---|---|
+| `NABD_PROVIDER` | Override the active provider (`groq`, `anthropic`, `openrouter`, `nvidia`, `router`). Ignored when config v2 is active. |
+| `NABD_MODEL` | Override the model ID for the standalone (non-router) path. Ignored when `NABD_PROVIDER=router`. |
+| `NABD_BASE_URL` | Override the provider base URL. **Security-sensitive**: the endpoint policy (`NABD_ENDPOINT_POLICY`) applies, and an invalid policy value now produces a warning on stderr and defaults to `strict`. Forbidden when `NABD_PROVIDER=router`. |
+| `NABD_ROUTES` | JSON array of `{"provider":"…","model":"…"}` objects for the router provider. Required when `NABD_PROVIDER=router`. |
+| `NABD_ROUTER_MODE` | Router fallback strategy. Currently only `fallback` is accepted. |
+| `NABD_ROUTER_PRESTREAM_TIMEOUT` | Duration string (e.g. `15s`) — time the router waits for a first byte before trying the next route. |
+| `NABD_ROUTER_RETRY_AFTER_WAIT` | Maximum duration (e.g. `30s`) the router will honour a `Retry-After` response header before failing over. |
+
+### Operational limits (v1 overrides)
+
+These variables override the corresponding `limits.*` fields in config v2.  In
+v2 prefer the structured config keys; these variables are provided for
+quick one-off overrides and v1 compatibility.
+
+| Variable | Purpose |
+|---|---|
+| `NABD_CTX` | Context window size in tokens. In v2 use `limits.context`. |
+| `NABD_MAX_TOKENS` | Maximum output tokens per provider turn. In v2 use `limits.max_tokens`. |
+| `NABD_MAX_TOKENS_PER_RUN` | Budget cap on total tokens per run. In v2 use `limits.max_tokens_per_run`. |
+| `NABD_MAX_READ` | Maximum bytes returned by a single `read_file` call. Overrides `limits.max_read` and per-provider `readCap` at runtime. |
+
+### UI and input
+
+| Variable | Purpose |
+|---|---|
+| `NABD_NO_MOUSE` | Any non-empty value disables mouse cell-motion input even when touch is detected. |
+| `NABD_FORCE_TOUCH` | `1` enables touch/mouse input on platforms where it is disabled by default (e.g. non-Termux terminals). |
+| `NABD_CLIPBOARD` | Clipboard transport override. `exec` forces the subprocess-based path. Unset uses the default heuristic. |
+| `NABD_EXPORTS_DIR` | Directory where `/export` session reports are written. Defaults to `~/.ag/exports`. |
