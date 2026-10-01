@@ -291,8 +291,15 @@ func proxyFromEnv(req *http.Request) (*url.URL, error) {
 // Client returns an *http.Client configured with the active NABD_ENDPOINT_POLICY,
 // NABD_ENDPOINT_ALLOW, and the given timeout. A timeout of 0 disables client-level
 // timeout (suitable for streaming requests controlled by context deadlines).
+//
+// If NABD_ENDPOINT_POLICY is set to an unrecognised value the function falls
+// back to PolicyStrict (fail-closed) and logs a diagnostic to stderr.
 func Client(timeout time.Duration) *http.Client {
-	pol, _ := ParsePolicy(config.Get("NABD_ENDPOINT_POLICY"))
+	raw := config.Get("NABD_ENDPOINT_POLICY")
+	pol, err := ParsePolicy(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nabd: NABD_ENDPOINT_POLICY %q unrecognised (%v); using strict\n", raw, err)
+	}
 	return ClientWithAllow(pol, CurrentAllowList(), timeout)
 }
 

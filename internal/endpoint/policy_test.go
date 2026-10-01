@@ -3,8 +3,10 @@ package endpoint_test
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -799,4 +801,67 @@ func TestTransportProxyAllowedUnderStrict(t *testing.T) {
 	if u == nil || u.Host != "127.0.0.1:8080" {
 		t.Fatalf("unexpected proxy URL: %v", u)
 	}
+}
+
+// ─── Client – invalid NABD_ENDPOINT_POLICY (F3) ──────────────────────────────
+
+// TestClientReportsInvalidPolicy verifies two invariants of the F3 fix:
+//
+//  1. Client() with an unrecognised NABD_ENDPOINT_POLICY value returns a
+//     non-nil *http.Client (fail-closed to PolicyStrict; never panics or
+//     returns nil).
+//  2. A diagnostic line is written to stderr so the operator can see the bad
+//     value; the empty-string case (no variable set) must produce no output.
+//
+// This test does NOT call t.Parallel() because it mutates both the process
+// environment (NABD_ENDPOINT_POLICY via t.Setenv) and the process-level
+// os.Stderr file descriptor.  Concurrent mutation of either is unsafe.
+func TestClientReportsInvalidPolicy(t *testing.T) {
+	// captureFn temporarily redirects os.Stderr to an in-process pipe, runs fn,
+	// restores the original descriptor, and returns the captured output.
+	captureFn := func(fn func()) string {
+		t.Helper()
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatalf("os.Pipe: %v", err)
+		}
+		orig := os.Stderr
+		os.Stderr = w
+		fn()
+		w.Close()
+		os.Stderr = orig
+		var buf strings.Builder
+		if _, err := io.Copy(&buf, r); err != nil {
+			t.Fatalf("reading captured stderr: %v", err)
+		}
+		r.Close()
+		return buf.String()
+	}
+
+	t.Run("invalid_value_returns_client_and_logs", func(t *testing.T) {
+		t.Setenv("NABD_ENDPOINT_POLICY", "permissive")
+		var c *http.Client
+		out := captureFn(func() { c = endpoint.Client(0) })
+		if c == nil {
+			t.Fatal("Client() returned nil; want non-nil (fail-closed)")
+		}
+		if !strings.Contains(out, "permissive") {
+			t.Errorf("stderr %q does not echo the invalid value", out)
+		}
+		if !strings.Contains(out, "strict") {
+			t.Errorf("stderr %q does not mention fallback to strict", out)
+		}
+	})
+
+	t.Run("empty_value_is_silent", func(t *testing.T) {
+		t.Setenv("NABD_ENDPOINT_POLICY", "")
+		var c *http.Client
+		out := captureFn(func() { c = endpoint.Client(0) })
+		if c == nil {
+			t.Fatal("Client() returned nil for default empty policy; want non-nil")
+		}
+		if out != "" {
+			t.Errorf("stderr should be empty for default (empty) policy, got %q", out)
+		}
+	})
 }
