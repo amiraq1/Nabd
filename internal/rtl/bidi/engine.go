@@ -88,6 +88,104 @@ func run(types []Class, pairTypes []bracketType, pairValues []rune, base int) (A
 	return a, nil
 }
 
+// AnalyzeWithLineBreaks analyses text once for the whole paragraph and returns
+// one level slice per wrapped piece. linebreaks holds rune-index limits in
+// strictly increasing order; the last value must equal len(text). The function
+// applies rule L1 correctly at every line boundary so trailing whitespace and
+// segment separators reset to the paragraph level per line, matching the
+// per-rune semantics of Analyze but without re-running bracket pairing (N0)
+// for each piece.
+//
+// base follows the same convention as Analyze: -1 auto (P2/P3), 0 forced LTR,
+// 1 forced RTL.
+//
+// The returned slice has len(linebreaks) elements. Element i contains the
+// levels for the rune range [linebreaks[i-1], linebreaks[i]) (linebreaks[-1] =
+// 0). ParaLevel is the resolved paragraph base direction.
+func AnalyzeWithLineBreaks(text []rune, base int, linebreaks []int) (Analysis, [][]uint8, error) {
+	if len(linebreaks) == 0 {
+		return Analysis{}, nil, fmt.Errorf("bidi: linebreaks must be non-empty")
+	}
+	switch base {
+	case -1, 0, 1:
+	default:
+		return Analysis{}, nil, fmt.Errorf("bidi: invalid base level %d", base)
+	}
+
+	if len(text) == 0 {
+		return Analysis{}, nil, fmt.Errorf("bidi: text must be non-empty")
+	}
+
+	prev := 0
+	for i, limit := range linebreaks {
+		if limit <= prev || limit > len(text) {
+			return Analysis{}, nil, fmt.Errorf(
+				"bidi: invalid linebreak %d at index %d after %d",
+				limit, i, prev,
+			)
+		}
+		prev = limit
+	}
+
+	if prev != len(text) {
+		return Analysis{}, nil, fmt.Errorf(
+			"bidi: final linebreak %d does not equal text length %d",
+			prev, len(text),
+		)
+	}
+
+	// Build per-rune bidi properties for the whole paragraph.
+	types := make([]Class, 0, len(text))
+	pairTypes := make([]bracketType, 0, len(text))
+	pairValues := make([]rune, 0, len(text))
+	for _, r := range text {
+		props, _ := LookupRune(r)
+		types = append(types, props.Class())
+		switch {
+		case !props.IsBracket():
+			pairTypes = append(pairTypes, bpNone)
+			pairValues = append(pairValues, 0)
+		case props.IsOpeningBracket():
+			pairTypes = append(pairTypes, bpOpen)
+			pairValues = append(pairValues, canonBracketRune(r))
+		default:
+			pairTypes = append(pairTypes, bpClose)
+			pairValues = append(pairValues, canonBracketRune(props.reverseBracket(r)))
+		}
+	}
+
+	par, err := newParagraph(types, pairTypes, pairValues, level(base))
+	if err != nil {
+		return Analysis{}, nil, err
+	}
+
+	// getLevels applies rule L1 at every linebreak boundary.
+	rawLevels := par.getLevels(linebreaks)
+	order := computeMultilineReordering(rawLevels, linebreaks)
+
+	a := Analysis{
+		ParaLevel: uint8(par.embeddingLevel),
+		Levels:    make([]uint8, len(rawLevels)),
+		Order:     order,
+		Classes:   types,
+	}
+	for i, l := range rawLevels {
+		a.Levels[i] = uint8(l)
+	}
+
+	// Split levels into per-piece slices.
+	pieces := make([][]uint8, len(linebreaks))
+	start := 0
+	for i, limit := range linebreaks {
+		seg := a.Levels[start:limit]
+		out := make([]uint8, len(seg))
+		copy(out, seg)
+		pieces[i] = out
+		start = limit
+	}
+	return a, pieces, nil
+}
+
 // canonBracketRune maps bracket runes to their canonical identifier for BD16.
 // U+2329 LEFT-POINTING ANGLE BRACKET and U+232A RIGHT-POINTING ANGLE BRACKET
 // have singleton canonical decompositions to U+3008/U+3009; BidiBrackets.txt

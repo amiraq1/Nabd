@@ -179,8 +179,65 @@ func Layout(logical string, spans []Span, width int, policy Policy) ([]VisualLin
 			out = append(out, VisualLine{})
 			continue
 		}
-		for _, piece := range splitPieces(line, width) {
-			vl, err := buildLine(line, piece, policy)
+
+		// ── paragraph-level analysis ────────────────────────────────────────
+		// Collect the logical rune sequence for the whole paragraph line.
+		var paraRunes []rune
+		for _, cc := range line {
+			paraRunes = append(paraRunes, []rune(cc.Text)...)
+		}
+
+		// ASCII fast-path decision at paragraph level (not per-piece).
+		paraBase := -1
+		switch policy.Base {
+		case LTR:
+			paraBase = 0
+		case RTL:
+			paraBase = 1
+		}
+		asciiPara := policy.Base != RTL && isSimpleASCII(string(paraRunes))
+
+		// Compute wrapped-piece cluster boundaries.
+		pieces := splitPieces(line, width)
+
+		// Build rune-index linebreaks for AnalyzeWithLineBreaks.
+		// We need the rune count up to each piece boundary (cluster index).
+		// Cluster ci in line[] spans runeWidths[ci] runes starting from runeStart[ci].
+		runeStart := make([]int, len(line)+1)
+		for i, cc := range line {
+			runeStart[i+1] = runeStart[i] + len([]rune(cc.Text))
+		}
+		// For each piece, the linebreak is the rune index of the first cluster
+		// of the *next* piece (or len(paraRunes) for the last piece).
+		linebreaks := make([]int, len(pieces))
+		for pi := range pieces {
+			if pi < len(pieces)-1 {
+				// First cluster of next piece.
+				nextStart := pieces[pi+1][0]
+				linebreaks[pi] = runeStart[nextStart]
+			} else {
+				linebreaks[pi] = len(paraRunes)
+			}
+		}
+
+		// Analyse the paragraph once. pieceLevels[i] holds per-rune levels
+		// for piece i after rule L1.
+		var paraAnalysis bidi.Analysis
+		var pieceLevels [][]uint8
+		if !asciiPara {
+			var err error
+			paraAnalysis, pieceLevels, err = bidi.AnalyzeWithLineBreaks(paraRunes, paraBase, linebreaks)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for pi, piece := range pieces {
+			var pLevels []uint8
+			if !asciiPara {
+				pLevels = pieceLevels[pi]
+			}
+			vl, err := buildLine(line, piece, policy, paraAnalysis.ParaLevel, pLevels, runeStart, asciiPara)
 			if err != nil {
 				return nil, err
 			}
@@ -190,12 +247,87 @@ func Layout(logical string, spans []Span, width int, policy Policy) ([]VisualLin
 	return out, nil
 }
 
+// buildLine reorders and measures one wrapped piece using pre-computed
+// paragraph levels. paraLevel is the resolved paragraph base direction.
+// pieceLevels holds one level per rune in this piece (after rule L1) from the
+// paragraph analysis; it is nil when asciiPara is true (fast path).
+// runeStart[i] is the rune index of the start of cluster i within the
+// paragraph line; used to index pieceLevels.
+func buildLine(line []classifiedCluster, piece []int, policy Policy, paraLevel uint8, pieceLevels []uint8, runeStart []int, asciiPara bool) (VisualLine, error) {
+	levels := make([]uint8, len(piece))
+	order := make([]int, len(piece))
+	for i := range order {
+		order[i] = i
+	}
+
+	if !asciiPara {
+		// Derive per-cluster level from the paragraph analysis: take the level
+		// of the first rune of the cluster within this piece.
+		//
+		// runeStart[piece[ci]] is the absolute rune index of cluster piece[ci]
+		// in the paragraph; pieceLevels is indexed from the start of the piece,
+		// so subtract runeStart[piece[0]] to get the piece-relative index.
+		pieceRuneBase := runeStart[piece[0]]
+		for ci, li := range piece {
+			relIdx := runeStart[li] - pieceRuneBase
+			levels[ci] = pieceLevels[relIdx]
+		}
+
+		// LTR islands keep an even embedding level (rule L2 invariant).
+		even := paraLevel
+		if even%2 == 1 {
+			even++
+		}
+		for ci, li := range piece {
+			if line[li].Kind != Prose {
+				levels[ci] = even
+			}
+		}
+		if policy.Mode != Logical {
+			order = l2Reorder(levels)
+		}
+	}
+
+	vis := make([]Cluster, 0, len(piece))
+	visLevels := make([]uint8, 0, len(piece))
+	visKinds := make([]SpanKind, 0, len(piece))
+	visStyles := make([]uint16, 0, len(piece))
+	for _, ci := range order {
+		li := piece[ci]
+		c := line[li].Cluster
+		if policy.Mode == ReorderAndMirror && line[li].Kind == Prose && levels[ci]%2 == 1 {
+			mirrored := mirrorText(c.Text)
+			if mirrored != c.Text {
+				c.Text = mirrored
+				c.Width = uniseg.StringWidth(mirrored)
+			}
+		}
+		vis = append(vis, c)
+		visLevels = append(visLevels, levels[ci])
+		visKinds = append(visKinds, line[li].Kind)
+		visStyles = append(visStyles, line[li].StyleID)
+	}
+
+	var runs []Run
+	for i := range vis {
+		last := len(runs) - 1
+		if len(runs) == 0 || runs[last].Level != visLevels[i] ||
+			runs[last].Kind != visKinds[i] || runs[last].StyleID != visStyles[i] {
+			runs = append(runs, Run{Level: visLevels[i], Kind: visKinds[i], StyleID: visStyles[i]})
+			last = len(runs) - 1
+		}
+		runs[last].Clusters = append(runs[last].Clusters, vis[i])
+	}
+	return VisualLine{Runs: runs, Width: clusterWidths(vis)}, nil
+}
+
 // validateSpans enforces the documented span contract. The returned error
 // always wraps ErrInvalidSpans.
 func validateSpans(logical string, spans []Span, clusters []Cluster) error {
 	invalid := func(format string, args ...any) error {
 		return fmt.Errorf("%w: %s", ErrInvalidSpans, fmt.Sprintf(format, args...))
 	}
+
 	total := len(logical)
 	for i, s := range spans {
 		switch {
@@ -334,84 +466,6 @@ func makeRange(start, end int) []int {
 		out = append(out, i)
 	}
 	return out
-}
-
-// buildLine reorders and measures one wrapped piece.
-func buildLine(line []classifiedCluster, piece []int, policy Policy) (VisualLine, error) {
-	var sb strings.Builder
-	for _, i := range piece {
-		sb.WriteString(line[i].Text)
-	}
-	text := sb.String()
-
-	levels := make([]uint8, len(piece))
-	order := make([]int, len(piece))
-	for i := range order {
-		order[i] = i
-	}
-
-	if !(policy.Base != RTL && isSimpleASCII(text)) {
-		base := -1
-		switch policy.Base {
-		case LTR:
-			base = 0
-		case RTL:
-			base = 1
-		}
-		a, err := bidi.Analyze([]rune(text), base)
-		if err != nil {
-			return VisualLine{}, err
-		}
-		off := 0
-		for ci, li := range piece {
-			levels[ci] = a.Levels[off]
-			off += len([]rune(line[li].Text))
-		}
-		even := a.ParaLevel
-		if even%2 == 1 {
-			even++
-		}
-		for ci, li := range piece {
-			if line[li].Kind != Prose {
-				levels[ci] = even
-			}
-		}
-		if policy.Mode != Logical {
-			order = l2Reorder(levels)
-		}
-	}
-
-	vis := make([]Cluster, 0, len(piece))
-	visLevels := make([]uint8, 0, len(piece))
-	visKinds := make([]SpanKind, 0, len(piece))
-	visStyles := make([]uint16, 0, len(piece))
-	for _, ci := range order {
-		li := piece[ci]
-		c := line[li].Cluster
-		if policy.Mode == ReorderAndMirror && line[li].Kind == Prose && levels[ci]%2 == 1 {
-			mirrored := mirrorText(c.Text)
-			if mirrored != c.Text {
-				c.Text = mirrored
-				c.Width = uniseg.StringWidth(mirrored)
-			}
-		}
-		vis = append(vis, c)
-		visLevels = append(visLevels, levels[ci])
-		visKinds = append(visKinds, line[li].Kind)
-		visStyles = append(visStyles, line[li].StyleID)
-	}
-
-	var runs []Run
-	for i := range vis {
-		last := len(runs) - 1
-		if len(runs) == 0 || runs[last].Level != visLevels[i] ||
-			runs[last].Kind != visKinds[i] || runs[last].StyleID != visStyles[i] {
-			runs = append(runs, Run{Level: visLevels[i], Kind: visKinds[i], StyleID: visStyles[i]})
-			last = len(runs) - 1
-		}
-		runs[last].Clusters = append(runs[last].Clusters, vis[i])
-	}
-	return VisualLine{Runs: runs, Width: clusterWidths(vis)}, nil
 }
 
 // isSimpleASCII reports whether text is guaranteed to need no reordering in a
