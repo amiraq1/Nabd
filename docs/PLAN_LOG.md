@@ -461,3 +461,31 @@ GitHub Actions still pending:
 GitHub CI, Ubuntu full race, and release-dryrun green:
   Phase 1 GO
 ```
+
+## 2026-10-02T23:35:00Z — Phase 1 baseline gate closure
+
+```text
+date UTC:      2026-10-02T23:35:00Z
+HEAD SHA:      79ed6dffb2ecb7306435ee27e48ec1fbe4e31def  (branch docs/phase1-linux-baseline)
+GitHub CI run: 37060263696
+status:        completed / success
+```
+
+### GitHub CI Verification Results (Run 37060263696)
+
+All five workflow jobs on GitHub Actions completed with conclusion `success`:
+1. `termux` (ID 111014901625): `success` (58s) — Build and vet for Termux (android/arm64).
+2. `release-dryrun` (ID 111014901918): `success` (1m5s) — Syft SBOM generation, clean tree assertion, ephemeral key signing, artifact verification.
+3. `module-tidiness` (ID 111014901960): `success` (14s) — `go mod tidy -diff`.
+4. `build` (ID 111014902074): `success` (11m26s) — Threat model freshness, test citations, gofmt, build, vet, unit tests, full package race detector, RTL race, nested module race, router/agent/UI race tests, UI benchmarks, static audits, git diff check, clean local clone verification.
+5. `vulnerability-scan` (ID 111014902199): `success` (54s) — `govulncheck`.
+
+### Final Gate Resolution
+
+```text
+Termux local/ci/full-security: PASS
+GitHub CI run: 37060263696
+Ubuntu full race: PASS
+release-dryrun and Syft: PASS
+Phase 1 decision: GO
+```
