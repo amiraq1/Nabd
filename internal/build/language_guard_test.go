@@ -51,7 +51,10 @@ import (
 // The config, registry, and snap diagnostics left this list when they moved to
 // typed errors with ASCII baselines whose Arabic sentence is rendered at the CLI
 // boundary; cmd/ag/errors.go gained the ownership sentence it now owns. The two
-// provider entries are what remains, and ADR-0002 decision 4 scopes provider
+// provider entries are what remains of hand-written Arabic text. A generated,
+// byte-ASCII presentation-form cache (internal/rtl/arabic_pres_tables.go, pinned
+// by generator determinism and the 1,440-entry derivation test) is listed below,
+// and ADR-0002 decision 4 scopes provider
 // errors as a track separate from 3ج, so #223 stays open until that track lands.
 //
 // PROVENANCE: the counts were measured with this scan from master at a8a005c
@@ -63,6 +66,10 @@ var arabicLiteralAllowlist = map[string]int{
 	"internal/provider/anthropic.go":             2,
 	"internal/provider/openai.go":                1,
 	"internal/presentation/permission_reason.go": 8,
+	// Generated, byte-ASCII Unicode 17 Presentation Forms-B string cache.
+	// Its literals decode to Arabic presentation forms and are pinned by
+	// generator determinism plus the 1,440-entry derivation test.
+	"internal/rtl/arabic_pres_tables.go": 1440,
 }
 
 // arabicLiteralViolation is one reason the tree does not match the ratchet.

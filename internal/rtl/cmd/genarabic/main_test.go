@@ -84,6 +84,13 @@ func TestGeneratorDeterminism(t *testing.T) {
 	if !bytes.Equal(pres1, pres2) {
 		t.Fatalf("pres table generator is nondeterministic: run 1 (%d bytes) != run 2 (%d bytes)", len(pres1), len(pres2))
 	}
+	// 6b. The generated presentation table must be byte-ASCII: the Go source
+	// file is required to stay ASCII-encoded (see language guard, issue #223).
+	for i, b := range pres1 {
+		if b >= 0x80 {
+			t.Fatalf("generated presentation table is not ASCII at byte %d: 0x%02X", i, b)
+		}
+	}
 	presFile := filepath.Join(repoRoot, "internal", "rtl", "arabic_pres_tables.go")
 	presDisk, err := os.ReadFile(presFile)
 	if err != nil {
