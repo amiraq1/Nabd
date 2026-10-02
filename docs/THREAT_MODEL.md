@@ -883,3 +883,19 @@ The agent loop turn ceiling (`max-turns = 40`) is a numerical guard, not a seman
 2. **Hard cut at 5 repeats:** Upon recording 5 identical fingerprints, the loop aborts immediately without further tool execution or provider queries. It emits an explicit `Notice` event and a `RunError` event with `ErrorCode: "loop_detected"`, returning `ErrToolLoop` to the caller.
 
 Evidence: `TestToolLoopNoticeAtThreeRepeats`, `TestToolLoopHardCutAtFiveRepeats`, `TestToolLoopCanonicalJSONKeyOrdering`, `TestToolLoopResetAcrossRuns`.
+
+### Baseline measurement harness
+
+`scripts/capture-baseline.sh` is security-adjacent measurement tooling, not a
+runtime containment boundary. It records build, test, race, static-analysis,
+security-gate, and artifact evidence in `local`, `ci`, and `full-security`
+modes.
+
+The harness does not install tools, modify provider credentials, or treat an
+unavailable required security tool as a successful check. Its output can
+contain command diagnostics and must be reviewed for sensitive data before
+being shared or committed.
+
+Android/arm64 does not support Go's race detector. A Termux result therefore
+records race as `UNAVAILABLE`; the repository's GitHub Actions Linux race run
+remains the authoritative race evidence.
