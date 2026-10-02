@@ -146,7 +146,46 @@ type classifiedCluster struct {
 // emits them explicitly. Binding "\n" separates lines; each line is an
 // independent paragraph. The returned clusters carry absolute source ranges
 // into logical.
+// layoutOptions controls internal unexported features of Layout.
+type layoutOptions struct {
+	arabicShaping bool
+}
+
+// Layout runs the display pipeline over already-sanitized logical text with
+// caller-supplied semantic spans:
+//
+//	spans -> provisional logical wrap -> grapheme clusters ->
+//	canonical bracket pairing (bidi engine) -> levels -> L1/L2 at cluster
+//	granularity -> L3 (clusters never split) -> mirroring ->
+//	final width measurement
+//
+// Spans must be:
+//   - sorted ascending by Start;
+//   - non-overlapping;
+//   - non-empty: Start < End;
+//   - inside [0, len(logical)];
+//   - aligned to UTF-8 rune boundaries and extended grapheme-cluster
+//     boundaries.
+//
+// Any violation returns an error matching ErrInvalidSpans, never a panic.
+// Layout never modifies logical or spans.
+//
+// A nil or empty span slice means the whole text is prose with StyleID 0.
+// Gaps between spans are prose with StyleID 0 and are breakable; every span
+// is one atom (its clusters are never merged with neighbours for wrapping or
+// attribution, even when the next span has the same Kind), and spans with
+// Kind != Prose additionally keep an even, LTR-island embedding level. Spans
+// covering whitespace are allowed when a caller (the Markdown layer in PR 2)
+// emits them explicitly. Binding "\n" separates lines; each line is an
+// independent paragraph. The returned clusters carry absolute source ranges
+// into logical.
 func Layout(logical string, spans []Span, width int, policy Policy) ([]VisualLine, error) {
+	return layoutWithOptions(logical, spans, width, policy, layoutOptions{})
+}
+
+// layoutWithOptions is an internal unexported entry point used by package tests
+// to exercise shaping features without global mutable state.
+func layoutWithOptions(logical string, spans []Span, width int, policy Policy, opts layoutOptions) ([]VisualLine, error) {
 	if width < 1 {
 		return nil, ErrInvalidWidth
 	}
@@ -237,7 +276,7 @@ func Layout(logical string, spans []Span, width int, policy Policy) ([]VisualLin
 			if !asciiPara {
 				pLevels = pieceLevels[pi]
 			}
-			vl, err := buildLine(line, piece, policy, paraAnalysis.ParaLevel, pLevels, runeStart, asciiPara)
+			vl, err := buildLine(logical, line, piece, policy, paraAnalysis.ParaLevel, pLevels, runeStart, asciiPara, opts)
 			if err != nil {
 				return nil, err
 			}
@@ -248,12 +287,16 @@ func Layout(logical string, spans []Span, width int, policy Policy) ([]VisualLin
 }
 
 // buildLine reorders and measures one wrapped piece using pre-computed
-// paragraph levels. paraLevel is the resolved paragraph base direction.
-// pieceLevels holds one level per rune in this piece (after rule L1) from the
-// paragraph analysis; it is nil when asciiPara is true (fast path).
-// runeStart[i] is the rune index of the start of cluster i within the
-// paragraph line; used to index pieceLevels.
-func buildLine(line []classifiedCluster, piece []int, policy Policy, paraLevel uint8, pieceLevels []uint8, runeStart []int, asciiPara bool) (VisualLine, error) {
+// paragraph levels. When opts.arabicShaping is false, it routes
+// directly to buildLineBaseline with zero overhead.
+func buildLine(logical string, line []classifiedCluster, piece []int, policy Policy, paraLevel uint8, pieceLevels []uint8, runeStart []int, asciiPara bool, opts layoutOptions) (VisualLine, error) {
+	if !opts.arabicShaping {
+		return buildLineBaseline(line, piece, policy, paraLevel, pieceLevels, runeStart, asciiPara)
+	}
+	return buildLineShaped(logical, line, piece, policy, paraLevel, pieceLevels, runeStart, asciiPara, opts)
+}
+
+func buildLineBaseline(line []classifiedCluster, piece []int, policy Policy, paraLevel uint8, pieceLevels []uint8, runeStart []int, asciiPara bool) (VisualLine, error) {
 	levels := make([]uint8, len(piece))
 	order := make([]int, len(piece))
 	for i := range order {
@@ -319,6 +362,209 @@ func buildLine(line []classifiedCluster, piece []int, policy Policy, paraLevel u
 		runs[last].Clusters = append(runs[last].Clusters, vis[i])
 	}
 	return VisualLine{Runs: runs, Width: clusterWidths(vis)}, nil
+}
+
+func buildLineShaped(logical string, line []classifiedCluster, piece []int, policy Policy, paraLevel uint8, pieceLevels []uint8, runeStart []int, asciiPara bool, opts layoutOptions) (VisualLine, error) {
+	levels := make([]uint8, len(piece))
+	if !asciiPara {
+		pieceRuneBase := runeStart[piece[0]]
+		for ci, li := range piece {
+			relIdx := runeStart[li] - pieceRuneBase
+			levels[ci] = pieceLevels[relIdx]
+		}
+
+		even := paraLevel
+		if even%2 == 1 {
+			even++
+		}
+		for ci, li := range piece {
+			if line[li].Kind != Prose {
+				levels[ci] = even
+			}
+		}
+	}
+
+	// Partition line into eligible runs.
+	// Boundary rules: start a new run at first difference in:
+	// - prose eligibility (Kind == Prose)
+	// - StyleID
+	// - SpanID / semantic owner
+	// - compatible BiDi level
+	// - hard newline
+	type runRange struct {
+		start int
+		end   int
+	}
+	var inlineRuns [8]runRange
+	var logicalRuns []runRange
+	if len(piece) <= 8 {
+		logicalRuns = inlineRuns[:0]
+	} else {
+		logicalRuns = make([]runRange, 0, len(piece))
+	}
+
+	runStart := 0
+	for i := 1; i < len(piece); i++ {
+		prevLi := piece[i-1]
+		currLi := piece[i]
+
+		prevProse := line[prevLi].Kind == Prose
+		currProse := line[currLi].Kind == Prose
+
+		if prevProse != currProse ||
+			line[prevLi].Kind != line[currLi].Kind ||
+			line[prevLi].StyleID != line[currLi].StyleID ||
+			line[prevLi].SpanID != line[currLi].SpanID ||
+			levels[i-1] != levels[i] ||
+			line[prevLi].Cluster.SrcBytes[1] != line[currLi].Cluster.SrcBytes[0] ||
+			line[prevLi].Cluster.SrcRunes[1] != line[currLi].Cluster.SrcRunes[0] ||
+			isHardBreakCluster(line[prevLi].Text) ||
+			isHardBreakCluster(line[currLi].Text) {
+			logicalRuns = append(logicalRuns, runRange{start: runStart, end: i})
+			runStart = i
+		}
+	}
+	if len(piece) > 0 {
+		logicalRuns = append(logicalRuns, runRange{start: runStart, end: len(piece)})
+	}
+
+	var inlineItems [128]shapedItem
+	var items []shapedItem
+	if len(piece) <= 128 {
+		items = inlineItems[:0]
+	} else {
+		items = make([]shapedItem, 0, len(piece))
+	}
+
+	for _, r := range logicalRuns {
+		firstLi := piece[r.start]
+		kind := line[firstLi].Kind
+		style := line[firstLi].StyleID
+		level := levels[r.start]
+
+		// Ineligible runs (Code, Path, URL, Command) MUST NEVER enter ShapeArabic.
+		if kind != Prose {
+			for k := r.start; k < r.end; k++ {
+				li := piece[k]
+				items = append(items, shapedItem{
+					c:     line[li].Cluster,
+					level: levels[k],
+					kind:  line[li].Kind,
+					style: line[li].StyleID,
+				})
+			}
+			continue
+		}
+
+		runByteStart := line[piece[r.start]].Cluster.SrcBytes[0]
+		runByteEnd := line[piece[r.end-1]].Cluster.SrcBytes[1]
+		textStr := logical[runByteStart:runByteEnd]
+
+		// Non-Arabic prose runs do not undergo Arabic cursive shaping.
+		if !hasArabicScript(textStr) {
+			for k := r.start; k < r.end; k++ {
+				li := piece[k]
+				items = append(items, shapedItem{
+					c:     line[li].Cluster,
+					level: levels[k],
+					kind:  line[li].Kind,
+					style: line[li].StyleID,
+				})
+			}
+			continue
+		}
+
+		// Invariant: run clusters must be strictly source-contiguous before shaping.
+		for k := r.start; k < r.end-1; k++ {
+			c1 := line[piece[k]].Cluster
+			c2 := line[piece[k+1]].Cluster
+			if c1.SrcBytes[1] != c2.SrcBytes[0] || c1.SrcRunes[1] != c2.SrcRunes[0] {
+				return VisualLine{}, fmt.Errorf("rtl: shaped run is not source-contiguous at cluster %d", k)
+			}
+		}
+
+		// Eligible Arabic Prose run -> shapeArabicRun.
+		runRuneStart := line[piece[r.start]].Cluster.SrcRunes[0]
+		items = shapeArabicRun(textStr, runByteStart, runRuneStart, level, kind, style, items)
+	}
+
+	order := make([]int, len(items))
+	for i := range order {
+		order[i] = i
+	}
+	if policy.Mode != Logical && !asciiPara {
+		var inlineLevels [128]uint8
+		var itemLevels []uint8
+		if len(items) <= 128 {
+			itemLevels = inlineLevels[:len(items)]
+		} else {
+			itemLevels = make([]uint8, len(items))
+		}
+		for i := range items {
+			itemLevels[i] = items[i].level
+		}
+		order = l2Reorder(itemLevels)
+	}
+
+	var visualRuns []Run
+	width := 0
+	for _, ci := range order {
+		it := items[ci]
+		c := it.c
+		lvl := it.level
+		k := it.kind
+		st := it.style
+		if policy.Mode == ReorderAndMirror && k == Prose && lvl%2 == 1 {
+			mirrored := mirrorText(c.Text)
+			if mirrored != c.Text {
+				c.Text = mirrored
+				c.Width = uniseg.StringWidth(mirrored)
+			}
+		}
+		width += c.Width
+
+		last := len(visualRuns) - 1
+		if len(visualRuns) == 0 || visualRuns[last].Level != lvl ||
+			visualRuns[last].Kind != k || visualRuns[last].StyleID != st {
+			visualRuns = append(visualRuns, Run{Level: lvl, Kind: k, StyleID: st})
+			last = len(visualRuns) - 1
+		}
+		visualRuns[last].Clusters = append(visualRuns[last].Clusters, c)
+	}
+	return VisualLine{Runs: visualRuns, Width: width}, nil
+}
+
+func hasArabicScript(s string) bool {
+	hasArabicByte := false
+	for i := 0; i < len(s); i++ {
+		if uint8(s[i]) >= 0xD8 {
+			hasArabicByte = true
+			break
+		}
+	}
+	if !hasArabicByte {
+		return false
+	}
+	for _, r := range s {
+		switch {
+		case r >= 0x0600 && r <= 0x06FF,
+			r >= 0x0750 && r <= 0x077F,
+			r >= 0x0870 && r <= 0x08FF,
+			r >= 0xFB50 && r <= 0xFDFF,
+			r >= 0xFE70 && r <= 0xFEFF,
+			r >= 0x10EC0 && r <= 0x10EFF:
+			return true
+		}
+	}
+	return false
+}
+
+// isHardBreakCluster reports whether a cluster text contains a hard line break.
+// The byte scan is equivalent to ContainsAny(s, "\r\n") for UTF-8 input:
+// 0x0A/0x0D bytes cannot occur inside multi-byte sequences, so rune decoding
+// is unnecessary (profiled hotspot: strings.IndexAny via ContainsAny).
+func isHardBreakCluster(s string) bool {
+	return strings.IndexByte(s, '\n') >= 0 || strings.IndexByte(s, '\r') >= 0
 }
 
 // validateSpans enforces the documented span contract. The returned error
