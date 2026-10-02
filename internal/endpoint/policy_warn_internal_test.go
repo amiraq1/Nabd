@@ -52,7 +52,10 @@ func TestClientWarnsOncePerInvalidPolicyValue(t *testing.T) {
 	var first, second *http.Client
 	out1 := capturePolicyStderr(t, func() { first = Client(0) })
 	out2 := capturePolicyStderr(t, func() { second = Client(0) })
-	if n := strings.Count(out1, "NABD_ENDPOINT_POLICY"); n != 1 {
+	// The warning line names NABD_ENDPOINT_POLICY twice (prefix and
+	// wrapped error), so count the line prefix, which appears exactly
+	// once per printed warning.
+	if n := strings.Count(out1, "nabd: NABD_ENDPOINT_POLICY"); n != 1 {
 		t.Errorf("first call: got %d warning lines, want 1 (%q)", n, out1)
 	}
 	if !strings.Contains(out1, "permissive") || !strings.Contains(out1, "strict") {
