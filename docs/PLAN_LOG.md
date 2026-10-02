@@ -389,3 +389,75 @@ W-01: PARTIAL — Windows local capture complete; Linux reference capture NOT ex
 W-02: COMPLETE
 Phase 1 gate: NO-GO (pending Linux reference baseline)
 ```
+
+## 2026-10-02T23:25:00Z — Phase 1 Termux Linux/Android baseline capture & rerun
+
+```text
+date UTC:      2026-10-02T23:25:00Z
+HEAD SHA:      47c8007f2b1f3da54a1fdb3735ee29784167e414  (branch docs/phase1-linux-baseline)
+branch:        docs/phase1-linux-baseline
+host:          android/arm64 (Linux 5.15), Go 1.27.1, 8 cores, 11.08 GB RAM
+```
+
+### Context & Two-Stage Execution
+
+#### 1. First run (Commit `7deabf7bd554`) — Security gate self-trip
+- **Execution**: Initial baseline measurement run under Termux in `$HOME/nabd-baseline-results/harness`.
+- **Finding**: `check_threat_model_freshness` failed with exit code 1 (`required_failure=1`).
+- **Root cause**: `scripts/capture-baseline.sh` was added under the `scripts/` directory, which is part of the security boundary allowlist monitored by `scripts/check-threat-model-freshness.sh`. The commit did not include an update to `docs/THREAT_MODEL.md`. In addition, `capture-baseline.sh` had mode `100644`.
+- **Classification**: Valid security gate enforcement. This was not a regression in the product, but a correct trip of the repository's security guard preventing unmonitored tooling additions to security boundaries.
+
+#### 2. Commit fix (Commit `47c8007`)
+- **Permission**: Restored execution bit (`chmod +x scripts/capture-baseline.sh`, mode change `100644 => 100755`).
+- **Threat Model**: Documented the harness in `docs/THREAT_MODEL.md` under `### Baseline measurement harness` as security-adjacent measurement tooling (not a runtime containment boundary), specifying its review requirements and the Android/arm64 Go race detector limitation.
+- **Verification**: Verified pre-commit checks:
+  * `git diff --check`: PASS
+  * `bash scripts/check-threat-model-tests.sh`: PASS (374 tests in THREAT_MODEL.md, 33 tests in TECH_DEBT.md)
+  * `bash scripts/check-security-invariants.sh`: PASS
+  * `bash scripts/test-threat-model-freshness.sh`: PASS
+  * `bash -n scripts/capture-baseline.sh`: PASS
+  * Committed as `docs(security): document phase 1 baseline harness` (`47c8007`) and pushed to remote.
+  * Post-commit: `bash scripts/check-threat-model-freshness.sh HEAD~1` returned PASS (exit=0).
+
+#### 3. Second run (Rerun at `47c8007f2b1f`) — All three modes green
+- **Evidence directory**: `$HOME/nabd-baseline-results/harness-47c8007f2b1f/`
+- **Mode results**:
+  * `local`: `exit=0`, `PASS=20 FAIL=0 UNAVAILABLE=1 SKIPPED=1`, `required_failure=0`
+  * `ci`: `exit=0`, `PASS=20 FAIL=0 UNAVAILABLE=1 SKIPPED=1`, `required_failure=0`
+  * `full-security`: `exit=0`, `PASS=21 FAIL=0 UNAVAILABLE=2 SKIPPED=1`, `required_failure=0`
+- **Checks status**:
+  * Unit tests (`go_test_unit`): PASS natively on Termux (28.7s - 48.7s).
+  * Unicode RTL conformance (`rtl_unicode_conformance`): PASS (all tests match).
+  * Nested module tests (`nested_module_tests`): PASS (third_party/bubbles).
+  * Static analysis (`staticcheck`, `govulncheck`, `go_vet`, `gofmt`): PASS.
+  * Security gates (`check_exec_env`, `check_security_invariants`, `check_threat_model_tests`, `test_threat_model_freshness`, `check_threat_model_freshness`): PASS.
+  * Linux binary cross-compile artifact: PASS (`nabd_linux_amd64`, 14,621,701 bytes, sha256 `e15bb4dfe4767ba1c402890378660e801a9a052b866c166eb9093d32f27efb50`).
+  * `race_detector`: UNAVAILABLE (Go runtime limitation on `android/arm64`; authoritative race run remains GitHub Actions Linux amd64 runner).
+  * `syft_sonatype_sweep`: UNAVAILABLE (syft not installed on local Termux host; CI installs it pinned).
+  * `sbom`: SKIPPED (reproduced in CI release-dryrun).
+  * Repository invariants: PASS (`git diff --check`, `git status --porcelain` clean).
+- **Integrity & Checksums**:
+  * `SHA256SUMS` generated in results directory:
+    ```text
+    1449c2b5ff946df859afcf660bcede9d2d0baf97e7b0142fa49c9ea716d7d764  local.log
+    e58edfae9e699393a0a7ed1a980c0eca08155b66e2f1db0e98fd89852372be51  ci.log
+    e4fcfaa96140910226f8597d3e244c7eeba1da4c42c4c58d0e2062c88f908333  full-security.log
+    19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061  local.exit
+    19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061  ci.exit
+    19eaf43821a7660ec323a87c8457bf74823beb296c39f5e01aa8a683aa50f061  full-security.exit
+    ```
+  * Secret scan with ripgrep (`rg -n -i 'api[_-]?key|authorization:|bearer |token=|sk-[a-z0-9]'`) returned zero matches across logs.
+  * Capture logs and exit files remain outside Git tracking.
+
+### Phase 1 Gate Decision
+
+```text
+Termux modes exit 0 + required_failure=0:
+  W-01 COMPLETE FOR TERMUX ANDROID
+
+GitHub Actions still pending:
+  Phase 1 CONDITIONAL GO
+
+GitHub CI, Ubuntu full race, and release-dryrun green:
+  Phase 1 GO
+```
