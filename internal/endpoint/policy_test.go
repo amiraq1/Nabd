@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -827,9 +828,9 @@ func TestClientReportsInvalidPolicy(t *testing.T) {
 		}
 		orig := os.Stderr
 		os.Stderr = w
+		defer func() { os.Stderr = orig }()
 		fn()
 		w.Close()
-		os.Stderr = orig
 		var buf strings.Builder
 		if _, err := io.Copy(&buf, r); err != nil {
 			t.Fatalf("reading captured stderr: %v", err)
@@ -851,6 +852,44 @@ func TestClientReportsInvalidPolicy(t *testing.T) {
 		if !strings.Contains(out, "strict") {
 			t.Errorf("stderr %q does not mention fallback to strict", out)
 		}
+	})
+
+	t.Run("invalid_value_fails_closed_like_strict", func(t *testing.T) {
+		t.Setenv("NABD_ENDPOINT_POLICY", "bogus")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		// The explicit strict client refuses the plaintext loopback dial.
+		strict := endpoint.ClientWithPolicy(endpoint.PolicyStrict, 0)
+		if _, err := strict.Get(srv.URL); !errors.Is(err, endpoint.ErrEndpointRefused) {
+			t.Fatalf("strict client: expected ErrEndpointRefused for plaintext loopback, got %v", err)
+		}
+
+		// The client built from the invalid value must behave identically.
+		var fallback *http.Client
+		out := captureFn(func() { fallback = endpoint.Client(0) })
+		if !strings.Contains(out, "bogus") || !strings.Contains(out, "strict") {
+			t.Errorf("stderr %q does not report the invalid value and strict fallback", out)
+		}
+		resp, err := fallback.Get(srv.URL)
+		if err == nil {
+			resp.Body.Close()
+			t.Fatal("client from invalid NABD_ENDPOINT_POLICY reached a plaintext loopback endpoint; fallback is not PolicyStrict")
+		}
+		if !errors.Is(err, endpoint.ErrEndpointRefused) {
+			t.Fatalf("fallback client: expected ErrEndpointRefused, got %v", err)
+		}
+
+		// A loopback client does reach the same endpoint, so the assertion
+		// above genuinely detects a weakened fallback.
+		loopback := endpoint.ClientWithPolicy(endpoint.PolicyLoopback, 0)
+		resp, err = loopback.Get(srv.URL)
+		if err != nil {
+			t.Fatalf("loopback client should reach a plaintext loopback endpoint: %v", err)
+		}
+		resp.Body.Close()
 	})
 
 	t.Run("empty_value_is_silent", func(t *testing.T) {
