@@ -104,6 +104,8 @@ gate runs.
 | `BidiTest.txt.gz` | `888bdfc8090652272d1f859cdb00ae659e2dc6c26740be61ef1d03998a687620` (official bytes; gz artifact `8c6423f74aab86045ec1b4283654f235b18ae548f91975854c41524383453345`, 1,315,854 B) |
 | `BidiBrackets.txt` | `dadbaf38a0d0246e5b805bf8725cb81b7c621f93d030595635f5ba2c2f179428` (plain text) |
 | `BidiMirroring.txt` | `a2f16fb873ab4fcdf3221cb1a8a85a134ddd6ed03603181823ff5206af3741ce` (plain text) |
+| `UnicodeData.txt` | `2e1efc1dcb59c575eedf5ccae60f95229f706ee6d031835247d843c11d96470c` (plain text, official bytes from `https://unicode.org/Public/17.0.0/ucd/UnicodeData.txt`) |
+| `ArabicShaping.txt` | `39afa01e680e27d0fd10b67a9b27be13fbaa3d0efecfb5be45991de9a0d267d0` (plain text, official bytes from `https://unicode.org/Public/17.0.0/ucd/ArabicShaping.txt`) |
 
 The decompressed hashes above are the authoritative data hashes and do not
 change when the storage format changes.
@@ -120,10 +122,16 @@ change when the storage format changes.
    `{0xXXXX, 0xYYYY},` entries into the existing array literal, and keep the
    header comment's sha256 current. The file's entry count must equal the data
    file's entry count; the Mirroring gate must stay `428/428` for 17.0.0.
-3. **testdata** — refresh the four files together with the tables, compress the
-   two large ones with `gzip -n -9`, update the hashes above, and re-run the
+3. **testdata** — refresh the files together with the tables, compress the
+   two large bidi test files with `gzip -n -9`, update the hashes above, and re-run the
    conformance command. Never substitute the gzip artifact hash for the
    decompressed data hash.
+4. **`arabic_tables_generated.go`, `arabic_pres_tables.go`** — regenerate both
+   with `go run ./internal/rtl/cmd/genarabic`; the command verifies SHA-256
+   hashes of `UnicodeData.txt` and `ArabicShaping.txt` before emitting code
+   (the pres tables are derived purely from code points and read no data files).
+   The generator is deterministic (verified by `TestGeneratorDeterminism`,
+   which byte-compares both generated files against disk).
 
 ## Arabic shaping gate for PR 2
 
@@ -148,6 +156,45 @@ in the first place.
 - `RestoreFromSource` remains the only logical copy path. Presentation forms
   must never enter the journal, search indexes, or any copy source; they are
   display-only.
+
+### Arabic shaping tables and behavior contracts
+
+1. **Deterministic derivation**:
+   - `arabic_tables_generated.go` is derived algorithmically by `cmd/genarabic`
+     from `UnicodeData.txt` (decomposition tags `<isolated>`, `<final>`, `<initial>`,
+     `<medial>`) and `ArabicShaping.txt` (Joining_Type property).
+   - `arabic_pres_tables.go` is emitted by the same `cmd/genarabic` run, derived
+     purely from the Presentation Forms-B code points (U+FE70..U+FEFF); no
+     external data files are read.
+   - No hand-written glyph mapping tables are used.
+2. **Joining types and transparency**:
+   - Explicit joining types (`D`, `R`, `L`, `C`, `U`, `T`) are read from `ArabicShaping.txt`.
+   - Per Unicode standard specification, unlisted code points in `U+0600..U+06FF`
+     with General_Category `Mn`, `Me`, or `Cf` default to `Joining_Type=T` (Transparent).
+     Combining marks / Tashkeel do not break Arabic joining sequences.
+3. **Lam-Alef ligatures**:
+   - All four canonical Lam-Alef ligature pairs are derived from 2-codepoint
+     decompositions in `UnicodeData.txt`:
+     - Lam + Alef with Madda (`U+0622`) → isolated `0xFEF5`, final `0xFEF6`
+     - Lam + Alef with Hamza above (`U+0623`) → isolated `0xFEF7`, final `0xFEF8`
+     - Lam + Alef with Hamza below (`U+0625`) → isolated `0xFEF9`, final `0xFEFA`
+     - Lam + Plain Alef (`U+0627`) → isolated `0xFEFB`, final `0xFEFC`
+4. **Logical Preservation Contract (Missing Forms and U+0649)**:
+   - In Unicode 17, `U+0649` (Alef Maksura) is classified as `Joining_Type=D` (dual-joining).
+     However, the Arabic Presentation Forms-B block (`U+FE70..U+FEFF`, defined in Unicode 1.x)
+     provides only isolated (`0xFEEF`) and final (`0xFEF0`) forms, with no initial or medial forms.
+   - Other extended Arabic characters in `U+0600..U+06FF` (e.g. `U+067E` Peh, `U+0686` Tcheh)
+     likewise have `JT=D` but lack Presentation Forms-B glyphs.
+   - **Contract**: Whenever a Presentation Form glyph is absent (`0x0000`) or a character
+     lacks presentation forms entirely, the shaping engine preserves the character as its
+     original logical rune without conversion.
+   - For `U+0649`:
+     - Isolated: mapped to `0xFEEF`.
+     - Final: mapped to `0xFEF0`.
+     - Initial: preserved as logical `U+0649`.
+     - Medial: preserved as logical `U+0649`.
+   - All letters with `JT=D` lacking initial/medial presentation forms are cataloged in the
+     `missingForms` table and asserted by unit tests (`TestAlefMaksuraContract` and `TestMissingFormsTable`).
 
 ## Removal condition (fork must not become permanent)
 
