@@ -87,3 +87,71 @@ func TestHugeToolOutputRemainsBounded(t *testing.T) {
 		}
 	}
 }
+
+// TestToolStatusSymbolsAndASCIIFallback verifies UI-F3:
+// 1. Table-driven expectation for Unicode and ASCII symbols across all statuses.
+// 2. All status symbols occupy exactly 1 terminal cell according to ansi.StringWidth.
+// 3. No non-ASCII runes (>= 128) leak in ASCII mode.
+// 4. Failed/Denied styling (bad) remains distinct from Cancelled styling (dim).
+func TestToolStatusSymbolsAndASCIIFallback(t *testing.T) {
+	cases := []struct {
+		name      string
+		status    presentation.ToolStatus
+		wantUni   string
+		wantASCII string
+	}{
+		{name: "Pending", status: presentation.ToolPending, wantUni: "○", wantASCII: "o"},
+		{name: "Running", status: presentation.ToolRunning, wantUni: "●", wantASCII: ">"},
+		{name: "Done", status: presentation.ToolDone, wantUni: "✓", wantASCII: "+"},
+		{name: "Failed", status: presentation.ToolFailed, wantUni: "✗", wantASCII: "x"},
+		{name: "Denied", status: presentation.ToolDenied, wantUni: "✗", wantASCII: "x"},
+		{name: "Cancelled", status: presentation.ToolCancelled, wantUni: "✗", wantASCII: "x"},
+		{name: "unknown/default", status: presentation.ToolStatus("unknown_status"), wantUni: "·", wantASCII: "."},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// 1. Unicode mode
+			t.Setenv("NABD_ASCII_ONLY", "")
+			uRaw := toolStatusSymbol(tc.status)
+			uStripped := ansi.Strip(uRaw)
+			if uStripped != tc.wantUni {
+				t.Errorf("%s Unicode symbol = %q, want %q", tc.name, uStripped, tc.wantUni)
+			}
+			if gotW := ansi.StringWidth(uStripped); gotW != 1 {
+				t.Errorf("%s Unicode width = %d, want 1", tc.name, gotW)
+			}
+
+			// 2. ASCII mode
+			t.Setenv("NABD_ASCII_ONLY", "1")
+			aRaw := toolStatusSymbol(tc.status)
+			aStripped := ansi.Strip(aRaw)
+			if aStripped != tc.wantASCII {
+				t.Errorf("%s ASCII symbol = %q, want %q", tc.name, aStripped, tc.wantASCII)
+			}
+			if gotW := ansi.StringWidth(aStripped); gotW != 1 {
+				t.Errorf("%s ASCII width = %d, want 1", tc.name, gotW)
+			}
+			for _, r := range aStripped {
+				if r >= 128 {
+					t.Errorf("%s ASCII symbol %q contains non-ASCII rune %q (U+%04X)", tc.name, aStripped, r, r)
+				}
+			}
+		})
+	}
+
+	// 3. Styling distinction: ToolFailed/ToolDenied (bad/red) vs ToolCancelled (dim/gray)
+	for _, env := range []string{"", "1"} {
+		t.Setenv("NABD_ASCII_ONLY", env)
+		failSym := toolStatusSymbol(presentation.ToolFailed)
+		denySym := toolStatusSymbol(presentation.ToolDenied)
+		cancelSym := toolStatusSymbol(presentation.ToolCancelled)
+
+		if failSym == cancelSym {
+			t.Errorf("ToolFailed and ToolCancelled unexpectedly share styling (env=%q): %q", env, failSym)
+		}
+		if denySym == cancelSym {
+			t.Errorf("ToolDenied and ToolCancelled unexpectedly share styling (env=%q): %q", env, denySym)
+		}
+	}
+}
