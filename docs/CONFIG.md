@@ -385,10 +385,14 @@ On Termux (`android/arm64`), Go's standard library does not use system `libc` re
 ### `NABD_ASCII_ONLY`
 
 - **Environment-only variable:** `NABD_ASCII_ONLY` is read strictly from the process environment (`os.Getenv`). It is **not** a configuration file key and cannot be set in `~/.ag/config` or `~/.ag/config.v2.json`. Setting it in a config file triggers an unknown key warning (in v1) or validation error (in v2).
-- **Scope:** Controls decorative UI glyphs only. When set to any non-empty value (e.g. `NABD_ASCII_ONLY=1`), Nabd replaces Unicode decorative symbols with plain ASCII equivalents:
+- **Scope:** Controls decorative UI glyphs only. When set to any non-empty value (including `1`, `0`, or `false`), Nabd replaces Unicode decorative symbols with plain ASCII equivalents:
   - Error indicator glyph: `✗ ` becomes `x ` (or `! ` depending on width).
+  - Tool execution status symbols: running tool symbol `●` becomes `* `, and completed tool symbol `○` becomes `- `.
+  - Streaming status indicator: `Streaming…` becomes `Streaming...`.
+  - Slash command menu: header banner (`-- Commands ` instead of `── Commands `), item truncation tails (`...` instead of `…`), and separator/border lines use `-`.
   - Truncation tail: `…` becomes `...`.
   - Border and separator lines: Unicode box-drawing character `─` becomes ASCII hyphen `-`.
+- **Disabling:** Unsetting the variable or setting it to an empty string (`NABD_ASCII_ONLY=""`) disables ASCII-only mode and restores default Unicode glyphs.
 - **Preserves Arabic and content text:** `NABD_ASCII_ONLY` affects only decorative framing glyphs and punctuation markers. It does **not** strip or alter Arabic text, user input, assistant responses, or error message bodies.
 
 ### `NABD_RTL`
