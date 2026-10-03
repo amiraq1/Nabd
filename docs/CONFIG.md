@@ -388,7 +388,6 @@ On Termux (`android/arm64`), Go's standard library does not use system `libc` re
 - **Scope:** Controls decorative UI glyphs only. When set to any non-empty value (including `1`, `0`, or `false`), Nabd replaces Unicode decorative symbols with plain ASCII equivalents:
   - Error indicator glyph: `✗ ` becomes `x ` (or `! ` depending on width).
   - Tool execution status symbols: running tool symbol `●` becomes `* `, and completed tool symbol `○` becomes `- `.
-  - Streaming status indicator: `Streaming…` becomes `Streaming...`.
   - Slash command menu: header banner (`-- Commands ` instead of `── Commands `), item truncation tails (`...` instead of `…`), and separator/border lines use `-`.
   - Truncation tail: `…` becomes `...`.
   - Border and separator lines: Unicode box-drawing character `─` becomes ASCII hyphen `-`.

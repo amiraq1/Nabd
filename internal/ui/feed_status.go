@@ -55,10 +55,7 @@ func (m *Feed) phaseText() string {
 	}
 	if m.running {
 		if !m.streamFirstDeltaAt.IsZero() {
-			if asciiOnly() {
-				return "Streaming..."
-			}
-			return "Streaming…"
+			return ""
 		}
 		return "Generating…"
 	}
