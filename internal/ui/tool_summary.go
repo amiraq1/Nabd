@@ -100,11 +100,29 @@ func toolImportantMetadata(t *presentation.ToolCard) string {
 }
 
 func toolStatusSymbol(status presentation.ToolStatus) string {
+	if asciiOnly() {
+		switch status {
+		case presentation.ToolPending:
+			return dim.Render("o")
+		case presentation.ToolRunning:
+			return warn.Render(">")
+		case presentation.ToolDone:
+			return good.Render("+")
+		case presentation.ToolFailed:
+			return bad.Render("x")
+		case presentation.ToolDenied:
+			return bad.Render("x")
+		case presentation.ToolCancelled:
+			return dim.Render("x")
+		default:
+			return dim.Render(".")
+		}
+	}
 	switch status {
 	case presentation.ToolPending:
-		return dim.Render("o")
+		return dim.Render("○")
 	case presentation.ToolRunning:
-		return warn.Render("~")
+		return warn.Render("●")
 	case presentation.ToolDone:
 		return good.Render("✓")
 	case presentation.ToolFailed:

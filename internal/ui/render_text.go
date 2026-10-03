@@ -53,6 +53,8 @@ var AllowedUISymbols = map[rune]bool{
 	'—': true, // U+2014 Em dash
 	'▌': true, // U+258C Prompt cursor block
 	'→': true, // U+2192 Arrow
+	'○': true, // U+25CB Tool pending
+	'●': true, // U+25CF Tool running
 }
 
 // maxTailLines is how many trailing lines of a tool result the phone screen
