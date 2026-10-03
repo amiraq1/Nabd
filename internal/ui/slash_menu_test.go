@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // TestSlashMenuOpenOnSlash confirms that typing '/' into an empty composer opens the menu.
@@ -262,8 +264,15 @@ func TestSlashMenuHonorsASCIIOnly(t *testing.T) {
 		}
 	}
 
-	// 3. Forced truncation test: narrow width forces truncation of long description
-	truncWidth := 30
+	// 3. Forced truncation test: compact width (w=45) includes description and forces truncation
+	truncWidth := 45
+	item := menu.items[0]
+	rawLine := fmt.Sprintf("%-12s %s", item.Usage, item.Description)
+	budget := truncWidth - 2
+	if rawW := ansi.StringWidth(rawLine); rawW <= budget {
+		t.Fatalf("test precondition failed: rawLine width %d <= budget %d, truncation would not occur", rawW, budget)
+	}
+
 	t.Setenv("NABD_ASCII_ONLY", "")
 	uTruncView := menu.view(truncWidth)
 	if !strings.Contains(uTruncView, "…") {

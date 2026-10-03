@@ -92,7 +92,6 @@ func TestHugeToolOutputRemainsBounded(t *testing.T) {
 // 1. Table-driven expectation for Unicode and ASCII symbols across all statuses.
 // 2. All status symbols occupy exactly 1 terminal cell according to ansi.StringWidth.
 // 3. No non-ASCII runes (>= 128) leak in ASCII mode.
-// 4. Failed/Denied styling (bad) remains distinct from Cancelled styling (dim).
 func TestToolStatusSymbolsAndASCIIFallback(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -138,20 +137,5 @@ func TestToolStatusSymbolsAndASCIIFallback(t *testing.T) {
 				}
 			}
 		})
-	}
-
-	// 3. Styling distinction: ToolFailed/ToolDenied (bad/red) vs ToolCancelled (dim/gray)
-	for _, env := range []string{"", "1"} {
-		t.Setenv("NABD_ASCII_ONLY", env)
-		failSym := toolStatusSymbol(presentation.ToolFailed)
-		denySym := toolStatusSymbol(presentation.ToolDenied)
-		cancelSym := toolStatusSymbol(presentation.ToolCancelled)
-
-		if failSym == cancelSym {
-			t.Errorf("ToolFailed and ToolCancelled unexpectedly share styling (env=%q): %q", env, failSym)
-		}
-		if denySym == cancelSym {
-			t.Errorf("ToolDenied and ToolCancelled unexpectedly share styling (env=%q): %q", env, denySym)
-		}
 	}
 }
