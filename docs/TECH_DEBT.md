@@ -368,6 +368,15 @@ narrow viewport floor.
 Addressed in: commit `fix(ui): honor ascii-only in slash menu`
 Final closure gate: Verified locally on arm64 and pending full CI pass on branch.
 
+## NO_COLOR_TOOL_STATUS_AMBIGUITY - glyph collision between failed, denied, and cancelled statuses under NO_COLOR
+
+- **Status:** Active / Accepted risk
+- **Owner:** UI / Presentation
+- **Priority:** Low
+- **Evidence:** `toolStatusSymbol` maps `ToolFailed`, `ToolDenied`, and `ToolCancelled` to identical glyphs (`✗` in Unicode mode, `x` in ASCII mode). Visual discrimination between failure (red/bad) and cancellation (faint/dim) relies entirely on terminal ANSI color styling. When colors are disabled (`NO_COLOR`, non-color profile, or dumb terminals), the rendered glyphs become identical textually.
+- **Pre-existing context:** This is a pre-existing design choice inherited from earlier UI revisions, not a regression introduced by UI-F3.
+- **Closure criteria:** Introduce distinct glyphs for cancelled/denied states (e.g. distinct ASCII/Unicode symbols or an explicit textual status label) that preserve unambiguous status identification without relying on ANSI color.
+
 ## TWO_INTERACTIVE_UIS - the layout work targets the experimental path
 
 cmd/ag/main.go carries two interactive TUIs and a third replay model:
