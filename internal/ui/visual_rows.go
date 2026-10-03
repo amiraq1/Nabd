@@ -85,6 +85,12 @@ func truncateToWidth(s string, w int, tail string) string {
 	return ansi.Truncate(s, w, tail)
 }
 
+// asciiOnly reports whether NABD_ASCII_ONLY is set to any non-empty value,
+// selecting ASCII fallbacks for decorative UI elements per docs/CONFIG.md.
+func asciiOnly() bool {
+	return os.Getenv("NABD_ASCII_ONLY") != ""
+}
+
 // separatorLine returns a full-width horizontal separator string of exactly
 // w terminal cells. Uses ASCII hyphens when NABD_ASCII_ONLY is set;
 // otherwise uses the Unicode box-drawing character (─, U+2500).
@@ -93,7 +99,7 @@ func separatorLine(w int) string {
 	if w <= 0 {
 		return ""
 	}
-	if os.Getenv("NABD_ASCII_ONLY") != "" {
+	if asciiOnly() {
 		return asciiSeparatorLine(w)
 	}
 	// ─ is 1 cell wide (verified by TestSeparatorGlyphWidth)
