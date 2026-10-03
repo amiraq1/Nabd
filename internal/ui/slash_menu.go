@@ -83,14 +83,22 @@ func (m *slashMenu) view(width int, maxRows ...int) string {
 	if mode != WidthWide && menuW > 50 {
 		menuW = 50
 	}
-	header := "── Commands "
-	dashes := menuW - ansi.StringWidth(header)
+	headerPrefix := "── Commands "
+	fill := "─"
+	truncTail := "…"
+	if asciiOnly() {
+		headerPrefix = "-- Commands "
+		fill = "-"
+		truncTail = "..."
+	}
+	dashes := menuW - ansi.StringWidth(headerPrefix)
 	if dashes < 0 {
 		dashes = 0
 	}
+	header := headerPrefix + strings.Repeat(fill, dashes)
 	shape := m.shape(maxRows...)
 	var b strings.Builder
-	b.WriteString(dim.Render(header + strings.Repeat("─", dashes)))
+	b.WriteString(dim.Render(header))
 	b.WriteByte('\n')
 	for i := shape.start; i < shape.end; i++ {
 		cmd, prefix := m.items[i], "  "
@@ -99,7 +107,7 @@ func (m *slashMenu) view(width int, maxRows ...int) string {
 			line = fmt.Sprintf("%-12s %s", cmd.Usage, cmd.Description)
 		}
 		if ansi.StringWidth(line) > menuW-2 {
-			line = ansi.Truncate(line, menuW-2, "…")
+			line = ansi.Truncate(line, menuW-2, truncTail)
 		}
 		if i == m.selected {
 			prefix = "> "
@@ -109,6 +117,6 @@ func (m *slashMenu) view(width int, maxRows ...int) string {
 		}
 		b.WriteByte('\n')
 	}
-	b.WriteString(dim.Render(strings.Repeat("─", menuW)))
+	b.WriteString(dim.Render(separatorLine(menuW)))
 	return b.String()
 }
