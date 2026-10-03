@@ -357,13 +357,16 @@ permission decision - dropping it would mean either a blind decision or a
 silently withheld prompt. requiredFloor documents the boundary; terminals
 shorter than five rows with a modal open are out of contract.
 
-## MENU_IGNORES_NABD_ASCII_ONLY - ASCII fallback is not applied consistently
+## MENU_IGNORES_NABD_ASCII_ONLY - ASCII fallback is not applied consistently (RESOLVED)
 
-separatorLine honours NABD_ASCII_ONLY and falls back to '-', but
-slash_menu.go:138 and :141 write U+2500 unconditionally. On a terminal that
-sets the variable the feed separators degrade to ASCII while the command menu
-stays Unicode. Unverified and untested; fixing it touches production code and
-needs its own red case, so it is out of scope for the current test batch.
+Fixed: slash_menu.go now routes through the centralized asciiOnly() helper, using
+`-- Commands ` prefix, ASCII `-` dashes, and `...` truncation tails when NABD_ASCII_ONLY
+is set to any non-empty value. The bottom border uses separatorLine(menuW).
+Regression test: TestSlashMenuHonorsASCIIOnly in internal/ui/slash_menu_test.go covers
+default Unicode preservation, ASCII pureness, forced truncation tail replacement, and
+narrow viewport floor.
+Addressed in: commit `fix(ui): honor ascii-only in slash menu`
+Final closure gate: Verified locally on arm64 and pending full CI pass on branch.
 
 ## TWO_INTERACTIVE_UIS - the layout work targets the experimental path
 
