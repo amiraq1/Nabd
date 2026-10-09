@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"nabd/internal/display"
 	"nabd/internal/event"
 	"nabd/internal/presentation"
 
@@ -224,6 +225,14 @@ func toolEnd(c *event.ToolCall, width int) string {
 	return out
 }
 
+// sanitizeStreamText applies the display policy to streamed model text at
+// the render boundary. The accumulation buffer stays raw; only what reaches
+// the screen is cleaned. Same policy as feed assistant text: newlines and
+// tabs allowed, no credential redaction (model output, not secrets).
+func sanitizeStreamText(s string) string {
+	return display.SanitizeForDisplay(s, display.DisplayPolicy{AllowNewline: true, AllowTab: true, Redact: false})
+}
+
 // flushJoin is the one place text-delta buffers turn into scrollback. Both
 // Chat and Replay call it, so a session replays exactly as it was seen:
 // the buffered text block first, then the event that ended it, joined into
@@ -232,7 +241,7 @@ func toolEnd(c *event.ToolCall, width int) string {
 func flushJoin(buf *string, e event.Event, width int) string {
 	var prints []string
 	if *buf != "" {
-		prints = append(prints, block(" ", *buf, width, lipgloss.NewStyle()))
+		prints = append(prints, block(" ", sanitizeStreamText(*buf), width, lipgloss.NewStyle()))
 		*buf = ""
 	}
 	if s := RenderEvent(e, width); s != "" {

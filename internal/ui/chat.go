@@ -303,7 +303,7 @@ func (m *Chat) View() string {
 		if m.input != "" {
 			s += "\n› " + m.input
 		}
-		if p := partialTail(m.buf, 6, m.width); p != "" {
+		if p := partialTail(sanitizeStreamText(m.buf), 6, m.width); p != "" {
 			return p + "\n" + dim.Render(s)
 		}
 		return dim.Render(s)
