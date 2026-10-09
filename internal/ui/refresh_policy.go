@@ -31,7 +31,7 @@ func visibleFeedItems(items []presentation.FeedItem) []presentation.FeedItem {
 		ID:   retentionNoticeID,
 		Seq:  firstVisible.Seq,
 		Text: fmt.Sprintf(
-			"%s %d older items hidden%s session journal has full history %s",
+			"%s %d older items hidden%ssession journal has full history %s",
 			ch.tail, hidden, ch.sep, ch.tail,
 		),
 	})

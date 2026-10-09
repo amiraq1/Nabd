@@ -161,7 +161,10 @@ func TestFeedRenderASCIIOnlyToolChromeAndRetentionNotice(t *testing.T) {
 		t.Errorf("retention notice did not map to ASCII chrome: %q", asciiNotice)
 	}
 	t.Setenv("NABD_ASCII_ONLY", "")
-	unicodeNotice := strings.Join(renderItem(retained[0], width), "\n")
+	// The notice text is baked at generation time: regenerate it to assert
+	// the default (flag unset) output stays byte-identical.
+	retainedDefault := visibleFeedItems(make([]presentation.FeedItem, maxVisibleFeedItems+1))
+	unicodeNotice := strings.Join(renderItem(retainedDefault[0], width), "\n")
 	if !strings.Contains(unicodeNotice, "… 2 older items hidden · session journal has full history …") {
 		t.Errorf("default retention notice changed: %q", unicodeNotice)
 	}
