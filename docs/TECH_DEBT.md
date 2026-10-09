@@ -1154,19 +1154,21 @@ Phase 2 execution.
 ### Issue #189 update text
 
 The following text is ready to be posted as a comment on Issue #189
-("Phase 0 - baseline and stabilization tracks") when the Phase 1 gate closes.
-It should NOT be posted until the Linux reference baseline is complete.
+("Phase 0 - baseline and stabilization tracks"). The Phase 1 gate closed
+with **GO** on 2026-10-02T23:35:00Z (see `docs/PLAN_LOG.md` — "Phase 1
+baseline gate closure"); the Linux reference baseline is complete.
 
 ---
 
-**Phase 1 progress update (W-01 partial, W-02 complete)**
+**Phase 1 progress update (W-01 complete, W-02 complete)**
 
-W-01 status: **PARTIAL**. A Windows/amd64 diagnostic capture is complete
-(`docs/BASELINE.md`), covering cross-compilation, RTL conformance, security
-scripts, and project metrics. The reference baseline (Linux, `ci` mode,
-`full-security` mode) has not yet been executed. Blockers: a clean Linux
-clone at `origin/master` with `rg`, staticcheck v0.8.1, and govulncheck v1.8.0
-installed.
+W-01 status: **COMPLETE**. The Linux reference baseline (`ci` mode,
+`full-security` mode) was captured and verified — all five GitHub Actions
+workflow jobs on run 37060263696 completed with `success`
+(`docs/PLAN_LOG.md` 2026-10-02T23:35:00Z), and the baseline was merged as
+PR #252 ('Docs/phase1 linux baseline') on 2026-10-03. (The earlier
+Windows/amd64 diagnostic capture in `docs/BASELINE.md` was superseded by
+the Linux reference.)
 
 W-02 status: **COMPLETE**. `docs/TECH_DEBT.md` has been updated:
 
@@ -1178,7 +1180,7 @@ W-02 status: **COMPLETE**. `docs/TECH_DEBT.md` has been updated:
 - Full debt taxonomy and Phase 2 priority order documented in the W-02
   Settlement section.
 
-Phase 1 gate decision: **NO-GO** pending Linux reference baseline.
+Phase 1 gate decision: **GO** (2026-10-02T23:35:00Z).
 
 ---
 
@@ -1196,3 +1198,9 @@ W-02 is **COMPLETE**. All required deliverables are present:
 | Issue #189 update text prepared | Done |
 
 Phase 1 gate: **NO-GO** (W-01 incomplete; Linux reference capture required).
+
+> **Superseded 2026-10-02T23:35:00Z:** the W-01 defects were corrected and
+> the Linux reference baseline was captured and verified (GitHub CI run
+> 37060263696, all jobs `success`). Final Phase 1 gate decision: **GO**
+> (`docs/PLAN_LOG.md` — "Phase 1 baseline gate closure"). This section is
+> retained as the contemporaneous W-02 record.
