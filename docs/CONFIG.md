@@ -425,7 +425,7 @@ rejects the file outright).
 | `NABD_PROVIDER` | Override the active provider (`groq`, `anthropic`, `openrouter`, `nvidia`, `router`). Ignored when config v2 is active. |
 | `NABD_MODEL` | Override the model ID for the standalone (non-router) path. Ignored when `NABD_PROVIDER=router`. |
 | `NABD_BASE_URL` | Override the provider base URL. **Security-sensitive**: the endpoint policy (`NABD_ENDPOINT_POLICY`) applies, and an invalid policy value now produces a warning on stderr and defaults to `strict`. Forbidden when `NABD_PROVIDER=router`. |
-| `NABD_ROUTES` | JSON array of `{"provider":"…","model":"…"}` objects for the router provider. Required when `NABD_PROVIDER=router`. |
+| `NABD_ROUTES` | Comma-separated `provider:model` pairs for the router provider, e.g. `groq:model-a,openrouter:model-b:free`. Provider names are lowercased, surrounding spaces/tabs are trimmed, at most 16 routes, and exact duplicates are rejected. Required when `NABD_PROVIDER=router`. |
 | `NABD_ROUTER_MODE` | Router fallback strategy. Currently only `fallback` is accepted. |
 | `NABD_ROUTER_PRESTREAM_TIMEOUT` | Duration string (e.g. `15s`) — time the router waits for a first byte before trying the next route. |
 | `NABD_ROUTER_RETRY_AFTER_WAIT` | Maximum duration (e.g. `30s`) the router will honour a `Retry-After` response header before failing over. |

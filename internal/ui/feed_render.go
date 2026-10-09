@@ -19,6 +19,7 @@ func renderItemsWithOffsets(items []presentation.FeedItem, width int, toolsExpan
 }
 
 func renderItem(it presentation.FeedItem, width int, toolsExpanded ...bool) []string {
+	ch := newFeedChrome()
 	isExpanded := len(toolsExpanded) > 0 && toolsExpanded[0]
 	switch it.Type {
 	case presentation.ItemUserMsg:
@@ -36,7 +37,7 @@ func renderItem(it presentation.FeedItem, width int, toolsExpanded ...bool) []st
 	case presentation.ItemRunBoundary:
 		return renderRunBoundary(it, width)
 	default:
-		return []string{dim.Render(truncateToWidth(fmt.Sprintf("· unknown item %s", it.Type), width, "…"))}
+		return []string{dim.Render(truncateToWidth(fmt.Sprintf(ch.bullet+" unknown item %s", it.Type), width, ch.tail))}
 	}
 }
 
@@ -84,15 +85,17 @@ func renderUserMsg(it presentation.FeedItem, width int) []string {
 }
 
 func renderAssistant(it presentation.FeedItem, width int) []string {
+	ch := newFeedChrome()
 	text := it.Text
 	if text == "" {
-		text = "·"
+		text = ch.bullet
 	}
 	clean := SanitizeForDisplay(text, DisplayPolicy{AllowNewline: true, AllowTab: true, Redact: false})
 	return append([]string{bold.Render(green.Render("Nabd"))}, formatMarkdown(clean, width)...)
 }
 
 func renderTool(it presentation.FeedItem, width int, expanded ...bool) []string {
+	ch := newFeedChrome()
 	if it.Tool == nil {
 		return nil
 	}
@@ -111,12 +114,12 @@ func renderTool(it presentation.FeedItem, width int, expanded ...bool) []string 
 				out = append(out, truncateOutput(t.Output, width)...)
 			}
 		} else if t.Status == presentation.ToolRunning {
-			out = append(out, dim.Render(truncateToWidth("  · running", width, "…")))
+			out = append(out, dim.Render(truncateToWidth("  "+ch.bullet+" running", width, ch.tail)))
 		}
 	} else if (t.Status == presentation.ToolFailed || t.Status == presentation.ToolDenied) && t.Err != "" {
 		clean := toolSummaryText(t.Err)
 		if clean != "" {
-			out = append(out, bad.Render(truncateToWidth("    · "+clean, width, "…")))
+			out = append(out, bad.Render(truncateToWidth("    "+ch.bullet+" "+clean, width, ch.tail)))
 		}
 	}
 	return out
@@ -143,6 +146,7 @@ func toolDisplayName(name string) string {
 }
 
 func renderPerm(it presentation.FeedItem, width int) []string {
+	ch := newFeedChrome()
 	if it.Perm == nil {
 		return nil
 	}
@@ -150,9 +154,9 @@ func renderPerm(it presentation.FeedItem, width int) []string {
 	sym := "?"
 	switch p.Status {
 	case presentation.PermAllow:
-		sym = good.Render("✓")
+		sym = good.Render(ch.check)
 	case presentation.PermDeny:
-		sym = bad.Render("✗")
+		sym = bad.Render(ch.cross)
 	default:
 		sym = warn.Render("?")
 	}
@@ -160,31 +164,33 @@ func renderPerm(it presentation.FeedItem, width int) []string {
 	if p.Args != "" {
 		head += " " + truncate(toolSummaryText(p.Args), width/3)
 	}
-	out := []string{truncateToWidth(head, width, "…")}
+	out := []string{truncateToWidth(head, width, ch.tail)}
 	if p.Reason != "" {
 		reason := SanitizeForDisplay(p.Reason, DisplayPolicy{Redact: true})
-		out = append(out, dim.Render(truncateProseToWidth("  · "+reason, width, "…")))
+		out = append(out, dim.Render(truncateProseToWidth("  "+ch.bullet+" "+reason, width, ch.tail)))
 	}
 	if p.Status == presentation.PermAllow && p.Effective != p.Decision {
-		out = append(out, dim.Render(truncateToWidth(fmt.Sprintf("  · requested %s, applied %s", p.Decision, p.Effective), width, "…")))
+		out = append(out, dim.Render(truncateToWidth(fmt.Sprintf("  "+ch.bullet+" requested %s, applied %s", p.Decision, p.Effective), width, ch.tail)))
 	}
 	return out
 }
 
 func renderNotice(it presentation.FeedItem, width int) []string {
+	ch := newFeedChrome()
 	clean := SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: true, Redact: true})
 	lines := strings.Split(clean, "\n")
 	out := make([]string, 0, len(lines))
 	for i, raw := range lines {
 		prefix := "  "
 		if i == 0 {
-			prefix = "⚑ "
+			prefix = ch.flag
 		}
-		out = append(out, warn.Render(truncateProseToWidth(prefix+raw, width, "…")))
+		out = append(out, warn.Render(truncateProseToWidth(prefix+raw, width, ch.tail)))
 	}
 	return out
 }
 func renderError(it presentation.FeedItem, width int) []string {
+	ch := newFeedChrome()
 	if it.Error != nil {
 		return renderErrorCard(it.Error, width)
 	}
@@ -192,14 +198,35 @@ func renderError(it presentation.FeedItem, width int) []string {
 	if text == "" {
 		text = "error"
 	}
-	return []string{bad.Render(truncateProseToWidth("✗ "+toolSummaryText(text), width, "…"))}
+	return []string{bad.Render(truncateProseToWidth(ch.cross+" "+toolSummaryText(text), width, ch.tail))}
 }
 func renderRunBoundary(it presentation.FeedItem, width int) []string {
-	return []string{dim.Render(truncateProseToWidth("── "+SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: false, Redact: false}), width, "…"))}
+	ch := newFeedChrome()
+	return []string{dim.Render(truncateProseToWidth(ch.rule+SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: false, Redact: false}), width, ch.tail))}
 }
 func truncate(s string, max int) string {
 	if max <= 0 {
 		return ""
 	}
-	return truncateToWidth(s, max, "…")
+	return truncateToWidth(s, max, newFeedChrome().tail)
+}
+
+// feedChrome holds the decorative glyphs used by feed rendering.
+// The NABD_ASCII_ONLY mapping lives in exactly one place (newFeedChrome),
+// so adding a new symbol means adding one field, not a new helper.
+type feedChrome struct {
+	tail   string // truncation tail
+	bullet string // list bullet
+	sep    string // metadata separator (spaces included)
+	check  string // permission allow mark ("ok" in ASCII mode: "+" reads as a diff addition)
+	cross  string // permission deny / error mark
+	flag   string // notice flag
+	rule   string // run-boundary rule
+}
+
+func newFeedChrome() feedChrome {
+	if asciiOnly() {
+		return feedChrome{tail: "...", bullet: "-", sep: " - ", check: "ok", cross: "x", flag: "! ", rule: "-- "}
+	}
+	return feedChrome{tail: "…", bullet: "·", sep: " · ", check: "✓", cross: "✗", flag: "⚑ ", rule: "── "}
 }

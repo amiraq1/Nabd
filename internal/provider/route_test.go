@@ -472,3 +472,15 @@ func TestRouterConstructionDoesNotMutateEnvironment(t *testing.T) {
 	// If Setenv/Unsetenv were called internally, the test framework's cleanup
 	// would catch the leaked mutation. No explicit check needed beyond compilation.
 }
+
+// ─── TestParseRoutesRejectsJSONArray ───────────────────────────────────────
+
+// NABD_ROUTES is a comma-separated provider:model list, not a JSON array.
+// docs/CONFIG.md once described it as JSON; this pins the rejection so the
+// documented contract cannot silently drift back.
+func TestParseRoutesRejectsJSONArray(t *testing.T) {
+	_, err := ParseRoutes(`[{"provider":"groq","model":"model-a"}]`)
+	if err == nil {
+		t.Fatal("expected error for JSON array input, got nil")
+	}
+}

@@ -10,6 +10,7 @@ import (
 )
 
 func renderToolSummary(t *presentation.ToolCard, width int) string {
+	ch := newFeedChrome()
 	if width <= 0 {
 		width = DefaultWidth
 	}
@@ -21,13 +22,13 @@ func renderToolSummary(t *presentation.ToolCard, width int) string {
 		parts = append(parts, subject)
 	}
 	if len(meta) > 0 {
-		parts = append(parts, strings.Join(meta, " · "))
+		parts = append(parts, strings.Join(meta, ch.sep))
 	}
 	if line := strings.Join(parts, "  "); ansi.StringWidth(line) <= width {
 		return line
 	}
 	if important := toolImportantMetadata(t); important != "" {
-		line := prefix + " · " + important
+		line := prefix + ch.sep + important
 		if ansi.StringWidth(line) <= width {
 			return line
 		}
@@ -35,7 +36,7 @@ func renderToolSummary(t *presentation.ToolCard, width int) string {
 	if subject != "" {
 		avail := width - ansi.StringWidth(prefix) - 2
 		if avail > 0 {
-			return prefix + "  " + truncateToWidth(subject, avail, "…")
+			return prefix + "  " + truncateToWidth(subject, avail, ch.tail)
 		}
 	}
 	return truncateToWidth(prefix, width, "")
@@ -144,13 +145,14 @@ func toolOutputAvailable(t *presentation.ToolCard) bool {
 }
 
 func renderToolMetadata(t *presentation.ToolCard, width int) []string {
+	ch := newFeedChrome()
 	var rows []string
 	add := func(label, value string) {
 		value = toolSummaryText(value)
 		if value == "" {
 			return
 		}
-		rows = append(rows, dim.Render(truncateToWidth("  "+label+": "+value, width, "…")))
+		rows = append(rows, dim.Render(truncateToWidth("  "+label+": "+value, width, ch.tail)))
 	}
 	add("arguments", t.Args)
 	if t.ExitCode != 0 {

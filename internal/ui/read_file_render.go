@@ -126,7 +126,8 @@ func renderReadFileOutput(output string, width int) []string {
 	if len(tail) > 0 {
 		hidden := len(lines) - toolOutputHeadLines - toolOutputTailLines
 		charsHidden := utf8.RuneCountInString(output) - runeCount(head) - runeCount(tail)
-		out = append(out, dim.Render(fmt.Sprintf("… %d lines / %d chars hidden …", hidden, max(0, charsHidden))))
+		ch := newFeedChrome()
+		out = append(out, dim.Render(fmt.Sprintf("%s %d lines / %d chars hidden %s", ch.tail, hidden, max(0, charsHidden), ch.tail)))
 		out = append(out, formatChunk(tail)...)
 	}
 
