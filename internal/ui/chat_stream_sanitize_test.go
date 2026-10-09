@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -238,5 +240,151 @@ func TestChatViewSanitizesLiveStream(t *testing.T) {
 	// Sanitization belongs at the display boundary; the buffer stays raw.
 	if m.buf != hostile {
 		t.Errorf("stream buffer changed: got %q, want original %q", m.buf, hostile)
+	}
+}
+
+func TestToolEndSanitizesOutput(t *testing.T) {
+	hostile := "result: ok\nAmount: 100\u202E USD\nhello\x1b[31mRED\x1b[0m world\nمرحبا بالعالم"
+	call := &event.ToolCall{
+		ID:     "call_1",
+		Name:   "bash",
+		Output: hostile,
+		OK:     true,
+	}
+
+	out := toolEnd(call, 80)
+	if strings.Contains(out, "\u202E") {
+		t.Errorf("RLO survived toolEnd: %q", out)
+	}
+	if strings.Contains(out, "\x1b[") {
+		t.Errorf("ANSI survived toolEnd: %q", out)
+	}
+	for _, want := range []string{"result: ok", "Amount: 100 USD", "helloRED world", "مرحبا بالعالم"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("toolEnd lost readable text %q in: %q", want, out)
+		}
+	}
+}
+
+func TestToolEndPreservesTailTruncation(t *testing.T) {
+	// 20 lines; tail() keeps only the last maxTailLines
+	var lines []string
+	for i := 1; i <= 20; i++ {
+		lines = append(lines, fmt.Sprintf("line%02d", i))
+	}
+	call := &event.ToolCall{
+		ID:     "call_1",
+		Name:   "bash",
+		Output: strings.Join(lines, "\n"),
+		OK:     true,
+	}
+
+	out := toolEnd(call, 80)
+	// Tail truncation must still work (last lines present, first lines cut)
+	if strings.Contains(out, "line01\n") {
+		t.Errorf("toolEnd did not truncate tail: %q", out)
+	}
+	if !strings.Contains(out, "line20") {
+		t.Errorf("toolEnd lost tail content: %q", out)
+	}
+}
+
+func TestRenderEventSanitizesNotice(t *testing.T) {
+	hostile := "compact failed: \u202Eerr\x1b[31mRED\x1b[0m\nمرحبا"
+	e := event.Event{Type: event.Notice, Text: hostile}
+
+	out := RenderEvent(e, 80)
+	if strings.Contains(out, "\u202E") {
+		t.Errorf("RLO survived Notice render: %q", out)
+	}
+	if strings.Contains(out, "\x1b[") {
+		t.Errorf("ANSI survived Notice render: %q", out)
+	}
+	for _, want := range []string{"compact failed:", "errRED", "مرحبا"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Notice render lost readable text %q in: %q", want, out)
+		}
+	}
+}
+
+func TestRenderEventSanitizesCompact(t *testing.T) {
+	// Compact Text is a model-generated summary: untrusted.
+	hostile := "Summary:\u202E hidden\x1b[31mRED\x1b[0m\nنص عربي"
+	e := event.Event{Type: event.Compact, Text: hostile}
+
+	out := RenderEvent(e, 80)
+	if strings.Contains(out, "\u202E") {
+		t.Errorf("RLO survived Compact render: %q", out)
+	}
+	if strings.Contains(out, "\x1b[") {
+		t.Errorf("ANSI survived Compact render: %q", out)
+	}
+	for _, want := range []string{"Summary:", "hiddenRED", "نص عربي"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("Compact render lost readable text %q in: %q", want, out)
+		}
+	}
+}
+
+func TestCallLineSanitizesNameAndArgs(t *testing.T) {
+	// Model-controlled tool name and arguments: untrusted.
+	call := &event.ToolCall{
+		ID:   "call_1",
+		Name: "bash\u202E",
+		Args: json.RawMessage(`{"cmd": "echo \x1b[31mRED\x1b[0m"}`),
+	}
+
+	out := callLine(call)
+	if strings.Contains(out, "\u202E") {
+		t.Errorf("RLO survived callLine: %q", out)
+	}
+	if strings.Contains(out, "\x1b[") {
+		t.Errorf("ANSI survived callLine: %q", out)
+	}
+	if !strings.Contains(out, "bash") {
+		t.Errorf("callLine lost tool name: %q", out)
+	}
+}
+
+func TestPermAskSanitizesCallLine(t *testing.T) {
+	// The permission prompt is the security-critical path: the user decides
+	// based on what they see.
+	call := &event.ToolCall{
+		ID:   "call_1",
+		Name: "bash",
+		Args: json.RawMessage(`{"cmd": "rm -rf /\u202E"}`),
+	}
+	e := event.Event{Type: event.PermAsk, Call: call}
+
+	out := RenderEvent(e, 80)
+	if strings.Contains(out, "\u202E") {
+		t.Errorf("RLO survived PermAsk render: %q", out)
+	}
+	if !strings.Contains(out, "allow?") {
+		t.Errorf("PermAsk render lost prompt: %q", out)
+	}
+}
+
+func TestToolEndSanitizesName(t *testing.T) {
+	rawName := "lookup\u202e\x1b[2JNAME"
+	call := &event.ToolCall{
+		Name: rawName,
+		OK:   true,
+	}
+
+	got := toolEnd(call, 80)
+
+	if strings.Contains(got, "\u202e") {
+		t.Fatalf("bidi override survived ToolEnd: %q", got)
+	}
+	if strings.Contains(got, "\x1b[2J") {
+		t.Fatalf("terminal clear-screen sequence survived ToolEnd: %q", got)
+	}
+	if !strings.Contains(got, "lookupNAME") {
+		t.Fatalf("readable tool name was lost: %q", got)
+	}
+	if call.Name != rawName {
+		t.Fatalf("original tool name was modified: got %q, want %q",
+			call.Name, rawName)
 	}
 }

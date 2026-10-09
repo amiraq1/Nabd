@@ -129,3 +129,29 @@ func TestSanitizeStripsZeroWidthFormatControls(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeIncompleteANSISequences(t *testing.T) {
+	// Incomplete ANSI sequences: the ESC is removed, but any printable
+	// residue after it is NOT an active escape sequence and is preserved
+	// as harmless text. This pins the behavior; changing it requires
+	// assessing impact on all callers.
+	cases := []struct {
+		in, want string
+	}{
+		{"abc\x1b[3", "abc[3"}, // ESC removed, "[3" is inert text
+		{"abc\x1b[", "abc["},   // ESC removed, "[" is inert text
+		{"abc\x1b", "abc"},     // lone ESC removed entirely
+		{"\x1b[31mRED", "RED"}, // complete sequence stripped
+		{"a\x1bb", "ab"},       // ESC before regular char removed
+	}
+	for _, tc := range cases {
+		got := display.SanitizeForDisplay(tc.in, display.DisplayPolicy{AllowNewline: true})
+		if got != tc.want {
+			t.Errorf("SanitizeForDisplay(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		// The output must never contain a live ESC byte.
+		if strings.Contains(got, "\x1b") {
+			t.Errorf("SanitizeForDisplay(%q) left live ESC: %q", tc.in, got)
+		}
+	}
+}
