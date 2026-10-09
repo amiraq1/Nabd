@@ -7,6 +7,7 @@ import (
 )
 
 func TestFormatMarkdown(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	cases := []struct {
 		name     string
 		input    string
@@ -121,6 +122,7 @@ func TestMarkdownChunking(t *testing.T) {
 }
 
 func TestMarkdownArabic(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	input := "Arabic **مرحبا** 123 /path/to/file 🎉"
 	// Should not reorder or destroy anything
 	expected := formatMarkdown(input, 50)
@@ -130,6 +132,7 @@ func TestMarkdownArabic(t *testing.T) {
 }
 
 func TestMarkdownNarrowWidth(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	input := "- A very long list item that must be wrapped"
 	// Extremely narrow width
 	got := formatMarkdown(input, 4)

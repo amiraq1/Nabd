@@ -79,6 +79,7 @@ func TestPTYTypingAfterFeedFillAppearsInComposer(t *testing.T) {
 // 3. TestPTYVisualRowsStayWithinTerminal: verifies strict geometric bounds for all screen rows
 // including wide UTF-8 and ANSI sequences.
 func TestPTYVisualRowsStayWithinTerminal(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	sess := StartPTYSession(t, 80, 24)
 
 	wideLine := strings.Repeat("عربى English 123 ", 8) // ~160 visual width

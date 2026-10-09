@@ -19,14 +19,14 @@ func TestRTLDisplayModeContract(t *testing.T) {
 		value string
 		want  rtl.Mode
 	}{
-		{"", rtl.Logical},
+		{"", rtl.Reorder},
 		{"logical", rtl.Logical},
 		{"off", rtl.Logical},
 		{"reorder", rtl.Reorder},
 		{"mirror", rtl.ReorderAndMirror},
 		{"auto", rtl.ReorderAndMirror},
 		{"reorder-and-mirror", rtl.ReorderAndMirror},
-		{"unknown", rtl.Logical},
+		{"unknown", rtl.Reorder},
 	}
 	for _, tc := range cases {
 		t.Run(tc.value, func(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 // is applied at the render points (streaming view, scrollback flush); the
 // accumulation buffer m.buf stays raw.
 func TestChatStreamingSanitizesBidi(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	hostile := "Amount: 100\u202E USD"
 
 	out := partialTail(sanitizeStreamText(hostile), 6, 80)
@@ -29,6 +30,7 @@ func TestChatStreamingSanitizesBidi(t *testing.T) {
 }
 
 func TestChatStreamingSanitizesANSI(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	hostile := "hello\x1b[31mRED\x1b[0m world"
 
 	out := partialTail(sanitizeStreamText(hostile), 6, 80)
@@ -41,6 +43,7 @@ func TestChatStreamingSanitizesANSI(t *testing.T) {
 }
 
 func TestChatStreamingPreservesArabic(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	arabic := "مرحبا بالعالم"
 
 	out := partialTail(sanitizeStreamText(arabic), 6, 80)
@@ -50,6 +53,7 @@ func TestChatStreamingPreservesArabic(t *testing.T) {
 }
 
 func TestFlushJoinSanitizesStreamBuffer(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	buf := "Amount: 100\u202E USD\nhello\x1b[31mRED\x1b[0m world\nمرحبا"
 
 	out := flushJoin(&buf, event.Event{Type: event.TextDelta}, 80)
@@ -73,6 +77,7 @@ func TestFlushJoinSanitizesStreamBuffer(t *testing.T) {
 // (NewReplay -> step -> View) with hostile deltas. It fails if Replay.View
 // renders the raw buffer.
 func TestReplayViewSanitizesStreamBuffer(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	hostile := "Amount: 100\u202E USD\nhello\x1b[31mRED\x1b[0m world"
 	evs := []event.Event{
 		{Seq: 1, Type: event.TextDelta, Text: hostile},
@@ -98,6 +103,7 @@ func TestReplayViewSanitizesStreamBuffer(t *testing.T) {
 // the end-of-session flush and inspects the string it hands to tea.Println.
 // It fails if advance() renders the raw buffer.
 func TestReplayAdvanceSanitizesFinalFlush(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	hostile := "Amount: 100\u202E USD\nhello\x1b[31mRED\x1b[0m world"
 	evs := []event.Event{
 		{Seq: 1, Type: event.TextDelta, Text: hostile},
@@ -169,6 +175,7 @@ func printedByAdvance(t *testing.T, r Replay) string {
 }
 
 func TestChatStreamingArabicControlsPolicy(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	// Conscious policy (must match internal/display/sanitize.go):
 	// - Preserved: U+061C (Arabic Letter Mark), U+200D (ZWJ), U+200E (LRM), U+200F (RLM)
 	// - Stripped: U+202A-U+202E (overrides), U+2066-U+2069 (isolates) — spoofing vectors
@@ -209,6 +216,7 @@ func TestChatStreamingArabicControlsPolicy(t *testing.T) {
 }
 
 func TestChatViewSanitizesLiveStream(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	ch := make(chan event.Event, 1)
 	m := asChat(t, NewChat(runnerStub{}, ch))
 	m.running = true
@@ -244,6 +252,7 @@ func TestChatViewSanitizesLiveStream(t *testing.T) {
 }
 
 func TestToolEndSanitizesOutput(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	hostile := "result: ok\nAmount: 100\u202E USD\nhello\x1b[31mRED\x1b[0m world\nمرحبا بالعالم"
 	call := &event.ToolCall{
 		ID:     "call_1",
@@ -267,6 +276,7 @@ func TestToolEndSanitizesOutput(t *testing.T) {
 }
 
 func TestToolEndPreservesTailTruncation(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	// 20 lines; tail() keeps only the last maxTailLines
 	var lines []string
 	for i := 1; i <= 20; i++ {
@@ -290,6 +300,7 @@ func TestToolEndPreservesTailTruncation(t *testing.T) {
 }
 
 func TestRenderEventSanitizesNotice(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	hostile := "compact failed: \u202Eerr\x1b[31mRED\x1b[0m\nمرحبا"
 	e := event.Event{Type: event.Notice, Text: hostile}
 
@@ -308,6 +319,7 @@ func TestRenderEventSanitizesNotice(t *testing.T) {
 }
 
 func TestRenderEventSanitizesCompact(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	// Compact Text is a model-generated summary: untrusted.
 	hostile := "Summary:\u202E hidden\x1b[31mRED\x1b[0m\nنص عربي"
 	e := event.Event{Type: event.Compact, Text: hostile}
@@ -327,6 +339,7 @@ func TestRenderEventSanitizesCompact(t *testing.T) {
 }
 
 func TestCallLineSanitizesNameAndArgs(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	// Model-controlled tool name and arguments: untrusted.
 	call := &event.ToolCall{
 		ID:   "call_1",
@@ -347,6 +360,7 @@ func TestCallLineSanitizesNameAndArgs(t *testing.T) {
 }
 
 func TestPermAskSanitizesCallLine(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	// The permission prompt is the security-critical path: the user decides
 	// based on what they see.
 	call := &event.ToolCall{
@@ -366,6 +380,7 @@ func TestPermAskSanitizesCallLine(t *testing.T) {
 }
 
 func TestToolEndSanitizesName(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	rawName := "lookup\u202e\x1b[2JNAME"
 	call := &event.ToolCall{
 		Name: rawName,

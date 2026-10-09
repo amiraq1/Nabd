@@ -19,14 +19,14 @@ const (
 // engine never inspects terminal or environment capabilities itself.
 func rtlDisplayMode() rtl.Mode {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("NABD_RTL"))) {
-	case "reorder":
-		return rtl.Reorder
 	case "mirror", "auto", "reorder-and-mirror":
 		return rtl.ReorderAndMirror
-	case "", "off", "logical":
+	case "off", "logical", "no", "disable":
 		return rtl.Logical
+	case "", "reorder":
+		return rtl.Reorder
 	default:
-		return rtl.Logical
+		return rtl.Reorder
 	}
 }
 

@@ -211,6 +211,7 @@ func TestUserCardNarrowWidths(t *testing.T) {
 
 // TestUserCardMixedUnicode verifies mixed Arabic, ASCII, emoji, and path rendering.
 func TestUserCardMixedUnicode(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(termenv.Ascii)
 
