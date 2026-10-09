@@ -1,6 +1,7 @@
 package event_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -24,18 +25,6 @@ func seqs(evs []event.Event) []int {
 	return out
 }
 
-func equalInts(a, b []int) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
-}
-
 func TestLiveEmpty(t *testing.T) {
 	if got := event.Live(nil); got != nil {
 		t.Fatalf("Live(nil) = %v, want nil", got)
@@ -47,7 +36,7 @@ func TestLiveEmpty(t *testing.T) {
 
 func TestLiveReturnsLinearBranch(t *testing.T) {
 	evs := chain(5, event.UserMsg)
-	if got := seqs(event.Live(evs)); !equalInts(got, []int{1, 2, 3, 4, 5}) {
+	if got := seqs(event.Live(evs)); !slices.Equal(got, []int{1, 2, 3, 4, 5}) {
 		t.Fatalf("Live = %v, want [1 2 3 4 5]", got)
 	}
 }
@@ -58,7 +47,7 @@ func TestLiveFollowsRewindBranch(t *testing.T) {
 	// last written event.
 	evs := chain(5, event.UserMsg)
 	evs = append(evs, event.Event{Seq: 6, Parent: 1, Type: event.Rewind})
-	if got := seqs(event.Live(evs)); !equalInts(got, []int{1, 6}) {
+	if got := seqs(event.Live(evs)); !slices.Equal(got, []int{1, 6}) {
 		t.Fatalf("Live = %v, want [1 6]", got)
 	}
 }
@@ -68,7 +57,7 @@ func TestLiveAppliesCompactionBoundary(t *testing.T) {
 	// Compact at seq 7 keeps seqs >= 5; the summary heads the result.
 	evs[6].Type = event.Compact
 	evs[6].FirstKept = 5
-	if got := seqs(event.Live(evs)); !equalInts(got, []int{7, 5, 6, 8, 9, 10}) {
+	if got := seqs(event.Live(evs)); !slices.Equal(got, []int{7, 5, 6, 8, 9, 10}) {
 		t.Fatalf("Live = %v, want [7 5 6 8 9 10]", got)
 	}
 }
@@ -78,7 +67,7 @@ func TestLiveStopsAtBrokenParent(t *testing.T) {
 	// Parent points at a seq that does not exist: branch ends there
 	// instead of walking into garbage.
 	evs = append(evs, event.Event{Seq: 4, Parent: 99, Type: event.UserMsg})
-	if got := seqs(event.Live(evs)); !equalInts(got, []int{4}) {
+	if got := seqs(event.Live(evs)); !slices.Equal(got, []int{4}) {
 		t.Fatalf("Live = %v, want [4]", got)
 	}
 }
