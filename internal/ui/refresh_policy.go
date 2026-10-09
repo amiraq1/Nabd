@@ -24,14 +24,15 @@ func visibleFeedItems(items []presentation.FeedItem) []presentation.FeedItem {
 	hidden := start
 	firstVisible := items[start]
 
+	ch := newFeedChrome()
 	out := make([]presentation.FeedItem, 0, maxVisibleFeedItems)
 	out = append(out, presentation.FeedItem{
 		Type: presentation.ItemNotice,
 		ID:   retentionNoticeID,
 		Seq:  firstVisible.Seq,
 		Text: fmt.Sprintf(
-			"… %d older items hidden · session journal has full history …",
-			hidden,
+			"%s %d older items hidden%s session journal has full history %s",
+			ch.tail, hidden, ch.sep, ch.tail,
 		),
 	})
 	out = append(out, items[start:]...)

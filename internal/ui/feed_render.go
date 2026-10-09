@@ -217,6 +217,7 @@ func truncate(s string, max int) string {
 type feedChrome struct {
 	tail   string // truncation tail
 	bullet string // list bullet
+	sep    string // metadata separator (spaces included)
 	check  string // permission allow mark ("ok" in ASCII mode: "+" reads as a diff addition)
 	cross  string // permission deny / error mark
 	flag   string // notice flag
@@ -225,7 +226,7 @@ type feedChrome struct {
 
 func newFeedChrome() feedChrome {
 	if asciiOnly() {
-		return feedChrome{tail: "...", bullet: "-", check: "ok", cross: "x", flag: "! ", rule: "-- "}
+		return feedChrome{tail: "...", bullet: "-", sep: " - ", check: "ok", cross: "x", flag: "! ", rule: "-- "}
 	}
-	return feedChrome{tail: "…", bullet: "·", check: "✓", cross: "✗", flag: "⚑ ", rule: "── "}
+	return feedChrome{tail: "…", bullet: "·", sep: " · ", check: "✓", cross: "✗", flag: "⚑ ", rule: "── "}
 }
