@@ -80,6 +80,7 @@ func TestPTYTypingAfterFeedFillAppearsInComposer(t *testing.T) {
 // including wide UTF-8 and ANSI sequences.
 func TestPTYVisualRowsStayWithinTerminal(t *testing.T) {
 	t.Setenv("NABD_RTL", "off")
+	resetRTLModeCache()
 	sess := StartPTYSession(t, 80, 24)
 
 	wideLine := strings.Repeat("عربى English 123 ", 8) // ~160 visual width

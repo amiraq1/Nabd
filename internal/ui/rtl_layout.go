@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 
 	"nabd/internal/rtl"
 
@@ -15,19 +16,61 @@ const (
 	styleBold
 )
 
-// rtlDisplayMode is intentionally a display-boundary decision. The RTL
-// engine never inspects terminal or environment capabilities itself.
-func rtlDisplayMode() rtl.Mode {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("NABD_RTL"))) {
-	case "mirror", "auto", "reorder-and-mirror":
+// NABD_RTL values:
+//
+//	unset, "", "auto"                 Reorder if stdout is a TTY, else Logical
+//	"reorder", "on", "1", "true"      always Reorder
+//	"mirror", "reorder-and-mirror"    always ReorderAndMirror
+//	"off", "logical", "no", "disable",
+//	"0", "false", "none"              Logical (no reordering)
+//	anything else                     Logical (never reorder by accident)
+//
+// Logical output when piped keeps saved logs searchable and copyable.
+func parseRTLMode(val string, isTTY bool) rtl.Mode {
+	switch strings.ToLower(strings.TrimSpace(val)) {
+	case "mirror", "reorder-and-mirror":
 		return rtl.ReorderAndMirror
-	case "off", "logical", "no", "disable":
+	case "reorder", "on", "1", "true":
+		return rtl.Reorder
+	case "", "auto":
+		if isTTY {
+			return rtl.Reorder
+		}
 		return rtl.Logical
-	case "", "reorder":
-		return rtl.Reorder
+	case "off", "logical", "no", "disable", "0", "false", "none":
+		return rtl.Logical
 	default:
-		return rtl.Reorder
+		return rtl.Logical
 	}
+}
+
+// stdoutIsTTY reports whether stdout is a character device.
+// Dependency-free; swap for go-isatty if you want stricter detection.
+func stdoutIsTTY() bool {
+	fi, err := os.Stdout.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// readRTLMode reads the environment every call (used by tests).
+func readRTLMode() rtl.Mode {
+	return parseRTLMode(os.Getenv("NABD_RTL"), stdoutIsTTY())
+}
+
+var (
+	rtlModeOnce  sync.Once
+	rtlModeValue rtl.Mode
+)
+
+// rtlDisplayMode resolves the mode once per process.
+func rtlDisplayMode() rtl.Mode {
+	rtlModeOnce.Do(func() { rtlModeValue = readRTLMode() })
+	return rtlModeValue
+}
+
+// resetRTLModeCache clears the cached mode. Tests only: call after
+// t.Setenv("NABD_RTL", ...) so the new value takes effect.
+func resetRTLModeCache() {
+	rtlModeOnce = sync.Once{}
 }
 
 func rtlDisplayPolicy() rtl.Policy {

@@ -10,6 +10,7 @@ import (
 
 func TestRenderPermissionReasonUsesCatalog(t *testing.T) {
 	t.Setenv("NABD_RTL", "off")
+	resetRTLModeCache()
 	ev := event.Event{
 		Type:   event.PermAsk,
 		Call:   &event.ToolCall{Name: "bash"},
@@ -39,6 +40,7 @@ func TestRenderLegacyPermissionTextUnchanged(t *testing.T) {
 
 func TestPermissionModalShowsLocalizedReason(t *testing.T) {
 	t.Setenv("NABD_RTL", "off")
+	resetRTLModeCache()
 	m := newPermissionModal()
 	m.open(&event.ToolCall{Name: "bash"}, "يتطلب موافقة")
 	got := m.view(80)

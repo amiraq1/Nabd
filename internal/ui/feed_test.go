@@ -23,6 +23,7 @@ func TestFeedEmpty(t *testing.T) {
 // TestFeedUserMsg verifies a user message renders.
 func TestFeedUserMsg(t *testing.T) {
 	t.Setenv("NABD_RTL", "off")
+	resetRTLModeCache()
 	f := NewFeed()
 	f.width = 50
 	f.height = 10

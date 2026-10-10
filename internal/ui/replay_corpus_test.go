@@ -154,6 +154,7 @@ func runReplayInPTY(t *testing.T, binPath, journalPath string, envOverrides map[
 // If UPDATE_GOLDEN=1 is set, it updates the golden files and index.
 func TestReplayCorpusGolden(t *testing.T) {
 	t.Setenv("NABD_RTL", "off")
+	resetRTLModeCache()
 	binPath := getOrBuildCorpusBinary(t)
 	corpusDir := "../../testdata/replay-corpus"
 

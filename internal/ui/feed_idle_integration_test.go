@@ -142,6 +142,7 @@ func TestFeedLiveDeliveryAfterStartupIdle(t *testing.T) {
 // and the assistant reply ("أهلاً"), ensuring correct delivery and rendering after idle periods.
 func TestFeedLiveDeliveryAfterIdleArabicMultiTurn(t *testing.T) {
 	t.Setenv("NABD_RTL", "off")
+	resetRTLModeCache()
 	sess := StartPTYSession(t, 80, 24)
 
 	emptyFlushed := make(chan struct{}, 50)

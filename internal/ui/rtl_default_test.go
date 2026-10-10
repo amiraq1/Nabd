@@ -1,26 +1,46 @@
 package ui
 
 import (
-	"os"
 	"testing"
 
 	"nabd/internal/rtl"
 )
 
-// TestRTLDefaultIsReorder verifies RTL reordering is ON by default.
-// Nabd is an Arabic-first tool; Arabic must display correctly without
-// requiring users to discover NABD_RTL. Opt-out via NABD_RTL=off remains.
-func TestRTLDefaultIsReorder(t *testing.T) {
-	os.Unsetenv("NABD_RTL")
-	if got := rtlDisplayMode(); got != rtl.Reorder {
-		t.Fatalf("default RTL mode = %v, want %v (Reorder)", got, rtl.Reorder)
+// TestParseRTLModeTTY verifies the TTY-aware default: Reorder on TTY,
+// Logical when piped. This is the core of the Arabic-first UX: interactive
+// terminals get visual order, pipes keep searchable logical order.
+func TestParseRTLModeTTY(t *testing.T) {
+	cases := []struct {
+		val   string
+		isTTY bool
+		want  rtl.Mode
+	}{
+		{"", true, rtl.Reorder},         // unset on TTY -> Reorder
+		{"", false, rtl.Logical},        // unset when piped -> Logical
+		{"auto", true, rtl.Reorder},     // auto on TTY -> Reorder
+		{"auto", false, rtl.Logical},    // auto when piped -> Logical
+		{"reorder", false, rtl.Reorder}, // explicit always wins
+		{"off", true, rtl.Logical},      // explicit off always wins
+		{"unknown", true, rtl.Logical},  // unknown never reorders by accident
+	}
+	for _, tc := range cases {
+		if got := parseRTLMode(tc.val, tc.isTTY); got != tc.want {
+			t.Errorf("parseRTLMode(%q, %v) = %v, want %v", tc.val, tc.isTTY, got, tc.want)
+		}
 	}
 }
 
-// TestRTLOptOut verifies NABD_RTL=off still disables reordering.
-func TestRTLOptOut(t *testing.T) {
+// TestReadRTLModeRespectsEnv verifies readRTLMode (used by tests)
+// picks up NABD_RTL changes without caching.
+func TestReadRTLModeRespectsEnv(t *testing.T) {
 	t.Setenv("NABD_RTL", "off")
-	if got := rtlDisplayMode(); got != rtl.Logical {
-		t.Fatalf("NABD_RTL=off mode = %v, want %v (Logical)", got, rtl.Logical)
+	resetRTLModeCache()
+	if got := readRTLMode(); got != rtl.Logical {
+		t.Fatalf("readRTLMode with NABD_RTL=off = %v, want Logical", got)
+	}
+	t.Setenv("NABD_RTL", "reorder")
+	resetRTLModeCache()
+	if got := readRTLMode(); got != rtl.Reorder {
+		t.Fatalf("readRTLMode with NABD_RTL=reorder = %v, want Reorder", got)
 	}
 }
