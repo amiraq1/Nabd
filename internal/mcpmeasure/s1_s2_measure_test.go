@@ -119,7 +119,8 @@ func countProcsInGroup(pgid int) int {
 
 // S1a: kill a process group containing a grandchild; none may remain.
 func TestS1aKillGroupNoOrphans(t *testing.T) {
-	if runtime.GOOS != "linux" {
+	// Android reports GOOS=android but has /proc — check availability directly.
+	if _, err := os.Stat("/proc/1/stat"); err != nil {
 		t.Skip("needs /proc")
 	}
 	cmd := startMock(t, "grandchild-spawner")
@@ -193,7 +194,9 @@ func TestS2aBigOutputNoDeadlock(t *testing.T) {
 	var after runtime.MemStats
 	runtime.GC()
 	runtime.ReadMemStats(&after)
-	t.Logf("S2a: discarded=%d bytes, heap grew by %d bytes", n, after.HeapAlloc-before.HeapAlloc)
+	delta := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+	t.Logf("S2a: discarded=%d bytes, heap before=%d after=%d delta=%d",
+		n, before.HeapAlloc, after.HeapAlloc, delta)
 	if n != 64<<20 {
 		t.Errorf("S2a FAIL: expected %d bytes, got %d", 64<<20, n)
 	}

@@ -1,7 +1,7 @@
 # MCP Phase S Measurement Report
 
 **Status:** template — fill after running on Termux
-**ADR:** docs/DECISIONS/0003-mcp-integration.md (v4)
+**ADR:** docs/DECISIONS/0003-mcp-integration.md (v5)
 
 ## Environment
 
