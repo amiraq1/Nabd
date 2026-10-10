@@ -91,6 +91,9 @@ func renderAssistant(it presentation.FeedItem, width int) []string {
 		text = ch.bullet
 	}
 	clean := SanitizeForDisplay(text, DisplayPolicy{AllowNewline: true, AllowTab: true, Redact: false})
+	if width <= 0 {
+		width = DefaultWidth
+	}
 	// Split into code/prose segments: code blocks get dark background styling
 	// with fences hidden (matching Chat UI), prose keeps formatMarkdown for
 	// headings/lists/bold/RTL.

@@ -47,3 +47,42 @@ func TestRenderAssistantCodeHasDarkBackground(t *testing.T) {
 		t.Errorf("code block missing dark background (ANSI 236), got:\n%q", joined)
 	}
 }
+
+// TestRenderAssistantHostileANSIWithFences verifies that hostile ANSI surrounding
+// fences is sanitized before code block splitting, preventing ANSI escape leaks.
+func TestRenderAssistantHostileANSIWithFences(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
+	resetRTLModeCache()
+	defer resetRTLModeCache()
+
+	item := presentation.FeedItem{
+		Type: presentation.ItemAssistant,
+		Text: "Intro\n\x1b[31m```go\x1b[0m\nfmt.Println(\"secure\")\n\x1b[32m```\x1b[0m\nOutro",
+	}
+	got := renderAssistant(item, 80)
+	joined := strings.Join(got, "\n")
+	if strings.Contains(joined, "\x1b[31m") || strings.Contains(joined, "\x1b[32m") {
+		t.Errorf("hostile ANSI survived renderAssistant: %q", joined)
+	}
+	if strings.Contains(joined, "```") {
+		t.Errorf("fences not stripped after sanitization: %q", joined)
+	}
+	for _, want := range []string{"Intro", "fmt.Println", "Outro"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("lost readable text %q in: %q", want, joined)
+		}
+	}
+}
+
+// TestRenderAssistantWidthClamped verifies that non-positive widths are clamped
+// to DefaultWidth instead of causing panic or invalid wrapping.
+func TestRenderAssistantWidthClamped(t *testing.T) {
+	item := presentation.FeedItem{
+		Type: presentation.ItemAssistant,
+		Text: "```\ncode here\n```\nprose",
+	}
+	got := renderAssistant(item, 0)
+	if len(got) == 0 {
+		t.Error("expected non-empty output with width=0")
+	}
+}
