@@ -370,18 +370,22 @@ The source file is opened read-only in both modes and is never modified.
 `--redact` requires `--export`, and `--export` is rejected together with any
 run mode. Diagnostics go to stderr; stdout is JSONL only.
 
-## MCP integration (planned, not implemented)
+## MCP integration (Phase 0 implemented)
 
 The following rows describe the *designed* posture for MCP support per
-ADR-0003. No MCP code exists yet; rows marked as design commitments have no
-test evidence. Nothing here is a GUARANTEED claim about shipped behavior.
+ADR-0003. Phase 0 is implemented and tested; rows for later phases remain design
+commitments with no test evidence. Nothing here is a GUARANTEED claim about
+shipped behavior beyond the rows whose evidence names an existing test.
 
 | Claim | Status | Evidence or residual |
 |---|---|---|
-| MCP settings load only from `~/.ag/mcp.json`; any MCP config inside the project root is refused regardless of filename | NOT PROVIDED | Designed: location-based rejection (ADR-0003 §5.1). No implementation yet. |
-| MCP server child processes run with a minimal env allowlist, never inheriting nabd's full environment | NOT PROVIDED | Designed: allowlist built per server definition (ADR-0003 §5.3). S3 measured: minimal allowlist works (A/B/C OK); negative test confirms PATH/HOME/TMPDIR required (stderr names the variable), LANG/TERM are controls. |
-| Repository-cloned MCP configs never start servers | NOT PROVIDED | Designed: opening a repo must not launch external processes (ADR-0003 §5.1). |
-| Tool permission classification comes from local user config only, never from server hints | NOT PROVIDED | Designed: `readOnlyHint` is display-only (ADR-0003 §8.1). The ReadOnly label is a user claim, not a verified property — residual risk documented in ADR-0003. |
+| MCP settings load only from `~/.ag/mcp.json`; any MCP config inside the project root is refused regardless of filename | GUARANTEED | `TestLoadPinnedToDefaultPath`: Load reads only DefaultPath() (a valid config elsewhere is ignored); `TestMCPSec03RepoTreeRejected` and `TestMCPSec03SymlinkToRepoRejected`: path and root are symlink-resolved before comparison, so a symlinked dir cannot smuggle a config in. |
+| MCP config secrets are `${VAR}` references only; explicit secret values are rejected | GUARANTEED | `TestMCPSec02SecretRefs`: plaintext, embedded, empty, and malformed references are refused; values must be exactly `${VAR}`. |
+| MCP config env names cannot shadow spawner-controlled or loader-subverting variables | GUARANTEED | `TestMCPEnvReservedNames`: PATH, HOME, LD_*, DYLD_* are refused so config cannot bypass sanitizePath or the isolated HOME. |
+| MCP config documents respect size and count caps | GUARANTEED | `TestMCPSec16_20SizeLimits`: 256KiB file cap, 16 servers, 256 tools per server, 64 env entries, 64 args, 4096-byte arg cap. |
+| MCP server child processes run with a minimal env allowlist, never inheriting the full environment | NOT PROVIDED | Designed per ADR-0003 §5.3. S3 measured: minimal allowlist works; negative test confirms PATH/HOME/TMPDIR required. Phase 0: the allowlist predicate is implemented and `TestMCPSec01EnvAllowlist` covers it, but this row stays NOT PROVIDED until Phase 2 tests the actual spawned process environment. |
+| Repository-cloned MCP configs never start servers | NOT PROVIDED | Designed: opening a repo must not launch external processes (ADR-0003 §5.1). Phase 0: in-tree configs are refused at load (`TestMCPSec03RepoTreeRejected`); server startup wiring is Phase 5. |
+| Tool permission classification comes from local user config only, never from server hints | NOT PROVIDED | Designed: `readOnlyHint` is display-only (ADR-0003 §8.1). Phase 0: classifications are restricted to read-only/write/execute, and duplicate JSON keys are rejected (`TestMCPDuplicateKeysRejected`) so last-wins cannot silently flip a classification. |
 | Tool fingerprints (SHA-256 over JCS-canonical fields) invalidate approval on any change | NOT PROVIDED | Designed per ADR-0003 §6.2. No implementation yet. |
 | MCP server processes are killed on timeout, session close, or disable, with no orphans | NOT PROVIDED | Designed: killGroup semantics per ADR-0003 §10.2. S1 measured: 3 rounds, control proves counter sees live procs (visible=2), remaining=0 after killGroup. |
 | Journal records server/tool IDs, decisions, and sizes — never raw args or outputs by default | NOT PROVIDED | Designed per ADR-0003 §11. No implementation yet. |
@@ -392,9 +396,9 @@ test evidence. Nothing here is a GUARANTEED claim about shipped behavior.
 | MCP tool outputs grant no read-credit and bypass readCap | NOT PROVIDED | Read-credit (NBD-034) and readCap accounting apply to local tools only. MCP outputs are untrusted content, not measured reads. Designed: stated explicitly so credit is never granted by accident (ADR-0003 P7). |
 | One server approval opens all its ReadOnly tools indefinitely | NOT PROVIDED | Unlike `bash` (which never gets even a session grant), a single MCP server approval opens every ReadOnly tool until fingerprint change. This is a deliberate but significant trust difference, stated here as a residual risk (ADR-0003 §8.2). |
 | Saved approval scope, revocation, and new-tool discovery | NOT PROVIDED | A prior interactive approval may authorize ReadOnly tools within its scope (matching server-id, fingerprint, unchanged policy). Scope, revocation mechanism, and new-tool detection are design commitments (ADR-0003 P3b), not implemented. Write/Execute always require per-execution approval, even under YOLO, and are refused headless. |
-
-
 | Absent independent security review | NOT PROVIDED | No second human reviewer exists; review is non-independent (author = owner = acceptance owner). No production release before naming a reviewer or renewing risk acceptance. Recorded in ADR-0003 (single-operator mode, 2026-10-10). |
+
+
 
 ## Operator guidance
 
