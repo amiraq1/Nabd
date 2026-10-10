@@ -94,7 +94,7 @@ if [ "${1:-}" = "--negative" ]; then
     for lang in node python; do
       bin="node"; args="$MOCK/node-server.js"
       [ "$lang" = python ] && { bin="python3"; args="$MOCK/python_server.py"; }
-      binpath="$(command -v "$bin" 2>/dev/null)" || continue
+      binpath="$(command -v "$bin" 2>/dev/null)" || { [ "$lang" = node ] && rn="SKIP(no $bin)" || rp="SKIP(no $bin)"; continue; }
       envargs=()
       for w in PATH HOME TMPDIR LANG TERM; do
         [ "$w" = "$v" ] && continue  # remove this one
