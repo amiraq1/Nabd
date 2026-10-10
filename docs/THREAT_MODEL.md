@@ -393,6 +393,8 @@ test evidence. Nothing here is a GUARANTEED claim about shipped behavior.
 | One server approval opens all its ReadOnly tools indefinitely | NOT PROVIDED | Unlike `bash` (which never gets even a session grant), a single MCP server approval opens every ReadOnly tool until fingerprint change. This is a deliberate but significant trust difference, stated here as a residual risk (ADR-0003 §8.2). |
 | Saved approval scope, revocation, and new-tool discovery | NOT PROVIDED | A prior interactive approval may authorize ReadOnly tools within its scope (matching server-id, fingerprint, unchanged policy). Scope, revocation mechanism, and new-tool detection are design commitments (ADR-0003 P3b), not implemented. Write/Execute always require per-execution approval, even under YOLO, and are refused headless. |
 
+| غياب المراجعة الأمنية المستقلة | NOT PROVIDED | لا يوجد مراجع أمني ثانٍ؛ المراجعة غير مستقلة (المؤلف = المالك = صاحب القبول). لا إنتاج قبل تسمية مراجع أو تجديد قبول المخاطرة. مسجّل في ADR-0003 (وضع المشغّل الواحد، 2026-10-10). |
+
 ## Operator guidance
 
 
