@@ -8,6 +8,8 @@ the client did back through notifications plus its exit status.
 """
 import argparse
 import json
+import os
+import subprocess
 import sys
 import threading
 import time
@@ -30,7 +32,32 @@ def main():
     ap.add_argument("--server-request", default=None,
                     help="server->client request method to send, e.g. roots/list")
     ap.add_argument("--server-ping", action="store_true")
+    ap.add_argument("--spawn-sleeper", action="store_true",
+                    help="spawn a sleep 300 grandchild (S1 orphan test)")
+    ap.add_argument("--oversize-message", action="store_true",
+                    help="send a >64MiB message after init (S2 test)")
+    ap.add_argument("--stderr-spam", action="store_true",
+                    help="write >64KiB to stderr ending with a marker")
     args = ap.parse_args()
+
+    if args.spawn_sleeper:
+        # Joins our process group (no setsid): the S1 test verifies the
+        # client's killGroup reaps it along with us.
+        subprocess.Popen(["sleep", "300"])
+    if args.stderr_spam:
+        def spam():
+            chunk = "E" * 8192 + "\n"
+            for _ in range(13):  # ~104KiB, over the 64KiB ring
+                try:
+                    sys.stderr.write(chunk)
+                except BrokenPipeError:
+                    return
+            try:
+                sys.stderr.write("STDERR-END\n")
+                sys.stderr.flush()
+            except BrokenPipeError:
+                pass
+        threading.Thread(target=spam, daemon=True).start()
 
     state = {"initialized": False}
 
@@ -58,14 +85,27 @@ def main():
                 sys.stderr.write("tools/list before notifications/initialized\n")
                 sys.stderr.flush()
                 sys.exit(4)
+            if args.oversize_message:
+                # 65 MiB single line BEFORE the response: the client must fail
+                # closed on it and the lifecycle watchdog must kill us (S2).
+                try:
+                    sys.stdout.write("x" * (65 * 1024 * 1024) + "\n")
+                    sys.stdout.flush()
+                except BrokenPipeError:
+                    pass
             tools = [{"name": "tool_%d" % i,
                       "description": "mock tool %d" % i,
                       "inputSchema": {"type": "object"}} for i in range(args.tools)]
             send({"jsonrpc": "2.0", "id": mid, "result": {"tools": tools}})
         elif method == "tools/call":
             name = params.get("name", "")
-            send({"jsonrpc": "2.0", "id": mid,
-                  "result": {"content": [{"type": "text", "text": "called:" + name}]}})
+            if name == "__dump_env":
+                send({"jsonrpc": "2.0", "id": mid,
+                      "result": {"content": [{"type": "text",
+                                             "text": json.dumps(dict(os.environ))}]}})
+            else:
+                send({"jsonrpc": "2.0", "id": mid,
+                      "result": {"content": [{"type": "text", "text": "called:" + name}]}})
         elif method == "ping":
             send({"jsonrpc": "2.0", "id": mid, "result": {}})
         elif method == "notifications/cancelled":
