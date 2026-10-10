@@ -21,12 +21,13 @@ const DefaultWidth = 50
 var _ = ansi.StringWidth
 
 var (
-	dim   = lipgloss.NewStyle().Faint(true)
-	bold  = lipgloss.NewStyle().Bold(true)
-	good  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	bad   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	warn  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	green = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	dim       = lipgloss.NewStyle().Faint(true)
+	bold      = lipgloss.NewStyle().Bold(true)
+	good      = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	bad       = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	warn      = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	agentText = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	green     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 
 	userMsgBg = lipgloss.CompleteColor{TrueColor: "#303030", ANSI256: "236", ANSI: "8"}
 	userMsgFg = lipgloss.CompleteColor{TrueColor: "#E0E0E0", ANSI256: "254", ANSI: "15"}

@@ -39,6 +39,7 @@ type Chat struct {
 	secretPrompt   bool
 	secretProvider string
 	secretKey      string
+	spinFrame      int
 }
 
 func NewChat(r Runner, events <-chan event.Event) *Chat {
@@ -77,6 +78,13 @@ func (m *Chat) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w = DefaultWidth
 		}
 		m.width = w
+		return m, nil
+
+	case spinTickMsg:
+		m.spinFrame++
+		if m.running {
+			return m, spinTick()
+		}
 		return m, nil
 
 	case evMsg:
@@ -256,13 +264,17 @@ func (m *Chat) key(k tea.KeyMsg) (tea.Model, tea.Cmd) {
 		text := line
 		m.input = ""
 		m.running = true
+		m.spinFrame = 0
 		ctx, cancel := context.WithCancel(context.Background())
 		m.cancel = cancel
-		return m, func() tea.Msg {
-			err := m.runner.Run(ctx, text)
-			cancel()
-			return doneMsg{err}
-		}
+		return m, tea.Batch(
+			func() tea.Msg {
+				err := m.runner.Run(ctx, text)
+				cancel()
+				return doneMsg{err}
+			},
+			spinTick(),
+		)
 
 	case tea.KeyBackspace:
 		if r := []rune(m.input); len(r) > 0 {
@@ -296,7 +308,7 @@ func (m *Chat) View() string {
 		return fmt.Sprint(line)
 	}
 	if m.running && m.pending == nil {
-		s := "· working · ctrl+c to cancel"
+		s := m.spinnerView()
 		if m.status != "" {
 			s = "· " + m.status
 		}

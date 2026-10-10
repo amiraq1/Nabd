@@ -14,6 +14,8 @@ import (
 // while preserving content text (including Arabic and Unicode punctuation
 // inside user/model text). See docs/CONFIG.md.
 func TestFeedRenderASCIIOnlyReplacesChrome(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
+	resetRTLModeCache()
 	t.Setenv("NABD_ASCII_ONLY", "1")
 
 	arabic := "مرحبا بالعالم هذا نص عربي يجب أن يبقى كما هو"

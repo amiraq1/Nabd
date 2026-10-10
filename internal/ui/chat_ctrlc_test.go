@@ -50,7 +50,7 @@ func TestCtrlCHandlerCancelsNotQuits(t *testing.T) {
 	// blocks on ctx.Done). In the real program Bubble Tea does this.
 	cmdDone := make(chan struct{})
 	go func() {
-		cmd()
+		runCmdFaithful(cmd)
 		close(cmdDone)
 	}()
 	// Give the runner a moment to enter its ctx.Done wait.
@@ -102,4 +102,27 @@ func TestCtrlCSecondPressQuits(t *testing.T) {
 	if _, ok := msg.(tea.QuitMsg); !ok {
 		t.Errorf("ctrl+c when idle produced %T, want tea.QuitMsg", msg)
 	}
+}
+
+// runCmdFaithful simulates the Bubble Tea runtime: a tea.BatchMsg's
+// sub-commands are executed concurrently; a plain command runs directly.
+func runCmdFaithful(cmd tea.Cmd) tea.Msg {
+	if cmd == nil {
+		return nil
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		done := make(chan struct{}, len(batch))
+		for _, sub := range batch {
+			go func(c tea.Cmd) {
+				runCmdFaithful(c)
+				done <- struct{}{}
+			}(sub)
+		}
+		for range batch {
+			<-done
+		}
+		return msg
+	}
+	return msg
 }

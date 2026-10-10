@@ -267,7 +267,7 @@ func sanitizeStreamText(s string) string {
 func flushJoin(buf *string, e event.Event, width int) string {
 	var prints []string
 	if *buf != "" {
-		prints = append(prints, block(" ", sanitizeStreamText(*buf), width, lipgloss.NewStyle()))
+		prints = append(prints, renderAgentText(sanitizeStreamText(*buf), width))
 		*buf = ""
 	}
 	if s := RenderEvent(e, width); s != "" {
