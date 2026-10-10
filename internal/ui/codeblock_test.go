@@ -41,3 +41,37 @@ func TestRenderAgentTextNoCodeBlocks(t *testing.T) {
 		t.Fatalf("plain text altered, got %q", got)
 	}
 }
+
+// TestRenderAgentTextArabicProseReorders verifies Arabic prose outside
+// code fences goes through RTL reordering (visual order).
+func TestRenderAgentTextArabicProseReorders(t *testing.T) {
+	t.Setenv("NABD_RTL", "reorder")
+	resetRTLModeCache()
+	defer resetRTLModeCache()
+
+	input := "مرحبا بالعالم"
+	got := renderAgentText(input, 80)
+	// Reordered: visual order differs from logical input.
+	if strings.Contains(got, "مرحبا بالعالم") {
+		t.Fatalf("Arabic prose was not reordered, got %q", got)
+	}
+	if !strings.Contains(got, "ابحرم") {
+		t.Fatalf("expected visual order, got %q", got)
+	}
+}
+
+// TestRenderAgentTextArabicInCodeStaysLTR verifies Arabic inside a
+// ``` fence is NOT reordered: code is direction-neutral, reordering
+// would corrupt identifiers and strings.
+func TestRenderAgentTextArabicInCodeStaysLTR(t *testing.T) {
+	t.Setenv("NABD_RTL", "reorder")
+	resetRTLModeCache()
+	defer resetRTLModeCache()
+
+	input := "```\nname = \"مرحبا\"\n```"
+	got := renderAgentText(input, 80)
+	// The Arabic string literal inside code must stay in logical order.
+	if !strings.Contains(got, "مرحبا") {
+		t.Fatalf("Arabic in code was reordered, got %q", got)
+	}
+}

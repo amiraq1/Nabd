@@ -14,10 +14,30 @@ var codeBlockStyle = lipgloss.NewStyle().
 	Foreground(lipgloss.Color("252")).
 	Padding(0, 1)
 
+// blockLTR renders a block without RTL reordering, for code and other
+// LTR-owned content. Uses legacyWrap directly, bypassing wrapLogicalText.
+func blockLTR(sym, s string, width int, st lipgloss.Style) string {
+	lines := legacyWrap(s, width-2)
+	var b strings.Builder
+	for i, l := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		if i == 0 {
+			b.WriteString(sym + " ")
+		} else {
+			b.WriteString("  ")
+		}
+		b.WriteString(l)
+	}
+	return st.Render(b.String())
+}
+
 // renderAgentText renders agent response text with fenced code blocks
-// highlighted. Text outside fences uses the agentText style; text inside
-// ``` fences uses codeBlockStyle. Unclosed fences render as code to the
-// end (fail-visible rather than fail-confusing).
+// highlighted. Text outside fences uses the agentText style (with RTL);
+// text inside ``` fences uses codeBlockStyle and stays LTR (code is
+// direction-neutral; reordering it would corrupt identifiers).
+// Unclosed fences render as code to the end.
 func renderAgentText(s string, width int) string {
 	segments := splitCodeBlocks(s)
 	var b strings.Builder
@@ -32,7 +52,7 @@ func renderAgentText(s string, width int) string {
 				lines = lines[1:]
 			}
 			code := strings.Join(lines, "\n")
-			b.WriteString(codeBlockStyle.Render(block(" ", code, width, lipgloss.NewStyle())))
+			b.WriteString(codeBlockStyle.Render(blockLTR(" ", code, width, lipgloss.NewStyle())))
 		} else {
 			b.WriteString(block(" ", seg.text, width, agentText))
 		}
