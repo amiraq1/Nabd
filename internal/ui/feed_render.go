@@ -91,7 +91,30 @@ func renderAssistant(it presentation.FeedItem, width int) []string {
 		text = ch.bullet
 	}
 	clean := SanitizeForDisplay(text, DisplayPolicy{AllowNewline: true, AllowTab: true, Redact: false})
-	return append([]string{bold.Render(green.Render("Nabd"))}, formatMarkdown(clean, width)...)
+	// Split into code/prose segments: code blocks get dark background styling
+	// with fences hidden (matching Chat UI), prose keeps formatMarkdown for
+	// headings/lists/bold/RTL.
+	segments := splitCodeBlocks(clean)
+	out := []string{bold.Render(green.Render("Nabd"))}
+	for _, seg := range segments {
+		if seg.isCode {
+			// Strip the optional language tag from the opening fence line.
+			lines := strings.Split(seg.text, "\n")
+			if len(lines) > 0 {
+				lines = lines[1:]
+			}
+			code := strings.Trim(strings.Join(lines, "\n"), "\n")
+			if code != "" {
+				out = append(out, strings.Split(blockLTR(" ", code, width, codeBlockStyle), "\n")...)
+			}
+		} else {
+			prose := strings.Trim(seg.text, "\n")
+			if prose != "" {
+				out = append(out, formatMarkdown(prose, width)...)
+			}
+		}
+	}
+	return out
 }
 
 func renderTool(it presentation.FeedItem, width int, expanded ...bool) []string {
