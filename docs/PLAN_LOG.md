@@ -489,3 +489,32 @@ Ubuntu full race: PASS
 release-dryrun and Syft: PASS
 Phase 1 decision: GO
 ```
+
+---
+
+## 2026-10-10 — MCP Phase S measurements complete (branch `docs/mcp-phase-s-harnesses`, HEAD `db31db1`)
+
+**Environment:** Termux (F-Droid, versionCode 1022) on 23078PND5G, go1.27.1 android/arm64.
+
+**Proven facts:**
+- S1a: 3 rounds PASS — `before=2` → `remaining=0` after killGroup; control test proves counter sees live procs (`visible=2 ≥ 1`).
+- S1b: PASS — `Wait` returns `signal: killed` without hanging on pipe-holding grandchild.
+- S2: 3 stable rounds — 64MiB discarded without deadlock, goroutines 2→2, heap delta small negative (GC).
+- S3 positive: node and python OK in allowlists A/B/C (absolute path + minimal PATH).
+- S3 negative: PATH/HOME/TMPDIR removal fails with stderr naming the variable; LANG/TERM are positive controls.
+- S4: SDK v1.8.0 = 235 deps / 13 external modules / transitional edges; stdlib scaffold = 76 deps / 0 external.
+
+**Unconfirmed assumptions:**
+- Single-sample timings in S3 are noise; not used for decisions.
+- S2 numbers are preliminary single-environment; no absolute memory limit set.
+
+**Risks:**
+- MCP not implemented; all THREAT_MODEL rows remain design commitments (NOT PROVIDED), no GUARANTEED claims beyond dependency isolation.
+- S4 choice has lasting dependency-surface consequences.
+
+**Decisions required:**
+- S4: stdlib scaffold vs SDK v1.8.0 (owner: ammar).
+- ADR-0003 P2/P3/P4 closure (owner: ammar).
+- Phase 0 owners (architectural, security reviewer, acceptance) still unnamed.
+
+**Report:** `docs/reports/mcp_phase_s_report.md`; raw runs in `docs/reports/raw/`.
