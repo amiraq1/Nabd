@@ -107,10 +107,11 @@ func countProcsInGroup(pgid int) int {
 			continue
 		}
 		fields := strings.Fields(s[rparen+1:])
-		if len(fields) < 4 {
+		if len(fields) < 3 {
 			continue
 		}
-		if g, err := strconv.Atoi(fields[3]); err == nil && g == pgid {
+		// fields: [0]=state [1]=ppid [2]=pgrp [3]=session
+		if g, err := strconv.Atoi(fields[2]); err == nil && g == pgid {
 			n++
 		}
 	}
@@ -120,12 +121,19 @@ func countProcsInGroup(pgid int) int {
 // S1a: kill a process group containing a grandchild; none may remain.
 func TestS1aKillGroupNoOrphans(t *testing.T) {
 	// Android reports GOOS=android but has /proc — check availability directly.
-	if _, err := os.Stat("/proc/1/stat"); err != nil {
+	// Note: /proc/1/stat is Permission denied for Termux apps; /proc/self works.
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
 		t.Skip("needs /proc")
 	}
 	cmd := startMock(t, "grandchild-spawner")
 	time.Sleep(500 * time.Millisecond) // let grandchild spawn
 	pgid := cmd.Process.Pid            // Setpgid=true => pgid == pid
+
+	// Sanity: at least 2 procs (parent + grandchild) must be visible,
+	// otherwise the counter is blind and a zero result means nothing.
+	if n := countProcsInGroup(pgid); n < 2 {
+		t.Fatalf("S1a ABORT: only %d procs visible in group %d before kill — counter blind", n, pgid)
+	}
 
 	killGroup(cmd)
 	cmd.Wait()
