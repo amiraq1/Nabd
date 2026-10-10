@@ -1,6 +1,6 @@
-# Threat model — v11
+# Threat model — v12
 
-Last reviewed: 2026-09-28
+Last reviewed: 2026-10-10
 
 This is the only place nabd states security claims. README points here.
 
@@ -370,7 +370,31 @@ The source file is opened read-only in both modes and is never modified.
 `--redact` requires `--export`, and `--export` is rejected together with any
 run mode. Diagnostics go to stderr; stdout is JSONL only.
 
+## MCP integration (planned, not implemented)
+
+The following rows describe the *designed* posture for MCP support per
+ADR-0003. No MCP code exists yet; rows marked as design commitments have no
+test evidence. Nothing here is a GUARANTEED claim about shipped behavior.
+
+| Claim | Status | Evidence or residual |
+|---|---|---|
+| MCP settings load only from `~/.ag/mcp.json`; any MCP config inside the project root is refused regardless of filename | NOT PROVIDED | Designed: location-based rejection (ADR-0003 §5.1). No implementation yet. |
+| MCP server child processes run with a minimal env allowlist, never inheriting nabd's full environment | NOT PROVIDED | Designed: allowlist built per server definition (ADR-0003 §5.3). S3 measurement pending. |
+| Repository-cloned MCP configs never start servers | NOT PROVIDED | Designed: opening a repo must not launch external processes (ADR-0003 §5.1). |
+| Tool permission classification comes from local user config only, never from server hints | NOT PROVIDED | Designed: `readOnlyHint` is display-only (ADR-0003 §8.1). The ReadOnly label is a user claim, not a verified property — residual risk documented in ADR-0003. |
+| Tool fingerprints (SHA-256 over JCS-canonical fields) invalidate approval on any change | NOT PROVIDED | Designed per ADR-0003 §6.2. No implementation yet. |
+| MCP server processes are killed on timeout, session close, or disable, with no orphans | NOT PROVIDED | Designed: killGroup semantics per ADR-0003 §10.2. S1 measurement pending. |
+| Journal records server/tool IDs, decisions, and sizes — never raw args or outputs by default | NOT PROVIDED | Designed per ADR-0003 §11. No implementation yet. |
+| Core packages (`tools`, `perm`, `safefs`, `redact`, `toolvocab`, `agent`) carry no MCP SDK or network dependencies | GUARANTEED | `TestMCPDependencyIsolation` runs `go list -deps` per core package and fails on any non-allowlisted module (ADR-0003 §12). |
+| A single flag disables all of MCP | NOT PROVIDED | Designed as `--no-mcp` (ADR-0003 §14), Phase 5 item. No implementation yet. |
+| STDIO server processes are contained by the OS | NOT PROVIDED | No OS-level containment on Termux (Landlock unavailable to the app process). B7 preliminary decision (ADR-0003 §4.2): path 2 — run as user with explicit warning. Residual risk accepted pending named owner. |
+| MCP server file reads bypass local .gitignore non-disclosure | NOT PROVIDED | The .gitignore non-disclosure guarantee covers local tools only. An MCP server running as the user can read files the local tools would refuse. Designed: user must understand this before first approval (ADR-0003 §6.1). |
+| MCP tool outputs grant no read-credit and bypass readCap | NOT PROVIDED | Read-credit (NBD-034) and readCap accounting apply to local tools only. MCP outputs are untrusted content, not measured reads. Designed: stated explicitly so credit is never granted by accident (ADR-0003 P7). |
+| One server approval opens all its ReadOnly tools indefinitely | NOT PROVIDED | Unlike `bash` (which never gets even a session grant), a single MCP server approval opens every ReadOnly tool until fingerprint change. This is a deliberate but significant trust difference, stated here as a residual risk (ADR-0003 §8.2). |
+| Saved approval scope, revocation, and new-tool discovery | NOT PROVIDED | A prior interactive approval may authorize ReadOnly tools within its scope (matching server-id, fingerprint, unchanged policy). Scope, revocation mechanism, and new-tool detection are design commitments (ADR-0003 P3b), not implemented. Write/Execute always require per-execution approval, even under YOLO, and are refused headless. |
+
 ## Operator guidance
+
 
 1. Prefer secure credential files over shell startup exports.
 2. Run nabd as a dedicated OS user on shared systems.
