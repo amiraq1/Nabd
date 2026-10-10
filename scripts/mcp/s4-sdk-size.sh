@@ -10,7 +10,7 @@
 # Usage: bash scripts/mcp/s4-sdk-size.sh [sdk-version]
 set -u
 
-SDK="${1:-v0.2.0}"
+SDK="${1:-v1.8.0}"
 SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$SCRATCH"' EXIT
 
