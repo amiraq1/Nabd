@@ -77,6 +77,30 @@ func TestFlushJoinSanitizesStreamBuffer(t *testing.T) {
 	}
 }
 
+func TestFlushJoinSanitizesHostileAnsiWithCodeBlocks(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
+	resetRTLModeCache()
+
+	// Hostile payload combining ``` fences with ANSI injection to lock in sanitize-then-split ordering.
+	buf := "Intro\n\x1b[31m```go\x1b[0m\nfmt.Println(\"secure\")\n\x1b[32m```\x1b[0m\nOutro"
+
+	out := flushJoin(&buf, event.Event{Type: event.TextDelta}, 80)
+	if strings.Contains(out, "\x1b[31m") || strings.Contains(out, "\x1b[32m") {
+		t.Errorf("hostile ANSI survived flushJoin: %q", out)
+	}
+	if strings.Contains(out, "```") {
+		t.Errorf("fences were not parsed (sanitize-then-split ordering failed): %q", out)
+	}
+	for _, want := range []string{"Intro", "fmt.Println", "secure", "Outro"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("flushJoin lost readable text %q in: %q", want, out)
+		}
+	}
+	if buf != "" {
+		t.Errorf("flushJoin did not drain the buffer, left %q", buf)
+	}
+}
+
 // TestReplayViewSanitizesStreamBuffer drives the real Replay model
 // (NewReplay -> step -> View) with hostile deltas. It fails if Replay.View
 // renders the raw buffer.

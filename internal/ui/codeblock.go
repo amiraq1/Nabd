@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -11,8 +12,7 @@ import (
 // background, falling back gracefully on limited terminals.
 var codeBlockStyle = lipgloss.NewStyle().
 	Background(lipgloss.Color("236")).
-	Foreground(lipgloss.Color("252")).
-	Padding(0, 1)
+	Foreground(lipgloss.Color("252"))
 
 // blockLTR renders a block without RTL reordering, for code and other
 // LTR-owned content. Uses legacyWrap directly, bypassing wrapLogicalText.
@@ -51,10 +51,10 @@ func renderAgentText(s string, width int) string {
 			if len(lines) > 0 {
 				lines = lines[1:]
 			}
-			code := strings.Join(lines, "\n")
-			b.WriteString(codeBlockStyle.Render(blockLTR(" ", code, width, lipgloss.NewStyle())))
+			code := strings.TrimSuffix(strings.Join(lines, "\n"), "\n")
+			b.WriteString(blockLTR(" ", code, width, codeBlockStyle))
 		} else {
-			b.WriteString(block(" ", seg.text, width, agentText))
+			b.WriteString(block(" ", strings.Trim(seg.text, "\n"), width, agentText))
 		}
 	}
 	return b.String()
@@ -65,10 +65,12 @@ type textSegment struct {
 	isCode bool
 }
 
-// splitCodeBlocks splits s on ``` fences. Even-indexed segments are
-// prose, odd-indexed are code.
+var fencePattern = regexp.MustCompile(`(?m)^[ ]{0,3}` + "```")
+
+// splitCodeBlocks splits s on line-anchored ``` fences. Even-indexed segments
+// are prose, odd-indexed are code.
 func splitCodeBlocks(s string) []textSegment {
-	parts := strings.Split(s, "```")
+	parts := fencePattern.Split(s, -1)
 	segs := make([]textSegment, 0, len(parts))
 	for i, p := range parts {
 		// Skip empty prose segments at boundaries to avoid blank blocks,
