@@ -78,9 +78,13 @@ echo
 echo "Note: ADR §5.3 already requires an absolute server path; this harness"
 echo "enforces the same (S3 pass criterion: absolute + minimal PATH)."
 
-# --- S3 negative test: each variable absence must fail and be named ---
+
+# --- S3 negative test: each variable absence must fail AND name the variable ---
 # Usage: bash scripts/mcp/s3-env-allowlist.sh --negative
+# Criterion: PATH/HOME/TMPDIR removal must FAIL with stderr naming the variable.
+# LANG/TERM are control rows (must stay OK — mocks don't require them).
 if [ "${1:-}" = "--negative" ]; then
+  PAYLOAD='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
   echo
   echo "### S3 negative: removing each variable in turn"
   echo "| removed | node | python |"
@@ -102,12 +106,23 @@ if [ "${1:-}" = "--negative" ]; then
           TERM) envargs+=("TERM=xterm-256color") ;;
         esac
       done
-      out=$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
-        | timeout 5 env -i "${envargs[@]}" "$binpath" $args 2>/dev/null | head -1)
-      if echo "$out" | grep -q protocolVersion; then r="OK"; else r="FAIL"; fi
-      [ "$lang" = node ] && rn="$r ($v removed)" || rp="$r ($v removed)"
+      # Capture stderr separately — the failure must NAME the variable.
+      errfile="$TMPD/stderr-$lang-$v.txt"
+      out=$(printf '%s\n' "$PAYLOAD" \
+        | timeout 5 env -i "${envargs[@]}" "$binpath" $args 2>"$errfile" | head -1)
+      err=$(cat "$errfile" 2>/dev/null)
+      if echo "$out" | grep -q '"protocolVersion"'; then
+        r="OK"
+      elif echo "$err" | grep -q "$v"; then
+        r="FAIL (names $v)"
+      else
+        r="FAIL (unnamed)"
+      fi
+      [ "$lang" = node ] && rn="$r" || rp="$r"
     done
     echo "| $v | $rn | $rp |"
   done
+  echo
+  echo "Expected: PATH/HOME/TMPDIR → FAIL naming the variable; LANG/TERM → OK (controls)."
   exit 0
 fi
