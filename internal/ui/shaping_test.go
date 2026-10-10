@@ -52,3 +52,56 @@ func TestShapedThroughFormatMarkdown(t *testing.T) {
 		}
 	}
 }
+
+// TestShapeArabicIdempotent verifies the gate requirement: shaping already-
+// shaped text (presentation forms) must not change it further. This prevents
+// double-shaping if the input was already processed.
+func TestShapeArabicIdempotent(t *testing.T) {
+	once := shapeArabicText("مرحبا")
+	twice := shapeArabicText(once)
+	if once != twice {
+		t.Errorf("shaping not idempotent:\n once: %q\ntwice: %q", once, twice)
+	}
+}
+
+// TestShapeArabicJoinSemantics verifies specific joining behavior:
+// بب -> U+FE91 (initial) U+FE90 (final), لا -> single U+FEFB ligature.
+func TestShapeArabicJoinSemantics(t *testing.T) {
+	// بب: first beh initial, second beh final
+	got := shapeArabicText("بب")
+	want := "\uFE91\uFE90"
+	if got != want {
+		t.Errorf("بب -> %q, want %q", got, want)
+	}
+
+	// لا: lam-alef ligature (single codepoint)
+	got = shapeArabicText("لا")
+	want = "\uFEFB"
+	if got != want {
+		t.Errorf("لا -> %q, want %q", got, want)
+	}
+}
+
+// TestShapeArabicPassthrough verifies non-Arabic text is unchanged.
+func TestShapeArabicPassthrough(t *testing.T) {
+	cases := []string{
+		"",
+		"hello",
+		"café",
+		"e\u0301", // e + combining acute
+		"👨‍👩‍👧‍👦", // emoji ZWJ family
+		"123",
+		"```code```",
+	}
+	for _, tc := range cases {
+		if got := shapeArabicText(tc); got != tc {
+			t.Errorf("passthrough failed for %q: got %q", tc, got)
+		}
+	}
+}
+
+// TestShapeArabicNonJoiningLetters verifies letters that dont join on the
+
+// TestShapeArabicIdempotent verifies the gate requirement: shaping already-
+// shaped text (presentation forms) must not change it further. This prevents
+// double-shaping if the input was already processed.
