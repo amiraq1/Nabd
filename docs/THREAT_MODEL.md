@@ -379,11 +379,11 @@ test evidence. Nothing here is a GUARANTEED claim about shipped behavior.
 | Claim | Status | Evidence or residual |
 |---|---|---|
 | MCP settings load only from `~/.ag/mcp.json`; any MCP config inside the project root is refused regardless of filename | NOT PROVIDED | Designed: location-based rejection (ADR-0003 §5.1). No implementation yet. |
-| MCP server child processes run with a minimal env allowlist, never inheriting nabd's full environment | NOT PROVIDED | Designed: allowlist built per server definition (ADR-0003 §5.3). S3 measurement pending. |
+| MCP server child processes run with a minimal env allowlist, never inheriting nabd's full environment | NOT PROVIDED | Designed: allowlist built per server definition (ADR-0003 §5.3). S3 measured: minimal allowlist works (A/B/C OK); negative test confirms PATH/HOME/TMPDIR required (stderr names the variable), LANG/TERM are controls. |
 | Repository-cloned MCP configs never start servers | NOT PROVIDED | Designed: opening a repo must not launch external processes (ADR-0003 §5.1). |
 | Tool permission classification comes from local user config only, never from server hints | NOT PROVIDED | Designed: `readOnlyHint` is display-only (ADR-0003 §8.1). The ReadOnly label is a user claim, not a verified property — residual risk documented in ADR-0003. |
 | Tool fingerprints (SHA-256 over JCS-canonical fields) invalidate approval on any change | NOT PROVIDED | Designed per ADR-0003 §6.2. No implementation yet. |
-| MCP server processes are killed on timeout, session close, or disable, with no orphans | NOT PROVIDED | Designed: killGroup semantics per ADR-0003 §10.2. S1 measurement pending. |
+| MCP server processes are killed on timeout, session close, or disable, with no orphans | NOT PROVIDED | Designed: killGroup semantics per ADR-0003 §10.2. S1 measured: 3 rounds, control proves counter sees live procs (visible=2), remaining=0 after killGroup. |
 | Journal records server/tool IDs, decisions, and sizes — never raw args or outputs by default | NOT PROVIDED | Designed per ADR-0003 §11. No implementation yet. |
 | Core packages (`tools`, `perm`, `safefs`, `redact`, `toolvocab`, `agent`) carry no MCP SDK or network dependencies | GUARANTEED | `TestMCPDependencyIsolation` runs `go list -deps` per core package and fails on any non-allowlisted module (ADR-0003 §12). |
 | A single flag disables all of MCP | NOT PROVIDED | Designed as `--no-mcp` (ADR-0003 §14), Phase 5 item. No implementation yet. |
