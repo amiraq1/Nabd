@@ -1,10 +1,10 @@
 package tools
 
 // Phase 3 ID -> test mapping (ADR-0003 P9):
-//   MCP-SEC-04  TestMCPSec04UnclassifiedRefused
+//   MCP-SEC-04  TestMCPSec04UnclassifiedDenied
 //   MCP-SEC-05  TestMCPSec05ReadOnlyHintIgnored
-//   MCP-SEC-06/07 TestMCPSec0607FingerprintChange
-//   MCP-SEC-08  TestMCPSec08ReservedName
+//   MCP-SEC-06/07 TestMCPSec06_07FingerprintInvalidation
+//   MCP-SEC-08  TestMCPSec08NameShadowing
 // (extra)       TestMCPAdapterReadOnly, TestMCPAdapterWritePrompts,
 //               TestMCPAdapterRunRefused, TestMCPAdapterModePlan,
 //               TestMCPToolRegistered
@@ -72,6 +72,9 @@ func (f *fakeMCPBackend) ApprovalText(desc MCPToolDesc) string {
 func (f *fakeMCPBackend) Call(ctx context.Context, server, tool string, args json.RawMessage) (string, bool, error) {
 	f.callN++
 	f.lastServer, f.lastTool = server, tool
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
 	return f.callOut, f.callIsErr, f.callErr
 }
 
@@ -99,9 +102,9 @@ func mcpArgs(server, tool string) json.RawMessage {
 	return json.RawMessage(`{"server":"` + server + `","tool":"` + tool + `","args":{"q":1}}`)
 }
 
-// TestMCPSec04UnclassifiedRefused: a tool with no local classification is
+// TestMCPSec04UnclassifiedDenied: a tool with no local classification is
 // refused before any prompt and never reaches the server.
-func TestMCPSec04UnclassifiedRefused(t *testing.T) {
+func TestMCPSec04UnclassifiedDenied(t *testing.T) {
 	be := newFakeMCPBackend() // no tools configured
 	asker := &fakeAsker{decision: event.AllowOnce}
 	tool := testMCPTool(be, asker, perm.ModeAsk)
@@ -146,9 +149,9 @@ func TestMCPSec05ReadOnlyHintIgnored(t *testing.T) {
 	}
 }
 
-// TestMCPSec0607FingerprintChange: any fingerprint change invalidates the
+// TestMCPSec06_07FingerprintInvalidation: any fingerprint change invalidates the
 // approval and forces re-approval (MCP-SEC-06/07).
-func TestMCPSec0607FingerprintChange(t *testing.T) {
+func TestMCPSec06_07FingerprintInvalidation(t *testing.T) {
 	be := newFakeMCPBackend()
 	be.add(MCPToolDesc{Server: "srv", Name: "t", Classification: "read-only", Fingerprint: "fp1"})
 	asker := &fakeAsker{decision: event.AllowOnce}
@@ -183,8 +186,8 @@ func TestMCPSec0607FingerprintChange(t *testing.T) {
 	}
 }
 
-// TestMCPSec08ReservedName: the adapter name can never address a server tool.
-func TestMCPSec08ReservedName(t *testing.T) {
+// TestMCPSec08NameShadowing: the adapter name can never address a server tool.
+func TestMCPSec08NameShadowing(t *testing.T) {
 	be := newFakeMCPBackend()
 	be.add(MCPToolDesc{Server: "srv", Name: "mcp_tool", Classification: "read-only", Fingerprint: "fp"})
 	asker := &fakeAsker{decision: event.AllowOnce}

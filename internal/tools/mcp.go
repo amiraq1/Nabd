@@ -103,6 +103,9 @@ func (t mcpTool) GuardedResult(ctx context.Context, raw json.RawMessage) (agent.
 	if err != nil {
 		return agent.GuardedResult{}, err
 	}
+	if _, err := parseMCPClassification(desc.Classification); err != nil {
+		return agent.GuardedResult{}, err
+	}
 
 	// Restrictive modes: only read-only tools proceed, and never with a prompt.
 	switch t.mode() {
@@ -157,6 +160,17 @@ func (t mcpTool) ask(ctx context.Context, raw json.RawMessage) event.Decision {
 		return event.AllowOnce
 	}
 	return event.Deny
+}
+
+// parseMCPClassification validates the local classification value.
+// Anything outside the closed set fails closed.
+func parseMCPClassification(s string) (string, error) {
+	switch s {
+	case "read-only", "write", "execute":
+		return s, nil
+	default:
+		return "", fmt.Errorf("mcp: invalid classification %q", s)
+	}
 }
 
 // RegisterMCP wires the mcp_tool adapter into the registry. Called from cmd/ag
