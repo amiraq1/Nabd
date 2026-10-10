@@ -157,8 +157,12 @@ Model -> Tool Registry -> MCP Tool Adapter
 
 ### الاعتماديات
 
-- SDK أو تنفيذ داخلي محدود — يُحسم في S4 بأرقام.
-- **المثبت لـ S4:** `github.com/modelcontextprotocol/go-sdk` @ `v1.8.0` (commit `3f3b699b2b67e1ed033a63d6651671dab53c2d32`).
+- **القرار (S4، 2026-10-10، ammar): التنفيذ الداخلي المحدود (stdlib-only).**
+  - الأرقام: SDK v1.8.0 = 235 حزمة / 13 وحدة خارجية / حواف انتقالية؛ stdlib = 76 / 0.
+  - `net/http`+`crypto/tls` من stdlib — لا حجة من GOMODCACHE (96M رقم خام لا صافٍ).
+  - النطاق ضيق (initialize/tools.list/tools.call على stdio)، والبروتوكول مثبَّت عند 2026-07-28.
+  - التزام Phase 1: مجموعة اختبارات للعميل الداخلي + حارس `TestMCPDependencyIsolation` يبقى كما هو.
+- **المثبت لـ S4 (مرجعي):** `github.com/modelcontextprotocol/go-sdk` @ `v1.8.0` (commit `3f3b699b2b67e1ed033a63d6651671dab53c2d32`).
 - **نسخة البروتوكول المعتمدة:** 2026-07-28 — التفاوض مقيّد بها صراحةً؛ لا تفاوض على نسخة أحدث دون قرار.
 - حصر الاعتماديات في طبقة التكامل؛ حراسة `go list -deps` لكل حزمة نواة على حدة (تشمل الانتقالية).
 **قائمة الحزم الصريحة:** `tools`، `perm`، `safefs`، `redact`، `snap`، `store`، `toolvocab`، `ignorefile`، `agent` — لا `provider` بطبيعة الحال.
