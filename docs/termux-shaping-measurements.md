@@ -53,7 +53,7 @@ Three independent questions, answered separately:
 
 ## Observations
 
-Judged visually on the Termux screen (screenshots attached to PR #262).
+Judged visually on the Termux screen (screenshots to be attached to PR #262).
 
 | ID | Connected? | Artifacts/boxes? | Note |
 |---|---|---|---|
@@ -61,8 +61,8 @@ Judged visually on the Termux screen (screenshots attached to PR #262).
 | L2 | No | No | Two beh separated |
 | P1 | n/a (spaced) | No | All four tested contextual forms render distinctly and correctly |
 | P2 | n/a | No | Ligature renders as single unit; two-char form as two units; visually distinct |
-| M1 | No (Arabic part) | No | "100" stays LTR inside RTL text — correct BiDi for tested case |
-| M2 | No (Arabic part) | No | "abc" LTR left, Arabic RTL middle, "123" LTR right — correct for tested case |
+| M1 | No (Arabic part) | No | "100" positioned LTR by Nabd’s layout (Termux does no BiDi) |
+| M2 | No (Arabic part) | No | "abc" LTR left, Arabic RTL middle, "123" LTR right (via Nabd’s layout) |
 | T1 | Partial | No | Tatweel lines visible and extend the word |
 
 ## Answers
@@ -78,16 +78,18 @@ Judged visually on the Termux screen (screenshots attached to PR #262).
   characters (U+0644 U+0627) occupy 2 cells. Layout math must not assume
   width identity for ligatures.
 
-Additional finding (for tested cases): Termux applies BiDi ordering
-(text displays right-to-left in correct order for the tested mixed lines)
-but performs no glyph shaping. Ordering works; joining does not. This is
-not a UAX #9 conformance claim.
+Additional finding: Termux performs neither glyph shaping nor BiDi
+ordering (consistent with upstream termux-app#5252 and
+internal/rtl/provenance.md). The correct visual order observed in Nabd is
+produced by Nabd's own rtl.Layout engine, not by the terminal. Ordering
+works via Nabd; joining does not work anywhere without explicit shaping.
 
 ## Decision rules
 
-The following outcome→decision matrix was fixed before the probe was run
-(2026-10-10, in the review thread for this document). It is recorded here
-so the eventual shaping-policy change can cite it.
+The following outcome→decision matrix was recorded during review on
+2026-10-10, after the probe ran and before any shaping code was written.
+It is preserved here so the shaping-policy change can cite the rule that
+was actually applied.
 
 | Outcome | Decision |
 |---|---|
@@ -98,8 +100,8 @@ so the eventual shaping-policy change can cite it.
 
 ## Decision
 
-Applied rule: L1 not connected + P1 connected → **the need for an explicit
-shaping policy is established.**
+Applied rule (from matrix above): L1 not connected + P1 connected →
+**the need for an explicit shaping policy is established.**
 
 This satisfies the condition in `docs/rtl-feed-integration.md` for
 considering a shaping policy. Any such policy must be:
@@ -120,5 +122,5 @@ considering a shaping policy. Any such policy must be:
 ## Artifacts
 
 - Probe: `tools/termux-shaping-probe/probe.py`
-- Raw output: `tools/termux-shaping-probe/run-20261010-1751.txt`
-- Screenshots: attached to PR #262 (phone-local originals)
+- Raw output: `run-20261010-1751.txt` (phone-local, 2762 bytes; to be committed under `tools/termux-shaping-probe/`)
+- Screenshots: phone-local originals (to be attached to PR conversation)

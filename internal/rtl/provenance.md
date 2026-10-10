@@ -153,6 +153,17 @@ in the first place.
   shapes, the engine must not apply presentation forms a second time.
 - Shaping will be an independent `Policy` field, not a `Mode` value, so callers
   opt in explicitly.
+
+### Resolved decision (2026-10-10)
+
+Per `docs/termux-shaping-measurements.md`, Termux does not shape logical
+Arabic. The shaping policy is implemented at the UI layer
+(`internal/ui/shaping.go`, called from `feed_render.go`), not as a `Policy`
+field in the engine. Rationale: the engine's `Layout` remains a pure BiDi +
+line-breaking function; shaping is a display-layer concern tied to the
+terminal's capabilities. The engine's internal shaping option stays
+test-only. The required double-shaping test lives at
+`internal/ui/shaping_test.go:TestShapeArabicIdempotent`.
 - `RestoreFromSource` remains the only logical copy path. Presentation forms
   must never enter the journal, search indexes, or any copy source; they are
   display-only.
