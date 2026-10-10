@@ -1,61 +1,86 @@
 # MCP Phase S Measurement Report
 
-**Status:** template — fill after running on Termux
+**Status:** partial — S2/S3/S4 complete; S1a pending rerun after harness fix
 **ADR:** docs/DECISIONS/0003-mcp-integration.md (v5)
+**Branch:** docs/mcp-phase-s-harnesses
+**HEAD:** 90ba282529d5b2d8ed576b43766f26cbde0784b7 (S1a fix: 082bebf — rerun pending)
 
 ## Environment
 
 | Field | Value |
 |---|---|
-| Device | [e.g. Xiaomi 23078PND5G] |
-| Termux version | [e.g. 0.119.0-beta.3] |
-| Android version | [e.g. 16] |
-| Go version | [`go version`] |
-| Git HEAD | [`git rev-parse HEAD`] |
-| Date | [YYYY-MM-DD] |
+| Device | 23078PND5G (Xiaomi) |
+| Termux | F-Droid, versionCode 1022 |
+| Android | 16 |
+| Go | go1.27.1 android/arm64 |
+| Date | 2026-10-10 |
 
-## S1: Process-group kill
+**Environment deviations:** `~/nabd` does not exist (correct: `~/Nabd`); `/tmp` is root-owned non-writable → outputs to `docs/reports/raw/` (gitignored).
 
-| Test | Result | Notes |
-|---|---|---|
-| S1a: killGroup, no orphans | [PASS/FAIL] | remaining=N |
-| S1b: pipe holder, no hang | [PASS/FAIL] | |
+## S1: Process-group kill — RESERVED (No-Go pending)
 
-**Go/No-Go:** if S1a fails, B3 and the cancellation approach must be revised before Phase 4.
+**Raw (run-20261010-2146-s1s2.txt):**
+- S1a: SKIP — `needs /proc` (harness checked `/proc/1/stat`, denied on Android)
+- S1b: PASS — Wait returned (signal: killed), no hang (2.01s)
 
-## S2: Pipes and timeouts under load
+**Findings:** Two harness bugs found on Termux, fixed in 082bebf:
+1. `/proc/1/stat` is Permission denied for Termux apps; `/proc/self/stat` works.
+2. `countProcsInGroup` read `fields[3]` (SID) not `fields[2]` (PGID) — would return 0 even with orphans (false success). Also added pre-kill sanity (≥2 procs visible).
 
-| Test | Result | Notes |
-|---|---|---|
-| S2a: 64 MiB discard | [PASS/FAIL] | heap delta=N bytes |
-| S2b: timeout cleanup | [PASS/FAIL] | goroutines before=N after=M |
-| S2c: write-no-read | [PASS/FAIL] | |
+**Interpretation:** S1b proves Wait doesn't hang on pipe held by dead leader's child. S1a — the core "no orphans after killGroup" — was never measured.
 
-**Go/No-Go:** failures here revise size/timeout limits.
+**Go/No-Go:** **No-Go (temporary)** — rerun S1a with fixed harness before evaluating.
 
-## S3: Env allowlist
+## S2: Pipes and timeouts under load — PASS
 
-Paste the table from `bash scripts/mcp/s3-env-allowlist.sh`:
+**Raw:**
+- S2a: PASS — discarded=67108864 bytes (64 MiB), heap before=281968 after=214656 delta=-67312 (no deadlock, no growth)
+- S2b: PASS — child reaped after kill; goroutines before=2 after=2 (no leak)
+- S2c: PASS — no freeze, child killed cleanly (2.04s)
 
-| server | list A | list B | list C |
+**Interpretation:** Pipe handling under load is sound. 64 MiB discard with negative heap delta (GC) proves no buffering blowup. Timeout path reaps cleanly with no goroutine leak.
+
+**Go/No-Go:** **Go** — S2 imposes no design changes.
+
+## S3: Env allowlist — PASS (after D3/D4 fix)
+
+**Raw (run-20261010-2147-s3.txt):**
+
+| server | list A (minimal) | list B (+lang) | list C (+real HOME) |
 |---|---|---|---|
-| node | | | |
-| python | | | |
+| node | OK(495ms) | OK(474ms) | OK(362ms) |
+| python | OK(156ms) | OK(103ms) | OK(95ms) |
 
-**Recommendation:** [which list, or "needs standalone decision"]
-**Go/No-Go:** if the restricted list breaks Node/Python, reformulate as a standalone decision.
+**Interpretation:** After fixing the harness (absolute binary path — bare-name exec broke Python's self-lookup on Android), both Node and Python mock servers start under all three allowlists, including the minimal one. The minimal list (PATH with $PREFIX/bin, HOME, TMPDIR, LANG, TERM) suffices.
 
-## S4: SDK vs stdlib
+**Go/No-Go:** **Go** — the restricted allowlist works for common servers. ADR §5.3's absolute-path requirement is validated as load-bearing (it prevents the exact failure mode observed).
 
-Paste from `bash scripts/mcp/s4-sdk-size.sh`:
+## S4: SDK vs stdlib — DECISION: stdlib scaffold
 
-- SDK deps count:
-- SDK graph edges:
-- Stdlib scaffold deps count:
-- **Decision:** [SDK @ pinned tag | stdlib scaffold] with rationale
+**Raw (run-20261010-2147-s4.txt):**
 
-**Go/No-Go:** the choice is recorded in ADR §4.5.
+| Metric | MCP Go SDK v1.8.0 | stdlib scaffold |
+|---|---|---|
+| go list -deps count | 235 | 76 |
+| go mod graph edges | 34 | 2 |
+| external modules | 13 | 0 |
+| network deps | net/http, crypto/tls | none |
+| module cache | 96M | — |
 
-## Raw output
+**Interpretation:** The SDK pulls 235 transitive deps including network and TLS stacks, 13 external modules, 96M cache. The stdlib scaffold (JSON-RPC lines + pipes) needs 76 deps, 0 external, 2 graph edges.
 
-[Paste the full test/script output below for the record]
+**Go/No-Go:** **Go with decision** — adopt the **stdlib-only scaffold** per ADR-0003 §4.5. Rationale: 3× fewer deps, zero external modules, zero network surface in the dependency tree. The SDK's network deps (net/http, crypto/tls) contradict the v1 "STDIO only, no network" posture at the dependency level.
+
+**Pinned:** `github.com/modelcontextprotocol/go-sdk` @ `v1.8.0` is **rejected** for v1; revisit only via new ADR if network transport is later approved.
+
+## Summary
+
+| Item | Verdict |
+|---|---|
+| S1 | No-Go (temporary) — rerun S1a |
+| S2 | Go |
+| S3 | Go |
+| S4 | Go — stdlib scaffold chosen |
+| Repo guards + isolation guard | Pass |
+
+**Next:** rerun S1a on Termux with 082bebf, then S1 verdict. Nothing else blocks Phase 0 entry except owner naming (W-08).
