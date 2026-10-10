@@ -518,3 +518,16 @@ Phase 1 decision: GO
 - Phase 0 owners (architectural, security reviewer, acceptance) still unnamed.
 
 **Report:** `docs/reports/mcp_phase_s_report.md`; raw runs in `docs/reports/raw/`.
+
+---
+
+## 2026-10-10 — MCP Phase S/Phase 0 closure (branch `docs/mcp-phase-s-harnesses`)
+
+**Decisions closed:**
+- S4: stdlib-only (ammar, 2026-10-10) — 76 deps / 0 external vs 235 / 13.
+- P2: `mcp_tool` fixed name + identity in mediator (3 implementation conditions).
+- P3: permission ladder with structural `perm.Policy` exception; `TestYOLODoesNotApproveMCPWrite`, `TestMCPNoSessionGrant` before implementation.
+- P4: `PermDetail` omitempty, closed list, full window constraints.
+- Owners: architectural + acceptance = Ammar (@amiraq1); security reviewer = single-operator mode (written amendment, review 2027-04-10).
+
+**Note:** db31db1 entry listed these as pending; this entry closes them. Historical entry preserved.
