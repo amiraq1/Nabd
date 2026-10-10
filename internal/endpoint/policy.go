@@ -37,6 +37,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -288,17 +289,38 @@ func proxyFromEnv(req *http.Request) (*url.URL, error) {
 	return url.Parse(raw)
 }
 
+// policyWarnMu guards policyWarned.
+var policyWarnMu sync.Mutex
+
+// policyWarned records the NABD_ENDPOINT_POLICY values that have already
+// produced a fallback diagnostic, so the warning is printed once per
+// distinct invalid value per process instead of on every Client() call.
+var policyWarned = map[string]struct{}{}
+
+// warnInvalidPolicyOnce prints the invalid-policy fallback diagnostic the
+// first time a given raw value is seen. It is safe for concurrent use.
+func warnInvalidPolicyOnce(raw string, err error) {
+	policyWarnMu.Lock()
+	defer policyWarnMu.Unlock()
+	if _, seen := policyWarned[raw]; seen {
+		return
+	}
+	policyWarned[raw] = struct{}{}
+	fmt.Fprintf(os.Stderr, "nabd: NABD_ENDPOINT_POLICY %q unrecognised (%v); using strict\n", raw, err)
+}
+
 // Client returns an *http.Client configured with the active NABD_ENDPOINT_POLICY,
 // NABD_ENDPOINT_ALLOW, and the given timeout. A timeout of 0 disables client-level
 // timeout (suitable for streaming requests controlled by context deadlines).
 //
 // If NABD_ENDPOINT_POLICY is set to an unrecognised value the function falls
-// back to PolicyStrict (fail-closed) and logs a diagnostic to stderr.
+// back to PolicyStrict (fail-closed) and logs a diagnostic to stderr, once
+// per distinct value.
 func Client(timeout time.Duration) *http.Client {
 	raw := config.Get("NABD_ENDPOINT_POLICY")
 	pol, err := ParsePolicy(raw)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nabd: NABD_ENDPOINT_POLICY %q unrecognised (%v); using strict\n", raw, err)
+		warnInvalidPolicyOnce(raw, err)
 	}
 	return ClientWithAllow(pol, CurrentAllowList(), timeout)
 }
