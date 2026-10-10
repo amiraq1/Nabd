@@ -148,6 +148,27 @@ func TestS1aKillGroupNoOrphans(t *testing.T) {
 	}
 }
 
+// TestS1aControlSeesLiveProcs is the CONTROL for S1a: it proves the counter
+// is not blind. A live process group must read as >=1; if the counter returns
+// 0 here, every S1a "remaining=0" is meaningless.
+func TestS1aControlSeesLiveProcs(t *testing.T) {
+	if _, err := os.Stat("/proc/self/stat"); err != nil {
+		t.Skip("needs /proc")
+	}
+	cmd := startMock(t, "grandchild-spawner")
+	defer func() {
+		killGroup(cmd)
+		cmd.Wait()
+	}()
+	time.Sleep(500 * time.Millisecond)
+	pgid := cmd.Process.Pid
+	n := countProcsInGroup(pgid)
+	t.Logf("S1a-control: pgid=%d visible=%d (must be >=1)", pgid, n)
+	if n < 1 {
+		t.Errorf("S1a-control FAIL: counter blind — 0 procs visible for live group %d", pgid)
+	}
+}
+
 // S1b: leader exits while grandchild holds a pipe; Wait must not hang.
 func TestS1bPipeHolderNoHang(t *testing.T) {
 	r, w, err := os.Pipe()
