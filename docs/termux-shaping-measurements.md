@@ -53,7 +53,7 @@ Three independent questions, answered separately:
 
 ## Observations
 
-Judged visually on the Termux screen (screenshots attached to PR #262).
+Judged visually on the Termux screen (screenshots to be attached to PR #262).
 
 | ID | Connected? | Artifacts/boxes? | Note |
 |---|---|---|---|
@@ -61,8 +61,8 @@ Judged visually on the Termux screen (screenshots attached to PR #262).
 | L2 | No | No | Two beh separated |
 | P1 | n/a (spaced) | No | All four tested contextual forms render distinctly and correctly |
 | P2 | n/a | No | Ligature renders as single unit; two-char form as two units; visually distinct |
-| M1 | No (Arabic part) | No | "100" positioned LTR by Nabd\u2019s layout (Termux does no BiDi) |
-| M2 | No (Arabic part) | No | "abc" LTR left, Arabic RTL middle, "123" LTR right (via Nabd\u2019s layout) |
+| M1 | No (Arabic part) | No | "100" positioned LTR by Nabd’s layout (Termux does no BiDi) |
+| M2 | No (Arabic part) | No | "abc" LTR left, Arabic RTL middle, "123" LTR right (via Nabd’s layout) |
 | T1 | Partial | No | Tatweel lines visible and extend the word |
 
 ## Answers
@@ -122,5 +122,5 @@ considering a shaping policy. Any such policy must be:
 ## Artifacts
 
 - Probe: `tools/termux-shaping-probe/probe.py`
-- Raw output: `tools/termux-shaping-probe/run-20261010-1751.txt`
+- Raw output: `run-20261010-1751.txt` (phone-local, 2762 bytes; to be committed under `tools/termux-shaping-probe/`)
 - Screenshots: phone-local originals (to be attached to PR conversation)

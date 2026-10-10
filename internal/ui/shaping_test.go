@@ -99,9 +99,3 @@ func TestShapeArabicPassthrough(t *testing.T) {
 		}
 	}
 }
-
-// TestShapeArabicNonJoiningLetters verifies letters that dont join on the
-
-// TestShapeArabicIdempotent verifies the gate requirement: shaping already-
-// shaped text (presentation forms) must not change it further. This prevents
-// double-shaping if the input was already processed.
