@@ -131,7 +131,9 @@ func TestS1aKillGroupNoOrphans(t *testing.T) {
 
 	// Sanity: at least 2 procs (parent + grandchild) must be visible,
 	// otherwise the counter is blind and a zero result means nothing.
-	if n := countProcsInGroup(pgid); n < 2 {
+	n := countProcsInGroup(pgid)
+	t.Logf("S1a: pgid=%d visible before kill=%d", pgid, n)
+	if n < 2 {
 		t.Fatalf("S1a ABORT: only %d procs visible in group %d before kill — counter blind", n, pgid)
 	}
 
