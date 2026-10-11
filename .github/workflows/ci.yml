@@ -106,8 +106,17 @@ jobs:
         if-no-files-found: warn
     - name: Exec.Cmd.Env static audit
       run: bash scripts/check-exec-env.sh
+    - name: Install ripgrep (required by check-security-invariants.sh)
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+    - name: Verify ripgrep availability
+      # RG_EXEC_COVERAGE_VACUOUS_PASS: check-security-invariants.sh fails
+      # closed without rg; this step makes the requirement explicit on the
+      # runner so a missing rg is never a silent surprise.
+      run: command -v rg && rg --version
     - name: Security invariants static audit
       run: bash scripts/check-security-invariants.sh
+    - name: Security invariants rg regression test
+      run: bash scripts/test-security-invariants-rg.sh
     - name: Git diff check
       run: git diff --check
     - name: Clean local clone verification
