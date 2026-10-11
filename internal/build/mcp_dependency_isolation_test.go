@@ -75,11 +75,40 @@ func TestMCPDependencyIsolation(t *testing.T) {
 			if dep == "" {
 				continue
 			}
+			// The core must never depend on internal/mcp, even though it is
+			// a nabd package: the dependency direction is strictly
+			// cmd/ag -> internal/mcp, and internal/tools defines the
+			// MCPBackend interface so it never imports the implementation.
+			if dep == "nabd/internal/mcp" {
+				t.Errorf("core package %s depends on nabd/internal/mcp (ADR-0003 §12); "+
+					"the dependency direction is cmd/ag -> internal/mcp only", pkg)
+				continue
+			}
 			if !allowedDep(dep) {
 				t.Errorf("core package %s leaks external dep %q (ADR-0003 §12); "+
 					"move it to internal/mcp or update the allowlist with architectural review",
 					pkg, dep)
 			}
+		}
+	}
+}
+
+// TestMCPStdlibOnly: internal/mcp itself must stay stdlib-only — no MCP SDK,
+// no network libraries, no external modules. The whole point of the package
+// is a hand-rolled, auditable JSON-RPC client (ADR-0003 §12).
+func TestMCPStdlibOnly(t *testing.T) {
+	out, err := exec.Command("go", "list", "-deps", "nabd/internal/mcp").Output()
+	if err != nil {
+		t.Fatalf("go list -deps nabd/internal/mcp: %v", err)
+	}
+	for _, dep := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		dep = strings.TrimSpace(dep)
+		if dep == "" {
+			continue
+		}
+		if !allowedDep(dep) {
+			t.Errorf("nabd/internal/mcp leaks external dep %q (ADR-0003 §12); "+
+				"internal/mcp must stay stdlib-only", dep)
 		}
 	}
 }

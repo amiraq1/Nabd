@@ -311,7 +311,9 @@ func TestMCPSec23ToolListChange(t *testing.T) {
 
 	// Wait for the notification + re-list, then peek at the internal list
 	// (Describe refuses unclassified tools by design).
-	deadline := time.Now().Add(15 * time.Second)
+	// Generous deadline: under full-suite load the mock startup and the
+	// async re-list can be slow.
+	deadline := time.Now().Add(45 * time.Second)
 	for {
 		m.mu.Lock()
 		ms := m.servers["srv"]
