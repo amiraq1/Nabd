@@ -90,6 +90,7 @@ type headlessConfig struct {
 	maxTurns int
 	mode     perm.Mode
 	sessDir  string
+	noMCP    bool
 	stdout   io.Writer
 	stderr   io.Writer
 	stdin    io.Reader
@@ -279,6 +280,15 @@ func runHeadlessErr(cfg headlessConfig) error {
 	pol := perm.New(reg)
 	wirePathRule(root, reg, pol)
 	pol.SetMode(cfg.mode)
+	g := &gate{p: pol}
+	mcpMgr, err := wireMCPForSession(cfg.noMCP, root.Dir(), reg, pol, g)
+	if err != nil {
+		journal.Close()
+		return err
+	}
+	if mcpMgr != nil {
+		defer mcpMgr.Close()
+	}
 
 	var sinks agent.Fanout
 	sinks = append(sinks, journal, noticeStderr{w: cfg.stderr})
@@ -289,7 +299,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 		})
 	}
 
-	loop := newSessionLoop(prov, reg, gate{pol}, silentAsker{})
+	loop := newSessionLoop(prov, reg, *g, silentAsker{})
 	promptSkills, promptDiag := skill.FormatForPrompt(allSkills)
 	for _, d := range promptDiag {
 		fmt.Fprintln(cfg.stderr, d.String())

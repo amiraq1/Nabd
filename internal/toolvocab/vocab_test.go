@@ -19,6 +19,7 @@ func TestClassifications(t *testing.T) {
 		{"skill", true, true},
 		{"glob", true, false},
 		{"grep", true, false},
+		{"mcp_tool", false, true},
 	}
 	if len(cases) != len(names) {
 		t.Fatalf("table has %d entries for %d vocabulary names; update the table", len(cases), len(names))

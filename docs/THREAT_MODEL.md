@@ -1,6 +1,6 @@
-# Threat model — v11
+# Threat model — v13
 
-Last reviewed: 2026-09-28
+Last reviewed: 2026-10-11
 
 This is the only place nabd states security claims. README points here.
 
@@ -370,7 +370,50 @@ The source file is opened read-only in both modes and is never modified.
 `--redact` requires `--export`, and `--export` is rejected together with any
 run mode. Diagnostics go to stderr; stdout is JSONL only.
 
+## MCP integration (Phase 0 implemented)
+
+The following rows describe the *designed* posture for MCP support per
+ADR-0003. Phase 0 is implemented and tested; rows for later phases remain design
+commitments with no test evidence. Nothing here is a GUARANTEED claim about
+shipped behavior beyond the rows whose evidence names an existing test.
+
+| Claim | Status | Evidence or residual |
+|---|---|---|
+| MCP settings load only from `~/.ag/mcp.json`; any MCP config inside the project root is refused regardless of filename | GUARANTEED | `TestLoadPinnedToDefaultPath`: Load reads only DefaultPath() (a valid config elsewhere is ignored); `TestMCPSec03RepoTreeRejected` and `TestMCPSec03SymlinkToRepoRejected`: path and root are symlink-resolved before comparison, so a symlinked dir cannot smuggle a config in. |
+| MCP config secrets are `${VAR}` references only; explicit secret values are rejected | GUARANTEED | `TestMCPSec02SecretRefs`: plaintext, embedded, empty, and malformed references are refused; values must be exactly `${VAR}`. |
+| MCP config env names cannot shadow spawner-controlled or loader-subverting variables | GUARANTEED | `TestMCPEnvReservedNames`: PATH, HOME, LD_*, DYLD_* are refused so config cannot bypass sanitizePath or the isolated HOME. |
+| MCP config documents respect size and count caps | GUARANTEED | `TestMCPSec16_20SizeLimits`: 256KiB file cap, 16 servers, 256 tools per server, 64 env entries, 64 args, 4096-byte arg cap. |
+| MCP client pins the negotiated protocol version | GUARANTEED | `TestMCPSec21ProtocolPin`: 2024-11-05/2025-11-25/2026-07-28 are accepted and returned as negotiated; newer versions (2027-01-01, 2026-07-29), unverified older versions (2025-06-18, 2025-03-26), and malformed versions are refused. `TestClientSendsRequestedVersion`: the initialize request carries protocolVersion 2026-07-28 (ADR-0003 v6). |
+| MCP client refuses server-initiated methods it does not implement | GUARANTEED | `TestMCPSec22CapabilityRefusal` and `TestMCPSec22CapabilityRefusalSampling`: server requests for roots/list and sampling/createMessage get JSON-RPC -32601 and no action. `TestClientPingReply`: ping is answered with an empty result. |
+| MCP server child processes run with a minimal env allowlist, never inheriting the full environment | GUARANTEED | `TestMCPLifecycleEnvIsolation`: the spawned server sees only PATH (sanitized), TERM, LANG, LC_*, NABD=1, an isolated 0700 HOME (never the real one, removed on Close), and declared `${VAR}` refs; an undeclared secret in the parent env does not reach the child. |
+| Repository-cloned MCP configs never start servers | GUARANTEED | Config loads from `~/.ag/mcp.json` only; in-tree configs are refused at load (`TestMCPSec03RepoTreeRejected`). Session wiring (Phase 5) never consults the repo. |
+| Tool permission classification comes from local user config only, never from server hints | GUARANTEED | `TestMCPSec05ReadOnlyHintIgnored`: a write-classified tool still prompts per call even when the server advertises readOnlyHint; the adapter's `MCPToolDesc` carries only the local classification and never reads server hints. |
+| Tool fingerprints (SHA-256 over JCS-canonical fields) invalidate approval on any change | GUARANTEED | `TestFingerprintToolChangeDetection`: description/schema/hint/server-id changes all change the fingerprint; `TestMCPSec06_07FingerprintInvalidation`: a changed fingerprint forces re-approval. Approval also binds the executable identity (path, argv, env names, binary SHA-256) — `TestMCPApprovalInvalidation`. |
+| MCP server processes are killed on timeout, session close, or disable, with no orphans | GUARANTEED | `TestMCPS1NoOrphans`: 3 rounds, server + `sleep` grandchild spawned, group confirmed alive, `Close` → whole group gone. `TestMCPS2OversizeKillsServer`: a >64MiB message fails the call closed and the watchdog kills the server. killGroup always runs before Wait (bash.go no-sweep-after-Wait rule). |
+| Journal records server/tool IDs, decisions, and sizes — never raw args or outputs by default | GUARANTEED | `TestMCPSec13JournalPrivacy`: HMAC-SHA256 binds args/outputs without storing them; the journal file contains no secret values. |
+| Core packages (`tools`, `perm`, `safefs`, `redact`, `toolvocab`, `agent`) carry no MCP SDK or network dependencies | GUARANTEED | `TestMCPDependencyIsolation` runs `go list -deps` per core package and fails on any non-allowlisted module (ADR-0003 §12). |
+| A single flag disables all of MCP | GUARANTEED | `TestMCPSec14NoMCPFlag` / `TestMCPSec14NoConfigNoRegistration`: `--no-mcp` loads no config, creates no manager, and never registers `mcp_tool`; with no config or no enabled servers nothing is registered either (lazy startup, `TestMCPSec15LazyStartup`). |
+| STDIO server processes are contained by the OS | NOT PROVIDED | No OS-level containment on Termux (Landlock unavailable to the app process). B7 preliminary decision (ADR-0003 §4.2): path 2 — run as user with explicit warning. Residual risk accepted pending named owner. |
+| MCP server file reads bypass local .gitignore non-disclosure | NOT PROVIDED | The .gitignore non-disclosure guarantee covers local tools only. An MCP server running as the user can read files the local tools would refuse. Designed: user must understand this before first approval (ADR-0003 §6.1). |
+| MCP tool outputs grant no read-credit and bypass readCap | NOT PROVIDED | Read-credit (NBD-034) and readCap accounting apply to local tools only. MCP outputs are untrusted content, not measured reads. Designed: stated explicitly so credit is never granted by accident (ADR-0003 P7). |
+| MCP server outputs cannot request, grant, or change permissions | GUARANTEED | `TestMCPSec09OutputInjection` (REDUCED): permission-granting injections stay UNTRUSTED and create no permission state. `TestMCPSec09bPoisonedDeny` (GUARANTEED): a Deny stays denied deterministically even against poisoned output. `TestMCPSec09cReclassNoEffect` (GUARANTEED): reclassification requests in output are ignored — classification comes from local config only. |
+| Interrupted or failed MCP writes are never re-executed | GUARANTEED | `TestMCPSec10NoRetryOnWrite`: `tools/call` is invoked exactly once; failures and cancellations propagate without retry (effect-duplication hazard). |
+| YOLO never auto-approves MCP tools | GUARANTEED | Structural: `MCPCheckCall` never returns Allow for write/execute — the verdict matrix asks on every such call regardless of YOLO (`TestMCPCheckCallYOLOExempt`); `perm.Policy.SetYOLOExempt("mcp_tool")` is the policy-level backstop (`TestYOLODoesNotApproveMCPWrite`). No session grants in v1 (`TestMCPNoSessionGrant`); headless denies via the silent asker (`TestMCPHeadless`). |
+| One server approval opens all its ReadOnly tools indefinitely | NOT PROVIDED | Unlike `bash` (which never gets even a session grant), a single MCP server approval opens every ReadOnly tool until fingerprint change. This is a deliberate but significant trust difference, stated here as a residual risk (ADR-0003 §8.2). |
+| Saved approval scope, revocation, and new-tool discovery | NOT PROVIDED | Approval scope is implemented and bound: server-id + tool + JCS fingerprint (over the raw advertised object, all fields — `TestFingerprintUnknownField`) + executable identity (path, argv, env names, binary SHA-256), stored 0600 under `~/.ag/mcp/` with symlink/owner/permission hardening and atomic writes (`TestApprovalStoreSymlinkRefused`). New tools arriving via `notifications/tools_list_changed` are re-listed and start unclassified = refused (`TestMCPSec23ToolListChange`). Still missing: a revocation UI. Write/Execute always require per-execution approval, even under YOLO, and are refused headless. |
+| Unclassified MCP tools are refused before any prompt | GUARANTEED | `TestMCPSec04UnclassifiedDenied`: `Describe` fails for unknown/unclassified tools, the adapter refuses without prompting and never reaches the server. |
+| The reserved adapter name `mcp_tool` cannot address a server tool | GUARANTEED | `TestMCPSec08NameShadowing`: a server tool named `mcp_tool` is refused at the adapter boundary and by the manager's `Describe` (defense in depth). |
+| A hung MCP call times out, kills the server, and re-handshakes on next use | GUARANTEED | `TestMCPSec11_12TimeoutOrphan`: a call exceeding the timeout is cancelled, the server is killed after a 5s grace (no orphan — the old PID is gone), and the next call re-spawns with a full initialize + tools/list + fingerprint check. `tools/call` is never retried. |
+| Parallel MCP calls are capped per server; excess is refused immediately | GUARANTEED | `TestMCPSec24ParallelCap`: beyond `max_parallel_calls` the call is refused at once, never queued (no freeze). |
+| MCP approvals travel the normal permission path | GUARANTEED | The loop's `CallAwareGate` consults `MCPCheckCall` per call, so every approval emits the standard `PermAsk` (modal) / `PermReply` (journal) events; the first-approval content is built locally with no server free text. The adapter's `GuardedResult` is verify-only and fails closed without a recorded approval (`TestMCPAdapterUnapprovedRefused`). |
+| MCP server stderr is sanitized before diagnostics | GUARANTEED | `TestStderrSanitized`: ANSI escapes and control characters are stripped from `StderrTail()` — server stderr is untrusted and never reaches the UI or logs raw. |
+| MCP approval/journal files resist symlink and permission attacks | GUARANTEED | `TestApprovalStoreSymlinkRefused` / `TestJournalSymlinkRefused`: O_NOFOLLOW opens, owner and 0600-or-stricter checks, atomic writes; a symlinked store is refused on read and safely replaced on write. |
+| Absent independent security review | NOT PROVIDED | No second human reviewer exists; review is non-independent (author = owner = acceptance owner). No production release before naming a reviewer or renewing risk acceptance. Recorded in ADR-0003 (single-operator mode, 2026-10-10). |
+
+
+
 ## Operator guidance
+
 
 1. Prefer secure credential files over shell startup exports.
 2. Run nabd as a dedicated OS user on shared systems.

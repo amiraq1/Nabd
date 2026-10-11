@@ -4,7 +4,7 @@
 package toolvocab
 
 // names is immutable by API: callers only receive copies through Names.
-var names = [...]string{"read_file", "write_file", "edit_file", "bash", "skill", "glob", "grep"}
+var names = [...]string{"read_file", "write_file", "edit_file", "bash", "skill", "glob", "grep", "mcp_tool"}
 
 // Names returns a copy of the complete tool vocabulary compiled into the
 // binary. It is deliberately independent of the tools active in one session.
@@ -39,7 +39,7 @@ func IsReadOnly(name string) bool {
 // unknown names are not guarded.
 func Guarded(name string) bool {
 	switch name {
-	case "skill":
+	case "skill", "mcp_tool":
 		return true
 	default:
 		return false

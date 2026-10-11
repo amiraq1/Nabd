@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Mock MCP server for internal/mcp Phase 1 client tests.
+
+Speaks newline-delimited JSON-RPC 2.0 over stdio. Validates the client handshake
+(init protocolVersion, notifications/initialized ordering) and, when asked,
+acts as an adversarial peer: it sends server->client requests and reports what
+the client did back through notifications plus its exit status.
+"""
+import argparse
+import json
+import os
+import subprocess
+import sys
+import threading
+import time
+
+
+def send(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def notify(method):
+    send({"jsonrpc": "2.0", "method": method})
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--protocol-version", default="2024-11-05")
+    ap.add_argument("--check-init-version", default="2026-07-28")
+    ap.add_argument("--tools", type=int, default=2)
+    ap.add_argument("--server-request", default=None,
+                    help="server->client request method to send, e.g. roots/list")
+    ap.add_argument("--server-ping", action="store_true")
+    ap.add_argument("--spawn-sleeper", action="store_true",
+                    help="spawn a sleep 300 grandchild (S1 orphan test)")
+    ap.add_argument("--oversize-message", action="store_true",
+                    help="send a >64MiB message after init (S2 test)")
+    ap.add_argument("--stderr-spam", action="store_true",
+                    help="write >64KiB to stderr ending with a marker")
+    ap.add_argument("--slow-call", type=float, default=0,
+                    help="delay seconds before tools/call response")
+    ap.add_argument("--list-changed-after", type=float, default=0,
+                    help="send notifications/tools_list_changed after N seconds")
+    ap.add_argument("--pid-file", default=None,
+                    help="write our pid to this file at startup")
+    args = ap.parse_args()
+
+    if args.pid_file:
+        open(args.pid_file, "w").write(str(os.getpid()))
+
+    if args.spawn_sleeper:
+        # Joins our process group (no setsid): the S1 test verifies the
+        # client's killGroup reaps it along with us.
+        subprocess.Popen(["sleep", "300"])
+    if args.stderr_spam:
+        def spam():
+            chunk = "E" * 8192 + "\n"
+            for _ in range(13):  # ~104KiB, over the 64KiB ring
+                try:
+                    sys.stderr.write(chunk)
+                except BrokenPipeError:
+                    return
+            try:
+                sys.stderr.write("STDERR-END\n")
+                sys.stderr.flush()
+            except BrokenPipeError:
+                pass
+        threading.Thread(target=spam, daemon=True).start()
+
+    state = {"initialized": False}
+
+    def handle(line):
+        try:
+            msg = json.loads(line)
+        except Exception:
+            return
+        method = msg.get("method")
+        mid = msg.get("id")
+        params = msg.get("params") or {}
+        if method == "initialize":
+            if params.get("protocolVersion") != args.check_init_version:
+                sys.stderr.write("bad init protocolVersion: %r\n" % (params.get("protocolVersion"),))
+                sys.stderr.flush()
+                sys.exit(3)
+            send({"jsonrpc": "2.0", "id": mid,
+                  "result": {"protocolVersion": args.protocol_version,
+                             "capabilities": {"tools": {}},
+                             "serverInfo": {"name": "mock", "version": "0.1"}}})
+        elif method == "notifications/initialized":
+            state["initialized"] = True
+        elif method == "tools/list":
+            if not state["initialized"]:
+                sys.stderr.write("tools/list before notifications/initialized\n")
+                sys.stderr.flush()
+                sys.exit(4)
+            if args.oversize_message:
+                # 65 MiB single line BEFORE the response: the client must fail
+                # closed on it and the lifecycle watchdog must kill us (S2).
+                try:
+                    sys.stdout.write("x" * (65 * 1024 * 1024) + "\n")
+                    sys.stdout.flush()
+                except BrokenPipeError:
+                    pass
+            tools = [{"name": "tool_%d" % i,
+                      "description": "mock tool %d" % i,
+                      "inputSchema": {"type": "object"}} for i in range(args.tools)]
+            if state.get("list_changed"):
+                tools.append({"name": "tool_new",
+                              "description": "appeared after list change",
+                              "inputSchema": {"type": "object"}})
+            send({"jsonrpc": "2.0", "id": mid, "result": {"tools": tools}})
+        elif method == "tools/call":
+            if args.slow_call > 0:
+                time.sleep(args.slow_call)
+            name = params.get("name", "")
+            if name == "__dump_env":
+                send({"jsonrpc": "2.0", "id": mid,
+                      "result": {"content": [{"type": "text",
+                                             "text": json.dumps(dict(os.environ))}]}})
+            else:
+                send({"jsonrpc": "2.0", "id": mid,
+                      "result": {"content": [{"type": "text", "text": "called:" + name}]}})
+        elif method == "ping":
+            send({"jsonrpc": "2.0", "id": mid, "result": {}})
+        elif method == "notifications/cancelled":
+            pass
+        elif "id" in msg and ("result" in msg or "error" in msg):
+            # Response to our server-initiated request: validate immediately
+            # and report back through a notification the test can observe.
+            if mid == 9001:
+                if "error" not in msg and msg.get("result") == {}:
+                    notify("test/ping-validated")
+                else:
+                    notify("test/ping-rejected")
+            elif mid == 9002:
+                err = msg.get("error") or {}
+                if err.get("code") == -32601:
+                    notify("test/refusal-validated")
+                else:
+                    notify("test/refusal-rejected")
+
+    def harass():
+        for _ in range(100):
+            if state["initialized"]:
+                break
+            time.sleep(0.1)
+        else:
+            # Handshake never completed (e.g. the client refused the version).
+            # Return quietly; the Go test asserts the handshake outcome itself
+            # and EOF on stdin ends the process.
+            return
+        time.sleep(0.2)
+        if args.list_changed_after > 0:
+            time.sleep(args.list_changed_after)
+            notify("notifications/tools_list_changed")
+            state["list_changed"] = True
+        if args.server_ping:
+            send({"jsonrpc": "2.0", "id": 9001, "method": "ping"})
+        if args.server_request:
+            send({"jsonrpc": "2.0", "id": 9002, "method": args.server_request,
+                  "params": {}})
+
+    threading.Thread(target=harass, daemon=True).start()
+    try:
+        for line in sys.stdin:
+            line = line.strip()
+            if line:
+                handle(line)
+    except BrokenPipeError:
+        pass
+    sys.exit(0)
+
+
+main()

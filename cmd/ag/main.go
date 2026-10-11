@@ -106,6 +106,7 @@ func main() {
 	permModeFlag := flag.String("permission-mode", "", "ask|deny|allow-reads|plan (interactive and headless; empty = path default)")
 	exportPath := flag.String("export", "", "export a session journal as JSONL to stdout and exit")
 	exportRedact := flag.Bool("redact", false, "with --export: redact recognized credential patterns")
+	noMCP := flag.Bool("no-mcp", false, "disable all MCP servers: no config is loaded, mcp_tool is not registered, no server starts")
 	flag.Parse()
 
 	provided := map[string]bool{}
@@ -151,6 +152,7 @@ func main() {
 			maxTurns: *maxTurns,
 			mode:     headlessMode,
 			sessDir:  *sessDir,
+			noMCP:    *noMCP,
 		}))
 	}
 
@@ -167,12 +169,12 @@ func main() {
 				"(Esc browse, Up/Down, Enter expand) works without it. " +
 				"Set NABD_FORCE_TOUCH=1 to override"))
 		}
-		if err := doChatWithFeed(interactiveMode, *sessDir, *cont, *feedTouch); err != nil {
+		if err := doChatWithFeed(interactiveMode, *sessDir, *cont, *feedTouch, *noMCP); err != nil {
 			die(err)
 		}
 		return
 	}
-	if err := doChat(interactiveMode, *sessDir, *cont); err != nil {
+	if err := doChat(interactiveMode, *sessDir, *cont, *noMCP); err != nil {
 		die(err)
 	}
 }
@@ -192,7 +194,7 @@ func doReplay(path string, speed float64) error {
 	return err
 }
 
-func doChat(mode perm.Mode, dir string, cont bool) error {
+func doChat(mode perm.Mode, dir string, cont bool, noMCP bool) error {
 	prov, err := pickProvider()
 	if err != nil {
 		return err
@@ -201,7 +203,7 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 	// cover custom providers whose key format matches no known shape.
 	exactKeys := provider.ExactKeys(prov)
 
-	sess, err := newInteractiveSession(prov)
+	sess, err := newInteractiveSession(prov, noMCP)
 	if err != nil {
 		return err
 	}
@@ -291,7 +293,7 @@ func touchAllowed(termuxVersion, force string) bool {
 	return true
 }
 
-func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error {
+func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool, noMCP bool) error {
 	ui.SetLimitNotice(limitNoticeArabic)
 	ui.SetCopyNotices(copySuccessArabic, copyUnavailableArabic, copyBlockedArabic)
 
@@ -303,7 +305,7 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 	// cover custom providers whose key format matches no known shape.
 	exactKeys := provider.ExactKeys(prov)
 
-	sess, err := newInteractiveSession(prov)
+	sess, err := newInteractiveSession(prov, noMCP)
 	if err != nil {
 		return err
 	}
@@ -747,7 +749,10 @@ func pickRouterProvider() (provider.Provider, error) {
 	return router.WithRetryAfterWait(time.Duration(retryWaitSec) * time.Second), nil
 }
 
-type gate struct{ p *perm.Policy }
+type gate struct {
+	p   *perm.Policy
+	mcp tools.MCPBackend // nil when MCP is disabled; enables the CallAwareGate path
+}
 
 func (g gate) Check(tool string) (agent.Verdict, string) {
 	v, why := g.p.Check(tool)

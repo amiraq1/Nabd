@@ -42,6 +42,21 @@ type SessionGrantPolicy interface {
 	SessionGrantAllowed(tool string) bool
 }
 
+// CallAwareGate is an optional gate extension for tools whose permission
+// verdict depends on the call arguments, not just the tool name
+// (MCP-SEC-09: one adapter name fronts many server tools with different
+// local classifications). When the gate implements it, decide consults
+// CheckCall for the calls HandlesCall accepts and keeps the name-based
+// Check for everything else. RecordCall runs after a handled call is
+// allowed, so per-call grants (e.g. an MCP first-approval) are persisted
+// exactly once per decision. Implementations must not block on the loop;
+// decide is sequential, so no extra synchronization is required.
+type CallAwareGate interface {
+	HandlesCall(c event.ToolCall) bool
+	CheckCall(c event.ToolCall) (Verdict, event.PermissionReason, string)
+	RecordCall(c event.ToolCall, d event.Decision)
+}
+
 // Asker is the human, reached through the UI. It must return on ctx death.
 type Asker interface {
 	Ask(ctx context.Context, call event.ToolCall) event.Decision
@@ -56,9 +71,21 @@ func (l *Loop) decide(ctx context.Context, c event.ToolCall, emit func(event.Eve
 	if l.Gate == nil {
 		return event.Deny, "no permission gate installed"
 	}
+	// Per-call verdicts for argument-addressed tools (MCP). The PermAsk /
+	// PermReply journaling and the human prompt below are shared with the
+	// name-based path; only the verdict source and the post-allow recording
+	// differ.
+	var cg CallAwareGate
 	v, reason, why := checkPermission(l.Gate, c.Name)
+	if tmp, ok := l.Gate.(CallAwareGate); ok && tmp.HandlesCall(c) {
+		cg = tmp
+		v, reason, why = cg.CheckCall(c)
+	}
 	switch v {
 	case VerdictAllow:
+		if cg != nil {
+			cg.RecordCall(c, event.AllowOnce)
+		}
 		return event.AllowOnce, ""
 	case VerdictDeny:
 		if why == "" {
@@ -96,6 +123,9 @@ func (l *Loop) decide(ctx context.Context, c event.ToolCall, emit func(event.Eve
 	}
 	if effective == event.AllowSession {
 		l.Gate.Record(c.Name, effective)
+	}
+	if cg != nil && effective == event.AllowOnce {
+		cg.RecordCall(c, effective)
 	}
 	return effective, ""
 }
