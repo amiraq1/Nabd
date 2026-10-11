@@ -276,3 +276,53 @@ func TestSecurityGates(t *testing.T) {
 		}
 	})
 }
+
+func TestThreatModelFreshnessGateCoversDisplay(t *testing.T) {
+	freshnessScript, _ := gateScripts(t)
+	repoDir, base := initTestRepo(t)
+
+	// Step 1 (negative case): A change under internal/display/ without a THREAT_MODEL change must fail the freshness gate (exit 1).
+	runGit(t, repoDir, "checkout", "-B", "branch-display-gap", base)
+	fullPath := filepath.Join(repoDir, "internal", "display", "sanitize.go")
+	if err := os.MkdirAll(filepath.Dir(fullPath), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(fullPath, []byte("package display\n// security boundary display modification\n"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	runGit(t, repoDir, "add", ".")
+	runGit(t, repoDir, "commit", "-qm", "modify internal/display/sanitize.go")
+
+	code, _, stderr := runCmd(t, repoDir, nil, "bash", freshnessScript, base)
+	t.Logf("Step 1 (negative case - internal/display/ changed without THREAT_MODEL): exit code = %d", code)
+	if code != 1 {
+		t.Fatalf("expected exit 1 from freshness gate when internal/display/ changes without THREAT_MODEL update, got %d; stderr: %s", code, stderr)
+	}
+	if !strings.Contains(stderr, "security-relevant files changed without docs/THREAT_MODEL.md update:") {
+		t.Errorf("expected threat model warning in stderr, got: %s", stderr)
+	}
+	if !strings.Contains(stderr, "internal/display/sanitize.go") {
+		t.Errorf("expected stderr to mention changed display file, got: %s", stderr)
+	}
+
+	// Step 2 (positive case): When docs/THREAT_MODEL.md is updated alongside internal/display/, the gate passes (exit 0).
+	tmPath := filepath.Join(repoDir, "docs", "THREAT_MODEL.md")
+	f, err := os.OpenFile(tmPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatalf("open THREAT_MODEL.md: %v", err)
+	}
+	if _, err := f.WriteString("\n| A change under internal/display/ without a THREAT_MODEL change fails the freshness gate | GUARANTEED | `TestThreatModelFreshnessGateCoversDisplay` |\n"); err != nil {
+		f.Close()
+		t.Fatalf("append THREAT_MODEL.md: %v", err)
+	}
+	f.Close()
+
+	runGit(t, repoDir, "add", ".")
+	runGit(t, repoDir, "commit", "-qm", "docs: update THREAT_MODEL.md for internal/display contract")
+
+	code, _, stderr = runCmd(t, repoDir, nil, "bash", freshnessScript, base)
+	t.Logf("Step 2 (positive case - THREAT_MODEL updated): exit code = %d", code)
+	if code != 0 {
+		t.Fatalf("expected exit 0 from freshness gate when THREAT_MODEL is updated, got %d; stderr: %s", code, stderr)
+	}
+}

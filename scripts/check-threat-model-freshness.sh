@@ -15,6 +15,7 @@ git cat-file -e "$base^{commit}"
 security_files=(
   internal/agent/fence.go
   internal/config/
+  internal/display/
   internal/mcp/
   internal/perm/
   internal/pathindex/
