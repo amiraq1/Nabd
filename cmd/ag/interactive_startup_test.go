@@ -56,25 +56,25 @@ func TestRemovedBashKeysFailClosedInteractiveStartup(t *testing.T) {
 			wantSub := fmt.Sprintf("%s=%s is no longer supported: this Termux build has no bash sandbox. Remove the setting to continue", tc.key, tc.val)
 
 			// Feed default
-			errFeed := doChatWithFeed(perm.ModeAsk, dir, false, false)
+			errFeed := doChatWithFeed(perm.ModeAsk, dir, false, false, true)
 			if errFeed == nil || !strings.Contains(errFeed.Error(), wantSub) {
 				t.Fatalf("doChatWithFeed() err = %v, want substring %q", errFeed, wantSub)
 			}
 
 			// Feed continue
-			errFeedCont := doChatWithFeed(perm.ModeAsk, dir, true, false)
+			errFeedCont := doChatWithFeed(perm.ModeAsk, dir, true, false, true)
 			if errFeedCont == nil || !strings.Contains(errFeedCont.Error(), wantSub) {
 				t.Fatalf("doChatWithFeed(--continue) err = %v, want substring %q", errFeedCont, wantSub)
 			}
 
 			// Chat default
-			errChat := doChat(perm.ModeAsk, dir, false)
+			errChat := doChat(perm.ModeAsk, dir, false, true)
 			if errChat == nil || !strings.Contains(errChat.Error(), wantSub) {
 				t.Fatalf("doChat() err = %v, want substring %q", errChat, wantSub)
 			}
 
 			// Chat continue
-			errChatCont := doChat(perm.ModeAsk, dir, true)
+			errChatCont := doChat(perm.ModeAsk, dir, true, true)
 			if errChatCont == nil || !strings.Contains(errChatCont.Error(), wantSub) {
 				t.Fatalf("doChat(--continue) err = %v, want substring %q", errChatCont, wantSub)
 			}

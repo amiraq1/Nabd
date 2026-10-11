@@ -79,11 +79,27 @@ type InitializeResult struct {
 	ServerInfo      json.RawMessage `json:"serverInfo,omitempty"`
 }
 
-// Tool is a single tool advertised by tools/list.
+// Tool is a single tool advertised by tools/list. Raw preserves the exact
+// bytes the server sent, so the fingerprint covers every advertised field —
+// including ones this client does not model (MCP-SEC-06/07). It is excluded
+// from marshaling; use Raw, not json.Marshal(t), for fingerprinting.
 type Tool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	Raw         json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON decodes the modeled fields and retains the original bytes.
+func (t *Tool) UnmarshalJSON(data []byte) error {
+	type toolWire Tool
+	var w toolWire
+	if err := json.Unmarshal(data, &w); err != nil {
+		return err
+	}
+	*t = Tool(w)
+	t.Raw = append(json.RawMessage(nil), data...)
+	return nil
 }
 
 // ContentItem is one content block of a tools/call result.

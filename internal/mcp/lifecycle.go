@@ -313,8 +313,40 @@ func (s *Server) PGID() int { return s.pgid }
 func (s *Server) ExecPath() string { return s.execPath }
 
 // StderrTail returns the last stderrRingSize bytes of server stderr,
-// for failure diagnostics only.
-func (s *Server) StderrTail() string { return s.stderr.String() }
+// for failure diagnostics only. The output is sanitized: server stderr is
+// untrusted, so ANSI escape sequences and control characters are stripped
+// before it can reach the UI or a log (terminal-injection hardening).
+// The raw bytes stay in the ring; only this accessor sanitizes.
+func (s *Server) StderrTail() string { return sanitizeStderr(s.stderr.String()) }
+
+// sanitizeStderr strips ANSI escape sequences and control characters from
+// untrusted server stderr, keeping printable text, newlines and tabs.
+func sanitizeStderr(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	inEsc := false
+	for _, r := range s {
+		if inEsc {
+			// ANSI CSI: ESC [ ... final byte (@-~). Also handle single-char
+			// escapes like ESC c. End the escape at the first final byte.
+			if (r >= '@' && r <= '~') || r == '\x1b' {
+				inEsc = false
+			}
+			continue
+		}
+		switch {
+		case r == '\x1b':
+			inEsc = true
+		case r == '\n' || r == '\t' || r == '\r':
+			b.WriteRune(r)
+		case r < 0x20 || r == 0x7f:
+			// drop other control characters
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
 
 // Close shuts the server down: polite stdin EOF, then the whole process
 // group is signalled BEFORE Wait reaps the leader (bash.go "no sweep after

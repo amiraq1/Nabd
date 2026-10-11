@@ -38,7 +38,16 @@ def main():
                     help="send a >64MiB message after init (S2 test)")
     ap.add_argument("--stderr-spam", action="store_true",
                     help="write >64KiB to stderr ending with a marker")
+    ap.add_argument("--slow-call", type=float, default=0,
+                    help="delay seconds before tools/call response")
+    ap.add_argument("--list-changed-after", type=float, default=0,
+                    help="send notifications/tools_list_changed after N seconds")
+    ap.add_argument("--pid-file", default=None,
+                    help="write our pid to this file at startup")
     args = ap.parse_args()
+
+    if args.pid_file:
+        open(args.pid_file, "w").write(str(os.getpid()))
 
     if args.spawn_sleeper:
         # Joins our process group (no setsid): the S1 test verifies the
@@ -96,8 +105,14 @@ def main():
             tools = [{"name": "tool_%d" % i,
                       "description": "mock tool %d" % i,
                       "inputSchema": {"type": "object"}} for i in range(args.tools)]
+            if state.get("list_changed"):
+                tools.append({"name": "tool_new",
+                              "description": "appeared after list change",
+                              "inputSchema": {"type": "object"}})
             send({"jsonrpc": "2.0", "id": mid, "result": {"tools": tools}})
         elif method == "tools/call":
+            if args.slow_call > 0:
+                time.sleep(args.slow_call)
             name = params.get("name", "")
             if name == "__dump_env":
                 send({"jsonrpc": "2.0", "id": mid,
@@ -136,6 +151,10 @@ def main():
             # and EOF on stdin ends the process.
             return
         time.sleep(0.2)
+        if args.list_changed_after > 0:
+            time.sleep(args.list_changed_after)
+            notify("notifications/tools_list_changed")
+            state["list_changed"] = True
         if args.server_ping:
             send({"jsonrpc": "2.0", "id": 9001, "method": "ping"})
         if args.server_request:

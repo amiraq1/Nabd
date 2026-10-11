@@ -139,3 +139,64 @@ func TestComputeExecIdentity(t *testing.T) {
 		t.Fatal("expected error for missing executable")
 	}
 }
+
+// TestApprovalStoreSymlinkRefused: the approval store refuses symlinks
+// (fail-closed) — a symlinked store could redirect approvals elsewhere.
+func TestApprovalStoreSymlinkRefused(t *testing.T) {
+	skipOnWindows(t)
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.json")
+	if err := os.WriteFile(real, []byte(`{"approvals":{}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link.json")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenStore(link); err == nil {
+		t.Fatal("symlinked approval store must be refused")
+	}
+
+	// Writes are safe by construction: rename(2) over a symlink replaces the
+	// link itself, never the target. Verify the link was replaced and the
+	// target untouched.
+	s, err := OpenStore(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.path = link // simulate a symlinked path
+	if err := s.Record(Approval{Server: "s", Tool: "t", Fingerprint: "fp"}); err != nil {
+		t.Fatalf("write over symlink: %v", err)
+	}
+	fi, err := os.Lstat(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("symlink must have been replaced by a regular file")
+	}
+	if raw, _ := os.ReadFile(real); string(raw) != `{"approvals":{}}` {
+		t.Fatalf("target file must be untouched, got %q", raw)
+	}
+}
+
+// TestJournalSymlinkRefused: the journal append refuses symlinks.
+func TestJournalSymlinkRefused(t *testing.T) {
+	skipOnWindows(t)
+	dir := t.TempDir()
+	real := filepath.Join(dir, "real.jsonl")
+	link := filepath.Join(dir, "link.jsonl")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	j, err := OpenJournal(link, filepath.Join(dir, "k"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j == nil {
+		t.Skip("journal disabled")
+	}
+	if err := j.Append(JournalEvent{Kind: "test"}); err == nil {
+		t.Fatal("symlinked journal append must be refused")
+	}
+}

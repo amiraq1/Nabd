@@ -316,3 +316,20 @@ func TestMCPLifecycleStderrRing(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 }
+
+// TestStderrSanitized: server stderr is untrusted — ANSI escapes and control
+// characters are stripped before diagnostics can reach the UI or a log.
+func TestStderrSanitized(t *testing.T) {
+	in := "ok line\n\x1b[31mred\x1b[0m\n\x1b]0;title\x07bell\x00null\x1b[2Jclear\ntab\there\r\n"
+	out := sanitizeStderr(in)
+	for _, bad := range []string{"\x1b", "\x00", "\x07"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("sanitized stderr still contains %q: %q", bad, out)
+		}
+	}
+	for _, want := range []string{"ok line", "red", "tab\there"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("sanitized stderr dropped printable text %q: %q", want, out)
+		}
+	}
+}

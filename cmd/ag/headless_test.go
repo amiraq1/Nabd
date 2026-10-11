@@ -390,7 +390,7 @@ func TestHeadlessYOLOBashDoesNotHang(t *testing.T) {
 		{call: &provider.ToolCall{ID: "b1", Name: "bash", Input: []byte(`{"cmd":"echo hi"}`)}},
 		{text: "done"},
 	}}
-	loop := newSessionLoop(prov, reg, gate{pol}, silentAsker{})
+	loop := newSessionLoop(prov, reg, gate{p: pol}, silentAsker{})
 
 	var events []event.Event
 	loop.Sink = yoloSink(func(e event.Event) error {

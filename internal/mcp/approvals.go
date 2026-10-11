@@ -69,11 +69,16 @@ type Store struct {
 	approvals map[string]Approval
 }
 
+// maxApprovalsBytes caps the approval store read: a corrupt or hostile file
+// cannot exhaust memory.
+const maxApprovalsBytes int64 = 1 * 1024 * 1024
+
 // OpenStore loads the approval store, or starts empty if absent.
-// A corrupt file fails closed (it is never silently ignored).
+// A corrupt file fails closed (it is never silently ignored). The read is
+// symlink/owner/permission-hardened like the config loader.
 func OpenStore(path string) (*Store, error) {
 	s := &Store{path: path, approvals: map[string]Approval{}}
-	raw, err := os.ReadFile(path)
+	raw, err := readSecureFile(path, maxApprovalsBytes)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return s, nil
@@ -152,10 +157,6 @@ func (s *Store) Record(a Approval) error {
 	if err != nil {
 		return err
 	}
-	if dir := filepath.Dir(s.path); dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
-	}
-	return os.WriteFile(s.path, data, 0o600)
+	// Atomic, symlink-hardened, 0600 write.
+	return writeSecureFile(s.path, data)
 }

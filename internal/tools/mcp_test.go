@@ -5,9 +5,14 @@ package tools
 //   MCP-SEC-05  TestMCPSec05ReadOnlyHintIgnored
 //   MCP-SEC-06/07 TestMCPSec06_07FingerprintInvalidation
 //   MCP-SEC-08  TestMCPSec08NameShadowing
-// (extra)       TestMCPAdapterReadOnly, TestMCPAdapterWritePrompts,
-//               TestMCPAdapterRunRefused, TestMCPAdapterModePlan,
-//               TestMCPToolRegistered
+// (extra)       TestMCPCheckCallMatrix, TestMCPCheckCallYOLOExempt,
+//               TestMCPAdapterReadOnly, TestMCPAdapterUnapprovedRefused,
+//               TestMCPAdapterRunRefused, TestMCPRecordCallIdempotent,
+//               TestMCPRecordCallDenyNoApprove, TestMCPToolRegistered
+//
+// Permission is decided by MCPCheckCall through the loop's normal
+// PermAsk/PermReply path (CallAwareGate); the adapter's GuardedResult is
+// verify-only and fails closed without a recorded first-approval.
 
 import (
 	"context"
@@ -78,23 +83,16 @@ func (f *fakeMCPBackend) Call(ctx context.Context, server, tool string, args jso
 	return f.callOut, f.callIsErr, f.callErr
 }
 
-type fakeAsker struct {
-	calls    int
-	decision event.Decision
-	lastCall event.ToolCall
+func testMCPTool(be *fakeMCPBackend) mcpTool {
+	return mcpTool{backend: be}
 }
 
-func (f *fakeAsker) ask(ctx context.Context, call event.ToolCall) event.Decision {
-	f.calls++
-	f.lastCall = call
-	return f.decision
-}
-
-func testMCPTool(be *fakeMCPBackend, asker *fakeAsker, mode perm.Mode) mcpTool {
-	return mcpTool{
-		backend: be,
-		asker:   asker.ask,
-		mode:    func() perm.Mode { return mode },
+// mcpCall builds the loop-level ToolCall the gate sees.
+func mcpCall(server, tool string) event.ToolCall {
+	return event.ToolCall{
+		ID:   "call-1",
+		Name: "mcp_tool",
+		Args: json.RawMessage(`{"server":"` + server + `","tool":"` + tool + `","args":{"q":1}}`),
 	}
 }
 
@@ -102,87 +100,89 @@ func mcpArgs(server, tool string) json.RawMessage {
 	return json.RawMessage(`{"server":"` + server + `","tool":"` + tool + `","args":{"q":1}}`)
 }
 
+func checkCall(t *testing.T, mode perm.Mode, be *fakeMCPBackend, server, tool string) (agent.Verdict, event.PermissionReason, string) {
+	t.Helper()
+	return MCPCheckCall(mode, be, mcpCall(server, tool))
+}
+
 // TestMCPSec04UnclassifiedDenied: a tool with no local classification is
-// refused before any prompt and never reaches the server.
+// denied at the gate before any prompt and never reaches the server.
 func TestMCPSec04UnclassifiedDenied(t *testing.T) {
 	be := newFakeMCPBackend() // no tools configured
-	asker := &fakeAsker{decision: event.AllowOnce}
-	tool := testMCPTool(be, asker, perm.ModeAsk)
 
-	_, err := tool.GuardedResult(context.Background(), mcpArgs("srv", "nope"))
-	if err == nil || !strings.Contains(err.Error(), "unclassified") {
-		t.Fatalf("expected unclassified refusal, got %v", err)
-	}
-	if asker.calls != 0 {
-		t.Fatal("no prompt should precede the refusal")
+	v, _, _ := checkCall(t, perm.ModeAsk, be, "srv", "nope")
+	if v != agent.VerdictDeny {
+		t.Fatalf("unclassified tool must be denied at the gate, got %v", v)
 	}
 	if be.callN != 0 {
 		t.Fatal("server must not be reached")
 	}
+
+	// And the adapter fails closed too, even if the gate were bypassed.
+	tool := testMCPTool(be)
+	if _, err := tool.GuardedResult(context.Background(), mcpArgs("srv", "nope")); err == nil {
+		t.Fatal("adapter must refuse unclassified tool")
+	}
 }
 
 // TestMCPSec05ReadOnlyHintIgnored: server hints never lower the local
-// classification — a write-classified tool still prompts per call even when
-// the server advertises readOnlyHint.
+// classification — a write-classified tool still asks per call, in every
+// mode, even when the server advertises readOnlyHint.
 func TestMCPSec05ReadOnlyHintIgnored(t *testing.T) {
 	be := newFakeMCPBackend()
 	be.add(MCPToolDesc{Server: "srv", Name: "t", Classification: "write", Fingerprint: "fp1"})
-	asker := &fakeAsker{decision: event.AllowOnce}
-	tool := testMCPTool(be, asker, perm.ModeAsk)
-	be.callOut = "ok"
-
-	if _, err := tool.GuardedResult(context.Background(), mcpArgs("srv", "t")); err != nil {
-		t.Fatalf("first approved call: %v", err)
-	}
-	// First approval + per-call approval for write.
-	if asker.calls != 2 {
-		t.Fatalf("write tool needs first + per-call approval, asker called %d times", asker.calls)
+	// First approval recorded (as the loop would after an AllowOnce).
+	MCPRecordCall(be, mcpCall("srv", "t"), event.AllowOnce)
+	if be.approveN != 1 {
+		t.Fatal("first approval must be recorded")
 	}
 
-	// Second call: still prompts (per-call), hints cannot silence it.
-	asker.calls = 0
-	if _, err := tool.GuardedResult(context.Background(), mcpArgs("srv", "t")); err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if asker.calls != 1 {
-		t.Fatalf("write tool must prompt on every call, asker called %d times", asker.calls)
+	for _, mode := range []perm.Mode{perm.ModeAsk, perm.ModeDeny, perm.ModeAllowReads, perm.ModePlan} {
+		v, _, _ := checkCall(t, mode, be, "srv", "t")
+		if mode == perm.ModeAsk {
+			if v != agent.VerdictAsk {
+				t.Fatalf("mode %v: write tool must ask per call, got %v", mode, v)
+			}
+		} else if v != agent.VerdictDeny {
+			t.Fatalf("mode %v: write tool must be denied, got %v", mode, v)
+		}
 	}
 }
 
-// TestMCPSec06_07FingerprintInvalidation: any fingerprint change invalidates the
-// approval and forces re-approval (MCP-SEC-06/07).
+// TestMCPSec06_07FingerprintInvalidation: any fingerprint change invalidates
+// the approval and forces re-approval (MCP-SEC-06/07).
 func TestMCPSec06_07FingerprintInvalidation(t *testing.T) {
 	be := newFakeMCPBackend()
 	be.add(MCPToolDesc{Server: "srv", Name: "t", Classification: "read-only", Fingerprint: "fp1"})
-	asker := &fakeAsker{decision: event.AllowOnce}
-	tool := testMCPTool(be, asker, perm.ModeAsk)
-	be.callOut = "ok"
 
-	if _, err := tool.GuardedResult(context.Background(), mcpArgs("srv", "t")); err != nil {
-		t.Fatalf("first call: %v", err)
+	v, _, _ := checkCall(t, perm.ModeAsk, be, "srv", "t")
+	if v != agent.VerdictAsk {
+		t.Fatalf("unapproved tool must ask, got %v", v)
 	}
-	if asker.calls != 1 || be.approveN != 1 {
-		t.Fatalf("expected one first-approval, asker=%d approveN=%d", asker.calls, be.approveN)
+	MCPRecordCall(be, mcpCall("srv", "t"), event.AllowOnce)
+	if be.approveN != 1 {
+		t.Fatal("approval must be recorded once")
 	}
 
-	// Same fingerprint: no new prompt.
-	asker.calls = 0
-	if _, err := tool.GuardedResult(context.Background(), mcpArgs("srv", "t")); err != nil {
-		t.Fatalf("second call: %v", err)
-	}
-	if asker.calls != 0 {
-		t.Fatal("valid approval must not re-prompt")
+	// Same fingerprint: allowed silently.
+	v, _, _ = checkCall(t, perm.ModeAsk, be, "srv", "t")
+	if v != agent.VerdictAllow {
+		t.Fatalf("approved read-only must be allowed, got %v", v)
 	}
 
 	// Fingerprint changed (e.g. description edited): re-approval required.
 	be.approved = map[string]bool{} // backend drops it: fingerprint mismatch
 	be.add(MCPToolDesc{Server: "srv", Name: "t", Classification: "read-only", Fingerprint: "fp2"})
-	asker.calls = 0
-	if _, err := tool.GuardedResult(context.Background(), mcpArgs("srv", "t")); err != nil {
-		t.Fatalf("changed fingerprint call: %v", err)
+	v, _, why := checkCall(t, perm.ModeAsk, be, "srv", "t")
+	if v != agent.VerdictAsk {
+		t.Fatalf("changed fingerprint must re-ask, got %v", v)
 	}
-	if asker.calls != 1 || be.approveN != 2 {
-		t.Fatalf("fingerprint change must force re-approval, asker=%d approveN=%d", asker.calls, be.approveN)
+	if !strings.Contains(why, "fp2") {
+		t.Fatalf("approval prompt must carry the new fingerprint, got %q", why)
+	}
+	MCPRecordCall(be, mcpCall("srv", "t"), event.AllowOnce)
+	if be.approveN != 2 {
+		t.Fatalf("re-approval must be recorded, approveN=%d", be.approveN)
 	}
 }
 
@@ -190,9 +190,13 @@ func TestMCPSec06_07FingerprintInvalidation(t *testing.T) {
 func TestMCPSec08NameShadowing(t *testing.T) {
 	be := newFakeMCPBackend()
 	be.add(MCPToolDesc{Server: "srv", Name: "mcp_tool", Classification: "read-only", Fingerprint: "fp"})
-	asker := &fakeAsker{decision: event.AllowOnce}
-	tool := testMCPTool(be, asker, perm.ModeAsk)
 
+	v, _, _ := checkCall(t, perm.ModeAsk, be, "srv", "mcp_tool")
+	if v != agent.VerdictDeny {
+		t.Fatalf("reserved name must be denied at the gate, got %v", v)
+	}
+
+	tool := testMCPTool(be)
 	_, err := tool.GuardedResult(context.Background(), mcpArgs("srv", "mcp_tool"))
 	if err == nil || !strings.Contains(err.Error(), "reserved name") {
 		t.Fatalf("expected reserved-name refusal, got %v", err)
@@ -202,11 +206,87 @@ func TestMCPSec08NameShadowing(t *testing.T) {
 	}
 }
 
+// TestMCPCheckCallMatrix: the full verdict matrix across modes and
+// classifications.
+func TestMCPCheckCallMatrix(t *testing.T) {
+	newBackend := func() *fakeMCPBackend {
+		be := newFakeMCPBackend()
+		be.add(MCPToolDesc{Server: "srv", Name: "ro", Classification: "read-only", Fingerprint: "fp-ro"})
+		be.add(MCPToolDesc{Server: "srv", Name: "wr", Classification: "write", Fingerprint: "fp-wr"})
+		be.add(MCPToolDesc{Server: "srv", Name: "ex", Classification: "execute", Fingerprint: "fp-ex"})
+		return be
+	}
+	cases := []struct {
+		mode perm.Mode
+		tool string
+		want agent.Verdict
+		note string
+	}{
+		{perm.ModeAsk, "ro", agent.VerdictAsk, "first approval asks"},
+		{perm.ModeAsk, "wr", agent.VerdictAsk, "first approval asks"},
+		{perm.ModeAsk, "ex", agent.VerdictAsk, "first approval asks"},
+		{perm.ModePlan, "ro", agent.VerdictAsk, "plan: read-only first approval asks"},
+		{perm.ModePlan, "wr", agent.VerdictDeny, "plan: write denied outright"},
+		{perm.ModePlan, "ex", agent.VerdictDeny, "plan: execute denied outright"},
+		{perm.ModeDeny, "ro", agent.VerdictAsk, "deny: read-only first approval asks"},
+		{perm.ModeDeny, "wr", agent.VerdictDeny, "deny: write denied outright"},
+		{perm.ModeAllowReads, "ro", agent.VerdictAsk, "allow-reads: read-only first approval asks"},
+		{perm.ModeAllowReads, "ex", agent.VerdictDeny, "allow-reads: execute denied outright"},
+	}
+	for _, tc := range cases {
+		be := newBackend()
+		v, _, _ := checkCall(t, tc.mode, be, "srv", tc.tool)
+		if v != tc.want {
+			t.Errorf("mode=%v tool=%s: got %v, want %v (%s)", tc.mode, tc.tool, v, tc.want, tc.note)
+		}
+	}
+
+	// Approved tools: read-only allowed silently, write/execute ask per call.
+	be := newBackend()
+	for _, tool := range []string{"ro", "wr", "ex"} {
+		MCPRecordCall(be, mcpCall("srv", tool), event.AllowOnce)
+	}
+	if v, _, _ := checkCall(t, perm.ModeAsk, be, "srv", "ro"); v != agent.VerdictAllow {
+		t.Errorf("approved read-only: got %v, want Allow", v)
+	}
+	if v, _, _ := checkCall(t, perm.ModeAsk, be, "srv", "wr"); v != agent.VerdictAsk {
+		t.Errorf("approved write: got %v, want Ask (per-call)", v)
+	}
+	if v, _, _ := checkCall(t, perm.ModeAsk, be, "srv", "ex"); v != agent.VerdictAsk {
+		t.Errorf("approved execute: got %v, want Ask (per-call)", v)
+	}
+	// Restrictive modes keep approved read-only silent.
+	if v, _, _ := checkCall(t, perm.ModePlan, be, "srv", "ro"); v != agent.VerdictAllow {
+		t.Errorf("plan approved read-only: got %v, want Allow", v)
+	}
+}
+
+// TestMCPCheckCallYOLOExempt: the exemption is structural — the matrix never
+// returns Allow for write/execute, so YOLO can never auto-approve them.
+// (The policy-level exemption is additionally covered by
+// TestYOLODoesNotApproveMCPWrite in internal/perm.)
+func TestMCPCheckCallYOLOExempt(t *testing.T) {
+	be := newFakeMCPBackend()
+	be.add(MCPToolDesc{Server: "srv", Name: "wr", Classification: "write", Fingerprint: "fp-wr"})
+	be.add(MCPToolDesc{Server: "srv", Name: "ex", Classification: "execute", Fingerprint: "fp-ex"})
+	MCPRecordCall(be, mcpCall("srv", "wr"), event.AllowOnce)
+	MCPRecordCall(be, mcpCall("srv", "ex"), event.AllowOnce)
+
+	for _, tool := range []string{"wr", "ex"} {
+		v, _, _ := checkCall(t, perm.ModeAsk, be, "srv", tool)
+		if v == agent.VerdictAllow {
+			t.Fatalf("%s: YOLO-exempt tool must never be auto-allowed", tool)
+		}
+	}
+}
+
+// TestMCPAdapterReadOnly: approved read-only output travels as a fenced,
+// UNTRUSTED event.
 func TestMCPAdapterReadOnly(t *testing.T) {
 	be := newFakeMCPBackend()
 	be.add(MCPToolDesc{Server: "srv", Name: "t", Classification: "read-only", Fingerprint: "fp1"})
-	asker := &fakeAsker{decision: event.AllowOnce}
-	tool := testMCPTool(be, asker, perm.ModeAsk)
+	MCPRecordCall(be, mcpCall("srv", "t"), event.AllowOnce)
+	tool := testMCPTool(be)
 	be.callOut = "result-text"
 
 	res, err := tool.GuardedResult(context.Background(), mcpArgs("srv", "t"))
@@ -226,65 +306,65 @@ func TestMCPAdapterReadOnly(t *testing.T) {
 	if res.Event.Type != event.EventMCPToolResult {
 		t.Fatalf("bad event type: %q", res.Event.Type)
 	}
-	// Approved read-only: second call needs no prompt.
-	asker.calls = 0
-	if _, err := tool.GuardedResult(context.Background(), mcpArgs("srv", "t")); err != nil {
-		t.Fatal(err)
-	}
-	if asker.calls != 0 {
-		t.Fatal("approved read-only tool must not re-prompt")
-	}
 }
 
-func TestMCPAdapterDeniedApproval(t *testing.T) {
+// TestMCPAdapterUnapprovedRefused: without a recorded approval the adapter
+// fails closed even if the gate were bypassed.
+func TestMCPAdapterUnapprovedRefused(t *testing.T) {
 	be := newFakeMCPBackend()
 	be.add(MCPToolDesc{Server: "srv", Name: "t", Classification: "read-only", Fingerprint: "fp1"})
-	asker := &fakeAsker{decision: event.Deny}
-	tool := testMCPTool(be, asker, perm.ModeAsk)
+	tool := testMCPTool(be)
+	be.callOut = "ok"
 
 	if _, err := tool.GuardedResult(context.Background(), mcpArgs("srv", "t")); err == nil {
-		t.Fatal("denied approval must refuse the call")
+		t.Fatal("unapproved tool must be refused by the adapter")
 	}
 	if be.callN != 0 {
-		t.Fatal("server must not be reached after denial")
+		t.Fatal("server must not be reached without approval")
 	}
 }
 
 func TestMCPAdapterRunRefused(t *testing.T) {
-	tool := testMCPTool(newFakeMCPBackend(), &fakeAsker{}, perm.ModeAsk)
+	tool := testMCPTool(newFakeMCPBackend())
 	_, _, err := tool.Run(context.Background(), mcpArgs("srv", "t"))
 	if err == nil || !strings.Contains(err.Error(), "guarded execution") {
 		t.Fatalf("plain Run must be refused, got %v", err)
 	}
 }
 
-func TestMCPAdapterModePlan(t *testing.T) {
+// TestMCPRecordCallIdempotent: per-call approvals never rewrite the stored
+// first-approval.
+func TestMCPRecordCallIdempotent(t *testing.T) {
 	be := newFakeMCPBackend()
-	be.add(MCPToolDesc{Server: "srv", Name: "ro", Classification: "read-only", Fingerprint: "fp1"})
-	be.add(MCPToolDesc{Server: "srv", Name: "wr", Classification: "write", Fingerprint: "fp2"})
-	be.callOut = "ok"
-	asker := &fakeAsker{decision: event.AllowOnce}
+	be.add(MCPToolDesc{Server: "srv", Name: "wr", Classification: "write", Fingerprint: "fp1"})
 
-	ro := testMCPTool(be, asker, perm.ModePlan)
-	if _, err := ro.GuardedResult(context.Background(), mcpArgs("srv", "ro")); err != nil {
-		t.Fatalf("read-only in plan mode: %v", err)
+	MCPRecordCall(be, mcpCall("srv", "wr"), event.AllowOnce)
+	MCPRecordCall(be, mcpCall("srv", "wr"), event.AllowOnce)
+	MCPRecordCall(be, mcpCall("srv", "wr"), event.AllowOnce)
+	if be.approveN != 1 {
+		t.Fatalf("first approval must be recorded exactly once, got %d", be.approveN)
 	}
+}
 
-	wr := testMCPTool(be, asker, perm.ModePlan)
-	asker.calls = 0
-	if _, err := wr.GuardedResult(context.Background(), mcpArgs("srv", "wr")); err == nil {
-		t.Fatal("write tool in plan mode must be denied")
+// TestMCPRecordCallDenyNoApprove: a denied call records nothing.
+func TestMCPRecordCallDenyNoApprove(t *testing.T) {
+	be := newFakeMCPBackend()
+	be.add(MCPToolDesc{Server: "srv", Name: "t", Classification: "read-only", Fingerprint: "fp1"})
+
+	MCPRecordCall(be, mcpCall("srv", "t"), event.Deny)
+	MCPRecordCall(be, mcpCall("srv", "t"), event.AllowSession)
+	if be.approveN != 0 {
+		t.Fatal("denial must not record an approval")
 	}
-	if asker.calls != 0 {
-		t.Fatal("plan-mode denial must not prompt")
+	if be.IsApproved(MCPToolDesc{Server: "srv", Name: "t"}) {
+		t.Fatal("denied tool must not be approved")
 	}
 }
 
 func TestMCPToolRegistered(t *testing.T) {
 	be := newFakeMCPBackend()
 	reg := &Registry{byName: map[string]Tool{}}
-	asker := &fakeAsker{}
-	reg.RegisterMCP(be, asker.ask, func() perm.Mode { return perm.ModeAsk })
+	reg.RegisterMCP(be)
 
 	got, ok := reg.byName["mcp_tool"]
 	if !ok {
@@ -299,5 +379,4 @@ func TestMCPToolRegistered(t *testing.T) {
 	if !toolvocab.Guarded("mcp_tool") {
 		t.Fatal("toolvocab.Guarded(mcp_tool) must be true")
 	}
-	var _ agent.GuardedOutcome = got.(agent.GuardedOutcome)
 }

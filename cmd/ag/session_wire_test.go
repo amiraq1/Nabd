@@ -61,7 +61,7 @@ func TestInteractiveSessionWiresPathRule(t *testing.T) {
 	}
 	t.Chdir(proj)
 
-	s, err := newInteractiveSession(&wireTestProvider{})
+	s, err := newInteractiveSession(&wireTestProvider{}, true)
 	if err != nil {
 		t.Fatalf("newInteractiveSession failed: %v", err)
 	}
@@ -177,7 +177,7 @@ func TestSessionGateWiresSessionGrantPolicy(t *testing.T) {
 		{text: "done"},
 	}}
 
-	sess, err := newInteractiveSession(prov)
+	sess, err := newInteractiveSession(prov, true)
 	if err != nil {
 		t.Fatalf("newInteractiveSession failed: %v", err)
 	}

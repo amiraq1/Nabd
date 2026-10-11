@@ -102,3 +102,55 @@ func TestFingerprintToolRejectsNonObject(t *testing.T) {
 		t.Fatal("expected parse error for malformed JSON")
 	}
 }
+
+// TestFingerprintUnknownField: fields the client does not model are preserved
+// in Tool.Raw and change the fingerprint. A server that adds, removes, or
+// alters any advertised field invalidates existing approvals (MCP-SEC-06/07).
+func TestFingerprintUnknownField(t *testing.T) {
+	base := json.RawMessage(`{"name":"t","description":"d","inputSchema":{"type":"object"}}`)
+	withExtra := json.RawMessage(`{"name":"t","description":"d","inputSchema":{"type":"object"},"annotations":{"destructiveHint":true},"x-custom":"1"}`)
+
+	var tb, te Tool
+	if err := json.Unmarshal(base, &tb); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(withExtra, &te); err != nil {
+		t.Fatal(err)
+	}
+	if len(tb.Raw) == 0 || len(te.Raw) == 0 {
+		t.Fatal("Tool.Raw must preserve the original bytes")
+	}
+	if !json.Valid(tb.Raw) || !json.Valid(te.Raw) {
+		t.Fatal("Tool.Raw must be valid JSON")
+	}
+
+	fb, err := FingerprintTool("srv", tb.Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fe, err := FingerprintTool("srv", te.Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fb == fe {
+		t.Fatal("unknown fields must change the fingerprint")
+	}
+
+	// The lossy path (re-marshal the modeled struct) must NOT be used: it
+	// would drop the unknown fields and produce the base fingerprint.
+	lossy, _ := json.Marshal(struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description,omitempty"`
+		InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+	}{Name: te.Name, Description: te.Description, InputSchema: te.InputSchema})
+	fl, err := FingerprintTool("srv", lossy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fl == fe {
+		t.Fatal("re-marshaled struct must not equal the raw fingerprint")
+	}
+	if fl != fb {
+		t.Fatal("re-marshaled struct drops unknown fields: must equal base fingerprint")
+	}
+}
