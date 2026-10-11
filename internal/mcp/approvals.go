@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -54,12 +55,13 @@ func ComputeExecIdentity(execPath string, args, envNames []string) (ExecIdentity
 }
 
 // DefaultApprovalsPath is the only location approvals are stored.
+// It matches the production path used by cmd/ag wiring.
 func DefaultApprovalsPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".ag", "mcp-approvals.json")
+	return filepath.Join(home, ".ag", "mcp", "approvals.json")
 }
 
 // Store is a 0600 JSON approval store: map["server\x00tool"]Approval.
@@ -93,7 +95,9 @@ func OpenStore(path string) (*Store, error) {
 	if err := dec.Decode(&f); err != nil {
 		return nil, fmt.Errorf("mcp: parse approvals: %w", err)
 	}
-	if dec.More() {
+	// Reject trailing content: a second Decode must hit EOF (same pattern
+	// as the config loader). dec.More() would miss a lone trailing "}".
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, errors.New("mcp: trailing content in approvals file")
 	}
 	if f.Approvals != nil {

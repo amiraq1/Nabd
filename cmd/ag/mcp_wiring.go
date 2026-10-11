@@ -64,8 +64,13 @@ func (a mcpBackendAdapter) Call(ctx context.Context, server, tool string, args j
 	return a.mgr.Call(ctx, server, tool, args)
 }
 
-// wireMCP creates the MCP manager for a session. It returns (nil, nil) when
-// MCP is unavailable, and the caller must then skip registration entirely.
+// wireMCP creates the MCP manager for a session. It returns (nil, nil, nil)
+// when MCP is disabled or unconfigured, and the caller must then skip
+// registration entirely.
+//
+// Fail-closed: any error here (bad config, unreadable approvals, journal
+// failure) aborts the whole session startup — the session never runs with a
+// half-wired MCP. The escape hatch is --no-mcp, which skips wiring entirely.
 func wireMCP(noMCP bool, projectRoot string) (tools.MCPBackend, *mcp.Manager, error) {
 	if noMCP {
 		return nil, nil, nil

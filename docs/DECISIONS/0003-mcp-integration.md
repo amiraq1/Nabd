@@ -1,8 +1,8 @@
 # ADR-0003: التكامل مع Model Context Protocol (MCP) في Nabd
 
-* **الحالة:** مقترح (Proposed) — بانتظار مراجعة معمارية وأمنية
+* **الحالة:** مقبول (Accepted) — وسُجِّل وضع المشغّل الواحد — نُفّذت المراحل 0–6 ودُمجت في `master` (PR #264، 2026-10-11). الإنتاج موقوف على بند «المراجع الأمني المستقل»: لا إصدار إنتاجي قبل تسمية مراجع أمني مستقل أو تجديد موثّق لقبول المخاطرة (راجع `docs/THREAT_MODEL.md`، صف «Absent independent security review»).
 * **يعالج:** توسيع منظومة الأدوات — لا issue مفتوح بعد
-* **مرتبط:** `docs/THREAT_MODEL.md` (التحديث في Phase 0)، `docs/DECISIONS/0002-user-facing-language.md` (نمط حقل Reason)
+* **مرتبط:** `docs/THREAT_MODEL.md` (v13)، `docs/DECISIONS/0002-user-facing-language.md` (نمط حقل Reason)
 
 ## السياق
 

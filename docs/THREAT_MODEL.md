@@ -370,12 +370,12 @@ The source file is opened read-only in both modes and is never modified.
 `--redact` requires `--export`, and `--export` is rejected together with any
 run mode. Diagnostics go to stderr; stdout is JSONL only.
 
-## MCP integration (Phase 0 implemented)
+## MCP integration (Phases 0–6 implemented, merged 2026-10-11 in PR #264)
 
-The following rows describe the *designed* posture for MCP support per
-ADR-0003. Phase 0 is implemented and tested; rows for later phases remain design
-commitments with no test evidence. Nothing here is a GUARANTEED claim about
-shipped behavior beyond the rows whose evidence names an existing test.
+The following rows describe the MCP posture per ADR-0003. All phases are
+implemented and tested; GUARANTEED rows name the regression test that proves
+the claim. Rows marked NOT PROVIDED are explicit residual risks or deferred
+work, not design commitments awaiting implementation.
 
 | Claim | Status | Evidence or residual |
 |---|---|---|
@@ -388,6 +388,7 @@ shipped behavior beyond the rows whose evidence names an existing test.
 | MCP server child processes run with a minimal env allowlist, never inheriting the full environment | GUARANTEED | `TestMCPLifecycleEnvIsolation`: the spawned server sees only PATH (sanitized), TERM, LANG, LC_*, NABD=1, an isolated 0700 HOME (never the real one, removed on Close), and declared `${VAR}` refs; an undeclared secret in the parent env does not reach the child. |
 | Repository-cloned MCP configs never start servers | GUARANTEED | Config loads from `~/.ag/mcp.json` only; in-tree configs are refused at load (`TestMCPSec03RepoTreeRejected`). Session wiring (Phase 5) never consults the repo. |
 | Tool permission classification comes from local user config only, never from server hints | GUARANTEED | `TestMCPSec05ReadOnlyHintIgnored`: a write-classified tool still prompts per call even when the server advertises readOnlyHint; the adapter's `MCPToolDesc` carries only the local classification and never reads server hints. |
+| Tools named `capture_*`/`observe_*` are never ReadOnly | GUARANTEED | `effectiveClassification` raises such tools to at least Mutating ("write") even when the local config says read-only, because driving a browser or observing processes has external effects (`TestEffectiveClassification`). The server cannot opt out: the rule applies after the local classification is read. |
 | Tool fingerprints (SHA-256 over JCS-canonical fields) invalidate approval on any change | GUARANTEED | `TestFingerprintToolChangeDetection`: description/schema/hint/server-id changes all change the fingerprint; `TestMCPSec06_07FingerprintInvalidation`: a changed fingerprint forces re-approval. Approval also binds the executable identity (path, argv, env names, binary SHA-256) — `TestMCPApprovalInvalidation`. |
 | MCP server processes are killed on timeout, session close, or disable, with no orphans | GUARANTEED | `TestMCPS1NoOrphans`: 3 rounds, server + `sleep` grandchild spawned, group confirmed alive, `Close` → whole group gone. `TestMCPS2OversizeKillsServer`: a >64MiB message fails the call closed and the watchdog kills the server. killGroup always runs before Wait (bash.go no-sweep-after-Wait rule). |
 | Journal records server/tool IDs, decisions, and sizes — never raw args or outputs by default | GUARANTEED | `TestMCPSec13JournalPrivacy`: HMAC-SHA256 binds args/outputs without storing them; the journal file contains no secret values. |
