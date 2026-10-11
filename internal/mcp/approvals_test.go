@@ -114,6 +114,19 @@ func TestApprovalStoreCorruptFailsClosed(t *testing.T) {
 	}
 }
 
+// TestApprovalStoreTrailingBraceRejected: a lone trailing "}" after the JSON
+// object must be rejected. The old dec.More() check missed this; the
+// Decode-then-EOF pattern catches it.
+func TestApprovalStoreTrailingBraceRejected(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "approvals.json")
+	if err := os.WriteFile(path, []byte(`{"approvals":{}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := OpenStore(path); err == nil {
+		t.Fatal("trailing brace must fail closed")
+	}
+}
+
 func TestComputeExecIdentity(t *testing.T) {
 	dir := t.TempDir()
 	bin := filepath.Join(dir, "b")

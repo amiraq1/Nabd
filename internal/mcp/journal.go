@@ -41,21 +41,23 @@ type JournalEvent struct {
 }
 
 // DefaultJournalKeyPath is the only location of the journal HMAC key.
+// It matches the production path used by cmd/ag wiring.
 func DefaultJournalKeyPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".ag", "mcp-journal.key")
+	return filepath.Join(home, ".ag", "mcp", "journal.key")
 }
 
 // DefaultJournalPath is the only location of the MCP journal.
+// It matches the production path used by cmd/ag wiring.
 func DefaultJournalPath() string {
 	home, err := os.UserHomeDir()
 	if err != nil || home == "" {
 		return ""
 	}
-	return filepath.Join(home, ".ag", "mcp-journal.jsonl")
+	return filepath.Join(home, ".ag", "mcp", "journal.jsonl")
 }
 
 // loadOrCreateKey loads the 0600 HMAC key, generating it once if absent.

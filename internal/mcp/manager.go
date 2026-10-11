@@ -98,8 +98,9 @@ func effectiveClassification(toolName string, c Classification) string {
 }
 
 // NewManager builds a Manager without starting any server (MCP-SEC-15: lazy
-// startup). Empty approvalsPath/journalPath select the defaults; the journal
-// may be disabled by passing empty journal paths.
+// startup). An empty approvalsPath selects DefaultApprovalsPath; empty
+// journalPath/journalKeyPath DISABLE the journal (they do not select
+// defaults) — used by tests.
 func NewManager(cfg Config, approvalsPath, journalPath, journalKeyPath string) (*Manager, error) {
 	if approvalsPath == "" {
 		approvalsPath = DefaultApprovalsPath()

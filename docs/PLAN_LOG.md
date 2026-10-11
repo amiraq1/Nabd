@@ -531,3 +531,15 @@ Phase 1 decision: GO
 - Owners: architectural + acceptance = Ammar (@amiraq1); security reviewer = single-operator mode (written amendment, review 2027-04-10).
 
 **Note:** db31db1 entry listed these as pending; this entry closes them. Historical entry preserved.
+
+---
+
+## 2026-10-11 — MCP client Phases 0–6 merged (PR #264)
+
+**Scope:** full MCP client per ADR-0003 v6 — `internal/mcp` (stdlib-only), `mcp_tool` adapter, `CallAwareGate` approval path, `--no-mcp`, session/headless wiring.
+
+**Merged:** squash `827e4e7` into `master` via PR #264 (CI green). Branch `docs/mcp-phase-s-harnesses` deleted. VM synced to `master`.
+
+**Post-merge:** independent review confirmed no security blocker; 7 doc/hardening follow-ups tracked in PR #265 (`docs/mcp-post-merge-tidy`).
+
+**Governance:** production MCP remains gated on an independent security reviewer or documented risk-acceptance renewal (THREAT_MODEL "Absent independent security review", ADR-0003 single-operator mode).
