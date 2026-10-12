@@ -16,7 +16,7 @@
 
 set -u
 
-BASE_SHA=9f89de8824e8ed3cd9186f8a37781d570c6ca69d2
+BASE_SHA=9f89de824e8ed3cd9186f8a37781d570c6ca69d2
 BASE_REF=origin/ci/threat-model-gate-covers-display
 REPO_URL=https://github.com/amiraq1/Nabd.git
 SRC_BRANCH=wip/p0-audit-2026-10-12
@@ -34,11 +34,30 @@ go version
 uname -a
 
 echo
-echo "== 1. clone and fetch the branch holding the tests =="
+echo "== 1. clone the branch that holds the tests =="
 rm -rf "$WORKDIR"
-git clone "$REPO_URL" "$WORKDIR" || die "clone failed"
+# A plain `git clone` checks out the repository's DEFAULT branch, and `git fetch`
+# updates refs only — it never touches the working tree. Cloning with -b is what
+# actually puts the test files on disk. Fetching alone leaves them absent, and
+# step 3 would then die on the first cp.
+git clone -b "$SRC_BRANCH" "$REPO_URL" "$WORKDIR" || die "clone of $SRC_BRANCH failed"
 cd "$WORKDIR" || die "cd $WORKDIR failed"
-git fetch origin "$SRC_BRANCH" || die "fetch $SRC_BRANCH failed"
+[ "$(git branch --show-current)" = "$SRC_BRANCH" ] \
+  || die "clone is on $(git branch --show-current), expected $SRC_BRANCH"
+# The pre-fix commit lives on its own branch; make sure that branch is present so
+# step 2 can fall back to it if the literal SHA is unusable.
+git fetch origin ci/threat-model-gate-covers-display || die "fetch of the base branch failed"
+# Cross-check BASE_SHA against the branch that actually holds it. A typo here
+# would otherwise surface only in step 2 as a confusing "invalid reference" or,
+# worse, silently select the wrong tree.
+REMOTE_BASE_SHA=$(git rev-parse "$BASE_REF" 2>/dev/null) || die "cannot resolve $BASE_REF"
+[ "$REMOTE_BASE_SHA" = "$BASE_SHA" ] \
+  || die "BASE_SHA is $BASE_SHA but $BASE_REF is $REMOTE_BASE_SHA — fix BASE_SHA"
+for f in p0_2_test.go p0_3_test.go p0_4_test.go p0_enforcement_test.go p0_undo_red_test.go protected.go; do
+  [ -f "internal/tools/$f" ] || die "source file internal/tools/$f is missing from $SRC_BRANCH"
+done
+[ -d internal/approval ] || die "source directory internal/approval is missing from $SRC_BRANCH"
+echo "source verified: $(git branch --show-current) @ $(git rev-parse --short HEAD)"
 
 echo
 echo "== 2. base worktree at the pre-fix commit =="

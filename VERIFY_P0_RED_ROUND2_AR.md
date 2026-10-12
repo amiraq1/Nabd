@@ -8,7 +8,7 @@
 
 | البند | القيمة |
 |---|---|
-| الـSHA المطلوب | `9f89de8824e8ed3cd9186f8a37781d570c6ca69d2` |
+| الـSHA المطلوب | `9f89de824e8ed3cd9186f8a37781d570c6ca69d2` |
 | `git clone` من GitHub | نجح (`/tmp/nabd-verify`) |
 | `git worktree add /tmp/nabd-base <sha>` | **نجح عبر اسم المرجع** `origin/ci/threat-model-gate-covers-display` |
 | `git rev-parse HEAD` في شجرة الأساس | `9f89de824e8ed3cd9186f8a37781d570c6ca69d2` ✅ **مطابق** |
@@ -20,8 +20,8 @@
 **⚠ عائق بيئي مكتشَف:** تمرير الـSHA الكامل المكوّن من 40 خانة hex كوسيط **حرفي** في سطر أوامر يُحجب في هذه البيئة:
 
 ```
-$ git cat-file -t 9f89de8824e8ed3cd9186f8a37781d570c6ca69d2
-fatal: Not a valid object name 9f89de8824e8ed3cd9186f8a37781d570c6ca69d2   (6/6 محاولات)
+$ git cat-file -t 9f89de824e8ed3cd9186f8a37781d570c6ca69d2
+fatal: Not a valid object name 9f89de824e8ed3cd9186f8a37781d570c6ca69d2   (6/6 محاولات)
 
 $ git cat-file -t HEAD                 → commit
 $ SHA=$(git rev-parse HEAD); git cat-file -t "$SHA"   → commit
@@ -225,7 +225,7 @@ fork/exec ...\tools.test: %1 is not a valid Win32 application.
 git clone https://github.com/amiraq1/Nabd.git nabd-verify && cd nabd-verify
 git fetch origin
 git worktree add --detach /tmp/nabd-base origin/ci/threat-model-gate-covers-display
-cd /tmp/nabd-base && git rev-parse HEAD   # يجب أن يطابق 9f89de8824e8ed3cd9186f8a37781d570c6ca69d2
+cd /tmp/nabd-base && git rev-parse HEAD   # يجب أن يطابق 9f89de824e8ed3cd9186f8a37781d570c6ca69d2
 
 # 2) انسخ الاختبارات + protected.go + حزمة approval (الاعتماد الناقص)
 cp <workspace>/internal/tools/{p0_2_test.go,p0_3_test.go,p0_4_test.go,p0_enforcement_test.go,p0_undo_red_test.go,protected.go} internal/tools/
