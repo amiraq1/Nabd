@@ -5,6 +5,7 @@ package tools
 // Moved out of write.go without behaviour changes.
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"crypto/sha256"
@@ -12,11 +13,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 
+	"nabd/internal/approval"
 	"nabd/internal/event"
 	"nabd/internal/safefs"
 	"nabd/internal/snap"
@@ -146,6 +149,82 @@ func writePathFromRoot(root *Root, input string) (relative, absolute string, err
 // on-disk trace. The critical window — between the write and log.add — contains
 // only log.add, shrinking the interruption window that the Android
 // lowmemorykiller could exploit.
+// --- P0-4 / ADR-5 Option A: excluded-path write enforcement -----------------
+//
+// A path excluded by the session .gitignore (e.g. .env, *.key, dist/) carries
+// content the user asked git to ignore. The journal and the shadow store are not
+// permitted to hold that content: a later /undo, a crash dump, or an accidental
+// `git add -A` would otherwise recover it. Two rules apply:
+//
+//  1. Without a valid one-shot approval token in ctx, commit() refuses the write
+//     outright — before any disk or shadow write (see the early check in
+//     commit). This is the ADR-5 Option A "fail closed" posture, in force until
+//     19 Oct 2026.
+//  2. With a valid token, commitExcluded() performs the disk write but stores no
+//     content in the shadow: no before blob, no after blob, no diff, no digest.
+//     Such a write cannot be undone — PersistedUndo returns ErrUndoExcluded and
+//     leaves the file on disk as written.
+//
+// The token lives in internal/approval: it is shared with the agent loop, and
+// tools already import agent, so it cannot live here. It is bound to the
+// canonical relative path, the tool-call id, and the process id, and is consumed
+// exactly once.
+//
+// excludedGuard is the sentinel written into EditRecord.BlobBefore/BlobAfter for
+// an approved excluded write. It is non-empty by design: a reader that predates
+// ADR-5 sees a non-empty BlobBefore and calls sh.Read(guard), which fails
+// (returns an error, deletes nothing) instead of reading "" as "creation →
+// delete the file" (the pre-B3 undo hazard in undo.go).
+const excludedGuard = "excluded:none"
+
+// ErrExcludedWrite is returned by commit() when a write targets a path excluded
+// by the session .gitignore and no valid one-shot approval token is present in
+// ctx. The mutation is refused before any disk or shadow write.
+var ErrExcludedWrite = errors.New("tools: excluded path write refused")
+
+// maxExcludedReadBytes bounds how much of a pre-existing excluded file is read
+// to compute the read-credit hash and to verify the post-write bytes. Excluded
+// files can be large (keys, bundles); reading beyond this is refused so a large
+// or hostile file cannot exhaust memory. The write itself is bounded separately
+// by maxWriteBytes.
+var maxExcludedReadBytes = 1 << 20 // 1 MiB
+
+// readExcludedFromRoot reads a path beneath root through the same
+// descriptor-relative, symlink/FIFO/device-refusing open the normal write path
+// uses (safefs.OpenRead), WITHOUT storing anything in the shadow. It returns
+// (data, mode, exists, error). A missing file is (nil, 0, false, nil); a
+// non-regular file (symlink, FIFO, device, directory) is an error; a file larger
+// than maxExcludedReadBytes is an error.
+func readExcludedFromRoot(root *Root, relative string) ([]byte, os.FileMode, bool, error) {
+	f, err := safefs.OpenRead(root.Dir(), relative)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, 0, false, nil
+		}
+		return nil, 0, false, err
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, 0, false, fmt.Errorf("excluded path %q is not a regular file", relative)
+	}
+	if fi.Size() > int64(maxExcludedReadBytes) {
+		return nil, 0, false, fmt.Errorf("excluded path %q is %d bytes, limit is %d", relative, fi.Size(), maxExcludedReadBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, int64(maxExcludedReadBytes)+1))
+	if err != nil {
+		return nil, 0, false, err
+	}
+	if len(data) > maxExcludedReadBytes {
+		return nil, 0, false, fmt.Errorf("excluded path %q exceeds %d bytes", relative, maxExcludedReadBytes)
+	}
+	return data, fi.Mode().Perm(), true, nil
+}
+
 func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg *Registry, tool, path string, data []byte) (snap.State, snap.State, error) {
 	// Normalize once at the shared mutation boundary. Callers may provide a
 	// root-relative path; legacy internal tests may provide the equivalent
@@ -153,6 +232,24 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	relative, absPath, err := writePathFromRoot(root, path)
 	if err != nil {
 		return snap.State{}, snap.State{}, err
+	}
+
+	// P0-4 / ADR-5 Option A: refuse an excluded write before any disk or shadow
+	// capture. The check is here — before captureFromRoot — so the pre-existing
+	// content of an excluded file is never read into the shadow store either.
+	//
+	// Fail closed when the exclusion policy cannot be determined: a nil registry
+	// is treated as "cannot decide", not as "allowed".
+	if reg == nil {
+		return snap.State{}, snap.State{}, errors.New("tools: no registry; cannot determine the exclusion policy — refusing write")
+	}
+	if reg.isPathExcluded(relative) {
+		if !approval.Consume(ctx, relative) {
+			return snap.State{}, snap.State{}, fmt.Errorf(
+				"%w: %q is excluded by the session .gitignore; an explicit one-shot approval is required",
+				ErrExcludedWrite, relative)
+		}
+		return commitExcluded(ctx, root, sh, log, reg, tool, relative, absPath, data)
 	}
 
 	before, err := captureFromRoot(sh, root, relative, absPath)
@@ -185,17 +282,15 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 
 	// The diff (LCS matrix allocation) runs here — BEFORE the write. If it
 	// aborts (budget exceeded, ctx cancelled), the project file is untouched.
+	// Excluded paths are handled by the early return above, so every record
+	// reaching this point is a normal (non-excluded) mutation.
 	var rec *event.EditRecord
 	var rerr error
-	if reg != nil && reg.isPathExcluded(relative) {
-		rec, rerr = buildExcludedRecord(sh, before, after, data, readLines)
-	} else {
-		var budget *diffBudget
-		if reg != nil {
-			budget = reg.diffBudget
-		}
-		rec, rerr = buildRecord(ctx, budget, sh, before, after, data, readLines)
+	var budget *diffBudget
+	if reg != nil {
+		budget = reg.diffBudget
 	}
+	rec, rerr = buildRecord(ctx, budget, sh, before, after, data, readLines)
 	if rerr != nil {
 		// Clean up the orphan blob that CaptureBytes wrote to the shadow
 		// store. The mutation is aborted, so no Edit will ever reference it;
@@ -303,25 +398,104 @@ func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, befor
 	return boundEditEvent(rec)
 }
 
-// buildExcludedRecord fingerprints a mutation on an excluded path without computing
-// a unified diff, guaranteeing that excluded content is never disclosed in diffs
-// while retaining shadow blobs and hashes so /undo reversibility remains guaranteed.
-func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*event.EditRecord, error) {
+// commitExcluded performs an approved write to a path excluded by the session
+// .gitignore (ADR-5 Option A). It writes the file to disk like the normal path,
+// but it stores no content in the shadow store — not the before blob, not the
+// after blob, not a diff, not a digest. The journal record carries only the
+// excludedGuard sentinel, which makes the write non-undoable (PersistedUndo
+// returns ErrUndoExcluded) and leaves the on-disk file as written.
+//
+// The pre-existing content is read through readExcludedFromRoot (the same
+// descriptor-relative, symlink/FIFO/device-refusing open the normal path uses),
+// never os.ReadFile/os.Lstat. The intent is journaled before publication via
+// OnMutationPrepared, and a pre-publish failure is journaled via
+// OnMutationAborted — the same durable path as a normal mutation (Task 4). The
+// loop then emits the final edit event from the in-memory log (LastEdit), so an
+// excluded write is journaled end to end; a post-write logging failure surfaces
+// as an error rather than a silent success.
+func commitExcluded(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg *Registry, tool, relative, absPath string, data []byte) (snap.State, snap.State, error) {
+	beforeBytes, mode, exists, err := readExcludedFromRoot(root, relative)
+	if err != nil {
+		return snap.State{}, snap.State{}, err
+	}
+	absent := !exists
+	if !exists {
+		mode = 0o644
+	}
+	var beforeHash string
+	if exists {
+		// Hash in memory only — never persisted — so read-credit validation can
+		// run without storing the secret.
+		beforeHash = sha256hex(beforeBytes)
+	}
+
+	var readLines int
+	if reg != nil {
+		readLines = reg.ConsumeLinesRead(relative, beforeHash)
+	}
+
+	// No Patch, no hashes, guard-only blobs: excluded content is not disclosed
+	// in the journal.
 	rec := &event.EditRecord{
 		MutationID: mutationID(),
-		Path:       after.Rel,
-		HashAfter:  sha256hex(data),
+		Path:       relative,
 		ReadLines:  readLines,
-		BlobAfter:  after.Blob,
-		BlobBefore: before.Blob,
-		ModeBefore: before.Mode,
+		BlobBefore: excludedGuard,
+		BlobAfter:  excludedGuard,
+		ModeBefore: mode,
 	}
-	if !before.Absent {
-		if b, err := sh.Read(before.Blob); err == nil {
-			rec.HashBefore = sha256hex(b)
+	if _, err := boundEditEvent(rec); err != nil {
+		return snap.State{}, snap.State{}, err
+	}
+
+	// Journal the intent before publishing, exactly as the normal path does.
+	prepared := false
+	if reg.OnMutationPrepared != nil {
+		if err := reg.OnMutationPrepared(rec); err != nil {
+			return snap.State{}, snap.State{}, err
+		}
+		prepared = true
+	}
+	abort := func(cause error) {
+		if prepared && reg.OnMutationAborted != nil {
+			_ = reg.OnMutationAborted(rec, cause)
 		}
 	}
-	return boundEditEvent(rec)
+
+	// Re-verify immediately before publishing (TOCTOU): the file must still be
+	// what we read, or the write is refused.
+	curBytes, _, curExists, err := readExcludedFromRoot(root, relative)
+	if err != nil {
+		abort(err)
+		return snap.State{}, snap.State{}, err
+	}
+	if curExists != exists || (exists && sha256hex(curBytes) != beforeHash) {
+		cause := errors.New("excluded file changed since it was read; re-read and retry the write")
+		abort(cause)
+		return snap.State{}, snap.State{}, cause
+	}
+
+	if err := writeFromRoot(root, relative, absPath, data, mode); err != nil {
+		if !safefs.WasPublished(err) {
+			abort(err)
+		}
+		return snap.State{}, snap.State{}, err
+	}
+
+	// Re-verify after the write through the safe read: the bytes on disk must be
+	// exactly what we intended.
+	afterBytes, _, _, err := readExcludedFromRoot(root, relative)
+	if err != nil {
+		return snap.State{}, snap.State{}, err
+	}
+	if !bytes.Equal(afterBytes, data) {
+		return snap.State{}, snap.State{}, errors.New("excluded write did not verify on disk as-is")
+	}
+
+	before := snap.State{Rel: relative, Absent: absent, Mode: mode, Blob: excludedGuard}
+	after := snap.State{Rel: relative, Size: int64(len(data)), Mode: mode, Blob: excludedGuard}
+	log.add(Edit{Tool: tool, Rel: root.Rel(absPath), Before: before, After: after, Record: rec})
+	return before, after, nil
 }
 
 // boundEditEvent enforces the event-size budget (NBD-011) on the serialized

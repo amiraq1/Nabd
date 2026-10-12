@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"nabd/internal/agent"
+	"nabd/internal/approval"
 	"nabd/internal/event"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
@@ -74,6 +75,31 @@ func (r *Registry) isPathExcluded(rel string) bool {
 		return false
 	}
 	return r.pathGate.IsPathExcluded(rel)
+}
+
+// ExcludedTarget reports the canonical relative path of a mutating call and
+// whether the session .gitignore excludes it. The agent loop uses it to decide
+// whether to mint a one-shot approval token; the loop never parses tool
+// arguments itself, so the parsing lives here where the write path already
+// parses the same request. It returns ("", false) for a non-mutating tool, an
+// unparseable argument, a path that does not normalize, or when no path gate is
+// installed.
+func (r *Registry) ExcludedTarget(tool string, args json.RawMessage) (string, bool) {
+	if r.pathGate == nil {
+		return "", false
+	}
+	if tool != "write_file" && tool != "edit_file" {
+		return "", false
+	}
+	var m mutatingRequest
+	if err := decodeStrict(args, &m); err != nil || m.Path == nil {
+		return "", false
+	}
+	rel, _, err := writePathFromRoot(r.root, *m.Path)
+	if err != nil {
+		return "", false
+	}
+	return rel, r.isPathExcluded(rel)
 }
 
 // Registry is the agent.Tools implementation: it owns the permission Class
@@ -384,6 +410,9 @@ func (r *Registry) Run(ctx context.Context, c provider.ToolCall) (string, bool, 
 	if len(args) == 0 {
 		args = json.RawMessage("{}")
 	}
+	// Stamp the call id so a one-shot approval token bound to a different call
+	// cannot be redeemed here (Task 2).
+	ctx = approval.WithCall(ctx, fixed.ID)
 	return t.Run(ctx, args)
 }
 

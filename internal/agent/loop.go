@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"nabd/internal/approval"
 	"nabd/internal/config"
 	"nabd/internal/provider"
 	"nabd/internal/skill"
@@ -88,6 +89,15 @@ type GuardedResult struct {
 
 type guardedTools interface {
 	GuardedFor(name string) (GuardedOutcome, bool)
+}
+
+// excludedTargeter is the optional tools-layer hook the loop uses to learn
+// whether an approved call targets a path excluded by the session .gitignore.
+// The tools layer parses the arguments; the loop never does. When the call is
+// excluded, the loop mints a one-shot approval token bound to the target path
+// and the call id (Task 2 / ADR-5 Option A).
+type excludedTargeter interface {
+	ExcludedTarget(tool string, args json.RawMessage) (string, bool)
 }
 
 // Loop turns one user message into a settled conversation: it streams a
@@ -901,7 +911,17 @@ func (l *Loop) runCalls(ctx context.Context, calls []provider.ToolCall) (bool, e
 			err = fmt.Errorf("tool %q is a guarded capability but the active tool layer provides no guarded outcome; refusing to fall back to plain execution", c.Name)
 			out = event.Outcome{OK: false}
 		default:
-			out, err = l.exec(ctx, c)
+			// An approved call that targets a path the session .gitignore
+			// excludes needs a one-shot token: the tool refuses the write
+			// without it, and the token binds the grant to this exact path,
+			// call, and process (Task 2 / ADR-5 Option A).
+			execCtx := ctx
+			if ea, ok := l.Tools.(excludedTargeter); ok {
+				if rel, excluded := ea.ExcludedTarget(c.Name, c.Input); excluded {
+					execCtx = approval.WithToken(ctx, approval.Mint(rel, c.ID))
+				}
+			}
+			out, err = l.exec(execCtx, c)
 		}
 		if err != nil {
 			out.Text, out.OK = err.Error(), false
