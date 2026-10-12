@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -32,14 +31,15 @@ type allowEntry struct {
 	isLoop   bool
 }
 
-// CurrentAllowList returns the active AllowList parsed from NABD_ENDPOINT_ALLOW
-// (via config.Get or environment variable). Returns nil if empty.
+// CurrentAllowList returns the active AllowList parsed from the configuration
+// layer (NABD_ENDPOINT_ALLOW). The value is sourced exclusively through
+// config.Get so that config v2's fail-closed design is respected: under config
+// v2 an implicit environment fallback is disabled (P2-6), meaning a stray
+// NABD_ENDPOINT_ALLOW in the process environment cannot widen the allowlist
+// beyond what the v2 document explicitly declares. In config v1 the environment
+// value is still honoured, because config.Get returns it there.
 func CurrentAllowList() *AllowList {
-	raw := config.Get("NABD_ENDPOINT_ALLOW")
-	if raw == "" {
-		raw = os.Getenv("NABD_ENDPOINT_ALLOW")
-	}
-	return ParseAllowList(raw)
+	return ParseAllowList(config.Get("NABD_ENDPOINT_ALLOW"))
 }
 
 // ParseAllowList parses a comma- or whitespace-separated list of allowed

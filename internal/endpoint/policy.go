@@ -75,6 +75,21 @@ func (pol Policy) String() string {
 // by the active endpoint policy.
 var ErrEndpointRefused = errors.New("endpoint refused")
 
+// ErrRedirectRefused is returned by the endpoint client's CheckRedirect hook.
+// Provider base URLs must never follow HTTP redirects: a 3xx response could
+// otherwise send the provider credential (x-api-key / Authorization) to an
+// attacker-controlled host. Refusing every redirect is fail-closed and safe —
+// the LLM chat/completions endpoints do not use redirects.
+var ErrRedirectRefused = errors.New("endpoint: HTTP redirect refused")
+
+// redirectRefuser refuses every redirect. Returning a non-nil error from
+// CheckRedirect makes http.Client.Do return that error with a nil *Response,
+// so the redirected request — and any host-bound credentials it carries — is
+// never sent to the next hop.
+func redirectRefuser(_ *http.Request, _ []*http.Request) error {
+	return ErrRedirectRefused
+}
+
 // ParsePolicy converts the NABD_ENDPOINT_POLICY value to a Policy.
 // An empty string maps to PolicyStrict. Unknown values are an error.
 func ParsePolicy(raw string) (Policy, error) {
@@ -308,11 +323,41 @@ func ClientWithPolicy(pol Policy, timeout time.Duration) *http.Client {
 	return ClientWithAllow(pol, CurrentAllowList(), timeout)
 }
 
+// redirectRefuserTransport wraps an http.RoundTripper and refuses any request
+// that net/http produced while following a redirect (req.Response != nil). This
+// is defense-in-depth: even a caller that sets Client.CheckRedirect to follow
+// redirects cannot leak credentials to the redirect target, because the wrapped
+// transport rejects the second hop before any bytes leave.
+type redirectRefuserTransport struct {
+	rt http.RoundTripper
+}
+
+func (r *redirectRefuserTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Response != nil {
+		// req.Response is set by net/http only on requests it generates while
+		// following a redirect. Refuse the hop before any data is sent.
+		return nil, ErrRedirectRefused
+	}
+	return r.rt.RoundTrip(req)
+}
+
+// redirectBlockingTransport wraps rt so it refuses redirect-following requests.
+func redirectBlockingTransport(rt http.RoundTripper) http.RoundTripper {
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	return &redirectRefuserTransport{rt: rt}
+}
+
 // ClientWithAllow returns an *http.Client configured with the specified policy and allowList.
 func ClientWithAllow(pol Policy, allowList *AllowList, timeout time.Duration) *http.Client {
 	return &http.Client{
-		Transport: TransportWithAllow(pol, allowList),
-		Timeout:   timeout,
+		Transport: redirectBlockingTransport(TransportWithAllow(pol, allowList)),
+		// Refuse all redirects. This is the core control for P0-1: without it,
+		// Go's default redirect behaviour keeps custom auth headers such as
+		// x-api-key on cross-host 3xx responses, leaking the provider key.
+		CheckRedirect: redirectRefuser,
+		Timeout:       timeout,
 	}
 }
 
