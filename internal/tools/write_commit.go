@@ -304,21 +304,27 @@ func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, befor
 }
 
 // buildExcludedRecord fingerprints a mutation on an excluded path without computing
-// a unified diff, guaranteeing that excluded content is never disclosed in diffs
-// while retaining shadow blobs and hashes so /undo reversibility remains guaranteed.
+// a unified diff and WITHOUT storing content blobs (P0-4). Excluded content
+// is never written to the shadow store; the record is marked Excluded so
+// /undo refuses with ErrUndoExcluded instead of deleting the file.
 func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*event.EditRecord, error) {
 	rec := &event.EditRecord{
 		MutationID: mutationID(),
 		Path:       after.Rel,
 		HashAfter:  sha256hex(data),
 		ReadLines:  readLines,
-		BlobAfter:  after.Blob,
-		BlobBefore: before.Blob,
+		Excluded:   true,
+		// BlobBefore/BlobAfter intentionally empty: excluded content
+		// must not enter the shadow store (P0-4).
 		ModeBefore: before.Mode,
 	}
 	if !before.Absent {
-		if b, err := sh.Read(before.Blob); err == nil {
-			rec.HashBefore = sha256hex(b)
+		// Hash of the before-content for the record, without storing the blob.
+		// We compute it from the already-captured state, not by reading the file.
+		if before.Blob != "" {
+			if b, err := sh.Read(before.Blob); err == nil {
+				rec.HashBefore = sha256hex(b)
+			}
 		}
 	}
 	return boundEditEvent(rec)

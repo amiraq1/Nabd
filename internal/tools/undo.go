@@ -10,6 +10,7 @@ import (
 var (
 	ErrUndoConflictMissing = errors.New("target file is missing; will not overwrite your deletion")
 	ErrUndoConflictChanged = errors.New("changed after the agent wrote it; will not overwrite your work")
+	ErrUndoExcluded        = errors.New("excluded path was never stored in shadow; cannot undo")
 )
 
 // UndoResult is one attempted rewind, in the order attempted.
@@ -46,6 +47,12 @@ func (r *Registry) PersistedUndo(recs []*event.EditRecord, n int) []UndoResult {
 // rewindRecord restores one persisted record: verify the file still matches
 // HashAfter, then put BlobBefore back through the shadow.
 func (r *Registry) rewindRecord(rec *event.EditRecord) UndoResult {
+	// P0-4: excluded paths were never stored in the shadow; refusing is
+	// safer than deleting the user's file (which an empty BlobBefore
+	// would otherwise mean).
+	if rec.Excluded {
+		return UndoResult{Rel: rec.Path, Note: ErrUndoExcluded.Error()}
+	}
 	// D: Restore Only Through the Descriptor-Relative Path. relative is the
 	// filesystem authority; abs is metadata for the messages and the journal.
 	rel, abs, err := writePathFromRoot(r.root, rec.Path)
