@@ -6,6 +6,10 @@ Published changes and downloadable artifacts are available on the
 
 ## Unreleased
 
+### Build
+
+- Every workflow reads the Go toolchain from `.go-version` (1.27.2), so govulncheck scans the toolchain that builds and releases the binary. Previously govulncheck ran on 1.27.2, build and release on 1.27.1, and the UI workflows on go.mod's 1.27.0 minimum. 1.27.2 is the current security patch. Guarded by `TestGoToolchainHasSingleSource`. CI staticcheck is upgraded to v0.8.2 for Go 1.27.2 export data compatibility.
+
 ### Fixed
 - `/models` catalog output in the Feed UI is formatted into a multi-column grid, preventing long catalogs from overflowing the viewport and scrolling earlier model names off-screen.
 - Silent empty turns (turns ending with 0 completion tokens or cut by length limit with no text or tool calls) emit an explanatory notice naming `NABD_MAX_TOKENS` and the value used, and headless mode (`-p`) exits non-zero rather than silently succeeding.
