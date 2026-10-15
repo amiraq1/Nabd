@@ -27,6 +27,7 @@ func TestBlockedNoticeCategoriesDroppedWhileToolCallsPending(t *testing.T) {
 		event.NoticeCategoryTPM,
 		event.NoticeCategoryDisplay,
 		event.NoticeCategoryProviderEmpty,
+		event.NoticeCategory(99), // Unknown persisted values fail closed too.
 	}
 
 	const marker = "BLOCKED-NOTICE-MARKER"
