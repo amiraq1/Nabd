@@ -13,6 +13,7 @@ Published changes and downloadable artifacts are available on the
 ### Fixed
 - `/models` catalog output in the Feed UI is formatted into a multi-column grid, preventing long catalogs from overflowing the viewport and scrolling earlier model names off-screen.
 - Silent empty turns (turns ending with 0 completion tokens or cut by length limit with no text or tool calls) emit an explanatory notice naming `NABD_MAX_TOKENS` and the value used, and headless mode (`-p`) exits non-zero rather than silently succeeding.
+- The headless exit decision for a silent turn now reads the notice category (`NoticeCategoryProviderEmpty`, appended to the notice categories so no existing value is renumbered) instead of matching notice wording. Rewording or translating a notice can no longer change the exit code, and an unrelated notice containing the old phrase can no longer create one. Notice texts and the conditions that emit them are unchanged, and the new category is outside the model-facing allowlist.
 - Tool cards waiting for human confirmation transition to `ToolPending` ("awaiting approval") upon `PermAsk`, moving to `ToolRunning` only after an allowing decision, and to `ToolDenied` on deny, accurately reflecting execution state in both live and replayed sessions.
 
 ## v2.1.3
