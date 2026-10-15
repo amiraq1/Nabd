@@ -152,7 +152,6 @@ func ensureGitignore(agDir string) error {
 	return f.Close()
 }
 
-func (s *Shadow) UsesGit() bool    { return false }
 func (s *Shadow) StoreDir() string { return s.store }
 
 // Capture reads the current state of an absolute path inside the root and
