@@ -144,15 +144,21 @@ func TestEmptyTurnEmitsNotice(t *testing.T) {
 			t.Fatalf("unexpected Run error: %v", err)
 		}
 
+		// Scan for the category rather than the first notice: a turn with a
+		// non-zero prompt count also emits a calibration notice, and asserting
+		// on whichever notice comes first would test the wrong event.
+		var found bool
 		for _, ev := range sink.events {
-			if ev.Type == event.Notice {
-				if ev.NoticeCategory != event.NoticeCategoryProviderEmpty {
-					t.Errorf("expected NoticeCategoryProviderEmpty, got %v (text %q)", ev.NoticeCategory, ev.Text)
+			if ev.Type == event.Notice && ev.NoticeCategory == event.NoticeCategoryProviderEmpty {
+				found = true
+				if !strings.Contains(ev.Text, "provider returned an empty response (upstream issue)") {
+					t.Errorf("provider-empty notice carries unexpected text: %q", ev.Text)
 				}
-				return
 			}
 		}
-		t.Fatalf("expected an empty-response notice, got events: %+v", sink.events)
+		if !found {
+			t.Fatalf("expected a NoticeCategoryProviderEmpty notice for a silent turn with finish_reason=content_filter, got events: %+v", sink.events)
+		}
 	})
 }
 
