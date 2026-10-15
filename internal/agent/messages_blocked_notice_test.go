@@ -26,6 +26,7 @@ func TestBlockedNoticeCategoriesDroppedWhileToolCallsPending(t *testing.T) {
 		event.NoticeCategoryLengthLimit,
 		event.NoticeCategoryTPM,
 		event.NoticeCategoryDisplay,
+		event.NoticeCategoryProviderEmpty,
 	}
 
 	const marker = "BLOCKED-NOTICE-MARKER"
