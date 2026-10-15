@@ -61,6 +61,27 @@ jobs:
       run: go build ./...
     - name: Vet
       run: go vet ./...
+    - name: Task 1 focused test evidence
+      shell: bash
+      run: |
+        set -euo pipefail
+        {
+          git rev-parse HEAD
+          go version
+          go env GOOS GOARCH
+        } | tee task1-environment.txt
+        go test -json -count=1 ./internal/event/ ./internal/agent/ ./cmd/ag/ \
+          -run '^(TestNoticeCategoryValuesAreAppendOnly|TestNoticeCategoryProviderEmptyIsNotModelFacing|TestBlockedNoticeCategoriesDroppedWhileToolCallsPending|TestJournalNoticeCategoryRoundTripDoesNotReachModel|TestEmptyTurnEmitsNotice|TestEmptyTurnEmitsNoticeWithCustomMaxTokens|TestEmptyResponseReadsCategoryNotWording|TestHeadlessEmptyResponse|TestHeadlessEmptyResponseWithOtherStopReasonKeepsExitCode|TestHeadlessEmptyResponseKeepsRunEndEnded)$' \
+          2>&1 | tee task1-tests.jsonl
+    - name: Upload Task 1 focused test evidence
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: task1-evidence-${{ github.sha }}
+        path: |
+          task1-environment.txt
+          task1-tests.jsonl
+        if-no-files-found: error
     - name: Unit tests without race
       run: go test ./... -count=1
     - name: Nested bubbles unit tests
