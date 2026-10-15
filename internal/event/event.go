@@ -364,6 +364,10 @@ type EditRecord struct {
 	ModeBefore os.FileMode `json:"mode_before,omitempty"`
 	BlobBefore string      `json:"blob_before,omitempty"`
 	BlobAfter  string      `json:"blob_after,omitempty"`
+	// Excluded marks a record for a path excluded from shadow storage
+	// (P0-4). Blobs are never stored for excluded paths; /undo refuses
+	// with ErrUndoExcluded instead of deleting the file.
+	Excluded bool `json:"excluded,omitempty"`
 }
 
 // ToolCall carries both the request and its outcome.
