@@ -131,7 +131,7 @@ the same uid.
 | Skills are progressive-disclosure, project scope is off unless an operator opts in, and every body is re-hashed before it is served | REDUCED | Only name, description and scope reach the prompt; the body is read on invocation. Containment is who may write into each scope plus the recorded SHA-256, not what the body says. The complete binary tool vocabulary is independent of the session's active registry, so continuation can fence historical `skill` calls while an empty skill index leaves the tool inactive. Evidence: `TestProjectSkillsAreAbsentWhenOptInIsOff`, `TestProjectSkillSymlinkEscapeIsRefused`, `TestJournalRecordsHashMatchesLoadedBytes`, `TestSkillToolRefusesBodyChangedSinceLoad`, `TestSkillRegistrationFollowsLoadedIndex`, `TestFenceRejectsUnknownName` |
 | Bash filesystem reach after approval | NOT PROVIDED | On Termux, approved bash runs with the full authority of the Termux app user; there is no filesystem sandbox. |
 | Zero-width format controls are stripped at the display boundary | GUARANTEED | `display.SanitizeForDisplay` strips U+200B (ZWSP), U+200C (ZWNJ), and U+FEFF (BOM); ZWJ (U+200D) is preserved for emoji sequences and LRM/RLM (U+200E/U+200F) for legitimate RTL text. Product decision 2026-10-09: ZWNJ stays stripped despite the Persian/Urdu fidelity cost — invisible format controls are a bidi-spoofing vector. Evidence: `TestSanitizeStripsZeroWidthFormatControls` |
-| The headless exit code for a silent turn is decided by notice category, never by notice wording | GUARANTEED | A turn with no assistant text and no tool calls exits 1, and the decision (`emptyResponse` in `cmd/ag/headless.go`) reads only `NoticeCategoryProviderEmpty` or the pre-existing `NoticeCategoryLengthLimit`; `internal/agent/loop.go` marks both silent-turn branches structurally and the notice texts are unchanged. Rewording or translating a notice cannot change the exit code, and an unrelated notice carrying the old phrase cannot create one. Evidence: `TestEmptyResponseReadsCategoryNotWording`, `TestHeadlessEmptyResponse`, `TestHeadlessEmptyResponseWithOtherStopReasonKeepsExitCode`, `TestEmptyTurnEmitsNotice` |
+| The headless empty-response decision reads the loop's structural notices, never their wording | GUARANTEED | The decision (`emptyResponse` in `cmd/ag/headless.go`) requires a `NoticeCategoryProviderEmpty` or `NoticeCategoryLengthLimit` notice on the live branch and reads no notice text; the text-blank and tool-activity exclusions are unchanged. `internal/agent/loop.go` keeps length-cut notices under `NoticeCategoryLengthLimit` and marks both non-length empty-response arms with `NoticeCategoryProviderEmpty`; the notice texts and their emission conditions are byte-identical. Rewording or translating a notice cannot change the exit code, and an unrelated notice carrying the old phrase cannot create one. It is not a detector of every cause of silence. Evidence: `TestEmptyResponseReadsCategoryNotWording`, `TestHeadlessEmptyResponse`, `TestHeadlessEmptyResponseWithOtherStopReasonKeepsExitCode`, `TestHeadlessEmptyResponseKeepsRunEndEnded`, `TestEmptyTurnEmitsNotice`, `TestJournalNoticeCategoryRoundTripDoesNotReachModel` |
 
 ## Path layer
 
@@ -693,22 +693,28 @@ call at all rather than an empty one. Evidence:
 
 ### Silent-turn exit attribution
 
-A headless run whose last turn produced no assistant text and no tool calls
+The headless empty-response decision depends on the structural notices the loop
+emits, not on their wording, and it keeps the text-exclusion and tool-activity
+conditions unchanged: the final assistant text must be blank, and a turn that
+used a tool is never treated as silent. A run that ends on such a turn therefore
 exits 1 rather than 0, so a scripted caller cannot mistake a silent provider for
-a successful empty answer. That decision (`emptyResponse` in
-`cmd/ag/headless.go`) used to match the notice *wording* —
-`strings.Contains(e.Text, "empty response")` and `"NABD_MAX_TOKENS"`. Wording is
-display text, subject to rewording and translation, and it is not a contract: a
-reworded notice would have made a silent empty turn exit 0, and an unrelated
-notice carrying the phrase would have exited 1. Both effects were theoretical
-and untested; neither was a reported incident.
+a successful empty answer. It is not an independent detector of every cause of
+silence — it requires one of those two notices on the live branch — so a silent
+turn that emits neither is outside its scope.
 
-The decision now reads the notice category. `internal/agent/loop.go` marks both
-silent-turn branches (the length cut, and every other empty turn) with
-`NoticeCategoryProviderEmpty`, and `emptyResponse` accepts exactly that category
-or the pre-existing `NoticeCategoryLengthLimit`. Notice texts and their emission
-conditions are byte-identical; only the identity of the condition travels
-structurally, the same rule the provider retry decision already follows.
+The wording it used to match was `strings.Contains(e.Text, "empty response")` and
+`strings.Contains(e.Text, "NABD_MAX_TOKENS")`. Wording is display text, subject
+to rewording and translation, and it is not a contract: a reworded notice would
+have made a silent empty turn exit 0, and an unrelated notice carrying the phrase
+would have exited 1. Both effects were theoretical and untested; neither was a
+reported incident.
+
+The decision now reads the notice category. `internal/agent/loop.go` keeps
+length-cut notices under `NoticeCategoryLengthLimit` and marks both non-length
+empty-response arms with `NoticeCategoryProviderEmpty`. `emptyResponse` accepts
+those two categories. Notice texts and their emission conditions are
+byte-identical; only the identity of the condition travels structurally, the
+same rule the provider retry decision already follows.
 
 The value is appended last in the `NoticeCategory` block on purpose: it is
 persisted as an integer in the append-only journal (`notice_category`), so
@@ -717,8 +723,9 @@ reviewed for the new value: `internal/store/jsonl.go` unmarshals events without
 validating the category, `internal/presentation/projector.go` renders a notice
 from its `Text` and never reads the category, and the only category consumer is
 `event.NoticeAllowedForModel`, a default-deny map lookup. No reader switches
-exhaustively, so an older binary can only drop the notice from the model
-context — the intended behaviour.
+exhaustively, so a reader at this revision drops an unknown value from the model
+context — the intended behaviour. The review covers the readers in this tree, not
+historical binaries.
 
 The category is deliberately absent from `noticeReachesModel`, so it cannot
 enter the model's context. That is the existing default-deny allowlist rather
@@ -726,8 +733,10 @@ than a new mechanism, and it is asserted twice on purpose: statically, and
 behaviourally on what `Messages` actually sends, with pending tool calls and
 idle. Evidence: `TestEmptyResponseReadsCategoryNotWording`,
 `TestHeadlessEmptyResponseWithOtherStopReasonKeepsExitCode`,
-`TestEmptyTurnEmitsNotice`, `TestHeadlessEmptyResponse`,
+`TestHeadlessEmptyResponseKeepsRunEndEnded`, `TestEmptyTurnEmitsNotice`,
+`TestHeadlessEmptyResponse`,
 `TestBlockedNoticeCategoriesDroppedWhileToolCallsPending`,
+`TestJournalNoticeCategoryRoundTripDoesNotReachModel`,
 `TestNoticeCategoryProviderEmptyIsNotModelFacing`,
 `TestNoticeCategoryValuesAreAppendOnly`.
 
