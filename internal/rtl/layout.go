@@ -73,9 +73,9 @@ const (
 )
 
 // Policy controls one Layout call. Shaping is deliberately absent here: it is
-// applied at the UI layer via shapeArabicText (see docs/termux-shaping-
-// measurements.md for the decision). The engine's shaping option remains
-// internal/test-only.
+// applied at the UI layer via shapeProseRuns (see docs/termux-shaping-
+// measurements.md and docs/rtl-step1-shape-after-markdown.md for the
+// decisions). The engine's shaping option remains internal/test-only.
 type Policy struct {
 	Mode Mode
 	Base Direction
