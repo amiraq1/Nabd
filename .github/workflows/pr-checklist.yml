@@ -24,4 +24,6 @@ jobs:
       - name: Required PR security checklist
         env:
           LIVE_BODY_FILE: ${{ runner.temp }}/pr-body
+          GITHUB_ACTOR: ${{ github.actor }}
+          PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
         run: bash scripts/check-pr-security-checklist.sh
