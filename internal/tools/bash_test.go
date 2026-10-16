@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -55,7 +57,62 @@ func TestBashRejectsNonStrictArgs(t *testing.T) {
 	}
 }
 
+// linuxProcessIsRunning distinguishes a live process from a zombie. kill(pid, 0)
+// treats zombies as existing, even though they can no longer execute; /proc
+// exposes the process state needed by this lifecycle assertion.
+func linuxProcessIsRunning(pid int) (bool, error) {
+	stat, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read process state for pid %d: %w", pid, err)
+	}
+	// comm is parenthesized and may itself contain spaces or ')', so split
+	// after the final ')' rather than using Fields on the whole stat record.
+	closeParen := strings.LastIndexByte(string(stat), ')')
+	if closeParen < 0 {
+		return false, fmt.Errorf("malformed /proc/%d/stat: missing comm terminator", pid)
+	}
+	fields := strings.Fields(string(stat[closeParen+1:]))
+	if len(fields) == 0 {
+		return false, fmt.Errorf("malformed /proc/%d/stat: missing state", pid)
+	}
+	return fields[0] != "Z" && fields[0] != "X", nil
+}
+
+// waitForLinuxProcessStop waits for process exit or zombie state. The bounded
+// poll is a deadline, not a fixed post-kill sleep: it returns as soon as the
+// kernel reports that the process can no longer execute.
+func waitForLinuxProcessStop(pid int, timeout time.Duration) (bool, error) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		running, err := linuxProcessIsRunning(pid)
+		if err != nil {
+			return false, err
+		}
+		if !running {
+			return true, nil
+		}
+		select {
+		case <-ticker.C:
+		case <-timer.C:
+			return false, nil
+		}
+	}
+}
+
 func TestBashTimeoutKillsGrandchildren(t *testing.T) {
+	if _, err := os.Stat("/proc/self/stat"); os.IsNotExist(err) {
+		t.Skip("requires Linux procfs to distinguish zombies from live processes")
+	} else if err != nil {
+		t.Fatal(err)
+	}
+
 	r, _ := newReg(t)
 	raw, _ := json.Marshal(map[string]any{
 		"cmd":       "sleep 60 & echo $!; sleep 60",
@@ -76,12 +133,16 @@ func TestBashTimeoutKillsGrandchildren(t *testing.T) {
 		}
 	}
 	if pid == 0 {
-		t.Skip("لم أستخرج pid الحفيد")
+		t.Fatalf("لم أتمكن من استخراج PID الحفيد من المخرجات: %q", o.Text)
 	}
-	time.Sleep(200 * time.Millisecond)
-	if syscall.Kill(pid, 0) == nil {
-		syscall.Kill(pid, syscall.SIGKILL)
-		t.Fatal("الحفيد نجا من قتل المجموعة")
+	stopped, err := waitForLinuxProcessStop(pid, 2*time.Second)
+	if err != nil {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatalf("تعذر فحص حالة الحفيد: %v", err)
+	}
+	if !stopped {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		t.Fatal("الحفيد ما زال قابلاً للتنفيذ بعد قتل المجموعة")
 	}
 }
 

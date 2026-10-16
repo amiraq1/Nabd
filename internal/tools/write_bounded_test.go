@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"nabd/internal/event"
 )
@@ -167,24 +166,46 @@ func TestDiffBudgetRejectionLeavesFileWrittenAndRecordIntact(t *testing.T) {
 	}
 }
 
-// TestDiffRespectsCancellation verifies NBD-011: a cancelled context terminates
-// expensive diff work promptly instead of running to completion.
-func TestDiffRespectsCancellation(t *testing.T) {
-	setDiffBounds(t, 1<<20, 100000, 1<<30, 1<<20, 1<<20) // huge budget, so only ctx stops it
-	before := strings.Repeat("cancel-before\n", 4000)
-	after := strings.Repeat("cancel-after\n", 4000)
+// cancelOnNthErrContext deterministically cancels on a selected Err check.
+// Embedding a base context supplies Deadline, Done, and Value without timers,
+// goroutines, sleeps, or shared package-level test hooks.
+type cancelOnNthErrContext struct {
+	context.Context
+	cancel   context.CancelFunc
+	cancelAt int
+	checks   int
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+func (c *cancelOnNthErrContext) Err() error {
+	c.checks++
+	if c.checks == c.cancelAt {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+// TestDiffRespectsCancellation verifies that unifiedDiff observes cancellation
+// inside the LCS matrix, not only before starting the diff.
+func TestDiffRespectsCancellation(t *testing.T) {
+	// Checks 1 and 2 are the entry and post-budget checks. Check 3 enters the
+	// first LCS row; check 4 cancels before the next row begins.
+	base, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	start := time.Now()
-	_, err := unifiedDiff(ctx, []byte(before), []byte(after), "c.txt")
-	elapsed := time.Since(start)
-	if err == nil {
-		t.Fatalf("expected cancellation error, got nil")
+	ctx := &cancelOnNthErrContext{
+		Context:  base,
+		cancel:   cancel,
+		cancelAt: 4,
 	}
-	if elapsed > 2*time.Second {
-		t.Fatalf("diff did not terminate promptly on cancellation: took %v", elapsed)
+	before := []byte("before-1\nbefore-2\nbefore-3\n")
+	after := []byte("after-1\nafter-2\nafter-3\n")
+
+	_, err := unifiedDiff(ctx, before, after, "c.txt")
+	if err != context.Canceled {
+		t.Fatalf("expected context.Canceled during LCS, got %v", err)
+	}
+	if ctx.checks != ctx.cancelAt {
+		t.Fatalf("Err checked %d times, want cancellation on check %d", ctx.checks, ctx.cancelAt)
 	}
 }
 
