@@ -7,19 +7,23 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Dependabot automated path
 #
-# Dependabot pull requests cannot fill in a human security checklist, but they
-# must still satisfy every mechanical safety property:
-#   1. Dual identity verification:
+# Dependabot pull requests cannot fill in a human security checklist. To handle
+# automated dependency bumps, this path provides a mechanical check with
+# explicit, bounded trust properties:
+#
+#   1. Event-level identity verification:
 #      - PR_AUTHOR_LOGIN must be exactly "dependabot[bot]" (the pull request author
 #        from github.event.pull_request.user.login).
-#      - GITHUB_ACTOR must be exactly "dependabot[bot]" (the event actor who pushed
-#        the commit or triggered the event from github.actor).
-#      Both are mandatory. If a human opens a PR or a human pushes commits to a
-#      Dependabot branch, the automated path is denied and the full human checklist
-#      is required. Branch-name prefixes (e.g. dependabot/*) are author-controlled
-#      and carry zero identity assurance.
+#      - GITHUB_ACTOR must be exactly "dependabot[bot]" (the actor triggering the
+#        current event from github.actor).
+#      Contract: An event triggered by a human does not benefit from this automated
+#      path, even if the pull request was opened by Dependabot. This check verifies
+#      the current event's actor and the PR author login; it does NOT inspect git
+#      commit history or prove the absence of prior human commits on the branch.
+#      Branch-name prefixes (e.g. dependabot/*) are author-controlled and carry
+#      zero identity assurance.
 #
-#   2. Bounded allowed file scope:
+#   2. Bounded path scope (file names only, not semantic diff inspection):
 #      - Root Go dependency manifests: exactly "go.mod" or "go.sum".
 #        Literal exact match only; suffixes or extension variations such as
 #        "go.mod.evil" or "go.sum.backup" are rejected.
@@ -28,11 +32,15 @@ set -euo pipefail
 #        third_party/. No executable Go source files or nested subtrees are permitted.
 #      - GitHub Actions workflow definitions: ".github/workflows/<name>.yml" or
 #        ".github/workflows/<name>.yaml" directly in .github/workflows/ (no subdirs,
-#        scripts, or non-workflow files). Note: Dependabot is configured to bump
-#        GitHub Action versions and commit pins in these workflow files.
+#        scripts, or non-workflow files).
+#      Boundary note: This check validates file paths and directory boundaries only;
+#      it does NOT inspect or parse diff contents. Specifically, accepting
+#      .github/workflows/<name>.yml or .yaml verifies file path scope only and does
+#      not prove that changes within the workflow are confined to action version
+#      bumps (uses: / commit SHAs).
 #
-#   Any file changed outside this strictly bounded scope causes the gate to fall
-#   back to the full human checklist.
+#   Any file changed outside this strictly bounded path scope causes the gate to
+#   fall back to the full human checklist.
 #
 #   3. Build, test, and security CI checks are unaffected and remain required.
 # ---------------------------------------------------------------------------
