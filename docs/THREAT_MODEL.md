@@ -1289,3 +1289,19 @@ changed" statement does not describe this v14 result or its follow-up correction
 - Moved the MCP implementation-status text out of the heading.
 - At that earlier editorial step only, every other claim row, status, test
   citation and section was unchanged. Later v14 changes supersede that scope.
+
+### Gate-scope alignment and dead-code removal (2026-10-16)
+
+Two changes touch the `security_files` boundary without changing any claim
+above:
+
+- `internal/snap/shadow.go`: the unused `Shadow.UsesGit` method, which
+  unconditionally returned false and had no callers, was removed. Dead-code
+  removal only; the shadow store's behaviour and this document's claims are
+  unchanged.
+- `scripts/check-pr-security-checklist.sh`: `internal/mcp/` was added to its
+  `security_files` array so it matches the list enforced by
+  `scripts/check-threat-model-freshness.sh`; the two gates were previously
+  asymmetric for MCP changes. `TestPRChecklistGateScopesThreatModelClaim`
+  pins the shared list.
+
