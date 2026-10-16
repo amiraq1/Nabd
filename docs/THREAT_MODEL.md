@@ -494,6 +494,11 @@ scope contributes at most 128 skills and the prompt contribution is capped at
 omitted. Discovery is bounded in depth and entry count, honors
 `internal/ignorefile`, and never follows a symlink — a symlinked entry is
 reported and refused, so a project skill cannot borrow a path outside its tree.
+The entry cap bounds the read and not only the result: a directory is asked for
+no more entries than the cap still allows, plus one, so reaching the ceiling
+neither materialises a full extra batch nor stops silently. The cap and its
+disclosure are pinned at the exact boundary
+(`TestWalkEntryCapBoundaryIsDisclosed`).
 A name defined twice keeps the first and reports the loser with the path that
 won.
 
