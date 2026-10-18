@@ -10,6 +10,11 @@ import (
 var (
 	ErrUndoConflictMissing = errors.New("target file is missing; will not overwrite your deletion")
 	ErrUndoConflictChanged = errors.New("changed after the agent wrote it; will not overwrite your work")
+	// ErrUndoBeforeMissing is the V16 fail-closed refusal: the record says the
+	// file existed (it carries a before-hash) but the content reference needed
+	// to restore it is absent. Deleting the file there would destroy exactly
+	// the content the record says was replaced.
+	ErrUndoBeforeMissing = errors.New("before-content reference is missing for an existing file; refusing to delete it")
 )
 
 // UndoResult is one attempted rewind, in the order attempted.
@@ -72,6 +77,18 @@ func (r *Registry) rewindRecord(rec *event.EditRecord) UndoResult {
 	}
 
 	if rec.BlobBefore == "" {
+		// Creation is a statement the record makes about itself: no before
+		// content AND no before hash. HashBefore is written exactly when the
+		// file existed (buildRecord), so an absent content reference beside a
+		// before-hash is a record this reader cannot restore — a writer that
+		// stores no content blobs (V16: the capture-ordering change proposed in
+		// the open PR #270) or a legacy record whose reference is gone. The
+		// marker such a writer adds is not needed: whatever this schema does not
+		// know it ignores, and the hashes decide. Fail closed, because deleting
+		// the file would destroy the content the record says it replaced.
+		if rec.HashBefore != "" {
+			return UndoResult{Rel: rec.Path, Note: ErrUndoBeforeMissing.Error()}
+		}
 		// Creation: the "before" was absence.
 		if err := removeFromRoot(r.root, rel, abs); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return UndoResult{Rel: rec.Path, Note: err.Error()}
