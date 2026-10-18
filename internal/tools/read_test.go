@@ -53,6 +53,39 @@ func TestReadFileStrictArgs(t *testing.T) {
 		}
 	})
 
+	t.Run("trailing data rejected", func(t *testing.T) {
+		raw := json.RawMessage(`{"path":"sample.txt"}{"path":"other.txt"}`)
+		out, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw))
+		if err == nil || ok {
+			t.Fatalf("expected trailing data to be rejected, got ok=%v, err=%v, out=%q", ok, err, out)
+		}
+		if !strings.Contains(err.Error(), "unexpected trailing data") {
+			t.Fatalf("expected error mentioning trailing data, got: %v", err)
+		}
+	})
+
+	t.Run("case-varied key dropped as undeclared and reported", func(t *testing.T) {
+		// read_file is ReadOnly, so the repair layer may remove a key the tool
+		// does not declare. A case-varied spelling is exactly such a key: it is
+		// dropped and reported, so the call reads the declared path rather than
+		// letting the last spelling reach the same field silently.
+		var fixes []Fix
+		r.OnRepair = func(f Fix) { fixes = append(fixes, f) }
+		defer func() { r.OnRepair = nil }()
+
+		raw := json.RawMessage(`{"path":"sample.txt","Path":"other.txt"}`)
+		out, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw))
+		if err != nil || !ok {
+			t.Fatalf("read_file failed: ok=%v err=%v", ok, err)
+		}
+		if !strings.Contains(out, "line 1: apple") {
+			t.Fatalf("the declared path must be the one read, got %q", out)
+		}
+		if got := DroppedKeys(fixes); len(got) != 1 || got[0] != "Path" {
+			t.Fatalf("the dropped spelling must be reported, got fixes=%+v dropped=%v", fixes, got)
+		}
+	})
+
 	t.Run("valid fields work as expected", func(t *testing.T) {
 		raw := json.RawMessage(`{"path":"sample.txt","offset":2,"limit":2}`)
 		out, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw))
@@ -66,4 +99,34 @@ func TestReadFileStrictArgs(t *testing.T) {
 			t.Fatalf("did not expect lines 1 or 4, got: %q", out)
 		}
 	})
+}
+
+// TestReadFileDecoderBoundaryWithRepairOff pins the decoder itself, with repair
+// disabled: that is the net behind RepairCall, so a bypass the repair layer
+// happens to drop as an undeclared key must still be refused on its own.
+func TestReadFileDecoderBoundaryWithRepairOff(t *testing.T) {
+	r, dir := newReg(t)
+	r.repairOff = true
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("line 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"mixed-case duplicate key", `{"path":"sample.txt","Path":"other.txt"}`},
+		{"nested duplicate key", `{"path":"sample.txt","opts":{"a":1,"a":2}}`},
+		{"leading whitespace duplicate key", "  {\"path\":\"sample.txt\",\"path\":\"other.txt\"}"},
+		{"trailing object", `{"path":"sample.txt"}{"path":"other.txt"}`},
+		{"trailing primitive", `{"path":"sample.txt"} 5`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, ok, err := r.Run(context.Background(), providerToolCall("read_file", json.RawMessage(tc.raw)))
+			if err == nil || ok {
+				t.Fatalf("the decoder accepted %s: ok=%v err=%v out=%q", tc.name, ok, err, out)
+			}
+		})
+	}
 }

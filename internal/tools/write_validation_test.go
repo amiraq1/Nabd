@@ -73,6 +73,9 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 				{"content object", `{"path":"target.txt","content":{"x":1}}`},
 				{"content array", `{"path":"target.txt","content":[1,2]}`},
 				{"duplicate content key", `{"path":"target.txt","content":"a","content":"b"}`},
+				{"mixed-case duplicate content key", `{"path":"target.txt","content":"a","Content":"b"}`},
+				{"nested duplicate key", `{"path":"target.txt","content":"x","opts":{"a":1,"a":2}}`},
+				{"trailing object", `{"path":"target.txt","content":"x"}{"content":"y"}`},
 				{"unknown field", `{"path":"target.txt","content":"x","bogus":1}`},
 				{"invalid JSON", `{"path":"target.txt",`},
 			}
@@ -85,6 +88,9 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 					{"new object", `{"path":"target.txt","old":"original content","new":{"x":1}}`},
 					{"new array", `{"path":"target.txt","old":"original content","new":[1,2]}`},
 					{"old absent", `{"path":"target.txt","new":"replacement"}`},
+					{"duplicate new key", `{"path":"target.txt","old":"original content","new":"a","new":"b"}`},
+					{"mixed-case duplicate new key", `{"path":"target.txt","old":"original content","new":"a","New":"b"}`},
+					{"trailing object", `{"path":"target.txt","old":"original content","new":"x"}{}`},
 					{"unknown field", `{"path":"target.txt","old":"original content","new":"x","bogus":1}`},
 					{"invalid JSON", `{"path":"target.txt",`},
 				}
