@@ -3,6 +3,7 @@ package build
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -206,6 +207,110 @@ func TestReleaseAssertsCleanTreeBeforeGoReleaser(t *testing.T) {
 	}
 	dryrunBlock := ci[start : start+end]
 	checkCleanStep("ci.yml (release-dryrun)", dryrunBlock, "scripts/release-notes.sh", "goreleaser/goreleaser-action")
+}
+
+// TestReleaseConfigIsValidatedPerPullRequest asserts the dry-run job validates
+// .goreleaser.yaml with the same pinned GoReleaser build the release uses, and
+// does so before it exercises the release command: a config that no longer
+// loads then fails on the pull request instead of at tag time. The keyless
+// signing path stays tag-only (it needs OIDC and writes Rekor entries), so this
+// per-PR parse is the only automated check of the config itself.
+func TestReleaseConfigIsValidatedPerPullRequest(t *testing.T) {
+	ci := readRepoFile(t, ".github/workflows/ci.yml")
+	start := strings.Index(ci, "release-dryrun:")
+	if start == -1 {
+		t.Fatal("ci.yml missing release-dryrun job")
+	}
+	end := strings.Index(ci[start:], "\n  termux:")
+	if end == -1 {
+		end = len(ci) - start
+	}
+	dryrun := ci[start : start+end]
+
+	idxCheck := strings.Index(dryrun, "args: check")
+	if idxCheck == -1 {
+		t.Fatal("ci.yml release-dryrun must validate the GoReleaser config with `args: check`")
+	}
+	idxRelease := strings.Index(dryrun, "args: release --clean --snapshot")
+	if idxRelease == -1 {
+		t.Fatal("ci.yml release-dryrun missing the snapshot release step")
+	}
+	if idxCheck > idxRelease {
+		t.Error("the config check must run before the snapshot release, not after it")
+	}
+
+	// Both GoReleaser steps must be pinned to the same action commit as the
+	// release, and each is a step of its own: validating the config with a
+	// different build would validate a config the release never runs.
+	goreleaserRE := regexp.MustCompile(`(?m)^\s*uses: goreleaser/goreleaser-action@([0-9a-f]{40}) # (\S+)$`)
+	relUses := goreleaserRE.FindAllStringSubmatch(readRepoFile(t, ".github/workflows/release.yml"), -1)
+	if len(relUses) != 1 {
+		t.Fatalf("release.yml must use goreleaser/goreleaser-action exactly once, got %d", len(relUses))
+	}
+	ciUses := goreleaserRE.FindAllStringSubmatch(dryrun, -1)
+	if len(ciUses) != 2 {
+		t.Fatalf("ci.yml release-dryrun must use goreleaser/goreleaser-action twice (config check and snapshot release), got %d", len(ciUses))
+	}
+	for i, m := range ciUses {
+		if m[1] != relUses[0][1] || m[2] != relUses[0][2] {
+			t.Errorf("ci.yml goreleaser-action use #%d pins @%s (%s) but release.yml pins @%s (%s); the two must be the same build",
+				i+1, m[1], m[2], relUses[0][1], relUses[0][2])
+		}
+	}
+
+	rel := readRepoFile(t, ".github/workflows/release.yml")
+	versionRE := regexp.MustCompile(`(?m)^\s*version: "(v[0-9.]+)"$`)
+	ciVersions := versionRE.FindAllStringSubmatch(dryrun, -1)
+	relVersions := versionRE.FindAllStringSubmatch(rel, -1)
+	if len(ciVersions) == 0 || len(relVersions) == 0 {
+		t.Fatalf("could not find the GoReleaser version pin: ci=%v release=%v", ciVersions, relVersions)
+	}
+	for _, v := range ciVersions {
+		if v[1] != relVersions[0][1] {
+			t.Errorf("ci.yml validates with GoReleaser %s but the release runs %s", v[1], relVersions[0][1])
+		}
+	}
+}
+
+// TestWorkflowActionsArePinnedToCommitSHAs enforces in code the rule the PR
+// checklist states in prose: every third-party action is pinned to a full
+// commit SHA, so a moved tag cannot change what CI runs. The walk covers every
+// workflow file, so a new workflow inherits the rule.
+func TestWorkflowActionsArePinnedToCommitSHAs(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("..", "..", ".github", "workflows", "*.yml"))
+	if err != nil {
+		t.Fatalf("glob workflows: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no workflow files found; the walker is broken, not the tree")
+	}
+
+	usesRE := regexp.MustCompile(`^\s*(?:- )?uses:\s*(\S+)`)
+	pinnedRE := regexp.MustCompile(`^[^@]+@[0-9a-f]{40}$`)
+	total := 0
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		for i, line := range strings.Split(string(data), "\n") {
+			m := usesRE.FindStringSubmatch(line)
+			if m == nil {
+				continue
+			}
+			ref := strings.TrimSuffix(m[1], "\r")
+			if strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "docker://") {
+				continue // a local or docker reference has no commit to pin
+			}
+			total++
+			if !pinnedRE.MatchString(ref) {
+				t.Errorf("%s:%d: %q is not pinned to a full commit SHA", filepath.Base(f), i+1, ref)
+			}
+		}
+	}
+	if total == 0 {
+		t.Fatal("no action references found; the walker is broken, not the tree")
+	}
 }
 
 func TestReleaseDryrunExtractsNotes(t *testing.T) {
