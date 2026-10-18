@@ -42,6 +42,15 @@ type SessionGrantPolicy interface {
 	SessionGrantAllowed(tool string) bool
 }
 
+// CallGrantPolicy is the optional per-call extension of SessionGrantPolicy: a
+// gate that answers per call can also say whether this call may carry a
+// standing grant. decide consults it so a call that must be approved every time
+// neither offers the session choice nor records one — which is what makes
+// "approval required on every write" true rather than merely displayed.
+type CallGrantPolicy interface {
+	SessionGrantAllowedCall(c event.ToolCall) bool
+}
+
 // CallAwareGate is an optional gate extension for tools whose permission
 // verdict depends on the call arguments, not just the tool name
 // (MCP-SEC-09: one adapter name fronts many server tools with different
@@ -108,6 +117,9 @@ func (l *Loop) decide(ctx context.Context, c event.ToolCall, emit func(event.Eve
 		c.SessionGrantKnown = true
 		c.SessionGrantAllowed = policy.SessionGrantAllowed(c.Name)
 	}
+	if cgp, ok := l.Gate.(CallGrantPolicy); ok && !cgp.SessionGrantAllowedCall(c) {
+		c.SessionGrantAllowed = false
+	}
 	if err := emit(event.Event{Type: event.PermAsk, Call: &c, Text: why, Reason: reason}); err != nil {
 		return event.Deny, "permission question was not journaled: " + err.Error()
 	}
@@ -118,6 +130,11 @@ func (l *Loop) decide(ctx context.Context, c event.ToolCall, emit func(event.Eve
 	// Apply policy constraints: the effective decision may differ from the
 	// raw click (e.g. AllowSession for bash → AllowOnce).
 	effective := l.Gate.Effective(c.Name, d)
+	if cgp, ok := l.Gate.(CallGrantPolicy); ok && effective == event.AllowSession && !cgp.SessionGrantAllowedCall(c) {
+		// Defence in depth: an asker that answers AllowSession anyway (a test
+		// double, an embedder) gets one-time consent, never a standing grant.
+		effective = event.AllowOnce
+	}
 	if err := emit(event.Event{Type: event.PermReply, Call: &c, Decision: effective, RawDecision: d, Text: why, Reason: reason}); err != nil {
 		return event.Deny, "permission reply was not journaled: " + err.Error()
 	}
