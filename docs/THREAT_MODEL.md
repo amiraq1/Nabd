@@ -243,7 +243,7 @@ authoritative; this table adds no claim.
 | Provider `providers.json` baseURL and `NABD_BASE_URL` override are validated at load time: plaintext http and non-public addresses are refused by default | GUARANTEED | `endpoint.CheckBaseURL` runs during `ParseProvidersData` and `BuildStandaloneProviderWithRegistry`, rejecting any declared or overridden `baseURL` that uses a non-https scheme or resolves to a loopback, RFC 1918, link-local, CGNAT, ULA, 6to4, cloud-metadata literal IP, or `.internal`/`.local`/`localhost`-suffixed hostname unless explicitly permitted by `NABD_ENDPOINT_ALLOW`. The active policy is read from `NABD_ENDPOINT_POLICY` (default `strict`); `loopback` allows plaintext HTTP strictly for loopback and private LAN addresses with HTTPS while continuing to refuse cloud metadata; `open` disables both layers. Evidence: `TestStrictRefusesPlaintextHTTP`, `TestStrictRefusesCloudMetadataLiteral`, `TestStrictRefusesCGNATLiteral`, `TestStrictRefusesIPv6ULA`, `TestStrictRefuses6to4Literal`, `TestLoopbackStillRefusesHTTP`, `TestOpenLevelDisablesBothLayers`, `TestAllowListStrictAcceptsAllowedHTTP` |
 | Provider dial-time endpoint guard evaluates the socket address via Dialer.Control immediately before connect, eliminating the TOCTOU rebinding window | GUARANTEED | `Policy.Dialer` configures `net.Dialer.Control` to inspect the literal socket IP address right before `connect(2)`. No secondary DNS lookup is performed, closing the DNS-rebinding window with zero TOCTOU: a hostname resolving to a private, loopback, link-local, CGNAT, ULA, 6to4, or metadata IP is aborted before any packet is transmitted unless permitted by `NABD_ENDPOINT_ALLOW`. Under `PolicyLoopback`, dial-time checks continue to refuse cloud metadata, link-local, CGNAT, and 6to4 addresses. When refused, `endpoint.ErrEndpointRefused` is wrapped and classified as `provider.ErrorKindEndpointRefused`, surfaced as `agent.ErrCodeEndpointRefused` with responsive remediation guidance. Evidence: `TestControlRefusesRebindingViaResolver`, `TestControlRefusesRebindingToPrivateAddress`, `TestControlRefusesLoopbackAddress`, `TestControlRefusesCloudMetadata`, `TestControlRefusesCGNATAddress`, `TestControlRefusesIPv6ULAAddress`, `TestControlRefuses6to4Address`, `TestControlPassesThroughPublicAddress`, `TestControlPermitsAllowedAddr`, `TestControlUnderLoopback`, `TestErrorKindEndpointRefused`, `TestCrossPackageEndpointRefusedRemedyFlow`, `TestFeedProviderErrorShowsEndpointRefusedRemedy` |
 | No provider can be constructed with an unguarded HTTP client | GUARANTEED | Every provider constructor (`NewOpenAIDialect`, `NewAnthropicDialect`) defaults to `endpoint.Client(0)` governed by the active endpoint policy; omitting explicit client injection is fail-closed, and direct or route constructors cannot produce an unguarded client. When an environment proxy (`HTTPS_PROXY` / `HTTP_PROXY`) is configured, the proxy URL is validated against the endpoint policy at request time. Evidence: `TestConstructorDefaultsToGuardedClient`, `scripts/check-security-invariants.sh`, `TestTransportProxyValidation`, `TestCustomEndpointIsAcceptedByDesign` |
-| Retryability of the provider's model-unavailable answer is decided by error type, never by message wording | GUARANTEED | Both the 404/410 status branch and the OpenAI-compatible body heuristic raise `*modelUnavailableError`; `transient` classifies the type with `errors.As`, so re-wording, re-accenting, or wrapping the message cannot change whether it is retried. The model, status, suffix, and optional complete rendering are data on the error. The standalone OpenAI-compatible path is exercised against a counting HTTP server and performs exactly one request for a 400 body reporting `model not found`. Every pre-existing user-visible shape remains byte-identical. Evidence: `TestModelUnavailableIsTypedAndNotRetried`, `TestModelUnavailableHeuristicIsTypedAndNotRetried`, `TestStandaloneOpenAICompatDoesNotRetryModelNotFoundBody`, `TestModelUnavailableRetryDecisionIgnoresWording`, `TestModelUnavailableRendersBothSitesByteIdentical`, `TestModelUnavailableSurvivesWrapping`, `TestHTTPErrorRetryLadderUnchanged` |
+| Retryability of the provider's model-unavailable answer is decided by error type, never by message wording | GUARANTEED | Both the 404/410 status branch and the OpenAI-compatible body heuristic raise `*modelUnavailableError`; `transient` classifies the type with `errors.As`, so re-wording, re-accenting, or wrapping the message cannot change whether it is retried. The model, status, suffix, and optional complete rendering are data on the error. The standalone OpenAI-compatible path is exercised against a counting HTTP server and performs exactly one request for a 400 body reporting `model not found`. Every pre-existing user-visible shape remains byte-identical: the wording renders through the provider language seam, whose ASCII English default the CLI replaces with the Arabic catalog at startup (ADR-0002 decision 4), and neither rendering reads as a model-not-found body. Evidence: `TestModelUnavailableIsTypedAndNotRetried`, `TestModelUnavailableHeuristicIsTypedAndNotRetried`, `TestStandaloneOpenAICompatDoesNotRetryModelNotFoundBody`, `TestModelUnavailableRetryDecisionIgnoresWording`, `TestModelUnavailableRendersBothSitesByteIdentical`, `TestModelUnavailableSurvivesWrapping`, `TestHTTPErrorRetryLadderUnchanged`, `TestModelUnavailableRenderingDefaultsToASCIIBaseline`, `TestModelUnavailableErrorReadsTheSeam`, `TestModelUnavailableTextNeverReadsAsModelNotFound`, `TestProviderLanguageCatalogIsInstalledByteIdentical` |
 | Local runtimes permit loopback HTTP under PolicyLoopback and explicit allowlisting via NABD_ENDPOINT_ALLOW under PolicyStrict | GUARANTEED | `endpoint.CheckBaseURL` permits plaintext http strictly for loopback destinations (`127.0.0.1`, `::1`, `localhost`) under `NABD_ENDPOINT_POLICY=loopback` to support local runtimes like Ollama without TLS, while remote destinations still require https and cloud metadata is refused at load and dial time. Alternatively, `NABD_ENDPOINT_ALLOW` permits designated local or private endpoints under `PolicyStrict` while keeping full connect-time protection active for all other providers. Evidence: `TestLoopbackStillRefusesHTTP`, `TestLoopbackAllowsLoopbackAndPrivate`, `TestLoopbackAllowsLoopbackHTTP`, `TestLoopbackRefusesCloudMetadata`, `TestAllowListStrictAcceptsAllowedHTTP`, `TestAllowListStrictAcceptsAllowedPrivate` |
 | `NABD_ENDPOINT_POLICY=open` disables both the load-time URL check and the connect-time dial guard | REDUCED | When an operator sets `NABD_ENDPOINT_POLICY=open`, `CheckBaseURL` returns nil for any URL and `Dialer` returns the dialer unchanged without registering a `Control` hook. This is the override for air-gapped or development environments that cannot use HTTPS. Whoever can set this variable can direct all connections to an arbitrary endpoint including plaintext and private addresses. The remaining controls are the 0600 permission and owner check on `providers.json` and `auth.json`. Evidence: `TestOpenLevelDisablesBothLayers`, `TestControlIsNoOpUnderOpenPolicy` |
 | OpenAI wire encoding preserves pre-compat baseline structure by default | GUARANTEED | `OpenAICompat.encode` pins the baseline request structure: standard `max_tokens`, `stream_options.include_usage=true`, and canonical `system` → `tool` → `user` message ordering; zero values of future endpoint compat flags preserve this body. Evidence: `TestOpenAIEncodingBaseline` |
@@ -378,6 +378,35 @@ allowlist, independently of config loading.
   `TestCaptureRefusesDirsAndLinks` pins both sentinels, and
   `TestSourceArabicLiteralRatchet` pins that no non-catalog source file gained
   Arabic text.
+
+### Provider error wording: an installed seam with ASCII defaults
+
+- The last hand-written Arabic in `internal/provider` — the model-unavailable
+  template and the first-byte timeout text, which was duplicated verbatim in
+  `anthropic.go` and `openai.go` — moved into the CLI catalog. The provider now
+  carries ASCII English baselines and renders both messages through
+  `SetModelUnavailableMessage` / `SetFirstByteTimeoutMessage`; `cmd/ag` installs
+  the Arabic wording at the top of `main`, before any provider answer can
+  arrive (ADR-0002 decision 4).
+- The seam sits inside the provider package rather than at a display boundary
+  because both messages are already text before any display boundary is
+  reached: the router folds a route's error string into
+  `RouterExhaustedError.Error()`, and the agent journals `err.Error()` into the
+  `RunError` event. Installing the wording at the renderer is what keeps the
+  feed, the headless stderr line, the journal, and the router details
+  byte-identical to the shapes the move replaced.
+- A caller that never runs the CLI sees the explicit English baseline; no retry
+  or classification decision reads the wording (evidence:
+  `TestModelUnavailableTextNeverReadsAsModelNotFound`,
+  `TestModelUnavailableErrorReadsTheSeam`,
+  `TestProviderLanguageCatalogIsInstalledByteIdentical`,
+  `TestFirstByteTimeoutMessageIsInstalledThroughTheSeam`,
+  `TestFirstByteTimeoutMessageHasOneSourceLiteral`).
+- The language guard's allowlist is now restricted to the ADR-0002 sanctioned
+  catalog files, enforced by
+  `TestArabicLiteralAllowlistIsRestrictedToSanctionedCatalogFiles`; the live
+  `TestSourceArabicLiteralRatchet` still fails any file that gains Arabic
+  outside them. This is the #223 closure criterion made mechanical.
 
 ### Router timing keys
 
@@ -1229,6 +1258,30 @@ before updating the relevant claim. No P0 severity is assigned by this list.
 | V20 | Source-comment contradiction: journal_rotation.go says non-jsonl archives are invisible to purge, but purgeCandidates includes regular names containing .archived-. | The predicate is established by [purgeCandidates](https://github.com/amiraq1/Nabd/blob/51859a06b5e4ba7d35babad700a4376acaa84a7d/cmd/ag/purge.go#L85) and the existing archived-file fixture in TestPurgeDeletesOnlyEligibleRegularJournals. Correct the stale maybeRotateOversizedJournal comment in a separate source-comment-only change; no uncertainty about the predicate or new runtime behavior is implied. |
 
 ## Revision log
+
+2026-10-18, provider error language seam (claims-affecting documentation revision):
+
+- Moved the last hand-written Arabic out of `internal/provider`: the first-byte
+  timeout text (duplicated verbatim in `anthropic.go` and `openai.go`) and the
+  model-unavailable template. The package now carries ASCII English defaults and
+  renders through a seam that `cmd/ag` installs at startup from its catalog;
+  both user-visible shapes stay byte-identical (ADR-0002 decision 4, provider
+  leg).
+- Recorded why the seam lives inside the provider package and not at a display
+  boundary: both messages are stringified before any display boundary is
+  reached — `RouterExhaustedError.Error()` folds the per-route text into its
+  details and the agent journals `err.Error()` into the `RunError` event — so a
+  display-side rewrite could not have kept the journal and route details
+  unchanged. No schema, event or retry decision changed; the retry verdict
+  still reads the type only.
+- Amended the retryability row's byte-identity sentence and evidence list, and
+  added the provider-wording subsection, so the document records where the
+  wording now lives instead of implying the provider still holds it.
+- Restricted the language guard's allowlist to the ADR-0002 sanctioned catalog
+  files and added `TestArabicLiteralAllowlistIsRestrictedToSanctionedCatalogFiles`
+  — #223's closure criterion made mechanical — while
+  `TestSourceArabicLiteralRatchet` keeps failing any Arabic outside the
+  catalogs.
 
 2026-10-18, V16 older-reader compatibility (claims-affecting documentation revision):
 
