@@ -64,25 +64,18 @@ func TestReadFileStrictArgs(t *testing.T) {
 		}
 	})
 
-	t.Run("case-varied key dropped as undeclared and reported", func(t *testing.T) {
-		// read_file is ReadOnly, so the repair layer may remove a key the tool
-		// does not declare. A case-varied spelling is exactly such a key: it is
-		// dropped and reported, so the call reads the declared path rather than
-		// letting the last spelling reach the same field silently.
-		var fixes []Fix
-		r.OnRepair = func(f Fix) { fixes = append(fixes, f) }
-		defer func() { r.OnRepair = nil }()
-
+	t.Run("case-varied key is refused, not guessed", func(t *testing.T) {
+		// Two spellings that reach the same Go field are an ambiguity, and the
+		// repair layer does not guess between them — the same rule it already
+		// applies to a field alias when both spellings are present. The strict
+		// decoder refuses the call, so neither spelling silently wins.
 		raw := json.RawMessage(`{"path":"sample.txt","Path":"other.txt"}`)
 		out, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw))
-		if err != nil || !ok {
-			t.Fatalf("read_file failed: ok=%v err=%v", ok, err)
+		if err == nil || ok {
+			t.Fatalf("a case-varied duplicate was accepted: ok=%v err=%v out=%q", ok, err, out)
 		}
-		if !strings.Contains(out, "line 1: apple") {
-			t.Fatalf("the declared path must be the one read, got %q", out)
-		}
-		if got := DroppedKeys(fixes); len(got) != 1 || got[0] != "Path" {
-			t.Fatalf("the dropped spelling must be reported, got fixes=%+v dropped=%v", fixes, got)
+		if !strings.Contains(err.Error(), "duplicate key") {
+			t.Fatalf("expected a duplicate-key refusal, got: %v", err)
 		}
 	})
 

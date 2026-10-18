@@ -241,6 +241,16 @@ func repairArgs(raw json.RawMessage, spec provider.ToolSpec, dropUnknown bool) (
 		return raw, nil
 	}
 
+	// A repeated key, or nesting past the decoder's ceiling, is the strict
+	// decoder's refusal to make. Repair re-marshals this object after a field
+	// fix, and json.Unmarshal has already collapsed a repeated key, so repairing
+	// would keep the last value and hide the ambiguity from the caller. Hand
+	// back only what the wrapper rules already unwrapped (recorded as fixes) and
+	// let decodeStrict refuse the payload.
+	if err := rejectDuplicateKeys(payload); err != nil {
+		return payload, fixes
+	}
+
 	fieldFixes, changed := repairFields(obj, spec, dropUnknown)
 	if !changed {
 		if len(fixes) == 0 {
