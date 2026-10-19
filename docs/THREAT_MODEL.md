@@ -91,7 +91,7 @@ These apply to every GUARANTEED row unless the row says otherwise.
 | Working tree | The resolved project directory used to construct `tools.Root`. |
 | Repository execution hooks | Working-tree files that programs may execute or interpret later: `.git/hooks/*`, `.git/config`, `.gitattributes` filter references, `.gitmodules`, `Makefile`, `package.json` scripts and `.envrc`. Their execution depends on the consuming program; writing them can enable deferred execution. |
 | Session journal | `~/.ag/sessions/*.jsonl` by default. Append-only events can include file contents and command output in cleartext; directory mode 0700 and file mode 0600 limit cross-user reads. Journal redaction is enabled by default and removes recognized credential patterns from new events before write; `NABD_REDACT_JOURNAL=0` is an explicit diagnostic opt-out. |
-| Shadow store | `<root>/.ag/shadow`, content-addressed `s256:` blobs containing full pre/post-edit content, including excluded files, for rollback. `.ag` and `.ag/shadow` are tightened to 0700. On each store write-open, the shield attempts to create `.ag/.gitignore` with the single rule `*`, using exclusive creation (`os.O_CREATE` and `os.O_EXCL`). An existing ignore file is never read, appended to or replaced. Creation failure is ignored; the ignore rule is no guarantee against forced addition or conflicting existing rules. Shadow blobs are not redacted. |
+| Shadow store | `<root>/.ag/shadow`, content-addressed `s256:` blobs containing full pre/post-edit content for regular files. Excluded files are never stored in shadow; their pre/post states are tracked via SHA-256 fingerprints without persisting content to disk, EditRecords are stamped with `Excluded=true` and empty blob references, and `/undo` refuses them via `ErrUndoExcluded` to prevent file deletion. `.ag` and `.ag/shadow` are tightened to 0700. On each store write-open, the shield attempts to create `.ag/.gitignore` with the single rule `*`, using exclusive creation (`os.O_CREATE` and `os.O_EXCL`). An existing ignore file is never read, appended to or replaced. Creation failure is ignored; the ignore rule is no guarantee against forced addition or conflicting existing rules. Shadow blobs are not redacted. |
 | MCP configuration and approvals | `~/.ag/mcp.json` selects server programs and enabled servers; `~/.ag/mcp/` holds MCP approval/journal data. Whoever can modify the configuration controls which server programs may start. |
 | Skills | User scope `~/.config/nabd/skills` loads without a project opt-in; project scope `<root>/.nabd/skills` is off by default. Protect the user scope as trusted instruction configuration. |
 
@@ -138,7 +138,7 @@ authoritative; this table adds no claim.
 | Tool → deferred execution | Per-call verdict on the write target (`perm.ClassifyWritePath`): execution-sensitive files ask on every call, `.git/` and `.ag/` are refused, and the call is answered before the name-based ladder | Path scope only, and only for the file tools: an approved `bash` command is gated on the displayed command alone, so it can still write these paths |
 | Tool-call arguments → tool | One decoder for every tool: decodeStrict after repair | decodeStrict refuses duplicate keys at any depth (case-insensitive), nesting past `maxJSONDepth`, an undeclared field, and any data after the first value; `glob` and `grep` no longer decode with `json.Unmarshal`, and repair never resolves an ambiguous payload (it hands a repeated key to the decoder instead of guessing). The prompt is built from the repaired call, and a ReadOnly call never prompts (V14 closed) |
 | History → model (compaction) | Projection fence: a fresh per-projection nonce and marker defanging applied at the journal-to-wire translation point | The envelope is a label, not an injection boundary: prompt injection through the summary is REDUCED (V17) |
-| Process → provider endpoint | Endpoint policy at load time and dial time; guarded HTTP clients | Policy `open`; redirect containment is not claimed |
+| Process → provider endpoint | Endpoint policy at load time and dial time; guarded HTTP clients with fail-closed redirect policy | Policy `open` disables load/dial time checks; redirects are refused fail-closed via `http.ErrUseLastResponse` |
 | Credentials | 0600 owner-checked files, env allowlist for children, redaction | Same-uid readers; best-effort redaction |
 | Journal / shadow store | 0700/0600 modes, redaction of recognized patterns, git shielding | Shadow store is not redacted; cleartext content |
 | Skills | User scope trusted; project scope off by default; hash re-verified; fenced projection | Project skills are repository-authored instructions |
@@ -191,6 +191,9 @@ authoritative; this table adds no claim.
 | Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED† | `internal/snap` checksum and rename capability tests (EVIDENCE-01). |
 | Undo never deletes a file whose record says it existed but whose before-content is missing | GUARANTEED | The reader decides creation from the record's own fields: creation requires no before-hash AND no before-blob. A present before-hash beside an absent content reference — a writer that stores no blobs (the capture-ordering change proposed in the open PR #270) or a legacy record whose reference is gone — refuses with `ErrUndoBeforeMissing` and leaves the file in place, and an unknown marker in the record is ignored, so the decision rests on data the older schema already has. Evidence: `TestPersistedUndoRefusesMissingBeforeBlob` (real journal round-trip carrying the unknown `excluded` field), and the control `TestPersistedUndoDeletesTrueCreation`. |
 | Undo refuses when current bytes no longer match the recorded hash | GUARANTEED† | undo and persisted-undo tests (EVIDENCE-01). |
+| Excluded files are never stored in the shadow store; pre/post mutation states use in-memory fingerprints, records are stamped Excluded, and undo refuses them without deleting | GUARANTEED | `commit()` detects excluded paths early via `isPathExcluded` before capture; excluded content is fingerprinted in-memory via `FingerprintBytes` without creating `.ag/shadow/` blobs, and `EditRecord` is emitted with `Excluded: true` and empty blob references. `/undo` checks `rec.Excluded` and `IsPathExcluded` to fail safely with `ErrUndoExcluded`, preserving the on-disk file. Evidence: `TestP04_CanaryExcludedPathNeverStoredInShadow`, `TestWriteFileToExcludedPathSucceedsWithUndoTracking`, `TestUndoRevertsWriteToGitignoredFile`. Dynamic disk-level verification passed on Linux CI runner (GitHub Actions Run 39307645290). |
+| Provider HTTP clients enforce a fail-closed redirect policy and never follow HTTP redirects or leak credentials | GUARANTEED | `endpoint.ClientWithAllow` installs `CheckRedirect: noRedirect`, returning `http.ErrUseLastResponse` on all 3xx redirects (301, 302, 303, 307, 308). All provider constructors (`NewAnthropicDialect`, `NewOpenAIDialect`) and `Client()` route through `ClientWithAllow`. Redirect responses terminate immediately without forwarding `x-api-key`, `Authorization`, or other sensitive headers to redirect targets, and provider errors sanitize credentials. Evidence: `TestP01_RedirectDoesNotLeakCredentials`, `TestP01_ProviderRefusesRedirectAndRedactsError`. Integration verification passed on Linux CI runner (GitHub Actions Run 39307645290). |
+| Bash headTail buffer synchronizes concurrent writes and snapshot reads and closes reader pipe on drain timeout to mitigate race conditions and goroutine leaks | GUARANTEED | `headTail` synchronizes `head`, `tail`, and `total` counters with `sync.RWMutex`, allowing concurrent writes while `String()` acquires a read lock to capture an atomic snapshot. When `cmd.Wait()` finishes, any hanging output drain is bounded by `bashDrainGrace` (2s), after which `pr.Close()` unblocks `io.Copy` and waits on the reader goroutine to exit cleanly. Evidence: `TestBash_HeadTailConcurrentWritesAndSnapshot`, `TestBash_GrandchildHoldsStdoutOpen`, `TestBash_ExceedsHeadTailCut`. Verified dynamically under `go test -race` on Linux CI runner (GitHub Actions Run 39307645290). |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
 | Every compaction summary is projected to the model inside the untrusted-data envelope, and marker-shaped text in the summary cannot close it | GUARANTEED | `FenceSummary` wraps the summary at the single journal-to-wire translation point (the `Compact` case in `Messages`), with a fresh nonce from `FenceNonceFunc` in both markers and one defang contract escaping every marker family before wrapping, so a summary that quotes a closing marker — even one carrying this projection's own nonce — cannot terminate the envelope, and the payload text itself survives intact apart from the one-character escape. A structural guard keeps the emitted markers and the defang list in agreement, so a third family added without an escape entry fails the suite. This is a claim about the envelope, not about model compliance; the behavioural limit is the prompt-injection row below. Evidence: `TestCompactSummaryIsFencedWithTheProjectionNonce`, `TestCompactSummaryNonceIsFreshPerProjection`, `TestCompactSummaryPayloadCannotForgeTheFence`, `TestCompactSummaryPayloadStaysIntact`, `TestEveryFenceMarkerFamilyIsDefanged`, `TestToolFenceEscapesTheSummaryMarkers`. |
 | Prompt injection through the compaction summary | REDUCED | The summary is fenced, labeled `UNTRUSTED_DATA NOT_INSTRUCTIONS`, and cannot be de-fenced from inside, but the envelope is a semantic signal rather than an injection boundary: a summary derived from hostile file or command content can still steer the model while fenced, so sensitive actions rely on permission approval. This is the same stance the document takes on any tool output. |
@@ -462,10 +465,10 @@ client", "Local runtimes permit loopback HTTP", and "`NABD_ENDPOINT_POLICY=open`
 - That endpoint controls the response stream, so it can emit `tool_calls` the
   model never proposed. Those calls still pass the permission gate, which is
   the boundary that remains.
-- Cross-host redirect containment, embedded-credential rejection, and
-  query/fragment rejection were withdrawn as requirements in v10 and no claim
-  covers them. Treat redirects as unprotected until a claim says otherwise
-  (open item V5).
+- Cross-host and same-origin redirect containment is enforced for provider HTTP
+  clients via `CheckRedirect: noRedirect` (`http.ErrUseLastResponse`), stopping
+  redirection fail-closed before any credentials can be leaked across endpoints.
+  Embedded-credential rejection and query/fragment rejection remain out of scope.
 - When an environment proxy is configured, the claims table says the proxy URL
   is validated against the policy at request time. No claim covers how the
   proxy itself resolves the destination (open item V5).
@@ -1282,6 +1285,30 @@ before updating the relevant claim. No P0 severity is assigned by this list.
   — #223's closure criterion made mechanical — while
   `TestSourceArabicLiteralRatchet` keeps failing any Arabic outside the
   catalogs.
+
+2026-10-19, security remediation P0/P1 (claims-affecting documentation revision):
+
+- P0: Prevented excluded files (.env, secrets, gitignored files) from being stored
+  as plaintext blobs in the shadow store (<root>/.ag/shadow). Early check in `commit()`
+  identifies excluded paths before any shadow capture; in-memory SHA-256 fingerprints
+  are computed without writing blobs to disk. EditRecords are marked `Excluded: true`,
+  and `/undo` refuses with `ErrUndoExcluded` instead of deleting or restoring files.
+  Evidence: `TestP04_CanaryExcludedPathNeverStoredInShadow`, `TestWriteFileToExcludedPathSucceedsWithUndoTracking`, `TestUndoRevertsWriteToGitignoredFile`.
+  Status: GUARANTEED (Dynamic execution verified on Linux CI runner, GitHub Actions Run 39307645290).
+- P0: Enforced fail-closed HTTP redirect policy for all provider clients via
+  `CheckRedirect: noRedirect` (`http.ErrUseLastResponse`) in `endpoint.ClientWithAllow`.
+  All provider constructors route through this client; redirect responses (301, 302, 303,
+  307, 308) terminate immediately without forwarding `x-api-key`, `Authorization`, or
+  custom credential headers, and error messages redact keys.
+  Evidence: `TestP01_RedirectDoesNotLeakCredentials`, `TestP01_ProviderRefusesRedirectAndRedactsError`.
+  Status: GUARANTEED (Dynamic execution verified on Linux CI runner, GitHub Actions Run 39307645290).
+- P1: Resolved potential data race in `bash.go` output collection. Protected `headTail`
+  buffer with `sync.RWMutex` to synchronize concurrent writes and snapshot reads.
+  Enforced reader pipe closure (`pr.Close()`) on `bashDrainGrace` timeout to unblock
+  `io.Copy` and eliminate reader goroutine leaks when descendants keep stdout open.
+  Clarified header docstring regarding Termux user authority.
+  Evidence: `TestBash_HeadTailConcurrentWritesAndSnapshot`, `TestBash_GrandchildHoldsStdoutOpen`, `TestBash_ExceedsHeadTailCut`.
+  Status: GUARANTEED (Dynamic execution verified on Linux CI runner with -race, GitHub Actions Run 39307645290).
 
 2026-10-18, V16 older-reader compatibility (claims-affecting documentation revision):
 
