@@ -15,6 +15,10 @@ var (
 	// to restore it is absent. Deleting the file there would destroy exactly
 	// the content the record says was replaced.
 	ErrUndoBeforeMissing = errors.New("before-content reference is missing for an existing file; refusing to delete it")
+	// ErrUndoExcluded is the P0-4 refusal: excluded paths were never stored in
+	// shadow; refusing is safer than deleting the user's file or attempting
+	// restoration from non-existent shadow blobs.
+	ErrUndoExcluded = errors.New("excluded path was never stored in shadow; cannot undo")
 )
 
 // UndoResult is one attempted rewind, in the order attempted.
@@ -88,6 +92,11 @@ func (r *Registry) rewindRecord(rec *event.EditRecord) UndoResult {
 		// the file would destroy the content the record says it replaced.
 		if rec.HashBefore != "" {
 			return UndoResult{Rel: rec.Path, Note: ErrUndoBeforeMissing.Error()}
+		}
+		// P0-4: excluded paths were never stored in shadow; refusing is safer than
+		// deleting the user's file (which an empty BlobBefore would otherwise mean).
+		if rec.Excluded || (r.pathGate != nil && r.pathGate.IsPathExcluded(rec.Path)) {
+			return UndoResult{Rel: rec.Path, Note: ErrUndoExcluded.Error()}
 		}
 		// Creation: the "before" was absence.
 		if err := removeFromRoot(r.root, rel, abs); err != nil && !errors.Is(err, os.ErrNotExist) {
