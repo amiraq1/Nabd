@@ -223,6 +223,56 @@ func (s *Shadow) CaptureAbsent(abs string) (State, error) {
 	return State{Rel: filepath.ToSlash(rel), Absent: true, At: time.Now().UTC()}, nil
 }
 
+// FingerprintBytes computes a state fingerprint (s256:sha256) for data without
+// persisting content into the shadow store. Used for excluded paths (P0-4) so
+// that pre- and post-mutation verification can compare content digests without
+// storing sensitive bytes on disk in .ag/shadow.
+func (s *Shadow) FingerprintBytes(abs string, data []byte, mode os.FileMode) (State, error) {
+	rel, err := filepath.Rel(s.root, abs)
+	if err != nil {
+		return State{}, err
+	}
+	sum := sha256.Sum256(data)
+	return State{
+		Rel:  filepath.ToSlash(rel),
+		Size: int64(len(data)),
+		Mode: mode.Perm(),
+		Blob: "s256:" + hex.EncodeToString(sum[:]),
+		At:   time.Now().UTC(),
+	}, nil
+}
+
+// Fingerprint reads and fingerprints an existing path without storing its content
+// in the shadow store. A missing path becomes an absent state.
+func (s *Shadow) Fingerprint(abs string) (State, error) {
+	rel, err := filepath.Rel(s.root, abs)
+	if err != nil {
+		return State{}, err
+	}
+	st := State{Rel: filepath.ToSlash(rel), At: time.Now().UTC()}
+
+	fi, err := os.Lstat(abs)
+	if errors.Is(err, os.ErrNotExist) {
+		st.Absent = true
+		return st, nil
+	}
+	if err != nil {
+		return State{}, err
+	}
+	if fi.IsDir() {
+		return State{}, fmt.Errorf("%s: %w", st.Rel, ErrShadowNotRegular)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return State{}, fmt.Errorf("%s: %w", st.Rel, ErrShadowSymlink)
+	}
+
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return State{}, err
+	}
+	return s.FingerprintBytes(abs, data, fi.Mode().Perm())
+}
+
 // Unchanged reports whether two states describe the same content. This is
 // the whole of "verification": one comparison, not a framework.
 func Unchanged(a, b State) bool {

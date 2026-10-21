@@ -53,6 +53,32 @@ func TestReadFileStrictArgs(t *testing.T) {
 		}
 	})
 
+	t.Run("trailing data rejected", func(t *testing.T) {
+		raw := json.RawMessage(`{"path":"sample.txt"}{"path":"other.txt"}`)
+		out, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw))
+		if err == nil || ok {
+			t.Fatalf("expected trailing data to be rejected, got ok=%v, err=%v, out=%q", ok, err, out)
+		}
+		if !strings.Contains(err.Error(), "unexpected trailing data") {
+			t.Fatalf("expected error mentioning trailing data, got: %v", err)
+		}
+	})
+
+	t.Run("case-varied key is refused, not guessed", func(t *testing.T) {
+		// Two spellings that reach the same Go field are an ambiguity, and the
+		// repair layer does not guess between them — the same rule it already
+		// applies to a field alias when both spellings are present. The strict
+		// decoder refuses the call, so neither spelling silently wins.
+		raw := json.RawMessage(`{"path":"sample.txt","Path":"other.txt"}`)
+		out, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw))
+		if err == nil || ok {
+			t.Fatalf("a case-varied duplicate was accepted: ok=%v err=%v out=%q", ok, err, out)
+		}
+		if !strings.Contains(err.Error(), "duplicate key") {
+			t.Fatalf("expected a duplicate-key refusal, got: %v", err)
+		}
+	})
+
 	t.Run("valid fields work as expected", func(t *testing.T) {
 		raw := json.RawMessage(`{"path":"sample.txt","offset":2,"limit":2}`)
 		out, ok, err := r.Run(context.Background(), providerToolCall("read_file", raw))
@@ -66,4 +92,34 @@ func TestReadFileStrictArgs(t *testing.T) {
 			t.Fatalf("did not expect lines 1 or 4, got: %q", out)
 		}
 	})
+}
+
+// TestReadFileDecoderBoundaryWithRepairOff pins the decoder itself, with repair
+// disabled: that is the net behind RepairCall, so a bypass the repair layer
+// happens to drop as an undeclared key must still be refused on its own.
+func TestReadFileDecoderBoundaryWithRepairOff(t *testing.T) {
+	r, dir := newReg(t)
+	r.repairOff = true
+	if err := os.WriteFile(filepath.Join(dir, "sample.txt"), []byte("line 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"mixed-case duplicate key", `{"path":"sample.txt","Path":"other.txt"}`},
+		{"nested duplicate key", `{"path":"sample.txt","opts":{"a":1,"a":2}}`},
+		{"leading whitespace duplicate key", "  {\"path\":\"sample.txt\",\"path\":\"other.txt\"}"},
+		{"trailing object", `{"path":"sample.txt"}{"path":"other.txt"}`},
+		{"trailing primitive", `{"path":"sample.txt"} 5`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, ok, err := r.Run(context.Background(), providerToolCall("read_file", json.RawMessage(tc.raw)))
+			if err == nil || ok {
+				t.Fatalf("the decoder accepted %s: ok=%v err=%v out=%q", tc.name, ok, err, out)
+			}
+		})
+	}
 }

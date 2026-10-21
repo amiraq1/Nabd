@@ -102,6 +102,11 @@ func TestEmptyTurnEmitsNotice(t *testing.T) {
 					if strings.Contains(ev.Text, "limit") {
 						t.Errorf("must not suggest raising limit on upstream empty response: %q", ev.Text)
 					}
+					// The exit decision reads the category, not the wording
+					// above, so the producer must mark this branch structurally.
+					if ev.NoticeCategory != event.NoticeCategoryProviderEmpty {
+						t.Errorf("expected NoticeCategoryProviderEmpty, got %v", ev.NoticeCategory)
+					}
 					break
 				}
 			}
@@ -109,6 +114,50 @@ func TestEmptyTurnEmitsNotice(t *testing.T) {
 
 		if !foundNotice {
 			t.Fatalf("expected Notice reporting upstream issue, got events: %+v", sink.events)
+		}
+	})
+
+	// The loop has a second silent-turn branch: a stop reason that is neither a
+	// length cut nor a clean stop (content_filter and friends). It emits the
+	// same notice and must carry the same category, or the headless exit
+	// decision would read a different signal for the same outcome.
+	t.Run("other silent stop reason carries the provider-empty category", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Write([]byte(`data: {"choices":[{"delta":{},"finish_reason":"content_filter"}],"usage":{"prompt_tokens":11,"completion_tokens":0}}` + "\n\n" +
+				`data: [DONE]` + "\n\n"))
+		}))
+		defer srv.Close()
+
+		sink := &recordSink{}
+		prov := &provider.OpenAICompat{Key: "test", Model: "m", BaseURL: srv.URL, Client: &http.Client{}}
+		l := &agent.Loop{
+			Provider: prov,
+			Tools:    noTools{},
+			Budget:   agent.NewBudget(),
+			Gate:     noTools{},
+			Human:    noTools{},
+			Sink:     sink,
+		}
+
+		if err := l.Run(context.Background(), "hello"); err != nil {
+			t.Fatalf("unexpected Run error: %v", err)
+		}
+
+		// Scan for the category rather than the first notice: a turn with a
+		// non-zero prompt count also emits a calibration notice, and asserting
+		// on whichever notice comes first would test the wrong event.
+		var found bool
+		for _, ev := range sink.events {
+			if ev.Type == event.Notice && ev.NoticeCategory == event.NoticeCategoryProviderEmpty {
+				found = true
+				if !strings.Contains(ev.Text, "provider returned an empty response (upstream issue)") {
+					t.Errorf("provider-empty notice carries unexpected text: %q", ev.Text)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("expected a NoticeCategoryProviderEmpty notice for a silent turn with finish_reason=content_filter, got events: %+v", sink.events)
 		}
 	})
 }
