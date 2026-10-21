@@ -3,6 +3,7 @@ package skill
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -230,5 +231,60 @@ func TestFormatForPromptIsBoundedSortedAndLoud(t *testing.T) {
 	}
 	if len(diag) == 0 {
 		t.Error("dropping skills must be reported, never silent")
+	}
+}
+
+// flatEntries lays down n plain .md files in dir. The walk counts every entry it
+// meets, so n files are exactly n entries against the entry cap.
+func flatEntries(t *testing.T, dir string, n int) {
+	t.Helper()
+	for i := 0; i < n; i++ {
+		p := filepath.Join(dir, fmt.Sprintf("e%04d.md", i))
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// The entry cap is a ceiling on what discovery returns, and reaching it must be
+// DISCLOSED rather than silently swallowed. The boundary is exact: a directory
+// holding maxWalkEntries entries is complete, one holding maxWalkEntries+1 is
+// truncated and says so. The disclosure is not traded away for a smaller
+// read-ahead batch — whatever the batch size, stopping at the cap still reports.
+//
+// Scope: this pins the OUTCOME (how many entries come back, and whether the
+// truncation is reported). It deliberately does not observe the batch size; see
+// the note on the read-ahead bound in walk.
+func TestWalkEntryCapBoundaryIsDisclosed(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		entries   int
+		wantTrunc bool
+	}{
+		{name: "at the ceiling", entries: maxWalkEntries},
+		{name: "one past the ceiling", entries: maxWalkEntries + 1, wantTrunc: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			flatEntries(t, dir, tc.entries)
+
+			got, diag := walk(dir, ignorefile.Matcher{})
+
+			if len(got) != maxWalkEntries {
+				t.Fatalf("walk returned %d entries, want exactly the %d cap", len(got), maxWalkEntries)
+			}
+			var truncated int
+			for _, d := range diag {
+				if d.Kind == DiagTruncated {
+					truncated++
+				}
+			}
+			switch {
+			case tc.wantTrunc && truncated == 0:
+				t.Fatalf("%d entries exceed the cap: the truncation must be disclosed, got %+v", tc.entries, diag)
+			case !tc.wantTrunc && truncated != 0:
+				t.Fatalf("%d entries fit the cap: no truncation may be reported, got %+v", tc.entries, diag)
+			}
+		})
 	}
 }
