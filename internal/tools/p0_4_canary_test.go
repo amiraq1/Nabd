@@ -118,6 +118,7 @@ func TestP04_CanaryExcludedPathNeverStoredInShadow(t *testing.T) {
 func TestP04_CanaryUndoRefusalKeepsFile(t *testing.T) {
 	r, _, dir := newGatedReg(t, ".env\n")
 	envPath := filepath.Join(dir, ".env")
+	shadowDir := filepath.Join(dir, ".ag", "shadow")
 
 	// Create .env with canary
 	canaryContent := "API_KEY=" + canaryToken + "_VAL\n"
@@ -151,6 +152,43 @@ func TestP04_CanaryUndoRefusalKeepsFile(t *testing.T) {
 	if string(kept) != canaryContent {
 		t.Fatalf("excluded file content was modified by refused undo: got %q, want %q", string(kept), canaryContent)
 	}
+
+	// Physical disk verification: the refused undo must not have captured the
+	// excluded bytes into shadow before deciding to refuse.
+	assertShadowContainsNoCanary(t, shadowDir)
+}
+
+// TestP04_CanaryReconcileMutationNeverStoredInShadow verifies that classifying
+// an unresolved mutation intent for an excluded path fingerprints the current
+// bytes without persisting them in the shadow store.
+func TestP04_CanaryReconcileMutationNeverStoredInShadow(t *testing.T) {
+	r, _, dir := newGatedReg(t, ".env\n")
+	shadowDir := filepath.Join(dir, ".ag", "shadow")
+	canaryContent := "API_KEY=" + canaryToken + "_RECONCILE\n"
+
+	_, ok, err := r.Run(context.Background(), providerToolCall("write_file", mustWriteArgs(".env", canaryContent)))
+	if !ok || err != nil {
+		t.Fatalf("write_file failed: ok=%v err=%v", ok, err)
+	}
+	rec := r.LastEdit()
+	if rec == nil {
+		t.Fatal("expected LastEdit record")
+	}
+	if !rec.Excluded || rec.HashAfter == "" {
+		t.Fatalf("record must be excluded and carry HashAfter: %+v", rec)
+	}
+
+	state, rerr := r.ReconcileMutation(rec)
+	if rerr != nil {
+		t.Fatalf("ReconcileMutation: %v", rerr)
+	}
+	if state != MutationPublished {
+		t.Fatalf("reconcile state = %q, want %q", state, MutationPublished)
+	}
+
+	// Physical disk verification: reconciliation must not have captured the
+	// excluded bytes into shadow while computing the digest.
+	assertShadowContainsNoCanary(t, shadowDir)
 }
 
 // TestP04_OrdinaryUndoStillWorks verifies that the security fix for excluded files
