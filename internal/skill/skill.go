@@ -261,12 +261,19 @@ func readSkill(base, rel string, scope Scope) (Skill, error) {
 	return parseSkill(base, rel, scope, data)
 }
 
+// readBatch returns how many directory entries the next read may pull in, seen
+// being the number of entries already visited in this walk. A fixed batch would
+// allocate up to 64 DirEntry structs after the ceiling was reached and discard
+// them; the batch instead stops at what is still admissible, plus the single
+// entry that proves truncation.
+func readBatch(seen int) int {
+	remaining := maxWalkEntries - seen
+	return min(64, remaining+1)
+}
+
 // walk lists skill files under base, bounded in depth and entry count and
-// honoring the session ignore matcher. The entry cap bounds the READ as well as
-// the result: each directory is asked for no more entries than the cap still
-// allows, so reaching the ceiling does not materialise a full extra batch of
-// DirEntry values first. It never follows a symlink: a directory symlink would
-// let a project skill's path escape the tree it claims to be in.
+// honoring the session ignore matcher. It never follows a symlink: a directory
+// symlink would let a project skill's path escape the tree it claims to be in.
 func walk(base string, ig ignorefile.Matcher) ([]string, []Diagnostic) {
 	var (
 		out  []string
@@ -285,18 +292,7 @@ func walk(base string, ig ignorefile.Matcher) ([]string, []Diagnostic) {
 		}
 		defer f.Close()
 		for {
-			// Bound the read, not only the result: ask for no more entries than
-			// the cap still allows, plus one so a truncation stays detectable.
-			//
-			// The +1 is load-bearing. ReadDir(n) with n <= 0 returns EVERY
-			// remaining entry, so min(64, remaining) would be a zero batch
-			// exactly when the cap is reached — the opposite of the intent. The
-			// batch cannot be zero: the check below returns before incrementing
-			// past maxWalkEntries, so seen <= maxWalkEntries, remaining >= 0,
-			// and remaining+1 >= 1.
-			remaining := maxWalkEntries - seen
-			batch := min(64, remaining+1)
-			entries, readErr := f.ReadDir(batch)
+			entries, readErr := f.ReadDir(readBatch(seen))
 			for _, e := range entries {
 				if seen >= maxWalkEntries {
 					diag = append(diag, Diagnostic{DiagTruncated, rel, fmt.Sprintf("more than %d entries; remaining files skipped", maxWalkEntries)})

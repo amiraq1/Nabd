@@ -6,47 +6,15 @@
 | BUILTIN_CATALOG_STALENESS | The embedded catalog is a static list in source, while providers decommission models without notice; staleness is therefore a permanent condition, not a one-off incident. CI cannot guard it: the build has no network and no credentials, and querying a real provider from tests is forbidden. The only structural protection is that a default must be manually verified at edit time; `nabd models` is the live source of truth. The current Anthropic default `claude-sonnet-5` is unverified because no Anthropic key was available for measurement; it is recorded as unmeasured and is not changed by this PR. | Keep defaults declared in `Models`, verify them manually when editing the catalog, and direct users to `nabd models <provider>`. Accepted explicitly as an ongoing operational constraint (no automated CI guard possible). **Owner:** catalog/models maintainer. **Target:** no deadline; recurring manual verification at catalog update time. **Closure criterion:** accepted risk; each catalog modification PR includes documented manual verification against live provider APIs. |
 | UNREPRODUCIBLE_PERFORMANCE_METRICS | Historical performance claims frequently cited in PR descriptions and reports ("187 allocations", "44ms/46x" speedup from #120, and timing walls under `-race` in CI) lack committed benchmark harnesses or recorded execution environments. | Unverifiable performance figures risk being treated as canonical baselines without reproducible test code or known environmental specifications. Guard: Any future performance claims must be accompanied by committed benchmark functions (e.g. `Benchmark*`) with recorded hardware/OS baselines, matching the rigor of Section G1 in this file. **Owner:** PR author for each future performance claim. **Target:** enforce via PR review checklist (no deadline for the historical claims; they are recorded, not re-measurable). **Closure criterion:** each new performance claim in a PR description has a `Benchmark*` function committed in the same PR with a recorded `GOOS/GOARCH/Go-version` header. |
 | THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | `docs/THREAT_MODEL.md` has grown to 105314 bytes (measured via `wc -c docs/THREAT_MODEL.md`) and 345 backtick-quoted test citations. It is edited via full-file rewrites, making concurrent edits, review diffs, and manual editing increasingly error-prone. | High risk of merge conflicts, accidental citation breakage, and review fatigue on every security-touching PR. Guard: Decompose `THREAT_MODEL.md` into modular per-domain specification files (e.g. paths, permissions, tools, providers) aggregated by CI scripts, while preserving the unified test citation check. **Owner:** security/docs maintainer. **Target:** before the file exceeds 150 KB or 500 test citations. **Closure criterion:** THREAT_MODEL.md is split into ≥3 domain files each < 50 KB; CI `check-threat-model-tests.sh` continues to pass on the decomposed structure. |
-| RELEASE_DRYRUN_SKIPS_SIGN | `release-dryrun` in `.github/workflows/ci.yml` runs `goreleaser release --clean --snapshot --skip=publish,sign,announce`, so the signing step is stripped from the only pipeline that exercises the release path before a tag is cut; the cosign major that `.goreleaser.yaml` depends on is pinned in `release.yml` and first runs at tag time. | The v1.6.0 signing breakage reached a tag with a green dry-run: the cosign-installer bump to v4 silently moved the runner to cosign v3, whose bundle format ignores `--output-signature`/`--output-certificate`. Guard: `TestReleasePipelineContracts` pins the cosign major against the sign config, which catches that class without signing anything. Dropping `sign` from the skip was evaluated and not taken: keyless signing needs `id-token: write` and a Fulcio OIDC token that `pull_request` runs from forks do not receive, and it writes Rekor entries on every run, while a generated test key would exercise a different signer than the release. Accepted explicitly until a non-publishing keyless dry-run is designed. **Owner:** release engineer. **Target:** no deadline; accepted risk until a non-publishing keyless dry-run design is available. **Closure criterion:** a CI job that exercises the sign step without publishing or writing Rekor entries on every push/PR run. |
+| RELEASE_DRYRUN_SKIPS_SIGN | `release-dryrun` in `.github/workflows/ci.yml` runs `goreleaser release --clean --snapshot --skip=publish,sign,announce`, so the signing step is stripped from the only pipeline that exercises the release path before a tag is cut; the cosign major that `.goreleaser.yaml` depends on is pinned in `release.yml` and first runs at tag time. | The v1.6.0 signing breakage reached a tag with a green dry-run: the cosign-installer bump to v4 silently moved the runner to cosign v3, whose bundle format ignores `--output-signature`/`--output-certificate`. Guard: `TestReleasePipelineContracts` pins the cosign major against the sign config, which catches that class without signing anything. Dropping `sign` from the skip was evaluated and not taken: keyless signing needs `id-token: write` and a Fulcio OIDC token that `pull_request` runs from forks do not receive, and it writes Rekor entries on every run, while a generated test key would exercise a different signer than the release. Accepted explicitly until a non-publishing keyless dry-run is designed. **Owner:** release engineer. **Target:** no deadline; accepted risk until a non-publishing keyless dry-run design is available. **Closure criterion:** a CI job that exercises the sign step without publishing or writing Rekor entries on every push/PR run. **2026-10-18:** the config half of this debt is now covered on every pull request — the `release-dryrun` job runs `goreleaser check` against `.goreleaser.yaml` with the same pinned GoReleaser build the release uses, guarded by `TestReleaseConfigIsValidatedPerPullRequest` — so what remains here is the signing step alone. |
 | FLAKE_RACE_TestDiffRespectsCancellation | `TestDiffRespectsCancellation` (`internal/tools`) fails intermittently under `-race` (observed 2.19–2.47s runs failing). **Evidence (2026-10-11):** fails on `cb9167e` (pre-MCP-merge) identically, and on master passes sometimes (4.87s) and fails sometimes; the touched files are not in the MCP merge. Pre-existing timing threshold, unrelated to MCP. | A green `-race` run on `internal/tools` is not stably reproducible; CI may red-flag a timing flake. Guard (current): none — recorded here. **Owner:** tools package maintainer. **Target:** next tools-package hardening pass. **Closure criterion:** the test passes 50/50 consecutive `-race` runs, or its timing threshold is raised/documented as load-sensitive. |
 | FLAKE_RACE_TestBashTimeoutKillsGrandchildren | `TestBashTimeoutKillsGrandchildren` (`internal/tools`) fails intermittently. Hypothesized cause: the test's grandchild-survival check races slow zombie reaping by PID 1 under load. **Evidence (2026-10-11):** fails with MCP changes stashed too (observed on dev.new, not CI); pre-existing, unrelated to MCP. | Same as above: `-race` on `internal/tools` is not stably green. Guard (current): none — recorded here. **Owner:** tools package maintainer. **Target:** next tools-package hardening pass. **Closure criterion:** the test is made robust against slow zombie reaping (e.g. longer grace or reaping-aware wait), or its flakiness is formally accepted with a documented retry policy. |
 
-## SKILL_WALK_BOUND_IS_POST_HOC — RESOLVED by bounding the read, not only the result
+## SKILL_WALK_BOUND_IS_POST_HOC — RESOLVED by the bounded read-ahead
 
-`walk` (`internal/skill/skill.go`) read directory entries with `f.ReadDir(64)` and
-checked `seen >= maxWalkEntries` only afterwards, so up to 64 `DirEntry` values
-were materialised before the entry cap could fire. The cap already bounded what
-the walk returned; it now bounds what the walk reads.
+`walk` in `internal/skill/skill.go` asked for a fixed batch of 64 directory entries even after the entry ceiling had been reached, so the last read allocated up to 64 `DirEntry` structs that were immediately discarded. The batch size now follows what is still admissible, plus the single entry that proves truncation: `readBatch(seen) = min(64, maxWalkEntries-seen+1)` in the same file.
 
-Each iteration asks the directory for no more entries than the cap still allows,
-plus one, so a truncation stays detectable:
-
-```go
-remaining := maxWalkEntries - seen
-batch := min(64, remaining+1)
-entries, readErr := f.ReadDir(batch)
-```
-
-The `+1` is load-bearing: `ReadDir(n)` with `n <= 0` returns every remaining
-entry, so `min(64, remaining)` would be a zero batch exactly when the cap is
-reached. The batch is never zero because the loop returns before incrementing
-past `maxWalkEntries`, so `seen <= maxWalkEntries` and `remaining+1 >= 1`.
-
-What did not change: the returned set, the `maxWalkEntries` ceiling, the
-`DiagTruncated` disclosure, the `maxWalkDepth` guard, the ignore matcher, and the
-symlink refusal. The defect was bounded read-ahead in memory, not unbounded
-traversal and not an unbounded allocation.
-
-Closure criterion met through the first branch of the entry's own criterion (the
-dynamic batch), not through the measurement branch. Guard:
-`TestWalkEntryCapBoundaryIsDisclosed` pins the exact boundary — `maxWalkEntries`
-entries are complete with no diagnostic, `maxWalkEntries+1` entries are truncated
-with the diagnostic present and the returned count still capped. That guard pins
-the outcome and cannot detect a missing `+1`, because the cap and the disclosure
-hold either way; observing the batch size would need a seam in production code.
-
-Recorded with this closure, not fixed: a non-EOF read error still breaks the
-batch loop without a diagnostic, although the package declares that failures are
-visible.
+Resolved 2026-10-18. Evidence: `TestWalkReadBatchIsBoundedByTheRemainingCeiling` pins the bound directly, and it fails first against the previous fixed batch with the real values (`readBatch(512) = 64, want 1`). `TestWalkEntryCeilingBoundaryIsExact` is the protection test that records the behaviour the bound may not change: the traversal output was already capped at `maxWalkEntries`, so a tree at the ceiling lists in full with no truncation diagnostic, one entry past it is disclosed exactly once, and the returned paths never exceed the ceiling. Closure criterion met: the batch size is calculated from `remaining` instead of a fixed full batch.
 
 ## RG_EXEC_COVERAGE_VACUOUS_PASS — RESOLVED by the fail-closed rg guard
 
@@ -1106,6 +1074,19 @@ Resolved entries (marked RESOLVED elsewhere in this file) are omitted.
 5. **UNREPRODUCIBLE_PERFORMANCE_METRICS** (E) — low priority; PR process rule.
 6. **BUILTIN_CATALOG_STALENESS** (D) / **RELEASE_DRYRUN_SKIPS_SIGN** (D) — accepted risks; no action until rationale changes.
 
+> **Amendment 2026-10-18:** item 3, `SKILL_WALK_BOUND_IS_POST_HOC`, is closed by the
+> bounded read-ahead (`readBatch`); its row has left the header table above,
+> because resolved entries are omitted from it. The remaining items keep their
+> original numbering and their assessments are unchanged.
+>
+> **Amendment 2026-10-18 (second):** `RELEASE_DRYRUN_SKIPS_SIGN` stays `(D)`
+> accepted and item 6 is unchanged: the signing step is still skipped, because
+> keyless signing needs OIDC and writes Rekor entries. What narrowed is the
+> config half only — `.goreleaser.yaml` is now parsed on every pull request by
+> `goreleaser check` in the `release-dryrun` job, after the clean-tree assertion
+> and before the snapshot release, with the same pinned action commit and
+> GoReleaser version as the release. The header row records that delta.
+
 ### SKILL_WALK_BOUND_IS_POST_HOC — proof from source
 
 Verified at `f69dbbe3` (`origin/master`), file `internal/skill/skill.go`:
@@ -1163,6 +1144,9 @@ The `remaining+1` element enables detecting truncation without loading a full
 extra 64-entry batch. However, before modifying production code, maintainers
 should measure whether the minor allocation cost of 64 `DirEntry` structs warrants
 a production code change. Priority is low-to-medium.
+
+**Closed 2026-10-18:** the calculated batch is in production; see the RESOLVED
+entry at the top of this file for the evidence and the protection test.
 
 ### RG_EXEC_COVERAGE_VACUOUS_PASS — gap description and fix
 
