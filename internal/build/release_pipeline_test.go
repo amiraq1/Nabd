@@ -51,6 +51,7 @@ func TestReleasePipelineContracts(t *testing.T) {
 	for _, required := range []string{
 		"Threat model test citations",
 		"bash scripts/check-threat-model-tests.sh",
+		"Run govulncheck (nested bubbles module)",
 		"release-dryrun:",
 		"release --clean --snapshot --skip=publish,sign,announce",
 		"expected 1 SBOM",
@@ -58,6 +59,11 @@ func TestReleasePipelineContracts(t *testing.T) {
 		if !strings.Contains(ci, required) {
 			t.Errorf("ci.yml missing %q", required)
 		}
+	}
+
+	checklist := read(".github/workflows/pr-checklist.yml")
+	if !strings.Contains(checklist, "timeout-minutes: 5") {
+		t.Errorf("pr-checklist.yml missing timeout-minutes: 5")
 	}
 
 	releasing := read("docs/RELEASING.md")
@@ -84,6 +90,11 @@ func TestGitattributesContracts(t *testing.T) {
 	for _, required := range []string{
 		"*.go text eol=lf",
 		"*.sh text eol=lf",
+		"*.yml text eol=lf",
+		"*.yaml text eol=lf",
+		"*.md text eol=lf",
+		"go.mod text eol=lf",
+		"go.sum text eol=lf",
 	} {
 		if !strings.Contains(content, required) {
 			t.Errorf(".gitattributes missing %q", required)
