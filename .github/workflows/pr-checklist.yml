@@ -12,6 +12,7 @@ permissions:
 jobs:
   pr-checklist:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -24,4 +25,6 @@ jobs:
       - name: Required PR security checklist
         env:
           LIVE_BODY_FILE: ${{ runner.temp }}/pr-body
+          GITHUB_ACTOR: ${{ github.actor }}
+          PR_AUTHOR_LOGIN: ${{ github.event.pull_request.user.login }}
         run: bash scripts/check-pr-security-checklist.sh

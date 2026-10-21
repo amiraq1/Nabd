@@ -107,19 +107,41 @@ func hasEnabledServers(cfg mcp.Config) bool {
 }
 
 // The CallAwareGate methods live on gate (cmd/ag/main.go) so the loop's
-// decide() consults the per-call MCP verdict through the normal
-// PermAsk/PermReply path.
+// decide() consults the per-call verdict through the normal PermAsk/PermReply
+// path. Two classes of call are answered per call: MCP tool calls, whose
+// classification depends on the server tool, and file writes to protected
+// paths, whose verdict depends on the target (V15).
 
 func (g gate) HandlesCall(c event.ToolCall) bool {
+	if _, _, _, ok := protectedWriteVerdict(c); ok {
+		return true
+	}
 	return tools.MCPHandlesCall(g.mcp, c)
 }
 
 func (g gate) CheckCall(c event.ToolCall) (agent.Verdict, event.PermissionReason, string) {
+	if v, reason, why, ok := protectedWriteVerdict(c); ok {
+		return v, reason, why
+	}
 	return tools.MCPCheckCall(g.p.Mode(), g.mcp, c)
 }
 
 func (g gate) RecordCall(c event.ToolCall, d event.Decision) {
+	if _, _, _, ok := protectedWriteVerdict(c); ok {
+		// A protected path is approved one call at a time; there is no
+		// standing approval to record, deliberately.
+		return
+	}
 	tools.MCPRecordCall(g.mcp, c, d)
+}
+
+// SessionGrantAllowedCall is agent.CallGrantPolicy. A standing grant for
+// write_file or edit_file must not be offered — nor recorded — for a protected
+// path: the next write there has to ask again, so presenting the choice would
+// promise something the policy does not honour.
+func (g gate) SessionGrantAllowedCall(c event.ToolCall) bool {
+	_, _, _, protected := protectedWriteVerdict(c)
+	return !protected
 }
 
 // wireMCPForSession is the shared session/headless wiring: register mcp_tool,

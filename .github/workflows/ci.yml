@@ -12,6 +12,7 @@ permissions:
 jobs:
   module-tidiness:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -23,6 +24,7 @@ jobs:
 
   vulnerability-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -32,6 +34,9 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           "$(go env GOPATH)/bin/govulncheck" ./...
+      - name: Run govulncheck (nested bubbles module)
+        working-directory: third_party/bubbles
+        run: '"$(go env GOPATH)/bin/govulncheck" ./...'
 
   build:
     runs-on: ubuntu-latest
@@ -168,6 +173,17 @@ jobs:
           bash scripts/release-notes.sh "$v" > "${RUNNER_TEMP}/release-notes.md"
       - name: Assert clean tree
         run: test -z "$(git status --porcelain)" || { git status --porcelain; exit 1; }
+      - name: Validate the GoReleaser config
+        # `check` parses .goreleaser.yaml with the same pinned GoReleaser build
+        # the release runs, so a config that no longer loads fails on the pull
+        # request instead of at tag time. It publishes nothing and needs no
+        # credentials. The keyless signing path stays tag-only: it depends on
+        # OIDC and writes Rekor entries, neither of which belongs in a PR run.
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: "v2.18.2"
+          args: check
       - name: Snapshot release, no publish, no sign
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
