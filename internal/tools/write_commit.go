@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -154,8 +155,14 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	if err != nil {
 		return snap.State{}, snap.State{}, err
 	}
+	isExcluded := reg != nil && reg.isPathExcluded(relative)
 
-	before, err := captureFromRoot(sh, root, relative, absPath)
+	var before snap.State
+	if isExcluded {
+		before, err = captureExcludedFromRoot(sh, root, relative, absPath)
+	} else {
+		before, err = captureFromRoot(sh, root, relative, absPath)
+	}
 	if err != nil {
 		return before, snap.State{}, err
 	}
@@ -164,9 +171,15 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 		mode = before.Mode
 	}
 	// Compute the "after" state from the in-memory data before any project-file
-	// write. CaptureBytes stores content in the shadow (a separate dir), not
-	// on the project disk path, so a diff failure leaves no on-disk trace.
-	after, err := sh.CaptureBytes(absPath, data, mode)
+	// write. For ordinary paths, CaptureBytes stores content in the shadow (a separate dir).
+	// For excluded paths (P0-4), FingerprintBytes calculates the digest without
+	// storing content in shadow, so sensitive files (.env) never touch .ag/shadow.
+	var after snap.State
+	if isExcluded {
+		after, err = sh.FingerprintBytes(absPath, data, mode)
+	} else {
+		after, err = sh.CaptureBytes(absPath, data, mode)
+	}
 	if err != nil {
 		return before, snap.State{}, err
 	}
@@ -176,8 +189,14 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	if reg != nil {
 		var beforeHash string
 		if !before.Absent {
-			if b, err := sh.Read(before.Blob); err == nil {
-				beforeHash = sha256hex(b)
+			if isExcluded {
+				if strings.HasPrefix(before.Blob, "s256:") {
+					beforeHash = before.Blob[5:]
+				}
+			} else {
+				if b, err := sh.Read(before.Blob); err == nil {
+					beforeHash = sha256hex(b)
+				}
 			}
 		}
 		readLines = reg.ConsumeLinesRead(relative, beforeHash)
@@ -187,8 +206,8 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	// aborts (budget exceeded, ctx cancelled), the project file is untouched.
 	var rec *event.EditRecord
 	var rerr error
-	if reg != nil && reg.isPathExcluded(relative) {
-		rec, rerr = buildExcludedRecord(sh, before, after, data, readLines)
+	if isExcluded {
+		rec, rerr = buildExcludedRecord(before, after, data, readLines)
 	} else {
 		var budget *diffBudget
 		if reg != nil {
@@ -198,15 +217,18 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	}
 	if rerr != nil {
 		// Clean up the orphan blob that CaptureBytes wrote to the shadow
-		// store. The mutation is aborted, so no Edit will ever reference it;
-		// leaving it would accumulate garbage across repeated rejections.
-		_ = sh.Discard(after.Blob)
+		// store. Excluded paths never write blobs, so no cleanup needed.
+		if !isExcluded {
+			_ = sh.Discard(after.Blob)
+		}
 		return before, after, rerr
 	}
 	prepared := false
 	if reg != nil && reg.OnMutationPrepared != nil {
 		if err := reg.OnMutationPrepared(rec); err != nil {
-			_ = sh.Discard(after.Blob)
+			if !isExcluded {
+				_ = sh.Discard(after.Blob)
+			}
 			return before, after, err
 		}
 		prepared = true
@@ -215,10 +237,7 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	// before-state was captured before the (potentially slow) diff above;
 	// if the file changed under us since, writing now would record a stale
 	// before-state in the journal and make /undo restore the wrong content.
-	// A verification failure joins the publish-failure path below: the
-	// mutation never reached the disk, so the abort record keeps the same
-	// shape (and the same after-blob) in both cases.
-	publishErr := verifyUnchanged(sh, root, relative, absPath, before)
+	publishErr := verifyUnchanged(sh, root, relative, absPath, before, isExcluded)
 	if publishErr == nil {
 		publishErr = writeFromRoot(root, relative, absPath, data, mode)
 	}
@@ -233,9 +252,15 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	// From here the disk has already changed. Every exit below must leave a
 	// record behind, or /undo goes blind exactly when it is needed most.
 	log.add(Edit{Tool: tool, Rel: root.Rel(absPath), Before: before, After: after, Record: rec})
-	// Verify the write by re-reading through the same secure capture and
+	// Verify the write by re-reading through the appropriate capture path and
 	// comparing against the expected state computed from data above.
-	actual, aerr := captureFromRoot(sh, root, relative, absPath)
+	var actual snap.State
+	var aerr error
+	if isExcluded {
+		actual, aerr = captureExcludedFromRoot(sh, root, relative, absPath)
+	} else {
+		actual, aerr = captureFromRoot(sh, root, relative, absPath)
+	}
 	if aerr != nil {
 		return before, after, aerr
 	}
@@ -248,19 +273,23 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 // verifyUnchanged re-captures the current on-disk state through the same
 // secure path used for the before-state and compares content hashes. A
 // mismatch means the file changed between capture and write; the write is
-// aborted so the journal never records a stale before-state. The re-capture
-// is a point check, not a lock — it shrinks the race to the instant before
-// publication and turns silent staleness into a loud, retryable error.
-func verifyUnchanged(sh *snap.Shadow, root *Root, relative, absolute string, before snap.State) error {
-	current, err := captureFromRoot(sh, root, relative, absolute)
+// aborted so the journal never records a stale before-state.
+func verifyUnchanged(sh *snap.Shadow, root *Root, relative, absolute string, before snap.State, isExcluded bool) error {
+	var current snap.State
+	var err error
+	if isExcluded {
+		current, err = captureExcludedFromRoot(sh, root, relative, absolute)
+	} else {
+		current, err = captureFromRoot(sh, root, relative, absolute)
+	}
 	if err != nil {
 		return err
 	}
 	if !snap.Unchanged(before, current) {
-		// The re-captured blob is unreferenced garbage; drop it. (When the
-		// states are unchanged, current.Blob == before.Blob — the blob the
-		// EditRecord keeps for /undo — so it must NOT be discarded.)
-		_ = sh.Discard(current.Blob)
+		if !isExcluded {
+			// The re-captured blob is unreferenced garbage; drop it.
+			_ = sh.Discard(current.Blob)
+		}
 		return errors.New("file changed since it was read; re-read and retry the write")
 	}
 	return nil
@@ -304,27 +333,23 @@ func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, befor
 }
 
 // buildExcludedRecord fingerprints a mutation on an excluded path without computing
-// a unified diff and WITHOUT storing content blobs (P0-4). Excluded content
+// a unified diff and WITHOUT storing content blobs in shadow (P0-4). Excluded content
 // is never written to the shadow store; the record is marked Excluded so
 // /undo refuses with ErrUndoExcluded instead of deleting the file.
-func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*event.EditRecord, error) {
+func buildExcludedRecord(before, after snap.State, data []byte, readLines int) (*event.EditRecord, error) {
 	rec := &event.EditRecord{
 		MutationID: mutationID(),
 		Path:       after.Rel,
 		HashAfter:  sha256hex(data),
 		ReadLines:  readLines,
 		Excluded:   true,
-		// BlobBefore/BlobAfter intentionally empty: excluded content
-		// must not enter the shadow store (P0-4).
 		ModeBefore: before.Mode,
+		// BlobBefore and BlobAfter intentionally empty: excluded content
+		// must not enter the shadow store (P0-4).
 	}
 	if !before.Absent {
-		// Hash of the before-content for the record, without storing the blob.
-		// We compute it from the already-captured state, not by reading the file.
-		if before.Blob != "" {
-			if b, err := sh.Read(before.Blob); err == nil {
-				rec.HashBefore = sha256hex(b)
-			}
+		if strings.HasPrefix(before.Blob, "s256:") {
+			rec.HashBefore = before.Blob[5:]
 		}
 	}
 	return boundEditEvent(rec)

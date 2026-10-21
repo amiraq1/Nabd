@@ -271,6 +271,95 @@ func TestHeadlessEmptyResponse(t *testing.T) {
 	})
 }
 
+// TestEmptyResponseReadsCategoryNotWording pins the headless exit decision to
+// the notice category. The notice wording is display text that may be reworded
+// or translated; the category is the producer's own structural claim about what
+// happened. A wording-based decision silently returns 0 when the text changes,
+// and silently returns 1 when an unrelated notice happens to contain the phrase.
+func TestEmptyResponseReadsCategoryNotWording(t *testing.T) {
+	// silentTurn builds a turn that produced no assistant text and no tool
+	// calls, carrying the given notice.
+	silentTurn := func(n event.Event) []event.Event {
+		n.Seq, n.Parent, n.Type = 2, 1, event.Notice
+		return []event.Event{
+			{Seq: 1, Type: event.TurnStart},
+			n,
+			{Seq: 3, Parent: 2, Type: event.TurnEnd},
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		evs  []event.Event
+		want bool
+	}{
+		{
+			name: "provider empty category with completely different wording",
+			evs:  silentTurn(event.Event{NoticeCategory: event.NoticeCategoryProviderEmpty, Text: "the upstream sent nothing back"}),
+			want: true,
+		},
+		{
+			name: "display notice carrying the old empty-response wording is not an empty response",
+			evs:  silentTurn(event.Event{NoticeCategory: event.NoticeCategoryDisplay, Text: "provider returned an empty response (upstream issue)"}),
+			want: false,
+		},
+		{
+			name: "display notice carrying NABD_MAX_TOKENS is not an empty response",
+			evs:  silentTurn(event.Event{NoticeCategory: event.NoticeCategoryDisplay, Text: "raise NABD_MAX_TOKENS and retry"}),
+			want: false,
+		},
+		{
+			name: "length limit category with unrelated wording still counts",
+			evs:  silentTurn(event.Event{NoticeCategory: event.NoticeCategoryLengthLimit, Text: "cut short"}),
+			want: true,
+		},
+		{
+			name: "unclassified notice is not an empty response",
+			evs:  silentTurn(event.Event{NoticeCategory: event.NoticeCategoryUnknown, Text: "provider returned an empty response (upstream issue)"}),
+			want: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := emptyResponse(tc.evs, ""); got != tc.want {
+				t.Fatalf("emptyResponse = %v, want %v; events: %+v", got, tc.want, tc.evs)
+			}
+		})
+	}
+
+	t.Run("a turn that used tools is never an empty response", func(t *testing.T) {
+		evs := []event.Event{
+			{Seq: 1, Type: event.TurnStart},
+			{Seq: 2, Parent: 1, Type: event.Notice, NoticeCategory: event.NoticeCategoryProviderEmpty, Text: "the upstream sent nothing back"},
+			{Seq: 3, Parent: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file"}},
+			{Seq: 4, Parent: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "read_file", OK: true}},
+			{Seq: 5, Parent: 4, Type: event.TurnEnd},
+		}
+		if emptyResponse(evs, "") {
+			t.Fatal("a turn with tool activity must not be classified as an empty response")
+		}
+	})
+}
+
+// TestHeadlessEmptyResponseWithOtherStopReasonKeepsExitCode covers the loop's
+// remaining silent-turn branch: a stop reason that is neither a length cut nor
+// a clean stop (content_filter and friends) still emits the empty-response
+// notice, so the headless exit code must be unchanged.
+func TestHeadlessEmptyResponseWithOtherStopReasonKeepsExitCode(t *testing.T) {
+	code, stdout, stderr := runHL(t, headlessConfig{
+		prompt:   "hello",
+		provider: &scriptedProvider{turns: []scriptTurn{{text: "", stop: "content_filter"}}},
+	})
+	if code != exitError {
+		t.Fatalf("exit %d, want %d", code, exitError)
+	}
+	if stdout != "" {
+		t.Fatalf("expected empty stdout, got %q", stdout)
+	}
+	if !strings.Contains(stderr, "provider returned an empty response (upstream issue)") {
+		t.Fatalf("expected stderr to contain the upstream issue notice, got %q", stderr)
+	}
+}
+
 func TestParsePermMode(t *testing.T) {
 	m, err := perm.ParseMode("allow-reads")
 	if err != nil || m != perm.ModeAllowReads {

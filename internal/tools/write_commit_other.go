@@ -20,6 +20,10 @@ func captureFromRoot(sh *snap.Shadow, root *Root, relative, absolute string) (sn
 	return sh.Capture(absolute)
 }
 
+func captureExcludedFromRoot(sh *snap.Shadow, root *Root, relative, absolute string) (snap.State, error) {
+	return sh.Fingerprint(absolute)
+}
+
 // writeFromRoot is the COMPATIBILITY PATH for non-Android platforms: it creates
 // the missing parent directories with the inherited mode, then publishes
 // atomically by absolute path. It is not a safe fallback and carries no new

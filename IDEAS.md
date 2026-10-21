@@ -8,4 +8,4 @@
   instead of filtering.
 - **TOCTOU**: `openat2(RESOLVE_BENEATH)` on Linux for the path layer.
 - **Multi-process undo**: the pending-edit log lives in process memory; two
-  `ag` instances in one repo cannot see each other's edits.
+  `nabd` instances in one repo cannot see each other's edits.

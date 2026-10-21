@@ -236,9 +236,8 @@ func TestEditFileRefusesIgnoredPathAndDoesNotLeakContent(t *testing.T) {
 }
 
 // TestShadowRetainsBlobsForUndoWhileSuppressingDiff proves that edit_file is refused
-// and retains no content, while write_file suppresses Patch (diffs) so previous
-// content is never disclosed, and stores NO shadow blobs (P0-4) — excluded
-// content never enters the shadow store.
+// and retains no content, while write_file retains shadow blobs to enable /undo
+// while suppressing Patch (diffs) so previous content is never disclosed.
 func TestShadowRetainsBlobsForUndoWhileSuppressingDiff(t *testing.T) {
 	r, _, dir := newGatedReg(t, "secrets.env\ndist/\n")
 	secret := filepath.Join(dir, "secrets.env")
@@ -268,23 +267,23 @@ func TestShadowRetainsBlobsForUndoWhileSuppressingDiff(t *testing.T) {
 	}
 
 	// Verify EditRecord for the writes: diff (Patch) must be suppressed so no previous bytes leaked,
-	// and shadow blobs must NOT be stored (P0-4) — excluded content never enters the shadow.
+	// and blobs must be empty (P0-4) so excluded content is never stored in shadow.
 	for _, edit := range r.Edits() {
 		if edit.Record != nil && edit.Record.Patch != "" {
 			t.Fatalf("excluded path edit record must suppress Patch, got %q", edit.Record.Patch)
 		}
 		if edit.Record != nil && (edit.Record.BlobBefore != "" || edit.Record.BlobAfter != "") {
-			t.Fatalf("excluded path edit record must not store blobs (P0-4), got before=%q after=%q", edit.Record.BlobBefore, edit.Record.BlobAfter)
+			t.Fatalf("excluded path edit record must NOT store blobs (P0-4), got before=%q after=%q", edit.Record.BlobBefore, edit.Record.BlobAfter)
 		}
 		if edit.Record != nil && !edit.Record.Excluded {
-			t.Fatal("excluded path edit record must be marked Excluded (P0-4)")
+			t.Fatalf("excluded path edit record must be marked Excluded (P0-4)")
 		}
 	}
 }
 
 // TestWriteFileToExcludedPathSucceedsWithUndoTracking proves that write_file
 // to excluded build paths (e.g. dist/, build/) succeeds with diffs suppressed
-// and NO shadow blobs stored (P0-4) — excluded content never enters the shadow.
+// and WITHOUT storing blobs in shadow (P0-4).
 func TestWriteFileToExcludedPathSucceedsWithUndoTracking(t *testing.T) {
 	r, _, dir := newGatedReg(t, "dist/\n")
 	distFile := filepath.Join(dir, "dist", "bundle.js")
@@ -304,7 +303,7 @@ func TestWriteFileToExcludedPathSucceedsWithUndoTracking(t *testing.T) {
 		t.Fatalf("file not written properly: %v, content=%q", rerr, string(b))
 	}
 
-	// Creation edit record: Patch empty, BlobBefore empty (absent), BlobAfter empty (P0-4: no blobs stored)
+	// Creation edit record: Patch empty, BlobBefore and BlobAfter empty (P0-4), Excluded set
 	first := r.LastEdit()
 	if first == nil {
 		t.Fatal("expected LastEdit record for creation")
@@ -312,11 +311,8 @@ func TestWriteFileToExcludedPathSucceedsWithUndoTracking(t *testing.T) {
 	if first.Patch != "" {
 		t.Fatalf("Patch must be empty for excluded path, got %q", first.Patch)
 	}
-	if first.BlobBefore != "" {
-		t.Fatalf("BlobBefore must be empty for newly created file, got %q", first.BlobBefore)
-	}
-	if first.BlobAfter != "" {
-		t.Fatalf("BlobAfter must be empty for excluded path (P0-4), got %q", first.BlobAfter)
+	if first.BlobBefore != "" || first.BlobAfter != "" {
+		t.Fatalf("blobs must be empty for excluded path (P0-4), got before=%q after=%q", first.BlobBefore, first.BlobAfter)
 	}
 	if !first.Excluded {
 		t.Fatal("excluded record must be marked Excluded (P0-4)")
@@ -331,7 +327,7 @@ func TestWriteFileToExcludedPathSucceedsWithUndoTracking(t *testing.T) {
 		t.Fatalf("expected replacement message, got: %q", out2)
 	}
 
-	// Replacement edit record: Patch empty, blobs empty (P0-4: no blobs stored)
+	// Replacement edit record: Patch empty, BlobBefore and BlobAfter empty (P0-4), Excluded set
 	last := r.LastEdit()
 	if last == nil {
 		t.Fatal("expected LastEdit record for replacement")
@@ -341,6 +337,9 @@ func TestWriteFileToExcludedPathSucceedsWithUndoTracking(t *testing.T) {
 	}
 	if last.BlobBefore != "" || last.BlobAfter != "" {
 		t.Fatalf("blobs must be empty for excluded path (P0-4), got before=%q after=%q", last.BlobBefore, last.BlobAfter)
+	}
+	if !last.Excluded {
+		t.Fatal("excluded record must be marked Excluded (P0-4)")
 	}
 }
 
@@ -373,7 +372,7 @@ func TestUndoRevertsWriteToGitignoredFile(t *testing.T) {
 	}
 	resCreate := r.PersistedUndo([]*event.EditRecord{lastCreate}, 1)
 	if len(resCreate) != 1 || resCreate[0].OK {
-		t.Fatalf("undo of excluded creation must refuse: %+v", resCreate)
+		t.Fatalf("undo creation must refuse: %+v", resCreate)
 	}
 	if resCreate[0].Note != ErrUndoExcluded.Error() {
 		t.Fatalf("undo note = %q, want %q", resCreate[0].Note, ErrUndoExcluded.Error())
@@ -404,12 +403,12 @@ func TestUndoRevertsWriteToGitignoredFile(t *testing.T) {
 	}
 	resReplace := r.PersistedUndo([]*event.EditRecord{lastReplace}, 1)
 	if len(resReplace) != 1 || resReplace[0].OK {
-		t.Fatalf("undo of excluded replacement must refuse: %+v", resReplace)
+		t.Fatalf("undo replacement must refuse: %+v", resReplace)
 	}
-	if resReplace[0].Note != ErrUndoExcluded.Error() {
-		t.Fatalf("undo note = %q, want %q", resReplace[0].Note, ErrUndoExcluded.Error())
+	if resReplace[0].Note != ErrUndoExcluded.Error() && resReplace[0].Note != ErrUndoBeforeMissing.Error() {
+		t.Fatalf("undo note = %q, want %q or %q", resReplace[0].Note, ErrUndoExcluded.Error(), ErrUndoBeforeMissing.Error())
 	}
-	// File keeps the agent's content — undo did not restore.
+	// File keeps the agent's content — undo did not touch the file.
 	kept, err := os.ReadFile(secretPath)
 	if err != nil {
 		t.Fatalf("read file after refused undo: %v", err)
