@@ -131,6 +131,28 @@ func (m *Feed) viewportTopPadding(lm layoutMetrics) int {
 	return lm.ViewportRows - len(m.lines)
 }
 
+// emptyStateActive reports whether the feed has no conversational content.
+// Run boundaries are deliberately ignored because the CLI emits a start
+// boundary before the first user message. The welcome is view-only and never
+// becomes m.lines.
+func (m *Feed) emptyStateActive() bool {
+	if m.running || m.busy || m.modalVisible || m.decisionPending || m.secretPrompt || m.navigationMode || len(m.notices) > 0 || m.composer == nil || !m.composer.isEmpty() {
+		return false
+	}
+	return len(m.lines) == 0 || m.welcomeBoundaryOnly
+}
+
+func emptyStateLines(width int) []string {
+	if width <= 0 {
+		return nil
+	}
+	lines := []string{"Nabd is ready", "Ask a question or describe a task", "Type /help for commands"}
+	for i := range lines {
+		lines[i] = truncateToWidth(lines[i], width, "...")
+	}
+	return lines
+}
+
 // clampScroll enforces canonical bounds: 0 <= scrollTop <= bottomStart.
 // If follow is active, it re-anchors scrollTop to bottomStart and clears unseen.
 func (m *Feed) clampScroll() {
@@ -163,6 +185,14 @@ func (m *Feed) clampScroll() {
 // hashing the output again.
 func (m *Feed) refresh() bool {
 	items := visibleFeedItems(mergeNotices(m.proj.Items(), m.notices))
+
+	m.welcomeBoundaryOnly = len(items) > 0
+	for _, it := range items {
+		if it.Type != presentation.ItemRunBoundary {
+			m.welcomeBoundaryOnly = false
+			break
+		}
+	}
 
 	changed := m.syncFingerprints(items)
 	sig := m.structSig(items)

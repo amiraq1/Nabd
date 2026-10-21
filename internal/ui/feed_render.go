@@ -238,7 +238,59 @@ func renderError(it presentation.FeedItem, width int) []string {
 }
 func renderRunBoundary(it presentation.FeedItem, width int) []string {
 	ch := newFeedChrome()
-	return []string{dim.Render(truncateProseToWidth(ch.rule+SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: false, Redact: false}), width, ch.tail))}
+	text := SanitizeForDisplay(it.Text, DisplayPolicy{AllowNewline: false, Redact: false})
+	if fields, ok := parseRunIdentity(text); ok {
+		sep := " · "
+		if asciiOnly() {
+			sep = " - "
+		}
+		full := fields[0] + sep + fields[1] + sep + fields[2] + sep + fields[3] + sep + fields[4]
+		short := full
+		if isFullCommit(fields[1]) {
+			short = fields[0] + sep + fields[1][:7] + sep + fields[2] + sep + fields[3] + sep + fields[4]
+		}
+		compact := fields[0] + sep + fields[3] + sep + fields[4]
+		text = full
+		if ansi.StringWidth(ch.rule+text) > width {
+			text = short
+		}
+		if ansi.StringWidth(ch.rule+text) > width {
+			text = compact
+		}
+	}
+	return []string{dim.Render(truncateProseToWidth(ch.rule+text, width, ch.tail))}
+}
+
+// parseRunIdentity recognizes only the banner shape emitted by the CLI. A
+// different journal string is rendered verbatim rather than being guessed at.
+func parseRunIdentity(text string) ([5]string, bool) {
+	var out [5]string
+	parts := strings.Split(text, " · ")
+	if len(parts) != 5 || !strings.HasPrefix(parts[0], "nabd ") {
+		return out, false
+	}
+	if !isFullCommit(parts[1]) && parts[1] != "none" {
+		return out, false
+	}
+	for i := range parts {
+		if strings.TrimSpace(parts[i]) == "" {
+			return out, false
+		}
+		out[i] = parts[i]
+	}
+	return out, true
+}
+
+func isFullCommit(s string) bool {
+	if len(s) != 40 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return false
+		}
+	}
+	return true
 }
 func truncate(s string, max int) string {
 	if max <= 0 {
