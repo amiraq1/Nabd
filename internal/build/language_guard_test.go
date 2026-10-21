@@ -50,26 +50,41 @@ import (
 //
 // The config, registry, and snap diagnostics left this list when they moved to
 // typed errors with ASCII baselines whose Arabic sentence is rendered at the CLI
-// boundary; cmd/ag/errors.go gained the ownership sentence it now owns. The two
-// provider entries are what remains of hand-written Arabic text. A generated,
-// byte-ASCII presentation-form cache (internal/rtl/arabic_pres_tables.go, pinned
-// by generator determinism and the 1,440-entry derivation test) is listed below,
-// and ADR-0002 decision 4 scopes provider
-// errors as a track separate from 3ج, so #223 stays open until that track lands.
+// boundary; cmd/ag/errors.go gained the ownership sentence it now owns, and then
+// the provider error wording (the duplicated first-byte timeout and the
+// model-unavailable template) when the provider leg of ADR-0002 decision 4
+// landed: internal/provider carries ASCII English baselines and the CLI
+// installs the Arabic wording from its catalog at startup. What remains is the
+// sanctioned set — the CLI catalog, the presentation reason catalog, and the
+// generated, byte-ASCII presentation-form cache (internal/rtl/
+// arabic_pres_tables.go, pinned by generator determinism and the 1,440-entry
+// derivation test). That restriction is #223's closure criterion, enforced by
+// TestArabicLiteralAllowlistIsRestrictedToSanctionedCatalogFiles.
 //
 // PROVENANCE: the counts were measured with this scan from master at a8a005c
 // (after the #228 and #229 merges), not copied from issue #223, and re-measured
-// after the batch above.
+// after each batch, most recently after the provider leg (master e30c0d1).
 // ─────────────────────────────────────────────────────────────────────────────
 var arabicLiteralAllowlist = map[string]int{
-	"cmd/ag/errors.go":                           12,
-	"internal/provider/anthropic.go":             2,
-	"internal/provider/openai.go":                1,
+	"cmd/ag/errors.go":                           14,
 	"internal/presentation/permission_reason.go": 8,
 	// Generated, byte-ASCII Unicode 17 Presentation Forms-B string cache.
 	// Its literals decode to Arabic presentation forms and are pinned by
 	// generator determinism plus the 1,440-entry derivation test.
 	"internal/rtl/arabic_pres_tables.go": 1440,
+}
+
+// sanctionedArabicCatalogFiles are the only files in the module that may carry
+// hand-written Arabic once the provider leg of ADR-0002 decision 4 has landed:
+// the two sanctioned language catalogs plus the generated Presentation Forms
+// cache (data, not prose). #223's closure criterion is exactly this — the
+// ratchet's allowlist restricted to the approved catalog files, not emptied
+// (ADR-0002, decision 6). A new Arabic home must be added here in the same
+// change that makes the language decision, not slipped past the ratchet.
+var sanctionedArabicCatalogFiles = map[string]string{
+	"cmd/ag/errors.go":                           "the single CLI language catalog (ADR-0002 decision 5)",
+	"internal/presentation/permission_reason.go": "the permission-reason display catalog (ADR-0002 decision 3)",
+	"internal/rtl/arabic_pres_tables.go":         "the generated Unicode Presentation Forms-B cache, not hand-written prose",
 }
 
 // arabicLiteralViolation is one reason the tree does not match the ratchet.
@@ -195,6 +210,20 @@ func TestSourceArabicLiteralRatchet(t *testing.T) {
 	}
 	for _, v := range arabicLiteralRatchetViolations(counts, arabicLiteralAllowlist) {
 		t.Errorf("%s: %s", v.file, v.reason)
+	}
+}
+
+// TestArabicLiteralAllowlistIsRestrictedToSanctionedCatalogFiles enforces the
+// closure criterion of #223 mechanically: every file the allowlist may name is
+// a sanctioned catalog file. The live ratchet covers the other direction
+// (Arabic outside the allowlist fails), so together they mean the allowlist
+// can neither grow a new Arabic home nor keep one after its text has moved
+// out.
+func TestArabicLiteralAllowlistIsRestrictedToSanctionedCatalogFiles(t *testing.T) {
+	for file := range arabicLiteralAllowlist {
+		if _, ok := sanctionedArabicCatalogFiles[file]; !ok {
+			t.Errorf("%s is in the Arabic allowlist but is not an ADR-0002 sanctioned catalog file; the provider track left no hand-written Arabic outside the catalogs, and the allowlist must be restricted to them (see issue #223)", file)
+		}
 	}
 }
 
