@@ -1,3 +1,8 @@
 # Enforce LF line endings for Go sources so gofmt and diffs are deterministic across OSes
 *.go text eol=lf
 *.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
