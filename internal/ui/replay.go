@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -18,7 +18,7 @@ type tickMsg int // carries the index it was scheduled for
 
 // Replay walks a session at roughly the speed it happened.
 type Replay struct {
-	events []agent.Event
+	events []event.Event
 	next   int
 	width  int
 	speed  float64
@@ -29,12 +29,12 @@ type Replay struct {
 
 // NewReplay takes the live branch, not the raw file: a compacted session
 // replays from its summary forward, exactly as the model would see it.
-func NewReplay(events []agent.Event, speed float64) Replay {
+func NewReplay(events []event.Event, speed float64) Replay {
 	if speed < 0 {
 		speed = 0
 	}
 	return Replay{
-		events: agent.Live(events),
+		events: event.Live(events),
 		width:  DefaultWidth,
 		speed:  speed,
 		buf:    new(string),
@@ -58,7 +58,7 @@ func (m Replay) step() tea.Cmd {
 	i := m.next
 
 	var cmds []tea.Cmd
-	if e.Type == agent.TextDelta {
+	if e.Type == event.TextDelta {
 		*m.buf += e.Text // same coalescing as Chat: one block, not one line per delta
 	} else if s := flushJoin(m.buf, e, m.width); s != "" {
 		cmds = append(cmds, tea.Println(s))
@@ -143,7 +143,7 @@ func (m Replay) advance() (tea.Model, tea.Cmd) {
 	if m.next >= len(m.events) {
 		m.done = true
 		if *m.buf != "" { // a session whose last event is text
-			s := block(" ", *m.buf, m.width, lipgloss.NewStyle())
+			s := block(" ", sanitizeStreamText(*m.buf), m.width, lipgloss.NewStyle())
 			*m.buf = ""
 			return m, tea.Sequence(tea.Println(s), tea.Quit)
 		}
@@ -173,7 +173,7 @@ func (m Replay) View() string {
 	case m.paused:
 		s += " · paused · space/→"
 	}
-	if p := partialTail(*m.buf, 6, m.width); p != "" {
+	if p := partialTail(sanitizeStreamText(*m.buf), 6, m.width); p != "" {
 		return p + "\n" + dim.Render(s)
 	}
 	return dim.Render(s)

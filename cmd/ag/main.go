@@ -21,6 +21,7 @@ import (
 	"nabd/internal/agent"
 	"nabd/internal/build"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
@@ -92,6 +93,12 @@ func main() {
 	// config.Load() into a private map — never merged into os.Environ, so no
 	// provider key ever reaches the process-global environment or any child
 	// process spawned by the bash tool.
+	//
+	// Install the provider-error language catalog before any code path can
+	// stream a provider answer (ADR-0002 decision 4, provider leg): a startup
+	// decision, not a per-surface one, so no CLI path can observe the ASCII
+	// baseline.
+	installProviderLanguage()
 	replay := flag.String("replay", "", "replay a session.jsonl and exit")
 	speed := flag.Float64("speed", 1, "replay multiplier; 0 is instant")
 	sessDir := flag.String("dir", "", "session directory (default ~/.ag/sessions)")
@@ -105,6 +112,7 @@ func main() {
 	permModeFlag := flag.String("permission-mode", "", "ask|deny|allow-reads|plan (interactive and headless; empty = path default)")
 	exportPath := flag.String("export", "", "export a session journal as JSONL to stdout and exit")
 	exportRedact := flag.Bool("redact", false, "with --export: redact recognized credential patterns")
+	noMCP := flag.Bool("no-mcp", false, "disable all MCP servers: no config is loaded, mcp_tool is not registered, no server starts")
 	flag.Parse()
 
 	provided := map[string]bool{}
@@ -150,6 +158,7 @@ func main() {
 			maxTurns: *maxTurns,
 			mode:     headlessMode,
 			sessDir:  *sessDir,
+			noMCP:    *noMCP,
 		}))
 	}
 
@@ -166,18 +175,21 @@ func main() {
 				"(Esc browse, Up/Down, Enter expand) works without it. " +
 				"Set NABD_FORCE_TOUCH=1 to override"))
 		}
-		if err := doChatWithFeed(interactiveMode, *sessDir, *cont, *feedTouch); err != nil {
+		if err := doChatWithFeed(interactiveMode, *sessDir, *cont, *feedTouch, *noMCP); err != nil {
 			die(err)
 		}
 		return
 	}
-	if err := doChat(interactiveMode, *sessDir, *cont); err != nil {
+	if err := doChat(interactiveMode, *sessDir, *cont, *noMCP); err != nil {
 		die(err)
 	}
 }
 
 func doReplay(path string, speed float64) error {
-	events, err := store.Read(path)
+	// Resolve the live branch streaming: a huge compacted journal replays
+	// without loading its pre-compaction history into memory. NewReplay
+	// still applies event.Live, which is idempotent on a live branch.
+	events, _, _, err := store.ReadLiveBranch(path, false)
 	if err != nil {
 		return err
 	}
@@ -188,16 +200,20 @@ func doReplay(path string, speed float64) error {
 	return err
 }
 
-func doChat(mode perm.Mode, dir string, cont bool) error {
+func doChat(mode perm.Mode, dir string, cont bool, noMCP bool) error {
 	prov, err := pickProvider()
 	if err != nil {
 		return err
 	}
+	// Exact configured secrets, collected once: pattern redaction alone cannot
+	// cover custom providers whose key format matches no known shape.
+	exactKeys := provider.ExactKeys(prov)
 
-	sess, err := newInteractiveSession(prov)
+	sess, err := newInteractiveSession(prov, noMCP)
 	if err != nil {
 		return err
 	}
+	defer sess.Close()
 	sess.SetMode(mode)
 	root := sess.root
 
@@ -208,31 +224,36 @@ func doChat(mode perm.Mode, dir string, cont bool) error {
 		if err != nil {
 			return err
 		}
-		journal, err = openSessionJournal(journalPath)
+		if _, rerr := maybeRotateOversizedJournal(journalPath, os.Stderr); rerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: journal rotation skipped: %v\n", rerr)
+		}
+		journal, err = openSessionJournal(journalPath, exactKeys)
 		if err == nil {
-			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions().Redact != nil)
+			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions(exactKeys).Redact != nil)
 		}
 	} else {
-		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
+		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr, exactKeys)
 	}
 	if err != nil {
 		return err
 	}
 
-	var prevEvs []agent.Event
+	var prevEvs []event.Event
 	if cont {
-		evs, err := store.Read(journalPath)
+		// Stream only the live branch: a huge journal no longer loads
+		// wholesale into memory on resume.
+		liveEvs, _, totalEvs, err := store.ReadLiveBranch(journalPath, false)
 		if err != nil {
 			journal.Close()
 			return err
 		}
-		prevEvs = agent.Live(evs)
+		prevEvs = liveEvs
 		fmt.Printf("resumed %s · %d live events of %d\n",
-			filepath.Base(journalPath), len(prevEvs), len(evs))
+			filepath.Base(journalPath), len(prevEvs), totalEvs)
 	}
 
 	uiSink := newUISink()
-	sess.loop.Sink = newStreamRedactSink(agent.Fanout{journal, uiSink})
+	sess.loop.Sink = newStreamRedactSink(agent.Fanout{journal, uiSink}, exactKeys)
 	if cont {
 		sess.loop.Seed(prevEvs)
 	}
@@ -278,7 +299,7 @@ func touchAllowed(termuxVersion, force string) bool {
 	return true
 }
 
-func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error {
+func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool, noMCP bool) error {
 	ui.SetLimitNotice(limitNoticeArabic)
 	ui.SetCopyNotices(copySuccessArabic, copyUnavailableArabic, copyBlockedArabic)
 
@@ -286,11 +307,15 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 	if err != nil {
 		return err
 	}
+	// Exact configured secrets, collected once: pattern redaction alone cannot
+	// cover custom providers whose key format matches no known shape.
+	exactKeys := provider.ExactKeys(prov)
 
-	sess, err := newInteractiveSession(prov)
+	sess, err := newInteractiveSession(prov, noMCP)
 	if err != nil {
 		return err
 	}
+	defer sess.Close()
 	sess.SetMode(mode)
 	root := sess.root
 
@@ -301,27 +326,32 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 		if err != nil {
 			return err
 		}
-		journal, err = openSessionJournal(journalPath)
+		if _, rerr := maybeRotateOversizedJournal(journalPath, os.Stderr); rerr != nil {
+			fmt.Fprintf(os.Stderr, "warning: journal rotation skipped: %v\n", rerr)
+		}
+		journal, err = openSessionJournal(journalPath, exactKeys)
 		if err == nil {
-			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions().Redact != nil)
+			writeSessionPolicyWarnings(os.Stderr, journalStoreOptions(exactKeys).Redact != nil)
 		}
 	} else {
-		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr)
+		journal, journalPath, err = newSessionJournalWithWarning(dir, os.Stderr, exactKeys)
 	}
 	if err != nil {
 		return err
 	}
 
-	var prevEvs []agent.Event
+	var prevEvs []event.Event
 	if cont {
-		evs, err := store.Read(journalPath)
+		// Stream only the live branch: a huge journal no longer loads
+		// wholesale into memory on resume.
+		liveEvs, _, totalEvs, err := store.ReadLiveBranch(journalPath, false)
 		if err != nil {
 			journal.Close()
 			return err
 		}
-		prevEvs = agent.Live(evs)
+		prevEvs = liveEvs
 		fmt.Printf("resumed %s · %d live events of %d\n",
-			filepath.Base(journalPath), len(prevEvs), len(evs))
+			filepath.Base(journalPath), len(prevEvs), totalEvs)
 	}
 
 	feed := ui.NewFeed()
@@ -334,19 +364,19 @@ func doChatWithFeed(mode perm.Mode, dir string, cont bool, feedTouch bool) error
 		sess.loop.Seed(prevEvs)
 	}
 
-	batcher := ui.NewBatcher(eventBatchInterval, maxEventBatchSize, func(batch []agent.Event) {
+	batcher := ui.NewBatcher(eventBatchInterval, maxEventBatchSize, func(batch []event.Event) {
 		feed.SendBatch(batch)
 	})
 	batcher.Start()
 
-	sess.loop.Sink = newStreamRedactSink(agent.Fanout{journal, feedSink{batcher: batcher}})
+	sess.loop.Sink = newStreamRedactSink(agent.Fanout{journal, feedSink{batcher: batcher}}, exactKeys)
 
 	feed.SetRunner(sess.loop)
 	feed.SetApprover(sess.ap)
 	feed.SetCallbacks(sess.callbacks())
 
 	if len(prevEvs) > 0 {
-		feed.BuildFromEvents(agent.Live(prevEvs))
+		feed.BuildFromEvents(event.Live(prevEvs))
 	}
 
 	prog := tea.NewProgram(feed, feed.ProgramOptions()...)
@@ -403,7 +433,7 @@ type feedSink struct {
 	batcher *ui.Batcher
 }
 
-func (s feedSink) Emit(e agent.Event) error {
+func (s feedSink) Emit(e event.Event) error {
 	s.batcher.Add(e)
 	return nil
 }
@@ -412,7 +442,7 @@ func fileUndo(loop *agent.Loop, reg *tools.Registry, n int) string {
 	if loop == nil || reg == nil {
 		return "undo not supported"
 	}
-	recs := editRecords(agent.Live(loop.Hist()))
+	recs := editRecords(event.Live(loop.Hist()))
 	if len(recs) == 0 {
 		return "no edits to undo"
 	}
@@ -439,12 +469,15 @@ func fileUndo(loop *agent.Loop, reg *tools.Registry, n int) string {
 	return ""
 }
 
-func chatOnCompact(loop *agent.Loop) string {
+func chatOnCompact(ctx context.Context, loop *agent.Loop) string {
 	if loop == nil {
 		return "compact not supported"
 	}
+	// The summarisation round-trip derives from the session lifecycle
+	// context: quitting mid-compact cancels the provider call instead of
+	// leaving it running on context.Background() past shutdown.
 	go func() {
-		if err := loop.Compact(context.Background(), loop.Budget.Usable()*4/10); err != nil {
+		if err := loop.Compact(ctx, loop.Budget.Usable()*4/10); err != nil {
 			loop.Note("compact failed: " + err.Error())
 		}
 	}()
@@ -459,14 +492,14 @@ func chatOnCompact(loop *agent.Loop) string {
 // a fatal loop error. The drop count is surfaced as a journal Notice just
 // before RunEnd (see noteDrops).
 type chanSink struct {
-	ch      chan agent.Event
+	ch      chan event.Event
 	dropped atomic.Int64
 }
 
 // newUISink builds the interactive UI sink. Its buffer is the contract value
 // (uiEventBuffer); when it overflows, Emit drops instead of blocking.
 func newUISink() *chanSink {
-	return &chanSink{ch: make(chan agent.Event, uiEventBuffer)}
+	return &chanSink{ch: make(chan event.Event, uiEventBuffer)}
 }
 
 // reportSession prints the authoritative session path and routes a close
@@ -480,7 +513,7 @@ func reportSession(out, errOut io.Writer, path string, closeErr error) {
 	}
 }
 
-func (s *chanSink) Emit(e agent.Event) error {
+func (s *chanSink) Emit(e event.Event) error {
 	select {
 	case s.ch <- e:
 	default:
@@ -722,14 +755,17 @@ func pickRouterProvider() (provider.Provider, error) {
 	return router.WithRetryAfterWait(time.Duration(retryWaitSec) * time.Second), nil
 }
 
-type gate struct{ p *perm.Policy }
+type gate struct {
+	p   *perm.Policy
+	mcp tools.MCPBackend // nil when MCP is disabled; enables the CallAwareGate path
+}
 
 func (g gate) Check(tool string) (agent.Verdict, string) {
 	v, why := g.p.Check(tool)
 	return mapVerdict(v), why
 }
 
-func (g gate) CheckReason(tool string) (agent.Verdict, agent.PermissionReason, string) {
+func (g gate) CheckReason(tool string) (agent.Verdict, event.PermissionReason, string) {
 	v, reason, why := g.p.CheckReason(tool)
 	return mapVerdict(v), reason, why
 }
@@ -744,13 +780,13 @@ func mapVerdict(v perm.Verdict) agent.Verdict {
 	return agent.VerdictAsk
 }
 
-func (g gate) Record(tool string, d agent.Decision) {
-	if d == agent.AllowSession {
-		g.p.Record(tool, agent.AllowSession)
+func (g gate) Record(tool string, d event.Decision) {
+	if d == event.AllowSession {
+		g.p.Record(tool, event.AllowSession)
 	}
 }
 
-func (g gate) Effective(tool string, d agent.Decision) agent.Decision {
+func (g gate) Effective(tool string, d event.Decision) event.Decision {
 	return g.p.Effective(tool, d)
 }
 
@@ -784,7 +820,7 @@ func latestSession(dir, projectRoot string) (string, error) {
 				continue
 			}
 			for _, ev := range events {
-				if ev.Type == agent.RunStart {
+				if ev.Type == event.RunStart {
 					if ev.ProjectRoot == "" {
 						continue
 					}
@@ -799,11 +835,11 @@ func latestSession(dir, projectRoot string) (string, error) {
 	return "", fmt.Errorf(errNoSessions, sessDir)
 }
 
-func editRecords(evs []agent.Event) []*agent.EditRecord {
-	var out []*agent.EditRecord
+func editRecords(evs []event.Event) []*event.EditRecord {
+	var out []*event.EditRecord
 	seen := map[string]bool{}
 	aborted := map[string]bool{}
-	key := func(rec *agent.EditRecord) string {
+	key := func(rec *event.EditRecord) string {
 		if rec == nil {
 			return ""
 		}
@@ -815,11 +851,11 @@ func editRecords(evs []agent.Event) []*agent.EditRecord {
 	for i := len(evs) - 1; i >= 0; i-- {
 		rec := evs[i].Edit
 		switch evs[i].Type {
-		case agent.EventEditAbort:
+		case event.EventEditAbort:
 			if rec != nil {
 				aborted[key(rec)] = true
 			}
-		case agent.EventEdit, agent.EventEditIntent:
+		case event.EventEdit, event.EventEditIntent:
 			if rec == nil {
 				continue
 			}

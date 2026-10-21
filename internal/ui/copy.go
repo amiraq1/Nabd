@@ -233,16 +233,22 @@ func (m *Feed) fullReportText() string {
 	if len(items) == 0 {
 		return ""
 	}
-	width := m.width
-	if width < minViewportWidth {
-		width = minViewportWidth
+	cards := make([]string, 0, len(items))
+	for i := range items {
+		text, ok := logicalCardText(items[i])
+		if !ok {
+			lines := renderItems(items[i:i+1], copyRenderWidth, true)
+			clean := make([]string, len(lines))
+			for j, line := range lines {
+				clean[j] = strings.TrimRight(stripCardGutter(ansi.Strip(line)), " ")
+			}
+			text = strings.Join(clean, "\n")
+		}
+		if text != "" {
+			cards = append(cards, text)
+		}
 	}
-	lines := renderItems(items, width, true)
-	clean := make([]string, len(lines))
-	for i, l := range lines {
-		clean[i] = stripCardGutter(ansi.Strip(l))
-	}
-	return strings.Join(clean, "\n")
+	return strings.Join(cards, "\n\n")
 }
 
 // copyFullReport copies the entire report (all cards, tools expanded) through

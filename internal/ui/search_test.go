@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -15,18 +15,18 @@ func feedWithCustomTexts(t *testing.T, texts []string, width int) *Feed {
 	m := NewFeed()
 	m.width = width
 	m.height = 20
-	events := make([]agent.Event, 0, len(texts)*2)
+	events := make([]event.Event, 0, len(texts)*2)
 	for i, txt := range texts {
 		events = append(events,
-			agent.Event{
+			event.Event{
 				Seq:  i*2 + 1,
-				Type: agent.ToolStart,
-				Call: &agent.ToolCall{ID: fmt.Sprintf("call-%d", i), Name: "bash"},
+				Type: event.ToolStart,
+				Call: &event.ToolCall{ID: fmt.Sprintf("call-%d", i), Name: "bash"},
 			},
-			agent.Event{
+			event.Event{
 				Seq:  i*2 + 2,
-				Type: agent.ToolEnd,
-				Call: &agent.ToolCall{ID: fmt.Sprintf("call-%d", i), Name: "bash", Output: txt, OK: true},
+				Type: event.ToolEnd,
+				Call: &event.ToolCall{ID: fmt.Sprintf("call-%d", i), Name: "bash", Output: txt, OK: true},
 			},
 		)
 	}

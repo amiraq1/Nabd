@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestInvariantNoRowExceedsWidthAllStages verifies that across all six
@@ -24,9 +24,9 @@ func TestInvariantNoRowExceedsWidthAllStages(t *testing.T) {
 			name: "idle",
 			setup: func(f *Feed) {
 				// idle baseline with typical conversation
-				f.applyBatch([]agent.Event{
-					{Seq: 1, Type: agent.UserMsg, Text: "list files in repo"},
-					{Seq: 2, Type: agent.TextDelta, Text: "Here is the listing of the repository files."},
+				f.applyBatch([]event.Event{
+					{Seq: 1, Type: event.UserMsg, Text: "list files in repo"},
+					{Seq: 2, Type: event.TextDelta, Text: "Here is the listing of the repository files."},
 				})
 			},
 		},
@@ -42,9 +42,9 @@ func TestInvariantNoRowExceedsWidthAllStages(t *testing.T) {
 			setup: func(f *Feed) {
 				f.running = true
 				f.busy = true
-				f.statusProj.Apply(agent.Event{
-					Type: agent.ToolStart,
-					Call: &agent.ToolCall{ID: "c1", Name: "read_file"},
+				f.statusProj.Apply(event.Event{
+					Type: event.ToolStart,
+					Call: &event.ToolCall{ID: "c1", Name: "read_file"},
 				})
 			},
 		},
@@ -53,21 +53,21 @@ func TestInvariantNoRowExceedsWidthAllStages(t *testing.T) {
 			setup: func(f *Feed) {
 				f.running = true
 				f.busy = true
-				f.statusProj.Apply(agent.Event{
-					Type: agent.ToolStart,
-					Call: &agent.ToolCall{ID: "c1", Name: "bash"},
+				f.statusProj.Apply(event.Event{
+					Type: event.ToolStart,
+					Call: &event.ToolCall{ID: "c1", Name: "bash"},
 				})
-				f.statusProj.Apply(agent.Event{
-					Type: agent.ToolStart,
-					Call: &agent.ToolCall{ID: "c2", Name: "read_file"},
+				f.statusProj.Apply(event.Event{
+					Type: event.ToolStart,
+					Call: &event.ToolCall{ID: "c2", Name: "read_file"},
 				})
 			},
 		},
 		{
 			name: "navigation_mode",
 			setup: func(f *Feed) {
-				f.applyBatch([]agent.Event{
-					{Seq: 1, Type: agent.UserMsg, Text: "test navigation"},
+				f.applyBatch([]event.Event{
+					{Seq: 1, Type: event.UserMsg, Text: "test navigation"},
 				})
 				f.enterNavigation()
 			},
@@ -78,7 +78,7 @@ func TestInvariantNoRowExceedsWidthAllStages(t *testing.T) {
 				f.running = true
 				f.busy = true
 				f.modalVisible = true
-				f.permModal.open(&agent.ToolCall{ID: "p1", Name: "bash", Args: []byte(`"rm -rf tmp"`)})
+				f.permModal.open(&event.ToolCall{ID: "p1", Name: "bash", Args: []byte(`"rm -rf tmp"`)})
 			},
 		},
 		{

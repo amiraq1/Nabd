@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/snap"
 )
 
@@ -45,7 +45,7 @@ func TestUndoSymlinkSafety(t *testing.T) {
 	os.Symlink(outsideFile, filePath)
 
 	// 3. Undo should fail because the target changed (HashAfter won't match, or it's a symlink).
-	res := reg.PersistedUndo([]*agent.EditRecord{rec}, 1)
+	res := reg.PersistedUndo([]*event.EditRecord{rec}, 1)
 	if res[0].OK {
 		t.Errorf("expected undo to fail when replacing a symlink, but it succeeded")
 	}
@@ -81,7 +81,7 @@ func TestUndoInternalSymlinkNotReplaced(t *testing.T) {
 	os.Symlink("target.txt", filePath)
 
 	// Undo should refuse because HashAfter doesn't match (target.txt hash != edited hash, or Capture refuses symlink)
-	res := reg.PersistedUndo([]*agent.EditRecord{rec}, 1)
+	res := reg.PersistedUndo([]*event.EditRecord{rec}, 1)
 	if res[0].OK {
 		t.Errorf("expected undo to fail when file became an internal symlink")
 	}

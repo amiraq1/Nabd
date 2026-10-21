@@ -261,9 +261,19 @@ func OfferedOffsets(ms []provider.Message) []OfferedOffset {
 				continue
 			}
 			o := OfferedOffset{Path: p}
-			o.Start, _ = strconv.Atoi(mm[1])
-			o.End, _ = strconv.Atoi(mm[2])
-			o.Offset, _ = strconv.Atoi(mm[4])
+			// The truncTailRE groups are \d+ by construction; a parse
+			// failure skips the entry rather than emitting a bogus
+			// zero offset.
+			var err error
+			if o.Start, err = strconv.Atoi(mm[1]); err != nil {
+				continue
+			}
+			if o.End, err = strconv.Atoi(mm[2]); err != nil {
+				continue
+			}
+			if o.Offset, err = strconv.Atoi(mm[4]); err != nil {
+				continue
+			}
 			out = append(out, o)
 		}
 	}

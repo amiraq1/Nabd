@@ -4,12 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 func TestPermissionModalHidesUnsupportedSessionGrant(t *testing.T) {
 	m := newPermissionModal()
-	m.open(&agent.ToolCall{
+	m.open(&event.ToolCall{
 		ID:                  "c1",
 		Name:                "bash",
 		SessionGrantKnown:   true,
@@ -19,7 +19,7 @@ func TestPermissionModalHidesUnsupportedSessionGrant(t *testing.T) {
 		t.Fatalf("choices = %+v, want once and deny only", m.choices())
 	}
 	for _, choice := range m.choices() {
-		if choice.Decision == agent.AllowSession {
+		if choice.Decision == event.AllowSession {
 			t.Fatal("unsupported AllowSession choice was exposed")
 		}
 	}
@@ -34,7 +34,7 @@ func TestPermissionModalHidesUnsupportedSessionGrant(t *testing.T) {
 
 func TestPermissionModalShowsSupportedSessionGrantScope(t *testing.T) {
 	m := newPermissionModal()
-	m.open(&agent.ToolCall{
+	m.open(&event.ToolCall{
 		ID:                  "c1",
 		Name:                "write_file",
 		SessionGrantKnown:   true,
@@ -51,7 +51,7 @@ func TestPermissionModalShowsSupportedSessionGrantScope(t *testing.T) {
 
 func TestPermissionModalFailsClosedWhenSessionGrantUnknown(t *testing.T) {
 	m := newPermissionModal()
-	call := &agent.ToolCall{
+	call := &event.ToolCall{
 		ID:                  "c1",
 		Name:                "write_file",
 		SessionGrantKnown:   false,
@@ -65,7 +65,7 @@ func TestPermissionModalFailsClosedWhenSessionGrantUnknown(t *testing.T) {
 		t.Fatalf("choices = %+v, want once and deny only", m.choices())
 	}
 	for _, choice := range m.choices() {
-		if choice.Decision == agent.AllowSession {
+		if choice.Decision == event.AllowSession {
 			t.Fatal("AllowSession choice was exposed when SessionGrantKnown was false")
 		}
 	}

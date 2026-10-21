@@ -8,7 +8,9 @@ import (
 
 	"nabd/internal/agent"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/ignorefile"
+	"nabd/internal/mcp"
 	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
@@ -33,6 +35,13 @@ type interactiveSession struct {
 	pol  *perm.Policy
 	ap   *ui.Approver
 	loop *agent.Loop
+	mcp  *mcp.Manager // nil when MCP is disabled; closed with the session
+	// ctx is the session lifecycle context: background work started by
+	// slash commands (e.g. /compact summarisation) derives from it so it
+	// is cancelled when the session ends instead of running on
+	// context.Background() past shutdown.
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func loadSessionSkills(root *tools.Root) ([]skill.Skill, []skill.Diagnostic, error) {
@@ -49,7 +58,7 @@ func loadSessionSkills(root *tools.Root) ([]skill.Skill, []skill.Diagnostic, err
 // open a journal or wire a sink: the journal and the view are the caller's
 // concern, and they are the only things the two entry points legitimately
 // differ on.
-func newInteractiveSession(prov provider.Provider) (*interactiveSession, error) {
+func newInteractiveSession(prov provider.Provider, noMCP bool) (*interactiveSession, error) {
 	root, err := tools.NewRoot("")
 	if err != nil {
 		return nil, err
@@ -69,8 +78,13 @@ func newInteractiveSession(prov provider.Provider) (*interactiveSession, error) 
 	reg.SetSkillIndex(func() []skill.Skill { return allSkills })
 	pol := perm.New(reg)
 	wirePathRule(root, reg, pol)
+	g := &gate{p: pol}
+	mcpMgr, err := wireMCPForSession(noMCP, root.Dir(), reg, pol, g)
+	if err != nil {
+		return nil, err
+	}
 	ap := ui.NewApprover()
-	loop := newSessionLoop(prov, reg, gate{pol}, ap)
+	loop := newSessionLoop(prov, reg, *g, ap)
 	promptSkills, promptDiag := skill.FormatForPrompt(allSkills)
 	for _, d := range promptDiag {
 		fmt.Fprintln(os.Stderr, d.String())
@@ -84,7 +98,20 @@ func newInteractiveSession(prov provider.Provider) (*interactiveSession, error) 
 		return sections
 	}
 	loop.SkillInventory = skill.JournalRecords(allSkills)
-	return &interactiveSession{root: root, reg: reg, pol: pol, ap: ap, loop: loop}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	return &interactiveSession{root: root, reg: reg, pol: pol, ap: ap, loop: loop, mcp: mcpMgr, ctx: ctx, cancel: cancel}, nil
+}
+
+// Close ends the session lifecycle, cancelling background work such as an
+// in-flight /compact summarisation, and shutting down MCP servers. Safe to
+// call more than once.
+func (s *interactiveSession) Close() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	if s.mcp != nil {
+		_ = s.mcp.Close()
+	}
 }
 
 // wirePathRule installs the session ignore rule on the policy and hands the same
@@ -112,7 +139,7 @@ func (s *interactiveSession) SetMode(m perm.Mode) {
 func (s *interactiveSession) callbacks() *ui.SessionCallbacks {
 	return &ui.SessionCallbacks{
 		OnUndo:     func(n int) string { return fileUndo(s.loop, s.reg, n) },
-		OnCompact:  func() string { return chatOnCompact(s.loop) },
+		OnCompact:  func() string { return chatOnCompact(s.ctx, s.loop) },
 		OnRewind:   func(n int) (string, string) { return rewindSummary(s.loop, n) },
 		OnCtx:      func() string { return ctxSummary(s.loop) },
 		OnEdits:    func() string { return editsSummary(s.loop) },
@@ -178,14 +205,14 @@ func rewindSummary(loop *agent.Loop, n int) (string, string) {
 
 // ctxSummary reports the current context pressure and budget.
 func ctxSummary(loop *agent.Loop) string {
-	ms := agent.Squeeze(agent.Messages(agent.Live(loop.Hist())), agent.KeepFullRounds)
+	ms := agent.Squeeze(agent.Messages(event.Live(loop.Hist())), agent.KeepFullRounds)
 	p := loop.Budget.Pressure(ms)
 	return fmt.Sprintf("context %d%% (%d / %d tokens)", int(p*100), loop.Budget.Estimate(ms), loop.Budget.Usable())
 }
 
 // editsSummary lists the edits that /undo can still reverse.
 func editsSummary(loop *agent.Loop) string {
-	p := editRecords(agent.Live(loop.Hist()))
+	p := editRecords(event.Live(loop.Hist()))
 	if len(p) == 0 {
 		return "no reversible edits pending"
 	}

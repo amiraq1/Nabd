@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
 	"nabd/internal/tools"
@@ -25,22 +26,22 @@ func (l loopTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, 
 func (l loopTools) Check(tool string) (agent.Verdict, string) {
 	return agent.VerdictAllow, ""
 }
-func (l loopTools) Record(tool string, d agent.Decision)                   {}
-func (l loopTools) Effective(tool string, d agent.Decision) agent.Decision { return d }
-func (l loopTools) Ask(ctx context.Context, c agent.ToolCall) agent.Decision {
-	return agent.AllowOnce
+func (l loopTools) Record(tool string, d event.Decision)                   {}
+func (l loopTools) Effective(tool string, d event.Decision) event.Decision { return d }
+func (l loopTools) Ask(ctx context.Context, c event.ToolCall) event.Decision {
+	return event.AllowOnce
 }
-func (l loopTools) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
+func (l loopTools) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (event.Outcome, error) {
 	return l.reg.RunDetailed(ctx, name, raw)
 }
 
 // LastEdit lets the loop's EventEdit emission find the persisted record.
-func (l loopTools) LastEdit() *agent.EditRecord      { return l.reg.LastEdit() }
-func (l loopTools) SetReadCredit(c agent.ReadCredit) { l.reg.SetReadCredit(c) }
+func (l loopTools) LastEdit() *event.EditRecord      { return l.reg.LastEdit() }
+func (l loopTools) SetReadCredit(c event.ReadCredit) { l.reg.SetReadCredit(c) }
 
 // SetLinesRead is a convenience wrapper that stages credit with no path/hash
 // binding (used by tests that don't need path-hash validation).
-func (l loopTools) SetLinesRead(n int) { l.reg.SetReadCredit(agent.ReadCredit{LinesRead: n}) }
+func (l loopTools) SetLinesRead(n int) { l.reg.SetReadCredit(event.ReadCredit{LinesRead: n}) }
 
 // writeOnceProvider asks for one write_file call, then on the next turn
 // (which carries the tool_result) answers with plain text and stops.
@@ -87,8 +88,8 @@ func TestLoopEmitsEditRecordEvent(t *testing.T) {
 		Gate:     loopTools{reg},
 		Human:    loopTools{reg},
 	}
-	var events []agent.Event
-	l.Sink = sinkFunc(func(e agent.Event) error {
+	var events []event.Event
+	l.Sink = sinkFunc(func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -100,11 +101,11 @@ func TestLoopEmitsEditRecordEvent(t *testing.T) {
 	var editIdx, toolEndIdx, turnEndIdx = -1, -1, -1
 	for i, e := range events {
 		switch e.Type {
-		case agent.EventEdit:
+		case event.EventEdit:
 			editIdx = i
-		case agent.ToolEnd:
+		case event.ToolEnd:
 			toolEndIdx = i
-		case agent.TurnEnd:
+		case event.TurnEnd:
 			turnEndIdx = i
 		}
 	}
@@ -140,7 +141,7 @@ func TestLoopEmitsEditRecordEvent(t *testing.T) {
 	}
 
 	// Messages() must not carry the patch.
-	live := agent.Live(events)
+	live := event.Live(events)
 	for _, m := range agent.Messages(live) {
 		if strings.Contains(m.Text, "--- a/out.md") || strings.Contains(m.Text, "نتيجة التعديل") && strings.Contains(m.Text, "+") {
 			t.Errorf("patch leaked into messages: %q", m.Text)
@@ -170,8 +171,8 @@ func TestMutationIntentPrecedesEditRecord(t *testing.T) {
 	reg.OnMutationPrepared = l.PrepareMutation
 	reg.OnMutationAborted = l.AbortMutation
 
-	var events []agent.Event
-	l.Sink = sinkFunc(func(e agent.Event) error {
+	var events []event.Event
+	l.Sink = sinkFunc(func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -182,11 +183,11 @@ func TestMutationIntentPrecedesEditRecord(t *testing.T) {
 	intentIdx, toolEndIdx, editIdx := -1, -1, -1
 	for i, e := range events {
 		switch e.Type {
-		case agent.EventEditIntent:
+		case event.EventEditIntent:
 			intentIdx = i
-		case agent.ToolEnd:
+		case event.ToolEnd:
 			toolEndIdx = i
-		case agent.EventEdit:
+		case event.EventEdit:
 			editIdx = i
 		}
 	}
@@ -228,12 +229,12 @@ func TestMutationAbortEventsTrackPrePublishFailure(t *testing.T) {
 	l := &agent.Loop{
 		Budget: agent.NewBudget(),
 	}
-	var events []agent.Event
-	l.Sink = sinkFunc(func(e agent.Event) error {
+	var events []event.Event
+	l.Sink = sinkFunc(func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	})
-	reg.OnMutationPrepared = func(rec *agent.EditRecord) error {
+	reg.OnMutationPrepared = func(rec *event.EditRecord) error {
 		if err := l.PrepareMutation(rec); err != nil {
 			return err
 		}
@@ -258,13 +259,13 @@ func TestMutationAbortEventsTrackPrePublishFailure(t *testing.T) {
 		t.Fatalf("symlink mutation unexpectedly succeeded: ok=%v err=%v", ok, runErr)
 	}
 
-	var types []agent.EventType
+	var types []event.EventType
 	for _, e := range events {
-		if e.Type == agent.EventEditIntent || e.Type == agent.EventEditAbort || e.Type == agent.EventEdit {
+		if e.Type == event.EventEditIntent || e.Type == event.EventEditAbort || e.Type == event.EventEdit {
 			types = append(types, e.Type)
 		}
 	}
-	want := []agent.EventType{agent.EventEditIntent, agent.EventEditAbort}
+	want := []event.EventType{event.EventEditIntent, event.EventEditAbort}
 	if !reflect.DeepEqual(types, want) {
 		t.Fatalf("mutation events=%v, want %v", types, want)
 	}
@@ -279,14 +280,14 @@ func TestMutationAbortEventsTrackPrePublishFailure(t *testing.T) {
 }
 
 // sinkFunc adapts a func to the agent.Sink interface.
-type sinkFunc func(agent.Event) error
+type sinkFunc func(event.Event) error
 
-func (f sinkFunc) Emit(e agent.Event) error { return f(e) }
+func (f sinkFunc) Emit(e event.Event) error { return f(e) }
 
 // TestWriteProducesExactlyOneEditRecord: one successful write must leave
 // exactly one edit_record event in the journal — no more (inflation), no
 // fewer (a write without evidence). The journal type string is
-// "edit_record" (agent.EventEdit); that event IS the write evidence.
+// "edit_record" (event.EventEdit); that event IS the write evidence.
 func TestWriteProducesExactlyOneEditRecord(t *testing.T) {
 	dir := t.TempDir()
 	root, err := tools.NewRoot(dir)
@@ -306,8 +307,8 @@ func TestWriteProducesExactlyOneEditRecord(t *testing.T) {
 		Gate:     loopTools{reg},
 		Human:    loopTools{reg},
 	}
-	var events []agent.Event
-	l.Sink = sinkFunc(func(e agent.Event) error {
+	var events []event.Event
+	l.Sink = sinkFunc(func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -317,7 +318,7 @@ func TestWriteProducesExactlyOneEditRecord(t *testing.T) {
 
 	count := 0
 	for _, e := range events {
-		if e.Type == agent.EventEdit {
+		if e.Type == event.EventEdit {
 			count++
 			if e.Edit == nil {
 				t.Error("edit_record event carries a nil Edit payload — silent non-evidence")
@@ -327,8 +328,8 @@ func TestWriteProducesExactlyOneEditRecord(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("edit_record events=%d, want exactly 1 for one write", count)
 	}
-	if string(agent.EventEdit) != "edit_record" {
-		t.Errorf("journal type string = %q, want edit_record", agent.EventEdit)
+	if string(event.EventEdit) != "edit_record" {
+		t.Errorf("journal type string = %q, want edit_record", event.EventEdit)
 	}
 }
 
@@ -358,8 +359,8 @@ func TestNoEditRecordWithoutMutation(t *testing.T) {
 		Gate:     loopTools{reg},
 		Human:    loopTools{reg},
 	}
-	var events []agent.Event
-	l.Sink = sinkFunc(func(e agent.Event) error {
+	var events []event.Event
+	l.Sink = sinkFunc(func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -367,7 +368,7 @@ func TestNoEditRecordWithoutMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range events {
-		if e.Type == agent.EventEdit {
+		if e.Type == event.EventEdit {
 			t.Fatalf("edit_record emitted with no mutation: %+v", e.Edit)
 		}
 	}
@@ -453,8 +454,8 @@ func TestLoopReadCreditCompositeKeyPropagation(t *testing.T) {
 			Gate:     loopTools{reg},
 			Human:    loopTools{reg},
 		}
-		var events []agent.Event
-		l.Sink = sinkFunc(func(e agent.Event) error {
+		var events []event.Event
+		l.Sink = sinkFunc(func(e event.Event) error {
 			events = append(events, e)
 			return nil
 		})
@@ -463,9 +464,9 @@ func TestLoopReadCreditCompositeKeyPropagation(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		var editEv *agent.Event
+		var editEv *event.Event
 		for i := range events {
-			if events[i].Type == agent.EventEdit {
+			if events[i].Type == event.EventEdit {
 				editEv = &events[i]
 				break
 			}
@@ -504,8 +505,8 @@ func TestLoopReadCreditCompositeKeyPropagation(t *testing.T) {
 			Gate:     loopTools{reg},
 			Human:    loopTools{reg},
 		}
-		var events []agent.Event
-		l.Sink = sinkFunc(func(e agent.Event) error {
+		var events []event.Event
+		l.Sink = sinkFunc(func(e event.Event) error {
 			events = append(events, e)
 			return nil
 		})
@@ -514,9 +515,9 @@ func TestLoopReadCreditCompositeKeyPropagation(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		var editEv *agent.Event
+		var editEv *event.Event
 		for i := range events {
-			if events[i].Type == agent.EventEdit {
+			if events[i].Type == event.EventEdit {
 				editEv = &events[i]
 				break
 			}

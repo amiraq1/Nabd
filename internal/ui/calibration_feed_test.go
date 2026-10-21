@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/provider"
 	"nabd/internal/store"
 )
@@ -21,8 +22,8 @@ func TestFeedCalibrationNoticeFilteredExact(t *testing.T) {
 	f.width = 60
 	f.height = 12
 
-	evs := []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "first"},
+	evs := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "first"},
 	}
 	_, _ = f.Update(agentEventBatchMsg{Events: evs})
 
@@ -37,8 +38,8 @@ func TestFeedCalibrationNoticeFilteredExact(t *testing.T) {
 	scrollBefore := f.scrollTop
 
 	// Hidden-only batch
-	evsHidden := []agent.Event{
-		{Seq: 2, Type: agent.Notice, Calib: &agent.Calibration{PromptTokens: 100}, Text: "calibration: token ratio adopted 1.50"},
+	evsHidden := []event.Event{
+		{Seq: 2, Type: event.Notice, Calib: &event.Calibration{PromptTokens: 100}, Text: "calibration: token ratio adopted 1.50"},
 	}
 	_, _ = f.Update(agentEventBatchMsg{Events: evsHidden})
 
@@ -56,22 +57,22 @@ func TestFeedCalibrationNoticeFilteredExact(t *testing.T) {
 	// Two-feed comparison to test spacing and formatting equivalence:
 	// feedA receives only visible events.
 	// feedB receives the identical visible events with a calibration notice inserted.
-	visible1 := agent.Event{Seq: 1, Type: agent.UserMsg, Text: "first"}
-	calibNotice := agent.Event{Seq: 2, Type: agent.Notice, Calib: &agent.Calibration{PromptTokens: 100}, Text: "calibration: token ratio adopted 1.50"}
-	visible2 := agent.Event{Seq: 3, Type: agent.UserMsg, Text: "second"}
-	fallbackNotice := agent.Event{Seq: 4, Type: agent.Notice, Text: "provider fallback to generic model"}
-	wordNotice := agent.Event{Seq: 5, Type: agent.Notice, Text: "we need to rerun calibration for this sensor"}
-	errNotice := agent.Event{Seq: 6, Type: agent.RunError, Err: "exhausted routes"}
+	visible1 := event.Event{Seq: 1, Type: event.UserMsg, Text: "first"}
+	calibNotice := event.Event{Seq: 2, Type: event.Notice, Calib: &event.Calibration{PromptTokens: 100}, Text: "calibration: token ratio adopted 1.50"}
+	visible2 := event.Event{Seq: 3, Type: event.UserMsg, Text: "second"}
+	fallbackNotice := event.Event{Seq: 4, Type: event.Notice, Text: "provider fallback to generic model"}
+	wordNotice := event.Event{Seq: 5, Type: event.Notice, Text: "we need to rerun calibration for this sensor"}
+	errNotice := event.Event{Seq: 6, Type: event.RunError, Err: "exhausted routes"}
 
 	feedA := NewFeed()
 	feedA.width = 60
 	feedA.height = 12
-	_, _ = feedA.Update(agentEventBatchMsg{Events: []agent.Event{visible1, visible2, fallbackNotice, wordNotice, errNotice}})
+	_, _ = feedA.Update(agentEventBatchMsg{Events: []event.Event{visible1, visible2, fallbackNotice, wordNotice, errNotice}})
 
 	feedB := NewFeed()
 	feedB.width = 60
 	feedB.height = 12
-	_, _ = feedB.Update(agentEventBatchMsg{Events: []agent.Event{visible1, calibNotice, visible2, fallbackNotice, wordNotice, errNotice}})
+	_, _ = feedB.Update(agentEventBatchMsg{Events: []event.Event{visible1, calibNotice, visible2, fallbackNotice, wordNotice, errNotice}})
 
 	// Exact line-by-line comparison: the calibration notice must produce zero lines,
 	// zero empty cards, and zero extra spacing separators.
@@ -97,12 +98,12 @@ func TestFeedCalibrationNoticeFilteredExact(t *testing.T) {
 
 	// Verify that old Notice events without Calib (e.g. from historical session logs)
 	// remain visible in Feed, proving no text-based filtering is applied.
-	oldNotice := agent.Event{
+	oldNotice := event.Event{
 		Seq:  7,
-		Type: agent.Notice,
+		Type: event.Notice,
 		Text: "calibration: token ratio adopted 1.45 (legacy)",
 	}
-	_, _ = feedB.Update(agentEventBatchMsg{Events: []agent.Event{oldNotice}})
+	_, _ = feedB.Update(agentEventBatchMsg{Events: []event.Event{oldNotice}})
 	if !strings.Contains(strings.Join(feedB.lines, "\n"), "calibration: token ratio adopted 1.45 (legacy)") {
 		t.Fatalf("legacy notice without Calib must remain visible in feed")
 	}
@@ -122,9 +123,9 @@ func TestRegressionUnseenProxyItemUpdate(t *testing.T) {
 		// in-place updates (1 tool line before and after, 4 total lines:
 		// Line 0: "⚙ bash", Line 1: "" separator, Line 2: "You", Line 3: "bottom message"),
 		// tool_c1 is pinned to expandCollapsed.
-		initBatch := []agent.Event{
-			{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "c1", Name: "bash"}},
-			{Seq: 2, Type: agent.UserMsg, Text: "bottom message"},
+		initBatch := []event.Event{
+			{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "bash"}},
+			{Seq: 2, Type: event.UserMsg, Text: "bottom message"},
 		}
 		_, _ = f.Update(agentEventBatchMsg{Events: initBatch})
 		f.overrides = map[string]expandState{"tool_c1": expandCollapsed}
@@ -149,8 +150,8 @@ func TestRegressionUnseenProxyItemUpdate(t *testing.T) {
 		// ToolEnd arrives with Duration > 0 (e.g. 50ms) and no output:
 		// Tool card updates in-place from "⚙ bash" to "✓ bash · 50ms".
 		// Total lines remain exactly 4, and the last line remains "bottom message".
-		updateBatch := []agent.Event{
-			{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", Name: "bash", OK: true, MS: 50}},
+		updateBatch := []event.Event{
+			{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "bash", OK: true, MS: 50}},
 		}
 		_, _ = f.Update(agentEventBatchMsg{Events: updateBatch})
 
@@ -190,15 +191,15 @@ func (dummyTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, e
 	return "", false, nil
 }
 func (dummyTools) Check(tool string) (agent.Verdict, string)              { return agent.VerdictDeny, "no" }
-func (dummyTools) Record(tool string, d agent.Decision)                   {}
-func (dummyTools) Effective(tool string, d agent.Decision) agent.Decision { return d }
-func (dummyTools) Ask(ctx context.Context, c agent.ToolCall) agent.Decision {
-	return agent.Deny
+func (dummyTools) Record(tool string, d event.Decision)                   {}
+func (dummyTools) Effective(tool string, d event.Decision) event.Decision { return d }
+func (dummyTools) Ask(ctx context.Context, c event.ToolCall) event.Decision {
+	return event.Deny
 }
 
-type fnSink func(agent.Event) error
+type fnSink func(event.Event) error
 
-func (s fnSink) Emit(e agent.Event) error { return s(e) }
+func (s fnSink) Emit(e event.Event) error { return s(e) }
 
 // TestCalibrationNoticeJournalAndFeedIntegration tests the end-to-end path with a synthetic provider:
 // 1. Provider sends usage triggering real Budget.Calibrate ratchet rise.
@@ -225,8 +226,8 @@ func TestCalibrationNoticeJournalAndFeedIntegration(t *testing.T) {
 	feed.width = 60
 	feed.height = 20
 
-	feedSink := fnSink(func(e agent.Event) error {
-		_, _ = feed.Update(agentEventBatchMsg{Events: []agent.Event{e}})
+	feedSink := fnSink(func(e event.Event) error {
+		_, _ = feed.Update(agentEventBatchMsg{Events: []event.Event{e}})
 		return nil
 	})
 
@@ -268,19 +269,19 @@ func TestCalibrationNoticeJournalAndFeedIntegration(t *testing.T) {
 
 	for _, ev := range recorded {
 		switch ev.Type {
-		case agent.UserMsg:
+		case event.UserMsg:
 			if ev.Text == "synthetic question" {
 				foundUserMsg = true
 			}
-		case agent.EventCalib:
+		case event.EventCalib:
 			if ev.Calib != nil && ev.Calib.PromptTokens == 20 {
 				foundEventCalib = true
 			}
-		case agent.EventProviderUsage:
+		case event.EventProviderUsage:
 			if ev.Usage != nil && ev.Usage.PromptTokens == 20 {
 				foundProviderUsage = true
 			}
-		case agent.Notice:
+		case event.Notice:
 			if strings.HasPrefix(ev.Text, "calibration: token ratio") {
 				foundNotice = true
 				if ev.Calib == nil {
@@ -290,7 +291,7 @@ func TestCalibrationNoticeJournalAndFeedIntegration(t *testing.T) {
 					t.Fatalf("recorded Notice Calib.PromptTokens = %d, want 20", ev.Calib.PromptTokens)
 				}
 			}
-		case agent.TurnEnd:
+		case event.TurnEnd:
 			foundTurnEnd = true
 		}
 	}

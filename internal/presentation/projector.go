@@ -4,28 +4,33 @@ import (
 	"strconv"
 	"strings"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 type pendingRead struct {
-	record agent.ReadRecord
+	record event.ReadRecord
 	seq    int
 }
 
 type Projector struct {
 	items               []FeedItem
-	byID                map[string]int
+	byID                map[ItemKey]int
 	assistantIdx        int
 	pendingReads        []pendingRead
 	deniedCalls         map[string]bool
-	UnhandledEventTypes map[agent.EventType]int
+	UnhandledEventTypes map[event.EventType]int
+	// touched records item keys created or mutated since the last
+	// DrainTouched call. The UI uses it to re-fingerprint only the items an
+	// incoming event batch actually changed, instead of hashing every
+	// visible item's full text/output on every 20ms refresh (L15).
+	touched map[ItemKey]bool
 }
 
 func NewProjector() *Projector {
-	return &Projector{byID: map[string]int{}, assistantIdx: -1, deniedCalls: map[string]bool{}, UnhandledEventTypes: map[agent.EventType]int{}}
+	return &Projector{byID: map[ItemKey]int{}, assistantIdx: -1, deniedCalls: map[string]bool{}, UnhandledEventTypes: map[event.EventType]int{}}
 }
 
-func (p *Projector) Build(events []agent.Event) ([]FeedItem, error) {
+func (p *Projector) Build(events []event.Event) ([]FeedItem, error) {
 	p.reset()
 	for i := range events {
 		if err := p.Apply(events[i]); err != nil {
@@ -36,42 +41,42 @@ func (p *Projector) Build(events []agent.Event) ([]FeedItem, error) {
 	return p.Items(), nil
 }
 
-func (p *Projector) Apply(e agent.Event) error {
+func (p *Projector) Apply(e event.Event) error {
 	switch e.Type {
-	case agent.RunStart:
+	case event.RunStart:
 		return p.appendRunBoundary("start", e)
-	case agent.RunEnd:
+	case event.RunEnd:
 		p.flushPendingReads()
 		return p.appendRunBoundary("end", e)
-	case agent.UserMsg:
+	case event.UserMsg:
 		return p.appendUserMsg(e)
-	case agent.TextDelta:
+	case event.TextDelta:
 		return p.appendTextDelta(e)
-	case agent.TurnEnd:
+	case event.TurnEnd:
 		p.finalizeAssistant()
 		p.flushPendingReads()
 		return nil
-	case agent.ToolStart:
+	case event.ToolStart:
 		return p.appendToolStart(e)
-	case agent.ToolEnd:
+	case event.ToolEnd:
 		return p.appendToolEnd(e)
-	case agent.PermAsk:
+	case event.PermAsk:
 		return p.appendPermAsk(e)
-	case agent.PermReply:
+	case event.PermReply:
 		return p.appendPermReply(e)
-	case agent.Notice:
+	case event.Notice:
 		return p.appendNotice(e)
-	case agent.RunError:
+	case event.RunError:
 		p.flushPendingReads()
 		return p.appendError(e)
-	case agent.Interrupted:
+	case event.Interrupted:
 		p.flushPendingReads()
 		return p.appendInterrupted(e)
-	case agent.EventRead:
+	case event.EventRead:
 		return p.appendReadRecord(e)
-	case agent.Compact, agent.Rewind, agent.EventEditIntent, agent.EventEditAbort, agent.EventEdit, agent.EventCalib, agent.EventRateLimit, agent.EventProviderUsage:
+	case event.Compact, event.Rewind, event.EventEditIntent, event.EventEditAbort, event.EventEdit, event.EventCalib, event.EventRateLimit, event.EventProviderUsage:
 		return nil
-	case agent.EventProviderRoute:
+	case event.EventProviderRoute:
 		text, ok := FormatRouteNotice(e.Route)
 		if !ok {
 			return nil
@@ -79,7 +84,7 @@ func (p *Projector) Apply(e agent.Event) error {
 		return p.append(FeedItem{Type: ItemNotice, ID: "notice_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: text})
 	default:
 		if p.UnhandledEventTypes == nil {
-			p.UnhandledEventTypes = map[agent.EventType]int{}
+			p.UnhandledEventTypes = map[event.EventType]int{}
 		}
 		p.UnhandledEventTypes[e.Type]++
 		return nil
@@ -114,38 +119,64 @@ func (p *Projector) Items() []FeedItem {
 
 func (p *Projector) reset() {
 	p.items = nil
-	p.byID = map[string]int{}
+	p.byID = map[ItemKey]int{}
 	p.assistantIdx = -1
 	p.pendingReads = nil
 	p.deniedCalls = map[string]bool{}
-	p.UnhandledEventTypes = map[agent.EventType]int{}
+	p.UnhandledEventTypes = map[event.EventType]int{}
+	p.touched = nil
 }
 
-func (p *Projector) appendRunBoundary(kind string, e agent.Event) error {
+// touch records that the item with key was created or mutated. Every
+// in-place mutation of p.items must go through here (append included), or
+// the UI's fingerprint cache will serve stale lines for the item.
+func (p *Projector) touch(key ItemKey) {
+	if p.touched == nil {
+		p.touched = make(map[ItemKey]bool)
+	}
+	p.touched[key] = true
+}
+
+// DrainTouched returns the keys of items created or mutated since the
+// previous drain and clears the set. A nil return means nothing changed.
+func (p *Projector) DrainTouched() []ItemKey {
+	if len(p.touched) == 0 {
+		return nil
+	}
+	out := make([]ItemKey, 0, len(p.touched))
+	for k := range p.touched {
+		out = append(out, k)
+	}
+	p.touched = make(map[ItemKey]bool)
+	return out
+}
+
+func (p *Projector) appendRunBoundary(kind string, e event.Event) error {
 	p.finalizeAssistant()
 	return p.append(FeedItem{Type: ItemRunBoundary, ID: "run_" + kind + "_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: e.Text, RunBoundary: kind})
 }
-func (p *Projector) appendUserMsg(e agent.Event) error {
+func (p *Projector) appendUserMsg(e event.Event) error {
 	p.finalizeAssistant()
 	return p.append(FeedItem{Type: ItemUserMsg, ID: "user_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: e.Text})
 }
-func (p *Projector) appendTextDelta(e agent.Event) error {
+func (p *Projector) appendTextDelta(e event.Event) error {
 	if p.assistantIdx < 0 || p.assistantIdx >= len(p.items) || p.items[p.assistantIdx].Type != ItemAssistant {
 		it := FeedItem{Type: ItemAssistant, ID: "asst_turn_" + strconv.Itoa(e.Seq), Seq: e.Seq}
 		p.assistantIdx = len(p.items)
 		_ = p.append(it)
 	}
 	p.items[p.assistantIdx].Text += e.Text
+	p.touch(p.items[p.assistantIdx].key())
 	return nil
 }
 func (p *Projector) finalizeAssistant() { p.assistantIdx = -1 }
 
-func (p *Projector) appendToolStart(e agent.Event) error {
+func (p *Projector) appendToolStart(e event.Event) error {
 	card := &ToolCard{CallID: callID(e), Name: toolName(e), Args: callArgs(e.Call), Status: ToolRunning, OutputState: OutputNone}
 	return p.append(FeedItem{Type: ItemTool, ID: toolID(e), Seq: e.Seq, Tool: card})
 }
 
-func (p *Projector) appendToolEnd(e agent.Event) error {
+func (p *Projector) appendToolEnd(e event.Event) error {
 	id := toolID(e)
 	idx, ok := p.byID[FeedItem{Type: ItemTool, ID: id}.key()]
 	if !ok || idx < 0 || idx >= len(p.items) {
@@ -155,6 +186,7 @@ func (p *Projector) appendToolEnd(e agent.Event) error {
 		return p.append(FeedItem{Type: ItemTool, ID: id, Seq: e.Seq, Tool: card})
 	}
 	target := &p.items[idx]
+	p.touch(target.key())
 	if target.Tool == nil {
 		target.Tool = &ToolCard{CallID: callID(e), Name: toolName(e), Args: callArgs(e.Call)}
 	}
@@ -166,7 +198,7 @@ func (p *Projector) appendToolEnd(e agent.Event) error {
 	return nil
 }
 
-func (p *Projector) applyToolResult(card *ToolCard, call *agent.ToolCall) {
+func (p *Projector) applyToolResult(card *ToolCard, call *event.ToolCall) {
 	if call == nil {
 		card.Status = ToolFailed
 		card.OutputState = OutputUnavailable
@@ -207,7 +239,7 @@ func outputState(output string) OutputState {
 // EventRead has no CallID in the stable journal contract. Tool lifecycle pairing
 // remains CallID-based; read metadata uses the production ordering/path only as
 // a compatibility key and supports both pre- and post-ToolEnd archives.
-func (p *Projector) appendReadRecord(e agent.Event) error {
+func (p *Projector) appendReadRecord(e event.Event) error {
 	if e.Read == nil {
 		return nil
 	}
@@ -217,7 +249,7 @@ func (p *Projector) appendReadRecord(e agent.Event) error {
 	p.pendingReads = append(p.pendingReads, pendingRead{record: *e.Read, seq: e.Seq})
 	return nil
 }
-func (p *Projector) applyReadToLatest(rec agent.ReadRecord) bool {
+func (p *Projector) applyReadToLatest(rec event.ReadRecord) bool {
 	for i := len(p.items) - 1; i >= 0; i-- {
 		card := p.items[i].Tool
 		if card == nil || card.Name != "read_file" || card.Truncated {
@@ -227,6 +259,7 @@ func (p *Projector) applyReadToLatest(rec agent.ReadRecord) bool {
 			continue
 		}
 		applyReadRecord(card, rec)
+		p.touch(p.items[i].key())
 		return true
 	}
 	return false
@@ -245,7 +278,7 @@ func (p *Projector) applyPendingRead(card *ToolCard) {
 		return
 	}
 }
-func applyReadRecord(card *ToolCard, rec agent.ReadRecord) {
+func applyReadRecord(card *ToolCard, rec event.ReadRecord) {
 	card.Truncated = rec.Truncated
 	if rec.NextOffset > 0 {
 		next := rec.NextOffset
@@ -264,18 +297,47 @@ func (p *Projector) flushPendingReads() {
 	p.pendingReads = nil
 }
 
-func (p *Projector) appendPermAsk(e agent.Event) error {
+func (p *Projector) findToolCard(e event.Event) (int, *ToolCard) {
+	id := toolID(e)
+	if idx, ok := p.byID[FeedItem{Type: ItemTool, ID: id}.key()]; ok && idx >= 0 && idx < len(p.items) {
+		return idx, p.items[idx].Tool
+	}
+	cid := callID(e)
+	if cid != "" {
+		for i := len(p.items) - 1; i >= 0; i-- {
+			if card := p.items[i].Tool; card != nil && card.CallID == cid {
+				return i, card
+			}
+		}
+	}
+	return -1, nil
+}
+
+func (p *Projector) appendPermAsk(e event.Event) error {
+	if idx, card := p.findToolCard(e); card != nil {
+		card.Status = ToolPending
+		p.touch(p.items[idx].key())
+	}
 	return p.append(FeedItem{Type: ItemPermission, ID: toolID(e), Seq: e.Seq, Perm: &PermCard{Name: toolName(e), Args: callArgs(e.Call), Reason: PermissionReasonText(e), Status: PermAsked}})
 }
-func (p *Projector) appendPermReply(e agent.Event) error {
+func (p *Projector) appendPermReply(e event.Event) error {
 	id := toolID(e)
 	raw := e.RawDecision
-	if raw == agent.Deny && e.Decision != agent.Deny {
+	if raw == event.Deny && e.Decision != event.Deny {
 		raw = e.Decision
 	}
 	effective := e.Decision
-	if e.Call != nil && (raw == agent.Deny || effective == agent.Deny) {
+	isDeny := raw == event.Deny || effective == event.Deny
+	if e.Call != nil && isDeny {
 		p.deniedCalls[e.Call.ID] = true
+	}
+	if toolIdx, card := p.findToolCard(e); card != nil {
+		if isDeny {
+			card.Status = ToolDenied
+		} else {
+			card.Status = ToolRunning
+		}
+		p.touch(p.items[toolIdx].key())
 	}
 	idx, ok := p.byID[FeedItem{Type: ItemPermission, ID: id}.key()]
 	if !ok || idx < 0 || idx >= len(p.items) {
@@ -286,12 +348,13 @@ func (p *Projector) appendPermReply(e agent.Event) error {
 			Decision:  raw,
 			Effective: effective,
 		}
-		if raw == agent.Deny || effective == agent.Deny {
+		if raw == event.Deny || effective == event.Deny {
 			card.Status = PermDeny
 		}
 		return p.append(FeedItem{Type: ItemPermission, ID: id, Seq: e.Seq, Perm: card})
 	}
 	t := &p.items[idx]
+	p.touch(t.key())
 	if t.Perm == nil {
 		t.Perm = &PermCard{Name: toolName(e), Args: callArgs(e.Call)}
 	}
@@ -301,50 +364,52 @@ func (p *Projector) appendPermReply(e agent.Event) error {
 		t.Perm.Reason = reason
 	}
 	t.Perm.Status = PermAllow
-	if raw == agent.Deny || effective == agent.Deny {
+	if raw == event.Deny || effective == event.Deny {
 		t.Perm.Status = PermDeny
 	}
 	return nil
 }
-func (p *Projector) appendNotice(e agent.Event) error {
+func (p *Projector) appendNotice(e event.Event) error {
 	if e.Calib != nil {
 		return nil
 	}
 	return p.append(FeedItem{Type: ItemNotice, ID: "notice_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: e.Text})
 }
-func (p *Projector) appendError(e agent.Event) error {
+func (p *Projector) appendError(e event.Event) error {
 	return p.append(FeedItem{Type: ItemError, ID: "err_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: e.Err, Error: ErrorCardFromEvent(e)})
 }
-func (p *Projector) appendInterrupted(e agent.Event) error {
+func (p *Projector) appendInterrupted(e event.Event) error {
 	for i := range p.items {
 		if p.items[i].Tool != nil && p.items[i].Tool.Status == ToolRunning {
 			p.items[i].Tool.Status = ToolCancelled
+			p.touch(p.items[i].key())
 		}
 	}
 	text := e.Text
 	if text == "" {
 		text = "stopped"
 	}
-	return p.append(FeedItem{Type: ItemError, ID: "intr_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: text, Error: NewErrorCard(agent.ErrCodeCanceled, text, "")})
+	return p.append(FeedItem{Type: ItemError, ID: "intr_" + strconv.Itoa(e.Seq), Seq: e.Seq, Text: text, Error: NewErrorCard(event.ErrCodeCanceled, text, "")})
 }
 func (p *Projector) append(it FeedItem) error {
 	p.byID[it.key()] = len(p.items)
 	p.items = append(p.items, it)
+	p.touch(it.key())
 	return nil
 }
-func callID(e agent.Event) string {
+func callID(e event.Event) string {
 	if e.Call != nil {
 		return e.Call.ID
 	}
 	return ""
 }
-func toolID(e agent.Event) string {
+func toolID(e event.Event) string {
 	if id := callID(e); id != "" {
 		return "tool_" + id
 	}
 	return "tool_seq_" + strconv.Itoa(e.Seq)
 }
-func toolName(e agent.Event) string {
+func toolName(e event.Event) string {
 	if e.Call != nil && e.Call.Name != "" {
 		return e.Call.Name
 	}

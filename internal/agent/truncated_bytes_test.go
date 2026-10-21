@@ -2,17 +2,18 @@ package agent
 
 import (
 	"encoding/json"
+	"nabd/internal/event"
 	"strings"
 	"testing"
 )
 
-func oversizedCall(extra int) Event {
-	return Event{
-		Type: ToolEnd,
-		Call: &ToolCall{
+func oversizedCall(extra int) event.Event {
+	return event.Event{
+		Type: event.ToolEnd,
+		Call: &event.ToolCall{
 			ID:     "call_1",
 			Name:   "bash",
-			Output: strings.Repeat("a", MaxPersistedOutput+extra),
+			Output: strings.Repeat("a", event.MaxPersistedOutput+extra),
 			OK:     true,
 		},
 	}
@@ -33,7 +34,7 @@ func TestForStoreRecordsTruncatedBytes(t *testing.T) {
 // TestForStoreLeavesSmallOutputAlone keeps the field honest: a zero must mean
 // "nothing was cut", which is also what older journals decode to.
 func TestForStoreLeavesSmallOutputAlone(t *testing.T) {
-	e := Event{Type: ToolEnd, Call: &ToolCall{ID: "c", Name: "glob", Output: "three files"}}
+	e := event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: "c", Name: "glob", Output: "three files"}}
 	stored := e.ForStore()
 	if stored.Call.TruncatedBytes != 0 {
 		t.Fatalf("TruncatedBytes = %d, want 0", stored.Call.TruncatedBytes)
@@ -57,7 +58,7 @@ func TestForStoreDoesNotMutateLiveEvent(t *testing.T) {
 // TestTruncatedBytesIsAdditive proves the wire contract: the key is absent
 // when nothing was cut, so old readers and old journals are unaffected.
 func TestTruncatedBytesIsAdditive(t *testing.T) {
-	clean, err := json.Marshal(Event{Type: ToolEnd, Call: &ToolCall{ID: "c", Name: "glob"}})
+	clean, err := json.Marshal(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: "c", Name: "glob"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +66,7 @@ func TestTruncatedBytesIsAdditive(t *testing.T) {
 		t.Fatalf("field should be omitted when zero: %s", clean)
 	}
 
-	var legacy Event
+	var legacy event.Event
 	if err := json.Unmarshal([]byte(`{"type":"tool_end","call":{"id":"c","name":"bash","out":"x"}}`), &legacy); err != nil {
 		t.Fatal(err)
 	}

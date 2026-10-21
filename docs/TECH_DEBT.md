@@ -2,12 +2,25 @@
 
 | ID | Debt | Consequence and guard |
 |---|---|---|
-| SKILLS_PROMPT_SECTION_FINGERPRINT | `agent.Fingerprint` and `agent.Diff` exist in `internal/agent/prompt.go` and are unit-tested, but the session never records the fingerprint of the ordered prompt sections at start, nor diffs them within a session. The skill index is journaled (the `skills` event), so the skill contribution is covered by body hash; the general prompt-section identity is not. | Follow-up, deliberately out of the session-wiring PR: wire `Fingerprint` at `Loop.Start` and emit the per-turn `Diff` when sections change. Until then, a prompt-section change mid-session is not journaled. |
-| BUILTIN_CATALOG_STALENESS | The embedded catalog is a static list in source, while providers decommission models without notice; staleness is therefore a permanent condition, not a one-off incident. CI cannot guard it: the build has no network and no credentials, and querying a real provider from tests is forbidden. The only structural protection is that a default must be manually verified at edit time; `nabd models` is the live source of truth. The current Anthropic default `claude-sonnet-5` is unverified because no Anthropic key was available for measurement; it is recorded as unmeasured and is not changed by this PR. | Keep defaults declared in `Models`, verify them manually when editing the catalog, and direct users to `nabd models <provider>`. |
-| SKILL_WALK_BOUND_IS_POST_HOC | Directory listing in skill discovery (`internal/skill/skill.go`) reads entries via `f.ReadDir(64)` and bounds traversal post-hoc via `seen >= maxWalkEntries` after opening and reading batches, loading entries into memory before capping. | Bounding is applied post-hoc during batch iteration; follow-up should bound directory traversal queues upfront before descriptor allocation. |
-| UNREPRODUCIBLE_PERFORMANCE_METRICS | Historical performance claims frequently cited in PR descriptions and reports ("187 allocations", "44ms/46x" speedup from #120, and timing walls under `-race` in CI) lack committed benchmark harnesses or recorded execution environments. | Unverifiable performance figures risk being treated as canonical baselines without reproducible test code or known environmental specifications. Guard: Any future performance claims must be accompanied by committed benchmark functions (e.g. `Benchmark*`) with recorded hardware/OS baselines, matching the rigor of Section G1 in this file. |
-| THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | `docs/THREAT_MODEL.md` has grown to 105314 bytes (measured via `wc -c docs/THREAT_MODEL.md`) and 345 backtick-quoted test citations. It is edited via full-file rewrites, making concurrent edits, review diffs, and manual editing increasingly error-prone. | High risk of merge conflicts, accidental citation breakage, and review fatigue on every security-touching PR. Guard: Decompose `THREAT_MODEL.md` into modular per-domain specification files (e.g. paths, permissions, tools, providers) aggregated by CI scripts, while preserving the unified test citation check. |
-| RELEASE_DRYRUN_SKIPS_SIGN | `release-dryrun` in `.github/workflows/ci.yml` runs `goreleaser release --clean --snapshot --skip=publish,sign,announce`, so the signing step is stripped from the only pipeline that exercises the release path before a tag is cut; the cosign major that `.goreleaser.yaml` depends on is pinned in `release.yml` and first runs at tag time. | The v1.6.0 signing breakage reached a tag with a green dry-run: the cosign-installer bump to v4 silently moved the runner to cosign v3, whose bundle format ignores `--output-signature`/`--output-certificate`. Guard: `TestReleasePipelineContracts` pins the cosign major against the sign config, which catches that class without signing anything. Dropping `sign` from the skip was evaluated and not taken: keyless signing needs `id-token: write` and a Fulcio OIDC token that `pull_request` runs from forks do not receive, and it writes Rekor entries on every run, while a generated test key would exercise a different signer than the release. Accepted explicitly until a non-publishing keyless dry-run is designed. |
+| SKILLS_PROMPT_SECTION_FINGERPRINT | `agent.Fingerprint` and `agent.Diff` exist in `internal/agent/prompt.go` and are unit-tested, but the session never records the fingerprint of the ordered prompt sections at start, nor diffs them within a session. The skill index is journaled (the `skills` event), so the skill contribution is covered by body hash; the general prompt-section identity is not. | Follow-up, deliberately out of the session-wiring PR: wire `Fingerprint` at `Loop.Start` and emit the per-turn `Diff` when sections change. Until then, a prompt-section change mid-session is not journaled. **Owner:** agent session maintainer. **Target:** next prompt-wiring PR. **Closure criterion:** wire `Fingerprint` at `Loop.Start` and record session prompt-section fingerprints/diffs in the journal. |
+| BUILTIN_CATALOG_STALENESS | The embedded catalog is a static list in source, while providers decommission models without notice; staleness is therefore a permanent condition, not a one-off incident. CI cannot guard it: the build has no network and no credentials, and querying a real provider from tests is forbidden. The only structural protection is that a default must be manually verified at edit time; `nabd models` is the live source of truth. The current Anthropic default `claude-sonnet-5` is unverified because no Anthropic key was available for measurement; it is recorded as unmeasured and is not changed by this PR. | Keep defaults declared in `Models`, verify them manually when editing the catalog, and direct users to `nabd models <provider>`. Accepted explicitly as an ongoing operational constraint (no automated CI guard possible). **Owner:** catalog/models maintainer. **Target:** no deadline; recurring manual verification at catalog update time. **Closure criterion:** accepted risk; each catalog modification PR includes documented manual verification against live provider APIs. |
+| UNREPRODUCIBLE_PERFORMANCE_METRICS | Historical performance claims frequently cited in PR descriptions and reports ("187 allocations", "44ms/46x" speedup from #120, and timing walls under `-race` in CI) lack committed benchmark harnesses or recorded execution environments. | Unverifiable performance figures risk being treated as canonical baselines without reproducible test code or known environmental specifications. Guard: Any future performance claims must be accompanied by committed benchmark functions (e.g. `Benchmark*`) with recorded hardware/OS baselines, matching the rigor of Section G1 in this file. **Owner:** PR author for each future performance claim. **Target:** enforce via PR review checklist (no deadline for the historical claims; they are recorded, not re-measurable). **Closure criterion:** each new performance claim in a PR description has a `Benchmark*` function committed in the same PR with a recorded `GOOS/GOARCH/Go-version` header. |
+| THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | `docs/THREAT_MODEL.md` has grown to 105314 bytes (measured via `wc -c docs/THREAT_MODEL.md`) and 345 backtick-quoted test citations. It is edited via full-file rewrites, making concurrent edits, review diffs, and manual editing increasingly error-prone. | High risk of merge conflicts, accidental citation breakage, and review fatigue on every security-touching PR. Guard: Decompose `THREAT_MODEL.md` into modular per-domain specification files (e.g. paths, permissions, tools, providers) aggregated by CI scripts, while preserving the unified test citation check. **Owner:** security/docs maintainer. **Target:** before the file exceeds 150 KB or 500 test citations. **Closure criterion:** THREAT_MODEL.md is split into ≥3 domain files each < 50 KB; CI `check-threat-model-tests.sh` continues to pass on the decomposed structure. |
+| RELEASE_DRYRUN_SKIPS_SIGN | `release-dryrun` in `.github/workflows/ci.yml` runs `goreleaser release --clean --snapshot --skip=publish,sign,announce`, so the signing step is stripped from the only pipeline that exercises the release path before a tag is cut; the cosign major that `.goreleaser.yaml` depends on is pinned in `release.yml` and first runs at tag time. | The v1.6.0 signing breakage reached a tag with a green dry-run: the cosign-installer bump to v4 silently moved the runner to cosign v3, whose bundle format ignores `--output-signature`/`--output-certificate`. Guard: `TestReleasePipelineContracts` pins the cosign major against the sign config, which catches that class without signing anything. Dropping `sign` from the skip was evaluated and not taken: keyless signing needs `id-token: write` and a Fulcio OIDC token that `pull_request` runs from forks do not receive, and it writes Rekor entries on every run, while a generated test key would exercise a different signer than the release. Accepted explicitly until a non-publishing keyless dry-run is designed. **Owner:** release engineer. **Target:** no deadline; accepted risk until a non-publishing keyless dry-run design is available. **Closure criterion:** a CI job that exercises the sign step without publishing or writing Rekor entries on every push/PR run. **2026-10-18:** the config half of this debt is now covered on every pull request — the `release-dryrun` job runs `goreleaser check` against `.goreleaser.yaml` with the same pinned GoReleaser build the release uses, guarded by `TestReleaseConfigIsValidatedPerPullRequest` — so what remains here is the signing step alone. |
+| FLAKE_RACE_TestDiffRespectsCancellation | `TestDiffRespectsCancellation` (`internal/tools`) fails intermittently under `-race` (observed 2.19–2.47s runs failing). **Evidence (2026-10-11):** fails on `cb9167e` (pre-MCP-merge) identically, and on master passes sometimes (4.87s) and fails sometimes; the touched files are not in the MCP merge. Pre-existing timing threshold, unrelated to MCP. | A green `-race` run on `internal/tools` is not stably reproducible; CI may red-flag a timing flake. Guard (current): none — recorded here. **Owner:** tools package maintainer. **Target:** next tools-package hardening pass. **Closure criterion:** the test passes 50/50 consecutive `-race` runs, or its timing threshold is raised/documented as load-sensitive. |
+| FLAKE_RACE_TestBashTimeoutKillsGrandchildren | `TestBashTimeoutKillsGrandchildren` (`internal/tools`) fails intermittently. Hypothesized cause: the test's grandchild-survival check races slow zombie reaping by PID 1 under load. **Evidence (2026-10-11):** fails with MCP changes stashed too (observed on dev.new, not CI); pre-existing, unrelated to MCP. | Same as above: `-race` on `internal/tools` is not stably green. Guard (current): none — recorded here. **Owner:** tools package maintainer. **Target:** next tools-package hardening pass. **Closure criterion:** the test is made robust against slow zombie reaping (e.g. longer grace or reaping-aware wait), or its flakiness is formally accepted with a documented retry policy. |
+
+## SKILL_WALK_BOUND_IS_POST_HOC — RESOLVED by the bounded read-ahead
+
+`walk` in `internal/skill/skill.go` asked for a fixed batch of 64 directory entries even after the entry ceiling had been reached, so the last read allocated up to 64 `DirEntry` structs that were immediately discarded. The batch size now follows what is still admissible, plus the single entry that proves truncation: `readBatch(seen) = min(64, maxWalkEntries-seen+1)` in the same file.
+
+Resolved 2026-10-18. Evidence: `TestWalkReadBatchIsBoundedByTheRemainingCeiling` pins the bound directly, and it fails first against the previous fixed batch with the real values (`readBatch(512) = 64, want 1`). `TestWalkEntryCeilingBoundaryIsExact` is the protection test that records the behaviour the bound may not change: the traversal output was already capped at `maxWalkEntries`, so a tree at the ceiling lists in full with no truncation diagnostic, one entry past it is disclosed exactly once, and the returned paths never exceed the ceiling. Closure criterion met: the batch size is calculated from `remaining` instead of a fixed full batch.
+
+## RG_EXEC_COVERAGE_VACUOUS_PASS — RESOLVED by the fail-closed rg guard
+
+`scripts/check-security-invariants.sh` used `rg` for its exec-coverage sub-check. When `rg` was not installed the sub-check scanned zero files and exited 0, producing a false-green result. Evidence (W-02, 2026-10-02): verified on the Windows capture host where `rg` is absent; `check_security_invariants` reported PASS but the `rg` sub-check scanned no files. Recorded in `docs/BASELINE.md` local capture evidence table (row `check_security_invariants_rg_subcheck`).
+
+Resolved 2026-10-11: the script now fails closed (`exit 1`) when `rg` is absent, proven by `scripts/test-security-invariants-rg.sh` (restricted-PATH regression test: fails on the unfixed script with "script passed with rg absent (vacuous green)", passes after the fix; the normal-path case prints an explicit SKIP on hosts without `rg`). CI installs ripgrep and has an explicit "Verify ripgrep availability" step before the audit, and the regression test itself runs as a CI step. Notably, the vacuous green was proven on CI itself: the new Verify step failed on the first run (runner had no `rg`), showing the audit had been scanning zero files there all along — not only on the Windows capture host. Closure criterion met: `check-security-invariants.sh` exits non-zero if `rg` is absent, and CI explicitly verifies `rg` is present so the sub-check is never vacuously green.
 
 ## STREAM_REDACT_PARENT_REUSE_REWIND_UNVERIFIED — RESOLVED by the unskipped regression test
 
@@ -356,13 +369,25 @@ permission decision - dropping it would mean either a blind decision or a
 silently withheld prompt. requiredFloor documents the boundary; terminals
 shorter than five rows with a modal open are out of contract.
 
-## MENU_IGNORES_NABD_ASCII_ONLY - ASCII fallback is not applied consistently
+## MENU_IGNORES_NABD_ASCII_ONLY - ASCII fallback is not applied consistently (RESOLVED)
 
-separatorLine honours NABD_ASCII_ONLY and falls back to '-', but
-slash_menu.go:138 and :141 write U+2500 unconditionally. On a terminal that
-sets the variable the feed separators degrade to ASCII while the command menu
-stays Unicode. Unverified and untested; fixing it touches production code and
-needs its own red case, so it is out of scope for the current test batch.
+Fixed: slash_menu.go now routes through the centralized asciiOnly() helper, using
+`-- Commands ` prefix, ASCII `-` dashes, and `...` truncation tails when NABD_ASCII_ONLY
+is set to any non-empty value. The bottom border uses separatorLine(menuW).
+Regression test: TestSlashMenuHonorsASCIIOnly in internal/ui/slash_menu_test.go covers
+default Unicode preservation, ASCII pureness, forced truncation tail replacement, and
+narrow viewport floor.
+Addressed in: commit `fix(ui): honor ascii-only in slash menu`
+Final closure gate: Verified locally on arm64 and pending full CI pass on branch.
+
+## NO_COLOR_TOOL_STATUS_AMBIGUITY - glyph collision between failed, denied, and cancelled statuses under NO_COLOR
+
+- **Status:** Active / Accepted risk
+- **Owner:** UI / Presentation
+- **Priority:** Low
+- **Evidence:** `toolStatusSymbol` maps `ToolFailed`, `ToolDenied`, and `ToolCancelled` to identical glyphs (`✗` in Unicode mode, `x` in ASCII mode). Visual discrimination between failure (red/bad) and cancellation (faint/dim) relies entirely on terminal ANSI color styling. When colors are disabled (`NO_COLOR`, non-color profile, or dumb terminals), the rendered glyphs become identical textually.
+- **Pre-existing context:** This is a pre-existing design choice inherited from earlier UI revisions, not a regression introduced by UI-F3.
+- **Closure criteria:** Introduce distinct glyphs for cancelled/denied states (e.g. distinct ASCII/Unicode symbols or an explicit textual status label) that preserve unambiguous status identification without relying on ANSI color.
 
 ## TWO_INTERACTIVE_UIS - the layout work targets the experimental path
 
@@ -1005,3 +1030,205 @@ renaming or deleting a test must still run
 `grep -rn TestName docs/ README.md CHANGELOG.md NOTES.md` manually before
 the operation (see the pre-delete protocol established after the NARROW_OVR_12
 incident).
+
+## W-02 Settlement — Debt taxonomy, ownership, and closure criteria (2026-10-02)
+
+> **Session:** Phase 1, W-02 execution, 2026-10-02T21:43:00Z
+> **Reference commit:** `origin/master` = `f69dbbe371c6e33aeb8734bed2755cf6fb60c156`
+>
+> This section completes W-02 as defined in the Phase 1 plan: classification of
+> existing debts, addition of the `rg` vacuous-pass gap discovered in W-01,
+> proof of `SKILL_WALK_BOUND_IS_POST_HOC`, and assignment of owner/deadline/
+> closure criteria to every open debt in the header table. Issue #189 update
+> text is at the end of this section.
+
+### Debt taxonomy (all open entries)
+
+Each entry in the header table is assigned a category from the schema below.
+Resolved entries (marked RESOLVED elsewhere in this file) are omitted.
+
+| Category | Description |
+|---|---|
+| **A — Architecture gap** | A known structural limitation where the current design is intentionally incomplete; follow-up is expected but not urgent. |
+| **B — Observable production risk** | A defect or gap that could manifest as a silent failure, false positive, or undetectable regression in production or CI. |
+| **C — Observability/auditability gap** | Missing journaling, fingerprinting, or tracing that makes the system harder to audit; not directly a user-facing failure. |
+| **D — Accepted/deferred risk** | A known limitation explicitly accepted with documented rationale; no action required until the rationale changes. |
+| **E — Maintenance burden** | A structural property that makes future maintenance harder but does not cause failures today. |
+
+| Debt ID | Category | Rationale |
+|---|---|---|
+| SKILLS_PROMPT_SECTION_FINGERPRINT | C | Missing per-session prompt-section fingerprint; audit gap, not a user-facing failure. |
+| BUILTIN_CATALOG_STALENESS | D | Explicitly accepted: no CI guard possible; manual verification is the policy. |
+| SKILL_WALK_BOUND_IS_POST_HOC | B | Bounded read-ahead: `f.ReadDir(64)` loads up to 64 DirEntries into memory before the `seen >= maxWalkEntries` check fires. Traversal output is strictly capped at `maxWalkEntries`; at most 64 extra DirEntry descriptors reside in memory. Low-to-medium priority; measure cost before modifying production code. |
+| UNREPRODUCIBLE_PERFORMANCE_METRICS | E | Historical claims are unverifiable; the guard is a PR-process rule, not a code fix. |
+| THREAT_MODEL_SIZE_MAINTENANCE_LIMIT | E | File size makes edits error-prone; no current failure, but review burden is real and growing. |
+| RELEASE_DRYRUN_SKIPS_SIGN | D | Explicitly accepted: keyless signing in PR runs is architecturally infeasible without Rekor writes. `TestReleasePipelineContracts` guards the cosign-major class. |
+| RG_EXEC_COVERAGE_VACUOUS_PASS | B | Security script silently passes when `rg` is absent; affects a security gate. |
+
+### Priority order for Phase 2
+
+1. **RG_EXEC_COVERAGE_VACUOUS_PASS** (B) — fix is a fail-closed guard `if ! command -v rg >/dev/null 2>&1; then echo "ERROR: rg is required" >&2; exit 1; fi` in `check-security-invariants.sh` plus explicit verification of `rg` in CI. High priority: security gate integrity.
+2. **THREAT_MODEL_SIZE_MAINTENANCE_LIMIT** (E) — medium priority; `docs/THREAT_MODEL.md` exceeds 105 KB and 345 test citations; review fatigue and editing conflict risk.
+3. **SKILL_WALK_BOUND_IS_POST_HOC** (B) — low-to-medium priority; output results are strictly capped at `maxWalkEntries`; the defect is bounded read-ahead in memory. Measure first whether the overhead of up to 64 `DirEntry` values justifies modifying production code.
+4. **SKILLS_PROMPT_SECTION_FINGERPRINT** (C) — low priority; auditability gap, not user-facing.
+5. **UNREPRODUCIBLE_PERFORMANCE_METRICS** (E) — low priority; PR process rule.
+6. **BUILTIN_CATALOG_STALENESS** (D) / **RELEASE_DRYRUN_SKIPS_SIGN** (D) — accepted risks; no action until rationale changes.
+
+> **Amendment 2026-10-18:** item 3, `SKILL_WALK_BOUND_IS_POST_HOC`, is closed by the
+> bounded read-ahead (`readBatch`); its row has left the header table above,
+> because resolved entries are omitted from it. The remaining items keep their
+> original numbering and their assessments are unchanged.
+>
+> **Amendment 2026-10-18 (second):** `RELEASE_DRYRUN_SKIPS_SIGN` stays `(D)`
+> accepted and item 6 is unchanged: the signing step is still skipped, because
+> keyless signing needs OIDC and writes Rekor entries. What narrowed is the
+> config half only — `.goreleaser.yaml` is now parsed on every pull request by
+> `goreleaser check` in the `release-dryrun` job, after the clean-tree assertion
+> and before the snapshot release, with the same pinned action commit and
+> GoReleaser version as the release. The header row records that delta.
+
+### SKILL_WALK_BOUND_IS_POST_HOC — proof from source
+
+Verified at `f69dbbe3` (`origin/master`), file `internal/skill/skill.go`:
+
+```go
+const maxWalkEntries = 512
+
+func walk(base string, ig ignorefile.Matcher) ([]string, []Diagnostic) {
+    var seen int
+    var rec func(dir, rel string, depth int)
+    rec = func(dir, rel string, depth int) {
+        if depth > maxWalkDepth {   // depth bound: PRE-HOC (fires before os.Open)
+            ...
+            return
+        }
+        f, err := os.Open(dir)      // directory opened
+        defer f.Close()
+        for {
+            entries, readErr := f.ReadDir(64)   // up to 64 entries loaded into memory
+            for _, e := range entries {
+                if seen >= maxWalkEntries {      // entry bound: POST-HOC (fires AFTER load)
+                    ...
+                    return
+                }
+                seen++
+                ...
+            }
+            if readErr == io.EOF || readErr != nil { break }
+        }
+    }
+    rec(base, "", 0)
+    ...
+}
+```
+
+Confirmed: `maxWalkDepth` is pre-hoc (checked before `os.Open`). `maxWalkEntries`
+is evaluated inside the batch loop after `f.ReadDir(64)` has allocated up to 64
+`DirEntry` structs in memory.
+
+Crucially:
+- Traversal output (`out`) NEVER exceeds `maxWalkEntries`: no entries past the
+  ceiling are added to the returned slice.
+- The defect is strictly a **bounded read-ahead**: at most 64 extra `DirEntry`
+  descriptors reside in memory before the guard returns.
+- Stopping at `maxWalkEntries - 64` would be incorrect as it could drop legitimate
+  entries. The correct read-ahead bound calculates:
+
+```go
+remaining := maxWalkEntries - seen
+batchSize := min(64, remaining+1)
+entries, err := f.ReadDir(batchSize)
+```
+
+The `remaining+1` element enables detecting truncation without loading a full
+extra 64-entry batch. However, before modifying production code, maintainers
+should measure whether the minor allocation cost of 64 `DirEntry` structs warrants
+a production code change. Priority is low-to-medium.
+
+**Closed 2026-10-18:** the calculated batch is in production; see the RESOLVED
+entry at the top of this file for the evidence and the protection test.
+
+### RG_EXEC_COVERAGE_VACUOUS_PASS — gap description and fix
+
+Evidence collected at HEAD `a1d448a` on Windows host (W-01 capture,
+2026-10-02T18:32:17Z):
+
+- `scripts/check-security-invariants.sh` exits 0 when `rg` is absent.
+- The exec-coverage sub-check scanned zero files and reported PASS.
+- Recorded in `docs/BASELINE.md` row `check_security_invariants_rg_subcheck`.
+
+The gap is documented in `docs/PLAN_LOG.md` pre-W-01 entry:
+> "check-security-invariants.sh depends on `rg` for its exec-coverage sub-check;
+> without `rg` the sub-check scans zero files and passes vacuously."
+
+Minimum fix (Phase 1 scope — READ-ONLY, do not apply yet):
+
+```bash
+# add near top of check-security-invariants.sh
+if ! command -v rg >/dev/null 2>&1; then
+  echo "ERROR: rg is required for exec-coverage sub-check" >&2
+  exit 1
+fi
+```
+
+CI note: Standard GitHub Actions `ubuntu-latest` runners have `ripgrep` pre-installed.
+Do NOT run `sudo apt-get install -y ripgrep` unconditionally; the script itself must
+fail closed if `rg` is missing, and CI should verify `rg` availability explicitly
+(`command -v rg`) rather than performing redundant installations.
+
+Both changes are outside the Phase 1 Hard Scope Gate. Recorded here for
+Phase 2 execution.
+
+### Issue #189 update text
+
+The following text is ready to be posted as a comment on Issue #189
+("Phase 0 - baseline and stabilization tracks"). The Phase 1 gate closed
+with **GO** on 2026-10-02T23:35:00Z (see `docs/PLAN_LOG.md` — "Phase 1
+baseline gate closure"); the Linux reference baseline is complete.
+
+---
+
+**Phase 1 progress update (W-01 complete, W-02 complete)**
+
+W-01 status: **COMPLETE**. The Linux reference baseline (`ci` mode,
+`full-security` mode) was captured and verified — all five GitHub Actions
+workflow jobs on run 37060263696 completed with `success`
+(`docs/PLAN_LOG.md` 2026-10-02T23:35:00Z), and the baseline was merged as
+PR #252 ('Docs/phase1 linux baseline') on 2026-10-03. (The earlier
+Windows/amd64 diagnostic capture in `docs/BASELINE.md` was superseded by
+the Linux reference.)
+
+W-02 status: **COMPLETE**. `docs/TECH_DEBT.md` has been updated:
+
+- All open debt entries now have Owner, Target, and Closure Criterion fields.
+- One new debt entry added: `RG_EXEC_COVERAGE_VACUOUS_PASS` (Category B -
+  security gate silent failure when `rg` is absent).
+- `SKILL_WALK_BOUND_IS_POST_HOC` entry updated with code-level proof from
+  `internal/skill/skill.go` at `f69dbbe3`.
+- Full debt taxonomy and Phase 2 priority order documented in the W-02
+  Settlement section.
+
+Phase 1 gate decision: **GO** (2026-10-02T23:35:00Z).
+
+---
+
+### W-02 gate decision
+
+W-02 is **COMPLETE**. All required deliverables are present:
+
+| Deliverable | Status |
+|---|---|
+| Debt taxonomy (all open entries categorised A-E) | Done |
+| Owner/Target/Closure criterion added to each entry | Done |
+| RG vacuous-pass gap added as `RG_EXEC_COVERAGE_VACUOUS_PASS` | Done |
+| `SKILL_WALK_BOUND_IS_POST_HOC` proved from source code | Done |
+| Phase 2 priority order stated | Done |
+| Issue #189 update text prepared | Done |
+
+Phase 1 gate: **NO-GO** (W-01 incomplete; Linux reference capture required).
+
+> **Superseded 2026-10-02T23:35:00Z:** the W-01 defects were corrected and
+> the Linux reference baseline was captured and verified (GitHub CI run
+> 37060263696, all jobs `success`). Final Phase 1 gate decision: **GO**
+> (`docs/PLAN_LOG.md` — "Phase 1 baseline gate closure"). This section is
+> retained as the contemporaneous W-02 record.

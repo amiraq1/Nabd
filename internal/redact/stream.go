@@ -67,13 +67,15 @@ type Stream struct {
 }
 
 // NewStream returns a Stream that also redacts the given exact credential
-// values. Empty values are ignored, matching RedactExactKeys.
+// values. Empty values are ignored, matching RedactExactKeys, as are values
+// shorter than MinExactKeyLen.
 func NewStream(exactKeys []string) *Stream {
 	keys := make([]string, 0, len(exactKeys))
 	for _, k := range exactKeys {
-		if k != "" {
-			keys = append(keys, k)
+		if len(k) < MinExactKeyLen {
+			continue
 		}
+		keys = append(keys, k)
 	}
 	return &Stream{exact: keys}
 }

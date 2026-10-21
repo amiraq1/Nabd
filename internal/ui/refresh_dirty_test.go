@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 )
 
@@ -11,7 +11,7 @@ import (
 // tests below can observe the dirty return of subsequent refresh() calls
 // against a valid baseline (the first refresh marks an invalid baseline
 // dirty by design).
-func seedFeed(t *testing.T, events ...agent.Event) *Feed {
+func seedFeed(t *testing.T, events ...event.Event) *Feed {
 	t.Helper()
 	f := NewFeed()
 	f.width = 80
@@ -23,8 +23,8 @@ func seedFeed(t *testing.T, events ...agent.Event) *Feed {
 // TestRefreshDirtyIdentical: an unchanged refresh reports false.
 func TestRefreshDirtyIdentical(t *testing.T) {
 	f := seedFeed(t,
-		agent.Event{Seq: 1, Type: agent.UserMsg, Text: "hello"},
-		agent.Event{Seq: 2, Type: agent.TurnEnd},
+		event.Event{Seq: 1, Type: event.UserMsg, Text: "hello"},
+		event.Event{Seq: 2, Type: event.TurnEnd},
 	)
 	if got := f.refresh(); got {
 		t.Fatal("identical refresh must return false")
@@ -38,10 +38,10 @@ func TestRefreshDirtyIdentical(t *testing.T) {
 // TestRefreshDirtyStreamingGrowth: growing the last assistant item is dirty.
 func TestRefreshDirtyStreamingGrowth(t *testing.T) {
 	f := seedFeed(t,
-		agent.Event{Seq: 1, Type: agent.UserMsg, Text: "say hello"},
-		agent.Event{Seq: 2, Type: agent.TextDelta, Text: "hel"},
+		event.Event{Seq: 1, Type: event.UserMsg, Text: "say hello"},
+		event.Event{Seq: 2, Type: event.TextDelta, Text: "hel"},
 	)
-	if err := f.proj.Apply(agent.Event{Seq: 3, Type: agent.TextDelta, Text: "lo world"}); err != nil {
+	if err := f.proj.Apply(event.Event{Seq: 3, Type: event.TextDelta, Text: "lo world"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.refresh(); !got {
@@ -54,9 +54,9 @@ func TestRefreshDirtyStreamingGrowth(t *testing.T) {
 func TestRefreshDirtyAddDeleteReorder(t *testing.T) {
 	// ADD: a new distinct message appears.
 	f := seedFeed(t,
-		agent.Event{Seq: 1, Type: agent.UserMsg, Text: "alpha"},
+		event.Event{Seq: 1, Type: event.UserMsg, Text: "alpha"},
 	)
-	if err := f.proj.Apply(agent.Event{Seq: 2, Type: agent.UserMsg, Text: "bravo"}); err != nil {
+	if err := f.proj.Apply(event.Event{Seq: 2, Type: event.UserMsg, Text: "bravo"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.refresh(); !got {
@@ -75,13 +75,13 @@ func TestRefreshDirtyAddDeleteReorder(t *testing.T) {
 	f = NewFeed()
 	f.width = 80
 	f.height = 24
-	f.applyBatch([]agent.Event{
-		{Seq: 5, Type: agent.UserMsg, Text: "alpha"},
-		{Seq: 5, Type: agent.UserMsg, Text: "bravo"},
+	f.applyBatch([]event.Event{
+		{Seq: 5, Type: event.UserMsg, Text: "alpha"},
+		{Seq: 5, Type: event.UserMsg, Text: "bravo"},
 	})
 	f.proj = presentation.NewProjector()
-	_ = f.proj.Apply(agent.Event{Seq: 5, Type: agent.UserMsg, Text: "bravo"})
-	_ = f.proj.Apply(agent.Event{Seq: 5, Type: agent.UserMsg, Text: "alpha"})
+	_ = f.proj.Apply(event.Event{Seq: 5, Type: event.UserMsg, Text: "bravo"})
+	_ = f.proj.Apply(event.Event{Seq: 5, Type: event.UserMsg, Text: "alpha"})
 	if got := f.refresh(); !got {
 		t.Fatal("reordering distinct items must return true")
 	}
@@ -91,10 +91,10 @@ func TestRefreshDirtyAddDeleteReorder(t *testing.T) {
 // must not report dirty.
 func TestRefreshDirtySeqOnly(t *testing.T) {
 	f := seedFeed(t,
-		agent.Event{Seq: 1, Type: agent.UserMsg, Text: "hello"},
+		event.Event{Seq: 1, Type: event.UserMsg, Text: "hello"},
 	)
 	f.proj = presentation.NewProjector()
-	if err := f.proj.Apply(agent.Event{Seq: 999, Type: agent.UserMsg, Text: "hello"}); err != nil {
+	if err := f.proj.Apply(event.Event{Seq: 999, Type: event.UserMsg, Text: "hello"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.refresh(); got {
@@ -106,11 +106,11 @@ func TestRefreshDirtySeqOnly(t *testing.T) {
 // not report dirty.
 func TestRefreshDirtyIDOnly(t *testing.T) {
 	f := seedFeed(t,
-		agent.Event{Seq: 1, Type: agent.UserMsg, Text: "hello"},
+		event.Event{Seq: 1, Type: event.UserMsg, Text: "hello"},
 	)
 	// Same visible content, different ID (the projector keys the ID off Seq).
 	f.proj = presentation.NewProjector()
-	if err := f.proj.Apply(agent.Event{Seq: 42, Type: agent.UserMsg, Text: "hello"}); err != nil {
+	if err := f.proj.Apply(event.Event{Seq: 42, Type: event.UserMsg, Text: "hello"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.refresh(); got {
@@ -123,7 +123,7 @@ func TestRefreshDirtyIDOnly(t *testing.T) {
 func TestRefreshDirtyWidthChangesWrapping(t *testing.T) {
 	long := "this is a fairly long single-line message that will exceed forty columns and wrap there but not at ninety columns"
 	f := seedFeed(t,
-		agent.Event{Seq: 1, Type: agent.UserMsg, Text: long},
+		event.Event{Seq: 1, Type: event.UserMsg, Text: long},
 	)
 
 	f.width = 40
@@ -137,7 +137,7 @@ func TestRefreshDirtyWidthChangesWrapping(t *testing.T) {
 // terminal width, so short notice text renders identically at both widths.
 func TestRefreshDirtyWidthSameVisualRows(t *testing.T) {
 	f := seedFeed(t,
-		agent.Event{Seq: 1, Type: agent.Notice, Text: "short text"},
+		event.Event{Seq: 1, Type: event.Notice, Text: "short text"},
 	)
 
 	f.width = 90
@@ -150,7 +150,7 @@ func TestRefreshDirtyWidthSameVisualRows(t *testing.T) {
 // never force a permanent true from refresh; the criterion is the final lines.
 func TestRefreshDirtyEmptyAndDuplicateIDs(t *testing.T) {
 	f := seedFeed(t,
-		agent.Event{Seq: 1, Type: agent.UserMsg, Text: "hello"},
+		event.Event{Seq: 1, Type: event.UserMsg, Text: "hello"},
 	)
 
 	// Inject notices with empty and duplicate IDs via the UI path.
@@ -185,7 +185,7 @@ func TestRefreshDirtyEmptyFrame(t *testing.T) {
 	}
 
 	// Empty -> content.
-	if err := f.proj.Apply(agent.Event{Seq: 1, Type: agent.UserMsg, Text: "hello"}); err != nil {
+	if err := f.proj.Apply(event.Event{Seq: 1, Type: event.UserMsg, Text: "hello"}); err != nil {
 		t.Fatal(err)
 	}
 	if got := f.refresh(); !got {

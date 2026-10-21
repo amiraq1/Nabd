@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestRenderGlobResultNotCollapsed asserts at the render layer (not via
@@ -18,7 +18,7 @@ import (
 // and kept only the summary. The result set itself vanished.
 func TestRenderGlobResultNotCollapsed(t *testing.T) {
 	// Short list (5 hits): every row must render, not just the last.
-	ev := agent.Event{Type: agent.ToolEnd, Call: &agent.ToolCall{
+	ev := event.Event{Type: event.ToolEnd, Call: &event.ToolCall{
 		ID: "g1", Name: "glob", OK: true, Output: "a.go\nb.go\nc.go\nd.go\ne.go\n",
 	}}
 	out := RenderEvent(ev, DefaultWidth)
@@ -35,7 +35,7 @@ func TestRenderGlobResultNotCollapsed(t *testing.T) {
 		b.WriteString(fmt.Sprintf("file_%02d.go\n", i))
 	}
 	b.WriteString("showing 1-50 of 166 · continue with offset=51\n")
-	ev2 := agent.Event{Type: agent.ToolEnd, Call: &agent.ToolCall{
+	ev2 := event.Event{Type: event.ToolEnd, Call: &event.ToolCall{
 		ID: "g2", Name: "glob", OK: true, Output: b.String(),
 	}}
 	out2 := RenderEvent(ev2, DefaultWidth)

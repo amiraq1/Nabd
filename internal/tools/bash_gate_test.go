@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
 )
@@ -23,8 +24,8 @@ func (g bashGate) Check(tool string) (agent.Verdict, string) {
 	}
 	return agent.VerdictDeny, "غير معروف"
 }
-func (g bashGate) Record(tool string, d agent.Decision)                   {}
-func (g bashGate) Effective(tool string, d agent.Decision) agent.Decision { return d }
+func (g bashGate) Record(tool string, d event.Decision)                   {}
+func (g bashGate) Effective(tool string, d event.Decision) event.Decision { return d }
 
 // bashProvider asks for one bash tool call. When raw is set it is sent
 // verbatim, so a test can hand the loop a malformed call as the model wrote it;
@@ -59,7 +60,7 @@ func (p *bashProvider) Stream(ctx context.Context, req provider.Request) (<-chan
 
 // runBash drives one loop run with a real Registry and returns the events
 // plus the temp dir.
-func runBash(t *testing.T, verdict agent.Verdict, cmd string) ([]agent.Event, string) {
+func runBash(t *testing.T, verdict agent.Verdict, cmd string) ([]event.Event, string) {
 	t.Helper()
 	return runBashCall(t, verdict, &bashProvider{cmd: cmd})
 }
@@ -67,7 +68,7 @@ func runBash(t *testing.T, verdict agent.Verdict, cmd string) ([]agent.Event, st
 // runBashCall is runBash with the provider supplied, so a test can hand the loop
 // the call exactly as the model wrote it (unknown fields, duplicate keys, an
 // aliased field) instead of a well-formed {"cmd": ...}.
-func runBashCall(t *testing.T, verdict agent.Verdict, provider *bashProvider) ([]agent.Event, string) {
+func runBashCall(t *testing.T, verdict agent.Verdict, provider *bashProvider) ([]event.Event, string) {
 	t.Helper()
 	dir := t.TempDir()
 	root, err := NewRoot(dir)
@@ -87,8 +88,8 @@ func runBashCall(t *testing.T, verdict agent.Verdict, provider *bashProvider) ([
 		Gate:     bashGate{verdict: map[string]agent.Verdict{"bash": verdict}},
 		Human:    bashAsker{verdict},
 	}
-	var events []agent.Event
-	l.Sink = toolsSink(func(e agent.Event) error {
+	var events []event.Event
+	l.Sink = toolsSink(func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -105,10 +106,10 @@ func TestBashDeniedRunsNoSubprocess(t *testing.T) {
 
 	startSeen, endSeen := false, false
 	for _, e := range events {
-		if e.Type == agent.ToolStart {
+		if e.Type == event.ToolStart {
 			startSeen = true
 		}
-		if e.Type == agent.ToolEnd {
+		if e.Type == event.ToolEnd {
 			endSeen = true
 			if e.Call == nil || e.Call.OK {
 				t.Fatalf("denied bash call must have OK=false in ToolEnd")
@@ -132,11 +133,11 @@ func TestBashApprovedRunsSubprocess(t *testing.T) {
 	var permIdx, startIdx, endIdx = -1, -1, -1
 	for i, e := range events {
 		switch e.Type {
-		case agent.PermReply:
+		case event.PermReply:
 			permIdx = i
-		case agent.ToolStart:
+		case event.ToolStart:
 			startIdx = i
-		case agent.ToolEnd:
+		case event.ToolEnd:
 			endIdx = i
 		}
 	}
@@ -170,23 +171,23 @@ func (b bashLoopTools) RepairCall(c provider.ToolCall) provider.ToolCall {
 func (b bashLoopTools) RepairCallWithDrops(c provider.ToolCall) (provider.ToolCall, []string) {
 	return b.reg.RepairCallWithDrops(c)
 }
-func (b bashLoopTools) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
+func (b bashLoopTools) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (event.Outcome, error) {
 	return b.reg.RunDetailed(ctx, name, raw)
 }
 
 // bashAsker answers the permission prompt from the same verdict.
 type bashAsker struct{ verdict agent.Verdict }
 
-func (a bashAsker) Ask(ctx context.Context, c agent.ToolCall) agent.Decision {
+func (a bashAsker) Ask(ctx context.Context, c event.ToolCall) event.Decision {
 	switch a.verdict {
 	case agent.VerdictAllow, agent.VerdictAsk:
-		return agent.AllowOnce
+		return event.AllowOnce
 	default:
-		return agent.Deny
+		return event.Deny
 	}
 }
 
 // toolsSink adapts a func to the agent.Sink interface.
-type toolsSink func(agent.Event) error
+type toolsSink func(event.Event) error
 
-func (f toolsSink) Emit(e agent.Event) error { return f(e) }
+func (f toolsSink) Emit(e event.Event) error { return f(e) }

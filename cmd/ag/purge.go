@@ -93,7 +93,13 @@ func purgeCandidates(dir string, cutoff time.Time) ([]string, error) {
 
 	files := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+		name := entry.Name()
+		// Rotation archives are named <journal>.archived-<nanos>: they do
+		// not end in .jsonl, but they are journals all the same and must
+		// enter retention like any other.
+		isJournal := strings.HasSuffix(name, ".jsonl")
+		isArchive := strings.Contains(name, ".archived-")
+		if entry.IsDir() || (!isJournal && !isArchive) {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())

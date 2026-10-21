@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/provider"
 )
 
@@ -107,8 +108,8 @@ func (p *sequentialReader) Stream(_ context.Context, req provider.Request) (<-ch
 type allowReadsGate struct{}
 
 func (allowReadsGate) Check(string) (agent.Verdict, string) { return agent.VerdictAllow, "" }
-func (allowReadsGate) Record(string, agent.Decision)        {}
-func (allowReadsGate) Effective(_ string, d agent.Decision) agent.Decision {
+func (allowReadsGate) Record(string, event.Decision)        {}
+func (allowReadsGate) Effective(_ string, d event.Decision) event.Decision {
 	return d
 }
 
@@ -150,15 +151,15 @@ func runSequentialRead(t *testing.T, r *Registry, dir, rel string, capBytes, max
 	err := loop.Run(context.Background(), "read the fixture")
 
 	run := turnCostRun{capBytes: capBytes, turns: prov.turns, offsets: prov.requests}
-	run.hitCeiling = err == agent.ErrMaxTurns
+	run.hitCeiling = err == event.ErrMaxTurns
 	run.completed = err == nil
 	return run
 }
 
 // recordingSink swallows every event; the loop refuses a nil sink.
-type recordingSink struct{ events []agent.Event }
+type recordingSink struct{ events []event.Event }
 
-func (s *recordingSink) Emit(e agent.Event) error {
+func (s *recordingSink) Emit(e event.Event) error {
 	s.events = append(s.events, e)
 	return nil
 }

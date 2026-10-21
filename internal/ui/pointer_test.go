@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -38,8 +38,8 @@ func feedWithPendingPermission(t *testing.T, width int) *Feed {
 	m := feedWithTools(t, 4, width)
 	m.touchEnabled = true
 	m.height = 24
-	m.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 100, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c_perm", Name: "bash"}},
+	m.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 100, Type: event.PermAsk, Call: &event.ToolCall{ID: "c_perm", Name: "bash"}},
 	}})
 	if !m.modalVisible {
 		t.Fatal("modal must be visible")

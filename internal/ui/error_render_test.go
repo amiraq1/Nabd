@@ -10,6 +10,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 	"nabd/internal/provider"
 )
@@ -24,8 +25,8 @@ const renderLeakyErr = "auth failed: Authorization: Bearer sk-ant-api03-abcdef01
 // used to print the provider message alone, dropping the journaled code and
 // the remedy.
 func TestRenderRunErrorShowsCodeAndHint(t *testing.T) {
-	out := RenderEvent(agent.Event{
-		Type:      agent.RunError,
+	out := RenderEvent(event.Event{
+		Type:      event.RunError,
 		Err:       "provider rejected the request",
 		ErrorCode: "provider_auth",
 	}, 66)
@@ -41,8 +42,8 @@ func TestRenderRunErrorShowsCodeAndHint(t *testing.T) {
 }
 
 func TestRenderRunErrorKeepsRouteCauses(t *testing.T) {
-	out := RenderEvent(agent.Event{
-		Type:      agent.RunError,
+	out := RenderEvent(event.Event{
+		Type:      event.RunError,
 		Err:       renderExhaustedErr,
 		ErrorCode: "budget",
 	}, 80)
@@ -58,8 +59,8 @@ func TestRenderRunErrorKeepsRouteCauses(t *testing.T) {
 // terminal: the phone terminal in the report is 66 columns.
 func TestRenderRunErrorRespectsWidth(t *testing.T) {
 	for _, width := range []int{20, 40, 66, 80} {
-		out := RenderEvent(agent.Event{
-			Type:      agent.RunError,
+		out := RenderEvent(event.Event{
+			Type:      event.RunError,
 			Err:       renderExhaustedErr,
 			ErrorCode: "budget",
 		}, width)
@@ -72,8 +73,8 @@ func TestRenderRunErrorRespectsWidth(t *testing.T) {
 }
 
 func TestRenderRunErrorRedactsSecrets(t *testing.T) {
-	out := RenderEvent(agent.Event{
-		Type:      agent.RunError,
+	out := RenderEvent(event.Event{
+		Type:      event.RunError,
 		Err:       renderLeakyErr,
 		ErrorCode: "provider_auth",
 	}, 66)
@@ -85,7 +86,7 @@ func TestRenderRunErrorRedactsSecrets(t *testing.T) {
 // exhaustedEvent is the route-exhaustion failure as the loop journals it: the
 // wait is inside the free-text message and, thanks to RunErrorEvent, also on the
 // event as RetryAfter.
-func exhaustedEvent() agent.Event {
+func exhaustedEvent() event.Event {
 	return agent.RunErrorEvent(&provider.RouterExhaustedError{
 		Attempts: []provider.ProviderError{
 			{Provider: "groq", Model: "m", Body: "rate limit reached"},
@@ -102,7 +103,7 @@ func exhaustedEvent() agent.Event {
 // every width except a wide one. The card now states it on its own line, and the
 // width ladder may drop prose but never this.
 func TestFeedErrorCardShowsWaitAtEveryWidth(t *testing.T) {
-	items, err := presentation.NewProjector().Build([]agent.Event{exhaustedEvent()})
+	items, err := presentation.NewProjector().Build([]event.Event{exhaustedEvent()})
 	if err != nil || len(items) != 1 {
 		t.Fatalf("projection failed: items=%#v err=%v", items, err)
 	}
@@ -124,7 +125,7 @@ func TestFeedErrorCardShowsWaitAtEveryWidth(t *testing.T) {
 // reported none" rather than "wait zero seconds".
 func TestFeedErrorCardStatesNoWaitWhenNoneReported(t *testing.T) {
 	ev := agent.RunErrorEvent(errors.New("auth failed: check the key"))
-	items, err := presentation.NewProjector().Build([]agent.Event{ev})
+	items, err := presentation.NewProjector().Build([]event.Event{ev})
 	if err != nil || len(items) != 1 {
 		t.Fatalf("projection failed: items=%#v err=%v", items, err)
 	}
@@ -159,7 +160,7 @@ func TestRenderRunErrorShowsWaitAtNarrowWidth(t *testing.T) {
 
 func TestErrorCardRemedyShowsAtAllWidths(t *testing.T) {
 	wantRemedy := presentation.RemedyEndpointRefused
-	card := presentation.NewErrorCard(agent.ErrCodeEndpointRefused, "proxy endpoint refused", "")
+	card := presentation.NewErrorCard(event.ErrCodeEndpointRefused, "proxy endpoint refused", "")
 	if card.Remedy != wantRemedy {
 		t.Fatalf("card.Remedy = %q, want %q", card.Remedy, wantRemedy)
 	}
@@ -195,7 +196,7 @@ func TestErrorCardRemedyShowsAtAllWidths(t *testing.T) {
 }
 
 func TestErrorCardRemedyRespectsNoColorAndAsciiOnly(t *testing.T) {
-	card := presentation.NewErrorCard(agent.ErrCodeEndpointRefused, "proxy endpoint refused", "")
+	card := presentation.NewErrorCard(event.ErrCodeEndpointRefused, "proxy endpoint refused", "")
 
 	t.Run("ColorProfile_Suppression", func(t *testing.T) {
 		orig := lipgloss.ColorProfile()
@@ -248,7 +249,7 @@ func TestErrorCardRemedyRespectsNoColorAndAsciiOnly(t *testing.T) {
 		}
 
 		// Verify that Arabic text in the error message is preserved (non-ASCII text not mangled)
-		cardArabic := presentation.NewErrorCard(agent.ErrCodeEndpointRefused, "فشل الاتصال بالخادم", "")
+		cardArabic := presentation.NewErrorCard(event.ErrCodeEndpointRefused, "فشل الاتصال بالخادم", "")
 		linesArabic := renderErrorCard(cardArabic, 66)
 		joinedArabic := strings.Join(linesArabic, "\n")
 		if !strings.Contains(joinedArabic, "فشل الاتصال بالخادم") {

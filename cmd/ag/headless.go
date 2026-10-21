@@ -15,6 +15,7 @@ import (
 	"nabd/internal/agent"
 	"nabd/internal/build"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
@@ -35,25 +36,26 @@ const (
 
 var (
 	errPermissionStuck = errors.New("permission denied; model could not proceed")
+	errEmptyResponse   = errors.New("empty response from provider")
 	errInterrupted     = errors.New("interrupted")
 )
 
 // silentAsker never blocks and never reads a tty. Decision(0)==Deny.
 type silentAsker struct{}
 
-func (silentAsker) Ask(context.Context, agent.ToolCall) agent.Decision {
-	return agent.Deny
+func (silentAsker) Ask(context.Context, event.ToolCall) event.Decision {
+	return event.Deny
 }
 
 type noticeStderr struct{ w io.Writer }
 
-func (s noticeStderr) Emit(e agent.Event) error {
+func (s noticeStderr) Emit(e event.Event) error {
 	switch e.Type {
-	case agent.Notice:
+	case event.Notice:
 		if e.Text != "" {
 			fmt.Fprintln(s.w, e.Text)
 		}
-	case agent.RunError:
+	case event.RunError:
 		if e.Err != "" {
 			fmt.Fprintln(s.w, e.Err)
 		} else if e.Text != "" {
@@ -68,7 +70,7 @@ type jsonlStdout struct {
 	redact store.EventRedactor
 }
 
-func (s jsonlStdout) Emit(e agent.Event) error {
+func (s jsonlStdout) Emit(e event.Event) error {
 	output := e
 	if s.redact != nil {
 		output = s.redact(e)
@@ -88,17 +90,18 @@ type headlessConfig struct {
 	maxTurns int
 	mode     perm.Mode
 	sessDir  string
+	noMCP    bool
 	stdout   io.Writer
 	stderr   io.Writer
 	stdin    io.Reader
 	provider provider.Provider
 }
 
-func finalAssistantText(evs []agent.Event) string {
-	evs = agent.Live(evs)
+func finalAssistantText(evs []event.Event) string {
+	evs = event.Live(evs)
 	lastStart := -1
 	for i, e := range evs {
-		if e.Type == agent.TurnStart {
+		if e.Type == event.TurnStart {
 			lastStart = i
 		}
 	}
@@ -107,25 +110,51 @@ func finalAssistantText(evs []agent.Event) string {
 	}
 	var b strings.Builder
 	for _, e := range evs[lastStart:] {
-		if e.Type == agent.ToolStart {
+		if e.Type == event.ToolStart {
 			return ""
 		}
-		if e.Type == agent.TextDelta {
+		if e.Type == event.TextDelta {
 			b.WriteString(e.Text)
 		}
-		if e.Type == agent.TurnEnd {
+		if e.Type == event.TurnEnd {
 			break
 		}
 	}
 	return b.String()
 }
 
-func deniedAndStuck(evs []agent.Event, text string) bool {
+func deniedAndStuck(evs []event.Event, text string) bool {
 	if strings.TrimSpace(text) != "" {
 		return false
 	}
-	for _, e := range agent.Live(evs) {
-		if e.Type == agent.PermReply && e.Decision == agent.Deny {
+	for _, e := range event.Live(evs) {
+		if e.Type == event.PermReply && e.Decision == event.Deny {
+			return true
+		}
+	}
+	return false
+}
+
+// emptyResponse reports whether the last turn ended silently because the
+// provider returned nothing. The decision reads the notice category, never the
+// notice wording: the wording is display text that may be reworded or
+// translated, so a decision keyed on it would return 0 for a silent empty turn
+// after any rewording, and 1 for an unrelated notice that happens to contain the
+// phrase. The category is the producer's own structural claim —
+// event.NoticeCategoryProviderEmpty for a provider that returned nothing,
+// event.NoticeCategoryLengthLimit for a cut before any output was produced. A
+// turn that used a tool is never silent.
+func emptyResponse(evs []event.Event, text string) bool {
+	if strings.TrimSpace(text) != "" {
+		return false
+	}
+	for _, e := range event.Live(evs) {
+		if e.Type == event.ToolStart || e.Type == event.ToolEnd {
+			return false
+		}
+	}
+	for _, e := range event.Live(evs) {
+		if e.Type == event.Notice && (e.NoticeCategory == event.NoticeCategoryProviderEmpty || e.NoticeCategory == event.NoticeCategoryLengthLimit) {
 			return true
 		}
 	}
@@ -139,14 +168,17 @@ func mapHeadlessExit(err error) int {
 	if errors.Is(err, errInterrupted) {
 		return exitInterrupted
 	}
-	if errors.Is(err, agent.ErrMaxTurns) {
+	if errors.Is(err, event.ErrMaxTurns) {
 		return exitMaxTurns
 	}
-	if errors.Is(err, agent.ErrRateLimitBudget) {
+	if errors.Is(err, event.ErrRateLimitBudget) {
 		return exitRateLimit
 	}
 	if errors.Is(err, errPermissionStuck) {
 		return exitPermStuck
+	}
+	if errors.Is(err, errEmptyResponse) {
+		return exitError
 	}
 	return exitError
 }
@@ -171,6 +203,24 @@ var headlessInterruptContext = func() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
 
+// maxStdinPromptBytes caps a "-" stdin prompt. Overflow is a hard error,
+// not a silent truncation: silently cutting a prompt mid-instruction would
+// change what the model was asked to do without the operator noticing.
+const maxStdinPromptBytes = 1 << 20
+
+// readStdinPrompt reads a "-" stdin prompt, failing closed when it exceeds
+// maxStdinPromptBytes instead of truncating it silently.
+func readStdinPrompt(r io.Reader) (string, error) {
+	b, err := io.ReadAll(io.LimitReader(r, maxStdinPromptBytes+1))
+	if err != nil {
+		return "", err
+	}
+	if len(b) > maxStdinPromptBytes {
+		return "", fmt.Errorf("stdin prompt exceeds %d bytes", maxStdinPromptBytes)
+	}
+	return string(b), nil
+}
+
 func runHeadlessErr(cfg headlessConfig) error {
 	if cfg.stdout == nil {
 		cfg.stdout = os.Stdout
@@ -184,11 +234,11 @@ func runHeadlessErr(cfg headlessConfig) error {
 		if r == nil {
 			r = os.Stdin
 		}
-		b, err := io.ReadAll(r)
+		b, err := readStdinPrompt(r)
 		if err != nil {
 			return err
 		}
-		prompt = string(b)
+		prompt = b
 	}
 	prompt = strings.TrimRight(prompt, "\n")
 	if strings.TrimSpace(prompt) == "" {
@@ -207,13 +257,16 @@ func runHeadlessErr(cfg headlessConfig) error {
 			return err
 		}
 	}
+	// Exact configured secrets, collected once: pattern redaction alone cannot
+	// cover custom providers whose key format matches no known shape.
+	exactKeys := provider.ExactKeys(prov)
 
 	root, err := tools.NewRoot("")
 	if err != nil {
 		return err
 	}
 
-	journal, journalPath, err := newSessionJournalWithWarning(cfg.sessDir, cfg.stderr)
+	journal, journalPath, err := newSessionJournalWithWarning(cfg.sessDir, cfg.stderr, exactKeys)
 	if err != nil {
 		return err
 	}
@@ -236,17 +289,26 @@ func runHeadlessErr(cfg headlessConfig) error {
 	pol := perm.New(reg)
 	wirePathRule(root, reg, pol)
 	pol.SetMode(cfg.mode)
+	g := &gate{p: pol}
+	mcpMgr, err := wireMCPForSession(cfg.noMCP, root.Dir(), reg, pol, g)
+	if err != nil {
+		journal.Close()
+		return err
+	}
+	if mcpMgr != nil {
+		defer mcpMgr.Close()
+	}
 
 	var sinks agent.Fanout
 	sinks = append(sinks, journal, noticeStderr{w: cfg.stderr})
 	if cfg.json {
 		sinks = append(sinks, jsonlStdout{
 			w:      cfg.stdout,
-			redact: journalEventRedactor(),
+			redact: journalEventRedactor(exactKeys),
 		})
 	}
 
-	loop := newSessionLoop(prov, reg, gate{pol}, silentAsker{})
+	loop := newSessionLoop(prov, reg, *g, silentAsker{})
 	promptSkills, promptDiag := skill.FormatForPrompt(allSkills)
 	for _, d := range promptDiag {
 		fmt.Fprintln(cfg.stderr, d.String())
@@ -260,7 +322,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 		return sections
 	}
 	loop.SkillInventory = skill.JournalRecords(allSkills)
-	loop.Sink = newStreamRedactSink(sinks)
+	loop.Sink = newStreamRedactSink(sinks, exactKeys)
 	loop.MaxTurns = cfg.maxTurns
 
 	cwd, _ := os.Getwd()
@@ -286,7 +348,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 	endFmt := statusSessionEnded
 	if interrupted || errors.Is(err, errInterrupted) {
 		endFmt = statusSessionStopped
-	} else if err != nil && !errors.Is(err, agent.ErrMaxTurns) {
+	} else if err != nil && !errors.Is(err, event.ErrMaxTurns) {
 		endFmt = statusSessionFailed
 	}
 	endErr := loop.End(fmt.Sprintf(endFmt, filepath.Base(journalPath)))
@@ -302,6 +364,9 @@ func runHeadlessErr(cfg headlessConfig) error {
 	text := finalAssistantText(loop.Hist())
 	if deniedAndStuck(loop.Hist(), text) {
 		return errPermissionStuck
+	}
+	if emptyResponse(loop.Hist(), text) {
+		return errEmptyResponse
 	}
 	if !cfg.json {
 		_, werr := io.WriteString(cfg.stdout, text)

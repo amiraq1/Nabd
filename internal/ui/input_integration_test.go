@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -147,9 +147,9 @@ func TestIntegrationPhase3AFullSequence(t *testing.T) {
 	}
 
 	// 16. Agent events still reach the feed behind the modal.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.TextDelta, Text: "assistant behind modal"},
-		{Seq: 3, Type: agent.TurnEnd},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.TextDelta, Text: "assistant behind modal"},
+		{Seq: 3, Type: event.TurnEnd},
 	}})
 	items := f.proj.Items()
 	var saw bool

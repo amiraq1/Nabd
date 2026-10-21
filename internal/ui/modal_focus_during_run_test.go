@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -40,8 +40,8 @@ func TestFocusRestoredAfterModalDuringRun(t *testing.T) {
 	f2, r2 := feedWithBlockingRunner(t)
 	startBlockingRun(t, f2, r2, "another run")
 	openModal(f2)
-	_, _ = f2.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 9, Type: agent.PermReply, Call: &agent.ToolCall{ID: "c1"}, Decision: agent.Deny, RawDecision: agent.Deny},
+	_, _ = f2.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 9, Type: event.PermReply, Call: &event.ToolCall{ID: "c1"}, Decision: event.Deny, RawDecision: event.Deny},
 	}})
 	if !f2.composer.focused() {
 		t.Fatal("focus must return via the PermReply event path while busy")

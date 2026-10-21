@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -90,10 +90,10 @@ func TestViewNeverOverflowsWidthAcrossAllWidths(t *testing.T) {
 			name: "idle feed with prompt and message",
 			setup: func() *Feed {
 				f := NewFeed()
-				f.applyBatch([]agent.Event{
-					{Seq: 1, Type: agent.UserMsg, Text: "short question"},
-					{Seq: 2, Type: agent.TextDelta, Text: "this is an answer with some detail to wrap"},
-					{Seq: 3, Type: agent.TurnEnd},
+				f.applyBatch([]event.Event{
+					{Seq: 1, Type: event.UserMsg, Text: "short question"},
+					{Seq: 2, Type: event.TextDelta, Text: "this is an answer with some detail to wrap"},
+					{Seq: 3, Type: event.TurnEnd},
 				})
 				return f
 			},
@@ -110,9 +110,9 @@ func TestViewNeverOverflowsWidthAcrossAllWidths(t *testing.T) {
 				f.streamFirstDeltaAt = start.Add(1240 * time.Millisecond)
 				f.streamLastDeltaAt = start.Add(2240 * time.Millisecond)
 				f.streamedChars = 180
-				f.applyBatch([]agent.Event{
-					{Seq: 1, Type: agent.UserMsg, Text: "compute streaming"},
-					{Seq: 2, Type: agent.TextDelta, Text: "streaming text"},
+				f.applyBatch([]event.Event{
+					{Seq: 1, Type: event.UserMsg, Text: "compute streaming"},
+					{Seq: 2, Type: event.TextDelta, Text: "streaming text"},
 				})
 				return f
 			},
@@ -122,8 +122,8 @@ func TestViewNeverOverflowsWidthAcrossAllWidths(t *testing.T) {
 			setup: func() *Feed {
 				f := NewFeed()
 				f.running = true
-				f.applyBatch([]agent.Event{
-					{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"go test -v ./..."`)}},
+				f.applyBatch([]event.Event{
+					{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"go test -v ./..."`)}},
 				})
 				return f
 			},
@@ -132,8 +132,8 @@ func TestViewNeverOverflowsWidthAcrossAllWidths(t *testing.T) {
 			name: "permission modal visible",
 			setup: func() *Feed {
 				f := NewFeed()
-				f.applyBatch([]agent.Event{
-					{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"rm -rf /tmp/test"`)}},
+				f.applyBatch([]event.Event{
+					{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "c1", Name: "bash", Args: json.RawMessage(`"rm -rf /tmp/test"`)}},
 				})
 				return f
 			},
@@ -151,10 +151,10 @@ func TestViewNeverOverflowsWidthAcrossAllWidths(t *testing.T) {
 			name: "long wrapping content with Arabic diacritics",
 			setup: func() *Feed {
 				f := NewFeed()
-				f.applyBatch([]agent.Event{
-					{Seq: 1, Type: agent.UserMsg, Text: "اَلْعَرَبِيَّةُ لُغَةٌ سَامِيَّةٌ جَمِيلَةٌ ذَاتُ تَارِيخٍ عَرِيقٍ وَتَفَاصِيلَ كَثِيرَةٍ"},
-					{Seq: 2, Type: agent.TextDelta, Text: "هذا رد طويل يحتوي على تشكيل وتفاصيل متتالية لاختبار التفاف الأسطر بدقة"},
-					{Seq: 3, Type: agent.TurnEnd},
+				f.applyBatch([]event.Event{
+					{Seq: 1, Type: event.UserMsg, Text: "اَلْعَرَبِيَّةُ لُغَةٌ سَامِيَّةٌ جَمِيلَةٌ ذَاتُ تَارِيخٍ عَرِيقٍ وَتَفَاصِيلَ كَثِيرَةٍ"},
+					{Seq: 2, Type: event.TextDelta, Text: "هذا رد طويل يحتوي على تشكيل وتفاصيل متتالية لاختبار التفاف الأسطر بدقة"},
+					{Seq: 3, Type: event.TurnEnd},
 				})
 				return f
 			},

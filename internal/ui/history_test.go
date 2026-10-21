@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 func TestHistoryAddSkipsEmptyAndWhitespace(t *testing.T) {
@@ -157,12 +157,12 @@ func TestHistoryResetBrowsing(t *testing.T) {
 func TestHistoryBuildFromEvents(t *testing.T) {
 	// Live events including user messages; Interrupted/RunEnd are not
 	// user messages and must not enter history.
-	events := []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "one"},
-		{Seq: 2, Type: agent.TextDelta, Text: "delta"},
-		{Seq: 3, Type: agent.UserMsg, Text: "two"},
-		{Seq: 4, Type: agent.Interrupted},
-		{Seq: 5, Type: agent.RunEnd},
+	events := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "one"},
+		{Seq: 2, Type: event.TextDelta, Text: "delta"},
+		{Seq: 3, Type: event.UserMsg, Text: "two"},
+		{Seq: 4, Type: event.Interrupted},
+		{Seq: 5, Type: event.RunEnd},
 	}
 	h := newUserHistory()
 	h.buildFromEvents(events)
@@ -176,9 +176,9 @@ func TestHistoryBuildFromEvents(t *testing.T) {
 }
 
 func TestHistoryBuildFromEventsSkipsWhitespace(t *testing.T) {
-	events := []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "   "},
-		{Seq: 2, Type: agent.UserMsg, Text: "real"},
+	events := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "   "},
+		{Seq: 2, Type: event.UserMsg, Text: "real"},
 	}
 	h := newUserHistory()
 	h.buildFromEvents(events)

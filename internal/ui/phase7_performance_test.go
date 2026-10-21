@@ -5,14 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestRepeatedIdenticalResizeSkipsItemRender(t *testing.T) {
 	f := NewFeed()
-	f.BuildFromEvents([]agent.Event{{Seq: 1, Type: agent.UserMsg, Text: "hello"}})
+	f.BuildFromEvents([]event.Event{{Seq: 1, Type: event.UserMsg, Text: "hello"}})
 	f.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	before := f.renderCount
 	for i := 0; i < 100; i++ {
@@ -25,7 +25,7 @@ func TestRepeatedIdenticalResizeSkipsItemRender(t *testing.T) {
 
 func TestRenderedViewportBackingIsBounded(t *testing.T) {
 	f := NewFeed()
-	f.BuildFromEvents([]agent.Event{{Seq: 1, Type: agent.TextDelta, Text: strings.Repeat("line\n", maxRenderedFeedLines+2000)}})
+	f.BuildFromEvents([]event.Event{{Seq: 1, Type: event.TextDelta, Text: strings.Repeat("line\n", maxRenderedFeedLines+2000)}})
 	if len(f.lines) > maxRenderedFeedLines {
 		t.Fatalf("retained %d lines, limit %d", len(f.lines), maxRenderedFeedLines)
 	}
@@ -33,9 +33,9 @@ func TestRenderedViewportBackingIsBounded(t *testing.T) {
 
 func TestLineCacheNeverExceedsVisibleItemCap(t *testing.T) {
 	f := NewFeed()
-	events := make([]agent.Event, 0, maxVisibleFeedItems+100)
+	events := make([]event.Event, 0, maxVisibleFeedItems+100)
 	for i := 0; i < maxVisibleFeedItems+100; i++ {
-		events = append(events, agent.Event{Seq: i + 1, Type: agent.UserMsg, Text: fmt.Sprintf("item %d", i)})
+		events = append(events, event.Event{Seq: i + 1, Type: event.UserMsg, Text: fmt.Sprintf("item %d", i)})
 	}
 	f.BuildFromEvents(events)
 	if len(f.lineCache) > maxVisibleFeedItems {
@@ -45,11 +45,11 @@ func TestLineCacheNeverExceedsVisibleItemCap(t *testing.T) {
 
 func TestVisibleItemCapStatesHiddenHistory(t *testing.T) {
 	f := NewFeed()
-	events := make([]agent.Event, 0, maxVisibleFeedItems+100)
+	events := make([]event.Event, 0, maxVisibleFeedItems+100)
 	for i := 0; i < maxVisibleFeedItems+100; i++ {
-		events = append(events, agent.Event{
+		events = append(events, event.Event{
 			Seq:  i + 1,
-			Type: agent.UserMsg,
+			Type: event.UserMsg,
 			Text: fmt.Sprintf("retention item %d", i),
 		})
 	}
@@ -76,7 +76,7 @@ func TestVisibleItemCapStatesHiddenHistory(t *testing.T) {
 
 func BenchmarkResizeAndStreamingRefresh(b *testing.B) {
 	f := NewFeed()
-	f.BuildFromEvents([]agent.Event{{Seq: 1, Type: agent.TextDelta, Text: strings.Repeat("stream ", 200)}})
+	f.BuildFromEvents([]event.Event{{Seq: 1, Type: event.TextDelta, Text: strings.Repeat("stream ", 200)}})
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		f.Update(tea.WindowSizeMsg{Width: 79 + i%2, Height: 24})

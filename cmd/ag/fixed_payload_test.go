@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"nabd/internal/event"
 	"net/http"
 	"strings"
 	"sync"
 	"testing"
 
-	"nabd/internal/agent"
 	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
@@ -134,7 +134,7 @@ func captureLoopWire(t *testing.T, format, systemText string) []byte {
 	reg := newToolsRegistry(t, dir)
 
 	tr := &captureTransport{}
-	loop := newSessionLoop(captureProvider(t, format, tr), reg, gate{perm.New(reg)}, silentAsker{})
+	loop := newSessionLoop(captureProvider(t, format, tr), reg, gate{p: perm.New(reg)}, silentAsker{})
 	loop.Sink = &recordSink{}
 	// The system text is a parameter so the guard can be exercised with an
 	// inflated prompt (the negative proof); the guard passes the real one.
@@ -201,7 +201,7 @@ func TestFixedPayloadMeasurementsMatchTheWire(t *testing.T) {
 		if err != nil {
 			t.Fatalf("format %s: payload.Measure: %v", format, err)
 		}
-		wire := agent.EstimateText(string(captured))
+		wire := event.EstimateText(string(captured))
 		t.Logf("format=%s system=%d schema=%d model=%d framing=%d residue=%d code_owned=%d · wire body=%d tokens (byte-identical to payload.Encode)",
 			format, m.System, m.Schema, m.Model, m.Framing, m.Residue, m.CodeOwned(), wire)
 

@@ -1,17 +1,99 @@
-# Threat model — v11
+# Threat model — v14
 
-Last reviewed: 2026-09-26
+Last reviewed: 2026-10-15 (draft — claims-affecting documentation revision).
+Base text: v13 plus the supplied editorial revision, reconciled against
+`master` at `51859a06b5e4ba7d35babad700a4376acaa84a7d`.
+The supplied text's unmerged PR #279 skill-entry-cap paragraph is excluded.
+Review references: targeted source review at `23c7b642`; silent-turn work merged
+in PR #278 at `51859a06`. These are separate evidence references, not a claim
+that every row was audited against one combined master tree. PR #270 branches
+from the earlier base `fb7a038`. Open-PR changes are not treated as merged fixes.
+
+Validation scope: compared the base document and open-PR listing on GitHub,
+checked patch application locally, and ran the existing test-citation existence
+guard on the pinned source snapshot. Follow-up review inspected decodeStrict,
+glob, the file-tool decoder call sites, purgeCandidates and its archive fixture,
+the rotation comment, and shadow ignore-file creation. This does not establish test execution,
+coverage, CI success or the correctness of inherited source observations.
+No runtime security reproduction or full code audit was performed. A PR changing a claim must
+update the corresponding row in the same PR. See "Revision log".
 
 This is the only place nabd states security claims. README points here.
+
+## Contents
+
+1. [How to read this document](#how-to-read-this-document)
+2. [Global assumptions](#global-assumptions)
+3. [Assets](#assets)
+4. [Adversaries](#adversaries)
+5. [Trust boundaries at a glance](#trust-boundaries-at-a-glance)
+6. [Claims and evidence](#claims-and-evidence)
+7. [Residual-risk register](#residual-risk-register)
+8. [Path layer](#path-layer)
+9. [Configuration handling](#configuration-handling)
+10. [Custom endpoints: policy-controlled](#custom-endpoints-policy-controlled)
+11. [Skills](#skills)
+12. [Journal, shadow, and history concurrency](#journal-shadow-and-history-concurrency)
+13. [MCP integration](#mcp-integration)
+14. [Operator guidance](#operator-guidance)
+15. [Open verification items (not claims)](#open-verification-items-not-claims)
+16. [Revision log](#revision-log)
+
+## How to read this document
+
+- A **claim** is one row in a claims table. Each row has exactly one status.
+  A guaranteed part and an unprovided boundary belong in separate rows.
+- **GUARANTEED** — holds under the global assumptions below, and is backed by a
+  backticked `Test*` function or a named script/AST guard. A phrase such as
+  "package tests" is not a specific citation.
+- **GUARANTEED†** — an inherited maintainer assertion whose evidence column
+  has no specific test or guard citation yet. It is evidence debt, not a newly
+  verified guarantee. Open item EVIDENCE-01 (not the previous document version)
+  lists every such claim row; add evidence or downgrade.
+- **REDUCED** — a mitigation with a stated residual risk. It is not a boundary.
+  A REDUCED row without a residual is a documentation defect.
+- **NOT PROVIDED** — a boundary that does not exist on the platform. Listed so
+  nobody assumes it does.
+- Test names in backticks are checked mechanically to resolve to a real Test*
+  function (`scripts/check-threat-model-tests.sh`). That check proves the test
+  exists; whether it is sufficient to prove the claim is a maintainer judgement
+  made at review time.
+- Sections before "Open verification items" state what the project claims.
+  "Open verification items" separates reported source observations, unresolved
+  questions and proposed designs. An item is not itself a verified guarantee
+  or a severity classification.
+
+## Global assumptions
+
+These apply to every GUARANTEED row unless the row says otherwise.
+
+- Platform: descriptor-relative filesystem guarantees are stated for Unix
+  (`On unix` in the rows). The `!unix` compatibility adapter carries no
+  descriptor guarantee.
+- Storage assumption: use Termux private storage for `~/.ag` and the project
+  root. Do not rely on Unix `0600`/`0700` confidentiality or case-sensitive
+  matching on Android shared/emulated storage (`/storage/emulated/...`,
+  `~/storage/shared`) without checking the actual filesystem and mount.
+  Storage-dependent claims do not apply where those prerequisites fail (V8).
+- Adversary scope: a same-uid local attacker is out of scope (Adversary 4). File
+  modes limit cross-user access only.
+- `bash` is never a filesystem sandbox. After approval it runs with the full
+  authority of the current user.
+- Evidence means the named tests pass in CI, or the named AST or script guard
+  passes. Race-detector evidence comes from the GitHub Actions Linux run, not
+  from Termux (see "Baseline measurement harness").
 
 ## Assets
 
 | Asset | Where it lives |
 |---|---|
-| Provider API keys | v1: `NABD_CONFIG` or `~/.ag/config`, with process environment fallback. v2: `NABD_CONFIG_V2` or `~/.ag/config.v2.json`, with explicit `env` or secure file credential sources only. OpenCode registry: `~/.ag/auth.json` (mode 0600, owner checked) with legacy environment fallback, and `~/.ag/providers.json` (mode 0600) with builtin catalog fallback. |
+| Provider API keys | v1: `NABD_CONFIG` or `~/.ag/config`, with process environment fallback. v2: `NABD_CONFIG_V2` or `~/.ag/config.v2.json`, with explicit `env` or secure file credential sources only. OpenCode registry: `~/.ag/auth.json` (mode 0600, owner checked, atomic write via temp file with fsync and sidecar file lock `~/.ag/auth.json.lock`) with legacy environment fallback, and `~/.ag/providers.json` (mode 0600) with builtin catalog fallback. |
 | Working tree | The resolved project directory used to construct `tools.Root`. |
+| Repository execution hooks | Working-tree files that programs may execute or interpret later: `.git/hooks/*`, `.git/config`, `.gitattributes` filter references, `.gitmodules`, `Makefile`, `package.json` scripts and `.envrc`. Their execution depends on the consuming program; writing them can enable deferred execution. |
 | Session journal | `~/.ag/sessions/*.jsonl` by default. Append-only events can include file contents and command output in cleartext; directory mode 0700 and file mode 0600 limit cross-user reads. Journal redaction is enabled by default and removes recognized credential patterns from new events before write; `NABD_REDACT_JOURNAL=0` is an explicit diagnostic opt-out. |
-| Shadow store | `<root>/.ag/shadow`, content-addressed `s256:` blobs containing full pre/post-edit content. `.ag` and `.ag/shadow` are tightened to 0700 and `.ag/.gitignore` is created, if missing, with the single rule `*` on every store write-open (O_CREATE|O_EXCL; an existing `.gitignore` is never read, appended to, or replaced), so the whole store stays invisible to git. |
+| Shadow store | `<root>/.ag/shadow`, content-addressed `s256:` blobs containing full pre/post-edit content for regular files. Excluded files are never stored in shadow; their pre/post states are tracked via SHA-256 fingerprints without persisting content to disk, EditRecords are stamped with `Excluded=true` and empty blob references, and `/undo` refuses them via `ErrUndoExcluded` to prevent file deletion. `.ag` and `.ag/shadow` are tightened to 0700. On each store write-open, the shield attempts to create `.ag/.gitignore` with the single rule `*`, using exclusive creation (`os.O_CREATE` and `os.O_EXCL`). An existing ignore file is never read, appended to or replaced. Creation failure is ignored; the ignore rule is no guarantee against forced addition or conflicting existing rules. Shadow blobs are not redacted. |
+| MCP configuration and approvals | `~/.ag/mcp.json` selects server programs and enabled servers; `~/.ag/mcp/` holds MCP approval/journal data. Whoever can modify the configuration controls which server programs may start. |
+| Skills | User scope `~/.config/nabd/skills` loads without a project opt-in; project scope `<root>/.nabd/skills` is off by default. Protect the user scope as trusted instruction configuration. |
 
 The journal and shadow store are high-sensitivity assets. Filesystem modes
 reduce cross-user disclosure; they do not protect against processes running as
@@ -20,16 +102,47 @@ the same uid.
 ## Adversaries
 
 1. **Confused model.** It may invent paths, retry destructive operations, or
-   treat tool output as instructions. Path resolution, permission classes, and
-   human approval for shell execution reduce this risk.
+   treat tool output as instructions, or write files that other programs later
+   execute. Path resolution, permission classes, and
+   human approval for shell execution reduce this risk, and a write through the
+   file tools to a build, hook, workflow or environment file now asks on every
+   call whatever grant the session holds (V15).
 2. **Hostile repository/tool content.** ReadOnly output reaches the provider in
    a nonce-fenced envelope. The fence is a semantic signal, not an injection
-   boundary; sensitive actions still rely on permission approval.
+   boundary; sensitive actions still rely on permission approval. A compaction
+   summary enters the same envelope, for the same reason and with the same
+   limit: it is labeled as data, not trusted as data (V17).
 3. **Hostile dependency invoked through bash.** Once approved, `sh -c` runs as
    the current user with project-root cwd and no `Root.Resolve` containment.
-   Environment allowlisting protects provider keys but not the filesystem.
+   Environment allowlisting keeps provider keys out of the child's environment;
+   it does not stop the command from reading anything the current user can
+   read, including `~/.ag/auth.json`, `~/.ag/config`, the session journal, and
+   `<root>/.ag/shadow`.
 4. **Same-uid local attacker.** Out of scope. OS user separation is the
    mitigation.
+5. **Hostile endpoint or MCP server.** The selected provider endpoint receives
+   the request content and applicable credential and can return tool calls.
+   Permission checks still apply to those calls. An MCP STDIO server runs as
+   the user; local classification is not an OS sandbox or network boundary.
+
+## Trust boundaries at a glance
+
+This table summarises where each boundary is enforced. The claims below are
+authoritative; this table adds no claim.
+
+| Boundary | Enforced by | Main residual |
+|---|---|---|
+| Model → tools | `perm.Policy` classes (ReadOnly / Mutating / Executing), human approval, deny modes | Prompt injection is REDUCED; the fence is a semantic signal |
+| Tool → filesystem (file tools) | `internal/safefs` descriptor-relative operations; `Resolve` is reporting-only | `!unix` adapter; config reading traverses parent symlinks |
+| Tool → filesystem (`bash`) | Approval of the displayed `cmd` only | NOT PROVIDED: no sandbox |
+| Tool → deferred execution | Per-call verdict on the write target (`perm.ClassifyWritePath`): execution-sensitive files ask on every call, `.git/` and `.ag/` are refused, and the call is answered before the name-based ladder | Path scope only, and only for the file tools: an approved `bash` command is gated on the displayed command alone, so it can still write these paths |
+| Tool-call arguments → tool | One decoder for every tool: decodeStrict after repair | decodeStrict refuses duplicate keys at any depth (case-insensitive), nesting past `maxJSONDepth`, an undeclared field, and any data after the first value; `glob` and `grep` no longer decode with `json.Unmarshal`, and repair never resolves an ambiguous payload (it hands a repeated key to the decoder instead of guessing). The prompt is built from the repaired call, and a ReadOnly call never prompts (V14 closed) |
+| History → model (compaction) | Projection fence: a fresh per-projection nonce and marker defanging applied at the journal-to-wire translation point | The envelope is a label, not an injection boundary: prompt injection through the summary is REDUCED (V17) |
+| Process → provider endpoint | Endpoint policy at load time and dial time; guarded HTTP clients with fail-closed redirect policy | Policy `open` disables load/dial time checks; redirects are refused fail-closed via `http.ErrUseLastResponse` |
+| Credentials | 0600 owner-checked files, env allowlist for children, redaction | Same-uid readers; best-effort redaction |
+| Journal / shadow store | 0700/0600 modes, redaction of recognized patterns, git shielding | Shadow store is not redacted; cleartext content |
+| Skills | User scope trusted; project scope off by default; hash re-verified; fenced projection | Project skills are repository-authored instructions |
+| MCP | Local config only, local classification, fingerprinted approvals, minimal child env | STDIO servers uncontained; active when configured; approval scope; independent review unverified |
 
 ## Claims and evidence
 
@@ -46,21 +159,24 @@ the same uid.
 | Unknown or empty tool names are denied | GUARANTEED | `TestUnknownToolIsDenied` |
 | ReadOnly tools allow without a prompt; Mutating and Executing tools ask | GUARANTEED | `TestReadIsFreeWritesAsk` |
 | `bash` cannot receive a session-wide grant | GUARANTEED | `perm.Policy.SessionGrantAllowed` excludes `bash` (and all non-Mutating tools) so standing grants are never offered, and `Effective` downgrades any `AllowSession` for `bash` to `AllowOnce`. Interactive surfaces (Chat and Feed modal) derive choices from policy so the session option is neither shown nor accepted by key ('a' / 'A'), and fail closed when session grants are unknown. Evidence: `TestSessionGrantAppliesToWritesOnly`, `TestRawDecisionForBash`, `TestSessionGateWiresSessionGrantPolicy`, `TestPermissionModalHidesUnsupportedSessionGrant`, `TestPermissionModalFailsClosedWhenSessionGrantUnknown`, `TestBashSessionKeyNeitherShownNorAccepted`, `TestChatBashSessionKeyRejected` |
-| YOLO never auto-approves Executing tools | GUARANTEED | `perm.Policy.Check` widens the verdict only for `Mutating` calls: an `Executing` tool under `SetYOLO(true)` falls through to the ordinary ladder, so it asks under `ModeAsk` and is denied under `ModeDeny`/`ModeAllowReads`/`ModePlan`, and accepts no standing grant. Headless runs never block on the resulting question: `silentAsker` answers `Deny` without reading a terminal. Evidence: `TestYOLODoesNotBypassExecuting`, `TestYOLOStillAllowsMutating`, `TestYOLOVerdictMatrix`, `TestHeadlessYOLOBashDoesNotHang` |
+| YOLO never auto-approves Executing tools, and Deny modes override YOLO | GUARANTEED | `perm.Policy.Check` widens the verdict only for `Mutating` calls: an `Executing` tool under `SetYOLO(true)` falls through to the ordinary ladder, so it asks under `ModeAsk` and is denied under `ModeDeny`/`ModeAllowReads`/`ModePlan`, and accepts no standing grant. Headless runs never block on the resulting question: `silentAsker` answers `Deny` without reading a terminal. Furthermore, explicit deny modes (`ModeDeny`, `ModeAllowReads`, `ModePlan`) evaluate before YOLO so a blanket YOLO flag cannot auto-approve mutating tools under a deny mode. Explicit per-tool session grants for Mutating tools can still stand under ModeDeny and ModeAllowReads. ModePlan is the exception: it is checked before standing grants and denies all Mutating/Executing calls even when a grant or YOLO is present. Source order: [Policy.CheckReason](https://github.com/amiraq1/Nabd/blob/51859a06b5e4ba7d35babad700a4376acaa84a7d/internal/perm/policy.go#L191-L198). Evidence: `TestYOLODoesNotBypassExecuting`, `TestYOLOStillAllowsMutating`, `TestYOLOVerdictMatrix`, `TestHeadlessYOLOBashDoesNotHang`, `TestModeDenyOverridesYOLO`, `TestModePlanOverridesGrants` |
 | Denied `bash` starts no subprocess | GUARANTEED | `TestBashDeniedRunsNoSubprocess` |
 | Permission decisions are journal-first and effective decisions are returned to the loop | GUARANTEED | `TestDecideLogsEffectiveDecision`, `TestDecideRefusesWhenPermissionQuestionCannotBeJournaled`; failed permission events deny execution and do not record a session grant |
 | Permission reasons are stable codes translated only at the presentation boundary, while old journals preserve their text | GUARANTEED | New `PermAsk`/`PermReply` events from the built-in policy carry a closed `PermissionReason` code plus an English `Text` fallback. `internal/presentation.PermissionReasonText` is the only Arabic catalog: a known code is authoritative, an unknown non-empty code renders nothing, and an empty code identifies a legacy event whose `Text` remains unchanged. Permission events remain audit-only and do not enter provider messages. Evidence: `TestPermissionReasonClosedVocabulary`, `TestDecidePersistsStablePermissionReason`, `TestLegacyPermissionEventKeepsTextAndEmptyReason`, `TestPermissionReasonCatalogCoversClosedVocabulary`, `TestPermissionReasonTextLegacyAndUnknownBehavior`, `TestProjectorCarriesLocalizedPermissionReason`, `TestRenderPermissionReasonUsesCatalog`, `TestRenderLegacyPermissionTextUnchanged`, `TestPermissionModalShowsLocalizedReason` |
 | Bash child environment is an allowlist that strips unsafe PATH entries, uses an isolated HOME, and points TMPDIR/TMP/TEMP at one private per-invocation directory | GUARANTEED | `childEnv` starts from an empty environment and copies only its allowlist. The temp-directory variables are no longer inherited: each invocation gets its own `nabd-tmp-*` directory, created 0700, never shared across invocations, and removed when the command finishes; if it cannot be created the child gets no temp variable at all rather than the caller's value. Evidence: `TestBashChildEnvAllowlistIntegration`, `TestBashChildEnvPathStripping`, `TestBashChildEnvHomePolicy`, `TestBashChildTempDirIsIsolatedAndRemoved` |
-| Bash arguments are decoded strictly before any subprocess starts | GUARANTEED | `bashTool.RunDetailed` uses the shared `decodeStrict` decoder — duplicate keys rejected by tokenizing the raw object, undeclared fields by `DisallowUnknownFields` — instead of `json.Unmarshal`, which keeps the last duplicate key and ignores undeclared ones. The boundary is the net behind repair: with repair disabled, or for a call the layer declines, an undeclared or duplicate key fails as `invalid args` and runs nothing. Evidence: `TestBashRejectsNonStrictArgs`, `TestBashStrictDecodeStillFailsThroughLoop` |
+| Tool argument decoding rejects a key repeated anywhere, a case-varied spelling of a declared field, an undeclared field, and nesting past its ceiling before anything executes | GUARANTEED | [decodeStrict and rejectDuplicateKeys](https://github.com/amiraq1/Nabd/blob/6885ee885bc327b6c15aabb78eaaf1a3cb133525/internal/tools/decode.go) walk the raw payload before the typed decode, so the check covers every object including opaque fields (`mcp_tool`'s `args`). Keys are compared case-insensitively because encoding/json matches struct fields that way, so `{"cmd":"a","Cmd":"b"}` cannot land twice on one field with the last value winning; the refusal names the repeated key; a document nested past `maxJSONDepth` is refused by the walk, not by a syntax or type error. `DisallowUnknownFields` still rejects an undeclared field. Every tool decodes through this boundary — `glob` and `grep` were the last two on `json.Unmarshal`. Repair may still drop an undeclared key for ReadOnly and Executing tools, where that key is inert by construction, and never for write_file/edit_file, which share live fields; it never resolves an ambiguity, because a payload whose keys are repeated as the decoder sees them (including a case-varied spelling) is left exactly as written and refused by the decoder rather than having one spelling guessed away. Evidence: `TestDecodeStrictRejectsDuplicateKeysAtAnyDepthOrSpelling`, `TestDecodeStrictNamesTheDuplicateKey`, `TestDecodeStrictAcceptsManyUniqueKeys`, `TestBashRejectsNonStrictArgs`, `TestBashStrictDecodeStillFailsThroughLoop`, `TestReadFileStrictArgs`, `TestReadFileDecoderBoundaryWithRepairOff`, `TestWriteValidationRejectsBeforeSideEffects`, `TestMCPArgumentsStrictBoundary`, `TestGlobStrictArgumentBoundary`, `TestGlobArgumentsOnTheProductionPath`, `TestGrepStrictArgumentBoundary`, `TestGrepArgumentsOnTheProductionPath`. |
+| The decodeStrict argument decoder rejects data after the first JSON value | GUARANTEED | [decodeStrict](https://github.com/amiraq1/Nabd/blob/6885ee885bc327b6c15aabb78eaaf1a3cb133525/internal/tools/decode.go) performs a second Decode that must return `io.EOF`, so an adjacent object, a trailing primitive, a trailing null or a trailing array is refused while trailing whitespace and a trailing newline are not. Scope: every tool now decodes through this decoder — bash, read_file, write_file, edit_file, skill, mcp_tool, glob and grep — and they all fail with the same `unexpected trailing data after JSON value`, so no tool carries a second single-value contract of its own. Evidence: `TestDecodeStrictRejectsTrailingData`, `TestBashRejectsNonStrictArgs`, `TestReadFileDecoderBoundaryWithRepairOff`, `TestMCPArgumentsStrictBoundary`, `TestWriteValidationRejectsBeforeSideEffects`, `TestGlobStrictArgumentBoundary`, `TestGrepStrictArgumentBoundary`. |
+| File-tool writes to repository-internal state and to execution-sensitive build, hook, workflow and environment files are refused or approved per call, never by a standing grant or YOLO | GUARANTEED | The production gate answers these calls per call (the loop's `CallAwareGate`), so the verdict is reached before the name-based ladder: `.git/` and `.ag/` writes are refused in every mode, and a write to a build entry point (Makefile, GNUmakefile, justfile, Taskfile), a package or tool manifest (`package.json`, `.envrc`, `.npmrc`, `.pre-commit-config.yaml`, `.goreleaser.yaml`), a Git attribute or module file (`.gitattributes`, `.gitmodules`), or any file inside `.github/workflows/`, `.husky/` or `.vscode/` asks on every call. Because the gate answers per call it also declares, through `CallGrantPolicy`, that this call may not carry a standing grant: the session choice is neither offered nor recorded, and the effective decision is one-time even if an asker returns `AllowSession`. Matching is case-insensitive and covers subdirectories. Evidence: `TestExecSensitiveWritesAlwaysAsk`, `TestInternalRepositoryWritesAreRefused`, `TestClassifyWritePath`. Scope, and the honest limit: the file tools only — an approved `bash` command is gated on the displayed command, so it can still write these paths, exactly as it can edit any other file. |
 | Mutation recovery intent is journaled and synced before a file publish; failed pre-publish attempts are marked separately, while a committed edit remains undoable after restart | GUARANTEED | `edit_intent` and `edit_abort` are journal-only recovery records; critical journal events use the durable sink path before the filesystem mutation proceeds. The failure matrix distinguishes file-fsync and rename failures before publication from a parent-fsync failure after publication, so recovery never guesses from an ambiguous error. Evidence: `TestMutationIntentFailureDoesNotPublish`, `TestMutationAbortEventsTrackPrePublishFailure`, `TestWriteFileAtomicFailureMatrix`, `TestWriteFileAtomicReportsPublishedWhenParentFsyncFails`, `TestCriticalEventsSyncDurableSink` |
 | Git header subprocess inherits no parent environment: only PATH/TERM/LANG/LC_ALL are forwarded, secrets and `GIT_CONFIG_GLOBAL` are dropped, and Env is never nil | GUARANTEED | `TestGitChildEnvForwardsOnlyAllowlist` |
-| Git status header never executes commands defined by repository-local config | GUARANTEED | `core.fsmonitor=false` is forced via `-c` (highest precedence); status runs with `--no-optional-locks` and `--ignore-submodules=all`; filter detection applies to repository-controlled scopes (local, worktree, their includes, and any unknown scope) via `--show-scope`, trusting system and global scopes as user-installed; when a repository-controlled scope defines a `filter.*.clean` or `filter.*.process` driver, status is skipped and the header stays hidden; a failed config read or malformed output fails closed. Residual: a user-installed system filter (e.g. git-lfs) may still run when the repository's `.gitattributes` references it, executing a program the user installed rather than one the repository defined; a future git release adding a new config-driven command to `status` is not covered until listed here. Evidence: `TestGitHeaderIgnoresRepoFsmonitor`, `TestGitHeaderSkipsRepoCleanFilter`, `TestGitHeaderStillWorksOnPlainRepo`, `TestRepoConfigDefinesCommands` |
-| Opened config must be regular, user-owned on Unix, and have no group/other permission bits | GUARANTEED | `internal/config` ParseFile and secure-open tests |
+| Git status header never executes commands defined by repository-controlled config | GUARANTEED | `core.fsmonitor=false` is forced via `-c` (highest precedence); status runs with `--no-optional-locks` and `--ignore-submodules=all`; filter detection applies to repository-controlled scopes (local, worktree, their includes, and any unknown scope) via `--show-scope`, trusting system and global scopes as user-installed; when a repository-controlled scope defines a `filter.*.clean` or `filter.*.process` driver, status is skipped and the header stays hidden; a failed config read or malformed output fails closed. Evidence: `TestGitHeaderIgnoresRepoFsmonitor`, `TestGitHeaderSkipsRepoCleanFilter`, `TestGitHeaderStillWorksOnPlainRepo`, `TestRepoConfigDefinesCommands` |
+| Git status header never runs user-installed filters or future config-driven commands | NOT PROVIDED | A user-installed system/global filter referenced by repository attributes may run; future Git config-driven execution paths are not covered until reviewed. |
+| Opened config must be regular, user-owned on Unix, and have no group/other permission bits | GUARANTEED† | `internal/config` ParseFile and secure-open tests (EVIDENCE-01). |
 | Config v1 and Config v2 default files coexistence on disk is fatal at startup | GUARANTEED | `TestV2CoexistenceOnDiskIsFatal` |
 | Config v2 rejects unknown fields, trailing JSON, and custom `base_url` | GUARANTEED | `TestV2RejectsUnknownFieldsAndTrailingJSON`, `TestV2CredentialFileAndClosedEndpointPolicy` |
-| Config package never writes configuration or credentials to disk | GUARANTEED | package API and configuration tests |
-| Config descriptor opening rejects symlinks and blocking special files | REDUCED | `O_NOFOLLOW` and `O_NONBLOCK`, followed by descriptor validation |
-| Config v2 has no implicit environment credential fallback | GUARANTEED | credential sources must explicitly use `env` or a secure absolute `file` only |
+| Config package never writes configuration or credentials to disk | GUARANTEED† | package API and configuration tests (EVIDENCE-01). |
+| Config descriptor opening rejects final-component symlinks and blocking special files | REDUCED | `O_NOFOLLOW` and `O_NONBLOCK`, followed by descriptor validation. Residual: parent-directory symlinks may still be traversed; this is not descriptor-relative containment of the whole config path. |
+| Config v2 has no implicit environment credential fallback | GUARANTEED† | Credential sources must explicitly use `env` or a secure absolute `file`. This is a credential-source claim, not a promise that Config v2 ignores all environment variables; V1 tracks the wider audit; specific credential-source evidence is required in EVIDENCE-01. |
 | Removed sandbox configuration keys requesting a boundary fail closed at startup before provider or tool execution | GUARANTEED | When `NABD_BASH_SANDBOX=on`, `NABD_BASH_NETWORK=deny`, or `NABD_BASH_RESOURCES=limit` is present in environment or configuration files, startup fails closed with an explicit error instructing the user to remove the setting; no provider request is made and no subprocess is executed across headless and interactive entry points. Neutral values (`auto`, `off`, `allow`, empty) emit a one-line warning on stderr that the setting is ignored. Evidence: `TestRemovedBashKeysRequestingBoundaryFailClosed`, `TestRemovedBashKeysNeutralValuesWarnOnly`, `TestRemovedBashKeysFailBeforeProviderOrTool`, `TestRemovedBashKeysFailClosedInteractiveStartup` |
 | The router's Retry-After wait budget is bounded, opt-in, and pre-commit only | GUARANTEED | `NABD_ROUTER_RETRY_AFTER_WAIT` is parsed into whole seconds in `[0, 120]` and defaults to 0 (disabled); the wait runs at most once per `Stream`, strictly before the commit point, through the injected clock and cancellable by the parent context. Evidence: `TestParseRetryAfterWait`, `TestWithRetryAfterWaitClamps`, `TestShouldWaitOut` |
 | The runtime status row never claims progress after a terminal failure | GUARANTEED | `RunError` and `Interrupted` retire the progress claims when the event is projected, instead of waiting for the runner goroutine to return; the send gate (`busy`) is left set so a failed run cannot be followed by a second concurrent run before `doneMsg`. Evidence: `TestRunErrorRetiresProgressStatus`, `TestRunErrorKeepsSendGate`, `TestInterruptedRetiresProgressStatus`, `TestDoneMsgClearsRunFailedStatus` |
@@ -72,44 +188,52 @@ the same uid.
 | Tool-output truncation is recorded as data and disclosed on the row that reports the result | GUARANTEED | `Event.ForStore()` records the number of discarded bytes in `ToolCall.TruncatedBytes` alongside the existing in-output marker; the field is additive (`omitempty`, legacy journals decode to `0`), the live in-memory event is never mutated, and the renderer states the loss on the `tool_end` row within the terminal width. Evidence: `TestForStoreRecordsTruncatedBytes`, `TestForStoreLeavesSmallOutputAlone`, `TestForStoreDoesNotMutateLiveEvent`, `TestTruncatedBytesIsAdditive`, `TestToolEndStatesTheLoss`, `TestToolEndSaysNothingWhenNothingWasCut`, `TestTruncatedToolRowRespectsWidth` |
 | Feed item retention is bounded and disclosed without mutating journal history | GUARANTEED | When the merged projected feed exceeds `maxVisibleFeedItems`, `visibleFeedItems` inserts one synthetic notice that states the exact number of older items omitted from the in-memory feed and identifies the session journal as the full-history source. The notice occupies one slot, the newest items remain visible, and neither projector items nor journal events are modified. Evidence: `TestVisibleItemCapStatesHiddenHistory`, `TestLineCacheNeverExceedsVisibleItemCap` |
 | Plan mode is strict read-only and cannot be overridden by a session grant or YOLO | GUARANTEED | `perm.Policy` carries a `Mode`; when it is `ModePlan`, `Check` returns `Deny` for every `Mutating`/`Executing` tool and short-circuits before the YOLO and standing-grant branches, so neither a per-session "allow for this session" nor `SetYOLO(true)` can write a byte or run a command. Reads (`ReadOnly`) still pass, so a plan-mode run can inspect the tree but never change it. The mode is applied to both the interactive gate (`gate{pol}` in `doChat`/`doChatWithFeed`) and the headless gate, so the same rule holds with and without a TTY. Evidence: `TestModeTable`, `TestModePlanOverridesGrants`, `TestModePlanAllowsReads` |
-| Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED | `internal/snap` checksum and rename capability tests |
-| Undo refuses when current bytes no longer match the recorded hash | GUARANTEED | undo and persisted-undo tests |
+| Shadow blobs are SHA-256 addressed and verified on read; publication never silently replaces an existing blob | GUARANTEED† | `internal/snap` checksum and rename capability tests (EVIDENCE-01). |
+| Undo never deletes a file whose record says it existed but whose before-content is missing | GUARANTEED | The reader decides creation from the record's own fields: creation requires no before-hash AND no before-blob. A present before-hash beside an absent content reference — a writer that stores no blobs (the capture-ordering change proposed in the open PR #270) or a legacy record whose reference is gone — refuses with `ErrUndoBeforeMissing` and leaves the file in place, and an unknown marker in the record is ignored, so the decision rests on data the older schema already has. Evidence: `TestPersistedUndoRefusesMissingBeforeBlob` (real journal round-trip carrying the unknown `excluded` field), and the control `TestPersistedUndoDeletesTrueCreation`. |
+| Undo refuses when current bytes no longer match the recorded hash | GUARANTEED† | undo and persisted-undo tests (EVIDENCE-01). |
+| Excluded files are never stored in the shadow store; pre/post mutation states use in-memory fingerprints, records are stamped Excluded, and undo refuses them without deleting | GUARANTEED | `commit()` detects excluded paths early via `isPathExcluded` before capture; excluded content is fingerprinted in-memory via `FingerprintBytes` without creating `.ag/shadow/` blobs, and `EditRecord` is emitted with `Excluded: true` and empty blob references. `/undo` checks `rec.Excluded` and `IsPathExcluded` before any capture and fails safely with `ErrUndoExcluded`, preserving the on-disk file; crash recovery in `ReconcileMutation` takes the same fingerprint-only path. Evidence: `TestP04_CanaryExcludedPathNeverStoredInShadow`, `TestP04_CanaryUndoRefusalKeepsFile`, `TestP04_CanaryReconcileMutationNeverStoredInShadow`, `TestWriteFileToExcludedPathSucceedsWithUndoTracking`, `TestUndoRevertsWriteToGitignoredFile`. Dynamic disk-level verification passed on Linux CI runner (GitHub Actions Run 39307645290). |
+| Provider HTTP clients enforce a fail-closed redirect policy and never follow HTTP redirects or leak credentials | GUARANTEED | `endpoint.ClientWithAllow` installs `CheckRedirect: noRedirect`, returning `http.ErrUseLastResponse` on all 3xx redirects (301, 302, 303, 307, 308). All provider constructors (`NewAnthropicDialect`, `NewOpenAIDialect`) and `Client()` route through `ClientWithAllow`. Redirect responses terminate immediately without forwarding `x-api-key`, `Authorization`, or other sensitive headers to redirect targets, and provider errors sanitize credentials. Evidence: `TestP01_RedirectDoesNotLeakCredentials`, `TestP01_ProviderRefusesRedirectAndRedactsError`. Integration verification passed on Linux CI runner (GitHub Actions Run 39307645290). |
+| Bash headTail buffer synchronizes concurrent writes and snapshot reads and closes reader pipe on drain timeout to mitigate race conditions and goroutine leaks | GUARANTEED | `headTail` synchronizes `head`, `tail`, and `total` counters with `sync.RWMutex`, allowing concurrent writes while `String()` acquires a read lock to capture an atomic snapshot. When `cmd.Wait()` finishes, any hanging output drain is bounded by `bashDrainGrace` (2s), after which `pr.Close()` unblocks `io.Copy` and waits on the reader goroutine to exit cleanly. Evidence: `TestBash_HeadTailConcurrentWritesAndSnapshot`, `TestBash_GrandchildHoldsStdoutOpen`, `TestBash_ExceedsHeadTailCut`. Verified dynamically under `go test -race` on Linux CI runner (GitHub Actions Run 39307645290). |
 | Prompt injection through ReadOnly output | REDUCED | nonce fencing plus approval for sensitive actions; model behavior is not guaranteed |
+| Every compaction summary is projected to the model inside the untrusted-data envelope, and marker-shaped text in the summary cannot close it | GUARANTEED | `FenceSummary` wraps the summary at the single journal-to-wire translation point (the `Compact` case in `Messages`), with a fresh nonce from `FenceNonceFunc` in both markers and one defang contract escaping every marker family before wrapping, so a summary that quotes a closing marker — even one carrying this projection's own nonce — cannot terminate the envelope, and the payload text itself survives intact apart from the one-character escape. A structural guard keeps the emitted markers and the defang list in agreement, so a third family added without an escape entry fails the suite. This is a claim about the envelope, not about model compliance; the behavioural limit is the prompt-injection row below. Evidence: `TestCompactSummaryIsFencedWithTheProjectionNonce`, `TestCompactSummaryNonceIsFreshPerProjection`, `TestCompactSummaryPayloadCannotForgeTheFence`, `TestCompactSummaryPayloadStaysIntact`, `TestEveryFenceMarkerFamilyIsDefanged`, `TestToolFenceEscapesTheSummaryMarkers`. |
+| Prompt injection through the compaction summary | REDUCED | The summary is fenced, labeled `UNTRUSTED_DATA NOT_INSTRUCTIONS`, and cannot be de-fenced from inside, but the envelope is a semantic signal rather than an injection boundary: a summary derived from hostile file or command content can still steer the model while fenced, so sensitive actions rely on permission approval. This is the same stance the document takes on any tool output. |
 | Agent notices forwarded to the model context are restricted to an enumerated allowlist that defaults to deny | GUARANTEED | Only notices that change world-state (such as /undo results) or restrict required capabilities (such as loop limits) reach the provider message projection; monitoring, calibration, and display notices never enter the model conversation. Forwarded notices are explicitly tagged («notice») as agent/system events rather than raw user text. The tag is a semantic signal that does not technically prevent model compliance with allowed notices; the guarantee is narrowing injectable content, not immunizing the model against permitted notices. Evidence: `TestCalibrationNoticeNeverReachesTheModel`, `TestBlockedNoticeCategoriesDroppedWhileToolCallsPending`, `TestAllowedNoticeCategoriesFlushedAfterToolCallsPending` |
 | The text of a notice that reaches the model is structured, bounded, and rendered by one choke point | GUARANTEED | `renderNotice` in `messages.go` is the only translation from a notice event to the model-facing line: a structured `NoticeData` payload is authoritative and the human `Text` is never consulted beside it, a payload that does not match its `NoticeCategory` is dropped rather than repaired, and text-only events (journals written before the payload existed) are sanitized and bounded so replay is unchanged. Every line passes `provider.SanitizeBody` for credential redaction, has every control rune collapsed so one notice is exactly one logical line, cannot open with the `«notice»` frame marker, and is capped at `maxNoticeBytes`. The emitters are guarded structurally: `TestAllowedNoticeEmitsCarryStructuredPayload` fails if an allowed category is ever constructed with raw `Text` and no payload, or if any allowed category has zero production emit sites; `TestAllowedNoticeGuardDetectsCategoryWithoutEmitter` proves that the AST guard detects orphan categories without emitters. Evidence: `TestNoticePayloadIsAuthoritativeOverHumanText`, `TestNoticePayloadCategoryMismatchIsDropped`, `TestNoticeLineIsBoundedSingleLineAndControlFree`, `TestLegacyNoticeTextIsSanitizedAndStillFlushed`, `TestNoticeTextCannotSpoofTheFrame`, `TestStructuredNoticeRendersPerCategory`, `TestNoticeProjectionUsesTheRenderer`, `TestAllowedNoticeEmitsCarryStructuredPayload`, `TestAllowedNoticeGuardDetectsCategoryWithoutEmitter` |
 | Tool-call repair changes what runs relative to what the model asked for (NBD-420) | REDUCED | `internal/tools/repair.go` corrects malformed calls before the registry lookup, so the gate classifies and prompts on the corrected call. It is a new surface between the model and the gate, bounded by design: inference is one-directional (an unrecognised name resolves only to a ReadOnly tool — `read_file`, `glob`, `grep` — and `write_file`/`edit_file`/`bash` require a literal match); the name map is explicit, never edit distance or string similarity, and every target is verified against `known`; path resolution is untouched, because `Root.Resolve` alone decides inside/outside the root and the layer never expands `~`, absolutises or relativises anything; and a call needing more than three corrections is returned unchanged. An argument key the tool does not declare is dropped only where it is inert — where it cannot change the action the user approves — and never where it may be a live field. For `bash` the whole action is the `cmd` string, which the prompt displays verbatim, so any other key changes nothing that runs; for `write_file` and `edit_file`, `old`, `new`, `all` and `content` are live fields, so dropping an undeclared one — `old` from a `write_file` call, say — would turn a local edit into a whole-file replacement, which is a different action rather than a narrower one. Every drop is reported as a fix and carried on the `tool_start` event as `DroppedArgs`, so the executed arguments being shorter than the model's is stated rather than implied, and the prompt is built from the repaired call, so the arguments on screen are the arguments that run. A name still unknown after the map returns the existing unknown-tool error, which the model reads and recovers from. Proof: `TestRepairInferenceIsReadOnlyOnly`, `TestRepairNameMapTargetsAreDeclared`, `TestRepairPathResolutionIsUntouched`, `TestRepairCapReturnsUnchanged`, `TestRepairDropsUndeclaredKeysOnlyWhereSafe`, `TestBashPromptShowsTheRepairedCall`, `TestRepairRulesSaveARound` |
 | File reads open through descriptor-relative operations and refuse symlinks and non-regular files | GUARANTEED | On unix, `internal/safefs.OpenRead` walks the relative path from a root descriptor with `O_NOFOLLOW` and validates the target from the opened descriptor with `Fstat`. Evidence: `TestOpenReadRefusesFinalSymlink`, `TestOpenReadRefusesIntermediateSymlink`, `TestOpenReadRefusesFIFO`, `TestOpenReadRefusesDirectory`, `TestCaptureFromRootRejectsFinalSymlink`, `TestCaptureFromRootRejectsIntermediateSymlink` |
-| File mutations publish relative to the parent descriptor and re-prove the target at the syscall | GUARANTEED | `write_file`, `edit_file`, and `/undo` derive one relative path and never open, stat, or rename a project file by absolute path on unix; the absolute path is reporting metadata only. Evidence: `TestWritePathFromRootRejectsTraversal`, `TestWriteFileAtomicRefusesIntermediateSymlink`, `TestWriteFileAtomicReplacesFinalSymlinkWithoutFollowing`, `TestWriteFromRootDoesNotUseAbsoluteMetadataAsAuthority`, `TestCommitRejectsSymlinkWithoutCapturingOutsideContent`, `TestReadSourceFromRootUsesRelativeAuthority`, `TestRemoveFromRootUsesRelativeAuthority`, `TestRemoveFileRemovesFinalSymlinkNotReferent`, `TestUndoRefusesModifiedAfterAgentWrite`. Supplementary structural guards (AST-based; they pin the delegation shape, not the path property): `TestWriteCommitDelegatesToAdapters`, `TestWriteCommitUnixAdapterIsDescriptorOnly`, and `TestWriteCommitOtherIsCompatibilityPath` |
+| File mutations publish relative to the parent descriptor and re-prove the target at the syscall | GUARANTEED | `write_file`, `edit_file`, and `/undo` derive one relative path and never open, stat, or rename a project file by absolute path on unix; the absolute path is reporting metadata only. The pre-mutation content hash is re-verified immediately before publishing a write to abort loudly if the file changed since capture. Evidence: `TestWritePathFromRootRejectsTraversal`, `TestWriteFileAtomicRefusesIntermediateSymlink`, `TestWriteFileAtomicReplacesFinalSymlinkWithoutFollowing`, `TestWriteFromRootDoesNotUseAbsoluteMetadataAsAuthority`, `TestCommitRejectsSymlinkWithoutCapturingOutsideContent`, `TestReadSourceFromRootUsesRelativeAuthority`, `TestRemoveFromRootUsesRelativeAuthority`, `TestRemoveFileRemovesFinalSymlinkNotReferent`, `TestUndoRefusesModifiedAfterAgentWrite`, `TestVerifyUnchanged`. Supplementary structural guards (AST-based; they pin the delegation shape, not the path property): `TestWriteCommitDelegatesToAdapters`, `TestWriteCommitUnixAdapterIsDescriptorOnly`, and `TestWriteCommitOtherIsCompatibilityPath` |
 | Traversal tools never surface symlinked entries and skip the shadow store | GUARANTEED | `glob` and `grep` list and search regular files only, and `skipDir` excludes `.ag`, so the content-addressed shadow history is never read back. Evidence: `TestGrepNeverSurfacesSymlinkedEntry`, `TestGrepSingleFileRefusesSymlinkEscape`, `TestGlobOmitsSymlinkedEntries`, `TestTraversalToolsNeverSurfaceShadowStore` |
-| The project shadow store is invisible to git, and shielding it never touches an existing `.gitignore` or blocks an edit | GUARANTEED | Every store write-open asserts `<root>/.ag/.gitignore` as the single rule `*` with `O_CREATE|O_EXCL` and mode 0600 inside the 0700 store directory — not only when the directory is first created, so a store that predates the shield, or lost its file, is shielded by the next edit; exclusive creation makes the "never replace an existing file" promise atomic, an existing `.gitignore` (user content, or an older shield's `/shadow/` rule) is left byte-for-byte alone, and a failed shield write is deliberately ignored so it can never be the reason an edit fails. `git status --porcelain` and `git add -A` neither show nor stage any `.ag/` path, and `/undo` keeps restoring from the store. Evidence: `TestShieldGitignoreKeepsProjectStoreOutOfGit`, `TestShieldGitignoreNeverReplacesExistingFile`, `TestShieldGitignoreExistingContentStaysByteForByte`, `TestShadowGitignoreAddedToExistingStoreOnEdit`, `TestShadowGitignoreRecreatedOnNextWrite`, `TestGitignoreWriteFailureDoesNotBlockTheEdit`, `TestUndoStillWorksWithShieldedGitignore` |
+| Shadow-store ignore-file creation reduces accidental Git inclusion without replacing an existing ignore file | REDUCED | Every store write-open asserts `<root>/.ag/.gitignore` as the single rule `*` with `os.O_CREATE` and `os.O_EXCL` and mode 0600 inside the 0700 store directory — not only when the directory is first created, so a store that predates the shield, or lost its file, is shielded by the next edit; exclusive creation makes the "never replace an existing file" promise atomic, an existing `.gitignore` (user content, or an older shield's `/shadow/` rule) is left byte-for-byte alone, and a failed shield write is deliberately ignored so it can never be the reason an edit fails. Residual: an existing conflicting ignore file, an ignored creation failure, already tracked content or forced addition can defeat Git invisibility. Ignore rules are not confidentiality controls. Evidence: `TestShieldGitignoreKeepsProjectStoreOutOfGit`, `TestShieldGitignoreNeverReplacesExistingFile`, `TestShieldGitignoreExistingContentStaysByteForByte`, `TestShadowGitignoreAddedToExistingStoreOnEdit`, `TestShadowGitignoreRecreatedOnNextWrite`, `TestGitignoreWriteFailureDoesNotBlockTheEdit`, `TestUndoStillWorksWithShieldedGitignore` |
 | Release SBOM coverage and threat-model evidence citations are mechanically checked before merge | GUARANTEED | `TestReleasePipelineContracts` and `scripts/check-threat-model-tests.sh` |
 | Path opening after `Resolve` outside the descriptor layer | REDUCED | The `!unix` compatibility adapter in `internal/tools/write_commit_other.go` (`TestWriteCommitOtherIsCompatibilityPath`) carries no descriptor guarantee; `bash` is not contained; `snap.Restore` / `snap.RestoreAt` are a path-based publish path, now test-only (`docs/TECH_DEBT.md`); configuration reading still traverses parent-directory symlinks. Residual: a same-uid attacker through those paths |
 | Journal redaction is enabled by default | REDUCED | recognized credential patterns (Anthropic, OpenRouter, OpenAI `sk-proj-`/long legacy `sk-`, Groq, NVIDIA, AWS access-key IDs, PEM private-key blocks, bare JWTs, GitHub, GitLab, Slack, `Bearer`/`authorization`) are removed from new events before `Event.ForStore()` and output truncation. Pattern matching is best effort: streamed `text_delta` chunks are joined through `redact.Stream` before they reach a sink, so a credential or PEM block split across chunks is redacted as one value; only the listed formats are recognized and hold-back is capped, so an unrecognized, unterminated, or over-cap secret can still survive. `NABD_REDACT_JOURNAL=0` is an explicit diagnostic opt-out; Config v1 in `~/.ag/config` takes precedence over the environment. Copy-on-write leaves the live in-memory event untouched. Unrecognized sensitive content, structural fields (paths, tool names, call IDs, hashes, blob addresses, error codes), and the shadow store are unchanged. `--json` applies the same policy so it cannot diverge. Evidence: `TestRedactExtendedPatterns`, `TestRedactIdempotent`, `TestStreamMatchesWholeEverySplit`, `TestJournalRedactsSecretSplitAcrossDeltas`, `TestHeadlessJSONRedactsSplitSecret`, `TestStreamFlushedOnInterrupt`, `TestJournalRedactionEnabledByDefaultAndDisabledOnlyByExplicitZero`, `TestJournalRedactionReadsV1Config`, `TestOpenSessionJournalUsesEnabledRedaction` |
 | Stream redactor hold-back state transitions preserve PEM boundary markers | REDUCED | Over-long token runs being swallowed across chunks terminate before any PEM block boundary, and PEM blocks are evaluated after swallow transitions so boundary markers remain intact. Evidence: `TestStreamSwallowPreservesPEMBoundary`, `TestStreamSwallowHoldsAcrossDashBoundary`, `TestStreamPEMLeakViaSwallowInteraction_S1`, `TestStreamOverCapTokenRunsAndPEMEverySplit` |
 | Open PEM block hold-back in stream redaction is bounded | REDUCED | Unterminated or open PEM blocks and incomplete markers are bounded by `StreamPEMHoldCap` (8KB); exceeding the cap fails closed by emitting a redaction token and swallowing the remainder of the block until the matching end marker or flush. Evidence: `TestStreamPEMHoldCapOpenBlock`, `TestStreamPEMValidBlockMatchesRedact`, `TestStreamPEMSwallowFindsSplitEnd`, `TestStreamPEMHoldCapIncompleteMarkerBounded`, `TestStreamPEMHoldCapOpenBlockBoundedAndRedacted`, `TestStreamPEMWithinCapMatchesRedact` |
 | Stream redactor never splits a complete match across emitted and held chunks | REDUCED | Cut points that straddle a recognized secret pattern or configured exact key are clamped back to the match boundary, ensuring complete credentials are not split into an unredacted emitted prefix and held suffix. Buffer growth stays bounded because the clamp runs only after the pre-clamp over-cap guard: a token run longer than `StreamHoldCap` is emitted as one Token with its remainder swallowed, so a match that spans the whole buffer can never hold it without limit. Evidence: `TestStreamCutNeverSplitsCompleteMatch`, `TestStreamCutNeverSplitsExactKey`, `TestStreamPendingBoundedOnLongBearerChain`, `TestStreamLongBearerTokenStaysCapped` |
-| Journal continuation handles a torn final line without appending across it | GUARANTEED | On append-open, a malformed final line is copied to a private `*.recovery-*` artifact outside the active `*.jsonl` session namespace, and the active journal is truncated to its valid prefix before continuation. A malformed middle line refuses the append without modifying the source; a valid final JSON line without a newline is separated before the next event. Evidence: `TestNewJSONLRepairsTruncatedFinalLine`, `TestNewJSONLSeparatesValidFinalLineWithoutNewline`, `TestNewJSONLRefusesCorruptMiddleLine` |
+| Journal continuation handles a torn final line without appending across it | GUARANTEED | On append-open, a malformed final line is copied to a private `*.recovery-*` artifact outside the active `*.jsonl` session namespace, and the active journal is truncated to its valid prefix before continuation. A malformed middle line refuses the append without modifying the source; a valid final JSON line without a newline is separated before the next event. Appending refuses symlink targets up front and opens append and recovery targets with `O_NOFOLLOW`. Evidence: `TestNewJSONLRepairsTruncatedFinalLine`, `TestNewJSONLSeparatesValidFinalLineWithoutNewline`, `TestNewJSONLRefusesCorruptMiddleLine`, `TestAppendRefusesSymlink` |
 | Unresolved mutation intents are classified on continuation without automatic replay | GUARANTEED | When the active branch contains an `edit_intent` without a matching `edit_record` or `edit_abort`, `--continue` compares the current descriptor-relative file state with the recorded before/after hashes, emits a display-only recovery notice with counts for `not_published`, `published`, `missing`, `conflict`, and read errors, and never re-executes the mutation. Abandoned branches are ignored. A subprocess crash harness proves the intent survives a killed process and each post-crash filesystem state is classified without changing the target. Evidence: `TestUnresolvedMutationIntentRequiresExplicitRecovery`, `TestCommittedOrAbortedMutationIsNotUnresolved`, `TestUnresolvedMutationIgnoresAbandonedBranch`, `TestReconcileMutationClassifiesWorkingTreeWithoutWriting`, `TestReconcileMutationRejectsUnsafePath`, `TestMutationCrashRecoveryMatrix` |
-| Session purge is bounded and opt-in | GUARANTEED | `nabd purge` is a dry run unless `--yes` is supplied, considers only regular `*.jsonl` files directly inside the selected directory, and supports an RFC3339 modification-time cutoff. It does not traverse subdirectories or follow symlinks. This does not provide race-free deletion against a same-user concurrent attacker; stop active nabd processes before cleanup. Evidence: `TestPurgeIsDryRunUnlessConfirmed`, `TestPurgeDeletesOnlyEligibleRegularJournals`, `TestPurgeRejectsInvalidCutoff` |
+| Session purge is bounded and opt-in | GUARANTEED | nabd purge is a dry run unless --yes is supplied. [purgeCandidates](https://github.com/amiraq1/Nabd/blob/51859a06b5e4ba7d35babad700a4376acaa84a7d/cmd/ag/purge.go#L85) examines only direct entries of the selected directory: a candidate must be a regular file according to os.Lstat, and its name must end in `.jsonl` or contain `.archived-` (not necessarily a well-formed archive suffix). With a cutoff, its modification time must be strictly before that instant. No recursive walk or symlink follow is performed. Same-uid concurrent mutation is not made race-free. Evidence: `TestPurgeIsDryRunUnlessConfirmed`, `TestPurgeDeletesOnlyEligibleRegularJournals` (includes old.jsonl.archived-1700000000000000000), `TestPurgeRejectsInvalidCutoff`. V20 records a stale comment, not an unknown eligibility rule. |
 | Redacted export leaves the source intact | GUARANTEED | `--export --redact` decodes and re-encodes to stdout; the source is opened read-only and never written. Raw `--export` copies source bytes verbatim. Evidence: `TestExportLeavesSourceUntouched`, `TestExportRawIsByteIdentical` |
 | Pointer input can select and expand cards, but never answers permissions or executes tools | GUARANTEED | Evidence: `TestPointerNeverAnswersPermission`, `TestPointerNeverExecutesATool` |
 | Permission modal ignores typeahead keystrokes during arm delay, resets delay on any non-decision key, and requires intentional confirmation | GUARANTEED | Evidence: `TestPermissionModalIgnoresTypeaheadDecisionKeys`, `TestPermissionModalAcceptsDecisionAfterArmDelay`, `TestPermissionModalArmDelayShowsHint`, `TestNavigationYNoLongerCopiesOrApproves`, `TestPermissionModalEnterNeverAllows`, `TestPermissionModalCtrlCDuringArmDelay`, `TestPermissionModalRapidTypingYesPleaseNoDecision`, `TestPermissionModalUppercaseDecisions`, `TestPermissionModalHintLineDimensions` |
 | Git status header inspects only the granted root and never traverses to a parent repository | GUARANTEED | `isGitRepo` checks `.git` strictly at the root; parent repos are out of bounds. Evidence: `TestIsGitRepoDetection` |
-| OSC 52 clipboard copy operates on projected cards only, after credential redaction and display sanitization | GUARANTEED | Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand` |
+| OSC 52 clipboard copy operates on canonical projected fields only, after credential redaction and display sanitization | GUARANTEED | Human-language cards bypass BiDi visual clusters when copied, so reordered Arabic and mirrored delimiters cannot replace logical source text. Tool cards retain their established projected/redacted summary and output contract. Raw journal bytes remain unavailable to the clipboard path. Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand`, `TestCopyUsesLogicalSourceWhenDisplayIsReordered` |
 | A bare `nabd` runs the feed UI, and `--feed=false` is the rollback that removes the `@` index | GUARANTEED | The `-feed` flag defaults to `true`, so the default interactive path is `doChatWithFeed` — the same path that calls `SetPickerRoot(root.Dir())` and therefore indexes the session root for `@`. `--feed=false` selects `doChat`, which wires no picker and performs no scan; the two entry points are mutually exclusive within one invocation, and the rollback needs no rebuild or reinstall. Evidence: `TestFeedIsTheDefaultInteractiveUI` |
 | Provider API keys never enter child environments or error output | GUARANTEED | `internal/provider/` constructor routes load keys from parsed config only, never through `os.Setenv`; `loadEnv` does not push credentials into the process environment that `bash` children inherit. Error bodies pass through `redact.Redact` before logging. Evidence: `TestConstructorsCarryKey`, `TestRouterRedactsBearerAuthorization`, `TestRouterFallsBackOnCredentialFailureWithRedactedLog`, `TestParseRoutesErrorMessagesContainNoSecrets` |
-| Recognized credential patterns are redacted from logs, journal, and display | REDUCED | `internal/redact/` matches Anthropic, OpenRouter, OpenAI (`sk-proj-` and long legacy `sk-`), Groq, NVIDIA, AWS access-key IDs (`AKIA`/`ASIA`), whole PEM private-key blocks (including an unterminated `BEGIN` line, redacted to end of input), bare JWTs, GitHub, GitLab, Slack, and `Bearer`/`authorization` patterns, replacing them with `[REDACTED]`; `SanitizeBody` runs redaction before truncation. Pattern matching is best effort: only the listed formats are recognized and streamed hold-back is capped, so an unrecognized or over-cap secret can still survive; streamed chunks are joined before redaction. Evidence: `TestRedactRecognizedCredentials`, `TestRedactExactKeys`, `TestRedactIsIdempotent`, `TestRedactExtendedPatterns`, `TestRedactIdempotent`, `TestStreamMatchesWholeEverySplit`, `TestStreamUnterminatedPEMRedactedOnFlush`, `TestSanitizeBodyRedactsBeforeTruncation` |
-| Plain headless stdout is not redacted; interactive assistant text is | NOT PROVIDED | The plain headless answer (`finalAssistantText` over agent history) is the user's requested output and is not redacted — the one surface that stays verbatim. Assistant text on the interactive surfaces *is* redacted: `doChatWithFeed` and `doChat` wrap the whole sink `Fanout` in `newStreamRedactSink`, so a streamed `text_delta` — including a credential or PEM block split across chunks — is joined and redacted before the feed sink renders it. Journal, `--json`, copy and `--export --redact` are redacted. Evidence: `TestHeadlessPlainStdoutNotRedactedByDesign`, `TestInteractiveFeedRedactsStreamedSecret`, `TestHeadlessJSONRedactsSplitSecret`, `TestCopyRedactsRecognizedCredentials`, `TestExportLeavesSourceUntouched` |
+| Recognized credential patterns are redacted from logs, journal, and display | REDUCED | `internal/redact/` matches Anthropic, OpenRouter, OpenAI (`sk-proj-`, long legacy `sk-`, `sk-svcacct-`, `sk-admin-`, `sk_`), xAI (`xai-`), Google (`AIza`), Hugging Face (`hf_`), Groq, NVIDIA, AWS access-key IDs (`AKIA`/`ASIA`), whole PEM private-key blocks (including an unterminated `BEGIN` line, redacted to end of input), bare JWTs, GitHub, GitLab, Slack, and `Bearer`/`authorization` patterns, replacing them with `[REDACTED]`; `SanitizeBody` runs redaction before truncation. Configured exact provider keys (min length 8) are also redacted across journal, stream, and export sinks. Pattern matching is best effort: only the listed formats are recognized and streamed hold-back is capped, so an unrecognized or over-cap secret can still survive; streamed chunks are joined before redaction. Evidence: `TestRedactRecognizedCredentials`, `TestRedactExactKeys`, `TestRedactIsIdempotent`, `TestRedactExtendedPatterns`, `TestRedactNewProviderPatterns`, `TestRedactExactKeysMinimumLength`, `TestStreamMatchesWholeEverySplit`, `TestStreamUnterminatedPEMRedactedOnFlush`, `TestSanitizeBodyRedactsBeforeTruncation` |
+| Interactive assistant text passes through streaming redaction before rendering | REDUCED | `doChatWithFeed` and `doChat` wrap the sink Fanout in `newStreamRedactSink`. Residual: recognized-pattern and stream hold-back limits still apply; this does not guarantee removal of every secret. Inherited evidence: `TestInteractiveFeedRedactsStreamedSecret`. |
+| Plain headless stdout is redacted | NOT PROVIDED | The requested plain headless answer stays verbatim by design. Journal, JSON, copy and redacted export use their own redaction paths. Inherited evidence: `TestHeadlessPlainStdoutNotRedactedByDesign`, `TestHeadlessJSONRedactsSplitSecret`, `TestCopyRedactsRecognizedCredentials`, `TestExportLeavesSourceUntouched`. |
 | Session journal files and directories are created private and legacy files hardened | GUARANTEED | `internal/store/` creates journal files with mode `0600` and parent directories with `0700` via `ensurePrivateParent`; existing files wider than `0600` are hardened with `Fchmod` before any data is written. Evidence: `TestNewJSONL_NewFileIsPrivate`, `TestNewJSONL_LegacyFileIsHardened`, `TestNewJSONL_CreatedAncestorsArePrivate`, `TestNewJSONL_MissingParentDirIsPrivate` |
+| The release configuration is validated on every pull request with the pinned GoReleaser build | GUARANTEED | The `release-dryrun` job runs `goreleaser check` through the same `goreleaser/goreleaser-action` commit and the same GoReleaser version `release.yml` uses, and runs it before the snapshot release step, so a `.goreleaser.yaml` that no longer parses fails on the pull request instead of at tag time. `TestReleaseConfigIsValidatedPerPullRequest` pins the step, its order, the shared action pin and the version equality between the two workflows; `TestWorkflowActionsArePinnedToCommitSHAs` holds every action reference in every workflow file to a full commit SHA. Scope: parsing and contracts, not a release rehearsal — the keyless signing path stays tag-only because it depends on OIDC and writes Rekor entries, and the dry run exercises only the command shape with an ephemeral key (see the signing row below). Evidence: `TestReleaseConfigIsValidatedPerPullRequest`, `TestWorkflowActionsArePinnedToCommitSHAs`, `TestReleasePipelineContracts`. |
 | Release artifacts are signed | GUARANTEED | `.goreleaser.yaml` signs the `checksums.txt` manifest with `cosign sign-blob` and publishes `checksums.txt.sig` (the signature) and `checksums.txt.pem` (the certificate) as release assets, so verification needs only those three files; the build is pinned to a known Go toolchain. `release.yml` pins the cosign major via `cosign-release`, because `--output-signature`/`--output-certificate` are the legacy cosign v2 interface and cosign v3 ignores both in favour of `--bundle`, which leaves the manifest unsigned and aborts the release at the signing step. The release notes come from the matching `CHANGELOG.md` section: `release.yml` and the `release-dryrun` job in `ci.yml` extract them with `scripts/release-notes.sh`, write them to `RUNNER_TEMP` outside the working tree, assert the tree is clean (`git status --porcelain`), and pass the result to GoReleaser through `--release-notes`; extraction fails closed when the `## <tag>` section is missing or empty. Evidence: `TestReleasePipelineContracts`, `TestReleaseNotesExtractedFromChangelog`, `TestReleaseNotesWrittenOutsideWorkspace`, `TestReleaseAssertsCleanTreeBeforeGoReleaser`, `TestReleaseDryrunExtractsNotes` |
-| Security gate scripts are mechanically checked | GUARANTEED | `scripts/check-pr-security-checklist.sh` enforces Phase 1 of the PR template and Phase 2 regression-test diff cross-checks with narrow N/A explanations for non-executable changes; Phase 1 resolves each item either by a full tick or, when it genuinely does not apply, by `- [x] N/A: <reason>` on the item's own line with a reason of at least 10 characters, while the three items that state an invariant applying to every pull request (classification, credential hygiene, action pinning) can never be N/A and an unchecked item always fails; the regression-test cross-check runs for the resolved item however it is written, so marking that item N/A cannot disable it; its `behaviour_free_diff` helper drops only the anchored diff headers (`^--- (a/\|/dev/null)`, `^\+\+\+ (b/\|/dev/null)`), so a removed `.go` line whose text begins with `--` or an added line beginning with `++` stays in the hunk and is inspected as behaviour instead of being mistaken for a header; `scripts/check-threat-model-freshness.sh` monitors every security boundary and all non-test files executing processes (`internal/ui/copy.go` and `internal/ui/git_header.go` alongside `internal/tools/`), kept in lockstep with the checklist gate and self-enforced by `scripts/check-security-invariants.sh` and `scripts/test-threat-model-freshness.sh`; `scripts/check-threat-model-tests.sh` verifies every backtick-quoted test citation in this document and in `docs/TECH_DEBT.md` resolves to a real `Test*` function (`NOTES.md` is deferred pending a historical-annotation convention; see `TECH_DEBT.md §NOTES_CITATION_GUARD_DEFERRED`). Evidence: `TestPRChecklistGateScopesThreatModelClaim`, `TestPRChecklistGateSecurityPathsAreRealBoundaries`, `TestPRChecklistGateNoTestExemption` (its `Negative_RemovedDoubleDashLineInGoDiff_IsBehaviour` and `Negative_AddedTriplePlusLineInGoDiff_IsBehaviour` cases), `TestPRChecklistGateExplicitNA`, `TestPRChecklistGateNATestItemStillRequiresATest`, `TestCitationGuardPassesOnCleanRepository`, `TestCitationGuardTechDebtIncluded` |
-| Pathindex is a security surface in the default UI | GUARANTEED | The `@` picker is reachable by default through `Feed.SetPickerRoot`; its traversal, session root `.gitignore` awareness, static exclusions, limits, and partial-index disclosure are documented and tested. Evidence: `TestDefaultTimeoutDoesNotBindBeforeTheCandidateLimit`, `TestGitignoreMaintainsPerformanceMarginOnWideTree`, `TestPickerExplicitSessionRootOverridesGitDir`, `TestScanRefusesSymlinkedEntries`, `TestScanGitignoreExcludesMatchingFiles` |
-| Session `.gitignore` exclusions are enforced at the permission layer | GUARANTEED | Patterns from the session root `.gitignore` are parsed by `internal/ignorefile` (the same matcher `pathindex.Scan` uses for the `@` picker, so the picker, reader, and mutators cannot disagree) and installed on `perm.Policy` at startup via `wirePathRule`, which is also the registry's path gate. `read_file` and `edit_file` refuse directly named excluded paths before any byte is read or inspected; `grep` skips excluded paths, appending an `N files excluded by the session .gitignore` disclosure instead of silently searching less. `write_file` permits writes to excluded paths (preserving legitimate generation of build artifacts in `dist/`, `build/`) while strictly separating model-facing disclosure from mutation tracking: diff generation (`Patch`) is suppressed so excluded content is never disclosed to the model or journal, whereas mutation tracking retains blobs in `.ag/shadow` and consumes read credit so user `/undo` reversibility remains guaranteed. Named trust boundary: non-disclosure to the model and `@` exclusion are guaranteed by the gate and patch suppression; rollback retention in `.ag/shadow` is deliberately preserved so agent mutations can be undone by the user; isolation of the local `.ag/shadow` directory from unauthorized local access remains the host environment's responsibility. Scope decision: the refusal for reads and edits is default in `ask`, `deny`, and `plan` modes; `--permission-mode allow-reads` is the override for `read_file` and `grep` only (`edit_file` remains denied in all modes as editing cannot be performed without inspecting content). `bash` and `glob` are out of scope: glob sees names only, and an approved shell command already runs with the user's authority. A zero-value or missing ignore file leaves the rule inert. Evidence: `TestInteractiveSessionWiresPathRule`, `TestHeadlessSessionWiresPathRule`, `TestReadFileRefusesIgnoredPath`, `TestReadFileRefusalIsNotFromPathindex`, `TestReadFileWithoutGateUnchanged`, `TestReadFileAllowReadsOverrideReadsIgnoredPath`, `TestEditFileRefusesIgnoredPathAndDoesNotLeakContent`, `TestShadowRetainsBlobsForUndoWhileSuppressingDiff`, `TestWriteFileToExcludedPathSucceedsWithUndoTracking`, `TestUndoRevertsWriteToGitignoredFile`, `TestExcludedWriteConsumesReadCredit`, `TestGrepSkipsIgnoredFilesWithDisclosure`, `TestGrepFromExcludedDirCannotEscape`, `TestCheckReadRefusesInAskAndDenyAndPlan`, `TestCheckReadAllowReadsOverride`, `TestCheckEditRefusesInAllModes`, `TestIsPathExcluded`, `TestPrefixDirectoryInheritance` |
+| Security gate scripts are mechanically checked | GUARANTEED | `scripts/check-pr-security-checklist.sh` enforces Phase 1 of the PR template and Phase 2 regression-test diff cross-checks with narrow N/A explanations for non-executable changes; Phase 1 resolves each item either by a full tick or, when it genuinely does not apply, by `- [x] N/A: <reason>` on the item's own line with a reason of at least 10 characters, while the three items that state an invariant applying to every pull request (classification, credential hygiene, action pinning) can never be N/A and an unchecked item always fails; the regression-test cross-check runs for the resolved item however it is written, so marking that item N/A cannot disable it; its `behaviour_free_diff` helper drops only the anchored diff headers (`^--- (a/\|/dev/null)`, `^\+\+\+ (b/\|/dev/null)`), so a removed `.go` line whose text begins with `--` or an added line beginning with `++` stays in the hunk and is inspected as behaviour instead of being mistaken for a header; `scripts/check-threat-model-freshness.sh` monitors every security boundary and all non-test files executing processes (`internal/ui/copy.go` and `internal/ui/git_header.go` alongside `internal/tools/`), kept in lockstep with the checklist gate and self-enforced by `scripts/check-security-invariants.sh` (which fails closed when `rg` is absent — never a vacuous green — proven by `scripts/test-security-invariants-rg.sh`, with CI installing `rg` and verifying its availability before the audit — the Verify step's first-run failure proved the audit had been vacuously green on CI itself) and `scripts/test-threat-model-freshness.sh`; `scripts/check-threat-model-tests.sh` verifies every backtick-quoted test citation in this document and in `docs/TECH_DEBT.md` resolves to a real `Test*` function (`NOTES.md` is deferred pending a historical-annotation convention; see `TECH_DEBT.md §NOTES_CITATION_GUARD_DEFERRED`); a dedicated automated path for Dependabot PRs replaces the human checklist only when both `PR_AUTHOR_LOGIN` and `GITHUB_ACTOR` are exactly `"dependabot[bot]"` for the current event (verified against workflow-injected values from GitHub Actions context, not the branch name; an event triggered by a human does not benefit from the automated path even if the PR author is Dependabot, but this check does not inspect git history or prove the absence of prior human commits on the branch) and every changed file falls within the strictly bounded dependency path scope (`go.mod`, `go.sum`, `third_party/*/go.mod`, `third_party/*/go.sum`, and `.github/workflows/*.{yml,yaml}` directly; this validates file path names and directory boundaries only, and does not parse diff contents or prove workflow changes are confined to action version bumps); any out-of-scope file, spoofed branch prefix, or human author/actor falls through to the full human checklist. Evidence: `TestPRChecklistGateScopesThreatModelClaim`, `TestPRChecklistGateSecurityPathsAreRealBoundaries`, `TestPRChecklistGateNoTestExemption` (its `Negative_RemovedDoubleDashLineInGoDiff_IsBehaviour` and `Negative_AddedTriplePlusLineInGoDiff_IsBehaviour` cases), `TestPRChecklistGateExplicitNA`, `TestPRChecklistGateNATestItemStillRequiresATest`, `TestPRChecklistGateDependabotPath`, `TestPRChecklistGateDependabotAllowedPrefixesDocumented`, `TestCitationGuardPassesOnCleanRepository`, `TestCitationGuardTechDebtIncluded` |
+| The `@` picker index enforces its documented traversal, exclusion and result-limit rules | GUARANTEED | The `@` picker is reachable by default through `Feed.SetPickerRoot`; its traversal, session root `.gitignore` awareness, static exclusions, limits, and partial-index disclosure are documented and tested. Evidence: `TestDefaultTimeoutDoesNotBindBeforeTheCandidateLimit`, `TestGitignoreMaintainsPerformanceMarginOnWideTree`, `TestPickerExplicitSessionRootOverridesGitDir`, `TestScanRefusesSymlinkedEntries`, `TestScanGitignoreExcludesMatchingFiles` |
+| Session `.gitignore` exclusions, as matched by the documented subset of `.gitignore` syntax, are enforced at the permission layer | GUARANTEED | Patterns from the session root `.gitignore` are parsed by `internal/ignorefile` (the same matcher `pathindex.Scan` uses for the `@` picker, so the picker, reader, and mutators cannot disagree) and installed on `perm.Policy` at startup via `wirePathRule`, which is also the registry's path gate. `read_file` and `edit_file` refuse directly named excluded paths before any byte is read or inspected; `grep` skips excluded paths, appending an `N files excluded by the session .gitignore` disclosure instead of silently searching less. `write_file` permits writes to excluded paths (preserving legitimate generation of build artifacts in `dist/`, `build/`) while strictly separating model-facing disclosure from mutation tracking: diff generation (`Patch`) is suppressed so excluded content is never disclosed to the model or journal, whereas mutation tracking retains blobs in `.ag/shadow` and consumes read credit so user `/undo` reversibility remains guaranteed. Named trust boundary: non-disclosure to the model and `@` exclusion are guaranteed by the gate and patch suppression; rollback retention in `.ag/shadow` is deliberately preserved so agent mutations can be undone by the user; isolation of the local `.ag/shadow` directory from unauthorized local access remains the host environment's responsibility. This retention includes cleartext excluded-file content and is not redacted. PR #270 proposals must not be treated as merged fixes; V16 (resolved 2026-10-18) pins the older-reader half — a record whose before-content is missing for an existing file is refused instead of deleting the file, while this tree keeps storing blobs for excluded paths. Scope decision: the refusal for reads and edits is default in `ask`, `deny`, and `plan` modes; `--permission-mode allow-reads` is the override for `read_file` and `grep` only (`edit_file` remains denied in all modes as editing cannot be performed without inspecting content). `bash` and `glob` are out of scope: glob sees names only, and an approved shell command already runs with the user's authority. A zero-value or missing ignore file leaves the rule inert. Matcher scope: the subset documented under "Pathindex traversal surface and candidate picker limits" (declared limits: nested `.gitignore` files, global `core.excludesFile`, negation patterns, `**` recursive globbing, and `.git/info/exclude` are out of scope); it is not full Git semantics. Evidence: `TestInteractiveSessionWiresPathRule`, `TestHeadlessSessionWiresPathRule`, `TestReadFileRefusesIgnoredPath`, `TestReadFileRefusalIsNotFromPathindex`, `TestReadFileWithoutGateUnchanged`, `TestReadFileAllowReadsOverrideReadsIgnoredPath`, `TestEditFileRefusesIgnoredPathAndDoesNotLeakContent`, `TestShadowRetainsBlobsForUndoWhileSuppressingDiff`, `TestWriteFileToExcludedPathSucceedsWithUndoTracking`, `TestUndoRevertsWriteToGitignoredFile`, `TestExcludedWriteConsumesReadCredit`, `TestGrepSkipsIgnoredFilesWithDisclosure`, `TestGrepFromExcludedDirCannotEscape`, `TestCheckReadRefusesInAskAndDenyAndPlan`, `TestCheckReadAllowReadsOverride`, `TestCheckEditRefusesInAllModes`, `TestIsPathExcluded`, `TestPrefixDirectoryInheritance` |
 | A bash cleanup signal cannot target a recycled process-group ID after the leader has been reaped | GUARANTEED | `killGroup` runs only on timeout/cancellation before `Wait` returns; clean completion does not perform a post-reap group sweep. Evidence: `TestBashCleanExitDoesNotKillProcessGroup` |
 | Read-credit hashes and renders one bounded snapshot, and uses one normalized relative key for read/write matching | GUARANTEED | `TestReadCreditCompositeKeyStructure`, `TestReadFileCreditPathForAbsoluteInside`, `TestReadFileUsesDescriptorStat`, `TestReadSinglePassSourceShape`, `TestReadCreditHashMatchesModelVisibleSource`, and `TestReadCreditValidMatchingCycle`; files over the bounded snapshot limit are refused; the descriptor-stat guard is AST-based (call sites, not text) |
 | Semantic loop detection bounds repeating identical tool executions | GUARANTEED | Tool calls are fingerprinted by `(tool, hash(input), hash(output-error))` across turns in a run; identical calls trigger a conversational notice at 3 repeats and a hard cut with `ErrToolLoop` at 5 repeats, preventing token and turn exhaustion from looping models. Evidence: `TestToolLoopNoticeAtThreeRepeats`, `TestToolLoopHardCutAtFiveRepeats`, `TestToolLoopCanonicalJSONKeyOrdering`, `TestToolLoopResetAcrossRuns` |
 | Provider registry schema rejects undeclared dialects, unknown fields, and literal credential keys | GUARANTEED | `TestRegistryRejectsUnknownDialect`, `TestRegistryRejectsUnknownFields`, `TestRegistryRejectsLiteralKeyInProvidersFile`, `TestModelIDAliasIsSentToProvider` |
-| Provider registry auth file enforces private 0600 permissions, owner check, and redaction in errors | GUARANTEED | `TestAuthFileRejectsOpenPermissions`, `TestAuthKeysAreRedactedInErrors` |
+| Provider registry auth file enforces private 0600 permissions, owner check, atomic writes, and redaction in errors | GUARANTEED | `registry.WriteAuthFile` performs an atomic write via a temporary file with `O_CREAT` and `O_EXCL`, verifies it is a regular file via descriptor `fstat`, tightens permissions to `0600` on the open descriptor, fsyncs the temp file before atomic rename, and fsyncs the parent directory. Symlink targets fail closed. Concurrent modifications in `providercmd.Connect` are serialized using a platform sidecar file lock (`~/.ag/auth.json.lock`). Evidence: `TestAuthFileRejectsOpenPermissions`, `TestAuthKeysAreRedactedInErrors`, `TestWriteAuthFileLeavesNoTemp`, `TestLockAuthFileSerializes` |
 | Provider catalog and credentials merge according to documented precedence with legacy builtin compatibility and safe migration backup | GUARANTEED | `TestBuiltinCatalogCoversLegacyProviders`, `TestRegistryFileOverridesBuiltin`, `TestRegistryPrecedenceIsDocumented`, `TestMigrateFromV1ConfigPreservesBackup` |
 | Route construction resolves provider identity, dialect, endpoint, model alias, and read ceiling through the registry, and failures name the file to fix | GUARANTEED | `BuildRouteProviderWithRegistry` takes the dialect (`openai`/`anthropic`), `baseURL`, model alias, and `readCap` from the registry; an unconfigured provider error names the requested ID, every configured provider, and the `providers.json` path, while a missing key names the `auth.json` path and the legacy variable. Neither error includes a key value. Evidence: `TestRouteResolvesRegistryProvider`, `TestUnknownProviderErrorNamesConfigFile`, `TestLegacyEnvConfigStillBuildsRoutes` |
 | Every provider, including the four legacy builtins, is built from the registry; no per-provider constructor remains | GUARANTEED | The per-provider constructors that named a provider and read its key variable directly are deleted. The non-router path builds through `BuildStandaloneProviderWithRegistry`, which resolves dialect, endpoint, default model, and read ceiling from the registry exactly as the router path does, and the router path is unchanged. A legacy env-only configuration with no `providers.json` still builds every route with the same endpoint, default model, and key as before. Evidence: `TestLegacyConstructorsAreGoneAndRoutesStillBuild` |
@@ -122,14 +246,49 @@ the same uid.
 | Provider `providers.json` baseURL and `NABD_BASE_URL` override are validated at load time: plaintext http and non-public addresses are refused by default | GUARANTEED | `endpoint.CheckBaseURL` runs during `ParseProvidersData` and `BuildStandaloneProviderWithRegistry`, rejecting any declared or overridden `baseURL` that uses a non-https scheme or resolves to a loopback, RFC 1918, link-local, CGNAT, ULA, 6to4, cloud-metadata literal IP, or `.internal`/`.local`/`localhost`-suffixed hostname unless explicitly permitted by `NABD_ENDPOINT_ALLOW`. The active policy is read from `NABD_ENDPOINT_POLICY` (default `strict`); `loopback` allows plaintext HTTP strictly for loopback and private LAN addresses with HTTPS while continuing to refuse cloud metadata; `open` disables both layers. Evidence: `TestStrictRefusesPlaintextHTTP`, `TestStrictRefusesCloudMetadataLiteral`, `TestStrictRefusesCGNATLiteral`, `TestStrictRefusesIPv6ULA`, `TestStrictRefuses6to4Literal`, `TestLoopbackStillRefusesHTTP`, `TestOpenLevelDisablesBothLayers`, `TestAllowListStrictAcceptsAllowedHTTP` |
 | Provider dial-time endpoint guard evaluates the socket address via Dialer.Control immediately before connect, eliminating the TOCTOU rebinding window | GUARANTEED | `Policy.Dialer` configures `net.Dialer.Control` to inspect the literal socket IP address right before `connect(2)`. No secondary DNS lookup is performed, closing the DNS-rebinding window with zero TOCTOU: a hostname resolving to a private, loopback, link-local, CGNAT, ULA, 6to4, or metadata IP is aborted before any packet is transmitted unless permitted by `NABD_ENDPOINT_ALLOW`. Under `PolicyLoopback`, dial-time checks continue to refuse cloud metadata, link-local, CGNAT, and 6to4 addresses. When refused, `endpoint.ErrEndpointRefused` is wrapped and classified as `provider.ErrorKindEndpointRefused`, surfaced as `agent.ErrCodeEndpointRefused` with responsive remediation guidance. Evidence: `TestControlRefusesRebindingViaResolver`, `TestControlRefusesRebindingToPrivateAddress`, `TestControlRefusesLoopbackAddress`, `TestControlRefusesCloudMetadata`, `TestControlRefusesCGNATAddress`, `TestControlRefusesIPv6ULAAddress`, `TestControlRefuses6to4Address`, `TestControlPassesThroughPublicAddress`, `TestControlPermitsAllowedAddr`, `TestControlUnderLoopback`, `TestErrorKindEndpointRefused`, `TestCrossPackageEndpointRefusedRemedyFlow`, `TestFeedProviderErrorShowsEndpointRefusedRemedy` |
 | No provider can be constructed with an unguarded HTTP client | GUARANTEED | Every provider constructor (`NewOpenAIDialect`, `NewAnthropicDialect`) defaults to `endpoint.Client(0)` governed by the active endpoint policy; omitting explicit client injection is fail-closed, and direct or route constructors cannot produce an unguarded client. When an environment proxy (`HTTPS_PROXY` / `HTTP_PROXY`) is configured, the proxy URL is validated against the endpoint policy at request time. Evidence: `TestConstructorDefaultsToGuardedClient`, `scripts/check-security-invariants.sh`, `TestTransportProxyValidation`, `TestCustomEndpointIsAcceptedByDesign` |
-| Retryability of the provider's model-unavailable answer is decided by error type, never by message wording | GUARANTEED | Both the 404/410 status branch and the OpenAI-compatible body heuristic raise `*modelUnavailableError`; `transient` classifies the type with `errors.As`, so re-wording, re-accenting, or wrapping the message cannot change whether it is retried. The model, status, suffix, and optional complete rendering are data on the error. The standalone OpenAI-compatible path is exercised against a counting HTTP server and performs exactly one request for a 400 body reporting `model not found`. Every pre-existing user-visible shape remains byte-identical. Evidence: `TestModelUnavailableIsTypedAndNotRetried`, `TestModelUnavailableHeuristicIsTypedAndNotRetried`, `TestStandaloneOpenAICompatDoesNotRetryModelNotFoundBody`, `TestModelUnavailableRetryDecisionIgnoresWording`, `TestModelUnavailableRendersBothSitesByteIdentical`, `TestModelUnavailableSurvivesWrapping`, `TestHTTPErrorRetryLadderUnchanged` |
+| Retryability of the provider's model-unavailable answer is decided by error type, never by message wording | GUARANTEED | Both the 404/410 status branch and the OpenAI-compatible body heuristic raise `*modelUnavailableError`; `transient` classifies the type with `errors.As`, so re-wording, re-accenting, or wrapping the message cannot change whether it is retried. The model, status, suffix, and optional complete rendering are data on the error. The standalone OpenAI-compatible path is exercised against a counting HTTP server and performs exactly one request for a 400 body reporting `model not found`. Every pre-existing user-visible shape remains byte-identical: the wording renders through the provider language seam, whose ASCII English default the CLI replaces with the Arabic catalog at startup (ADR-0002 decision 4), and neither rendering reads as a model-not-found body. Evidence: `TestModelUnavailableIsTypedAndNotRetried`, `TestModelUnavailableHeuristicIsTypedAndNotRetried`, `TestStandaloneOpenAICompatDoesNotRetryModelNotFoundBody`, `TestModelUnavailableRetryDecisionIgnoresWording`, `TestModelUnavailableRendersBothSitesByteIdentical`, `TestModelUnavailableSurvivesWrapping`, `TestHTTPErrorRetryLadderUnchanged`, `TestModelUnavailableRenderingDefaultsToASCIIBaseline`, `TestModelUnavailableErrorReadsTheSeam`, `TestModelUnavailableTextNeverReadsAsModelNotFound`, `TestProviderLanguageCatalogIsInstalledByteIdentical` |
 | Local runtimes permit loopback HTTP under PolicyLoopback and explicit allowlisting via NABD_ENDPOINT_ALLOW under PolicyStrict | GUARANTEED | `endpoint.CheckBaseURL` permits plaintext http strictly for loopback destinations (`127.0.0.1`, `::1`, `localhost`) under `NABD_ENDPOINT_POLICY=loopback` to support local runtimes like Ollama without TLS, while remote destinations still require https and cloud metadata is refused at load and dial time. Alternatively, `NABD_ENDPOINT_ALLOW` permits designated local or private endpoints under `PolicyStrict` while keeping full connect-time protection active for all other providers. Evidence: `TestLoopbackStillRefusesHTTP`, `TestLoopbackAllowsLoopbackAndPrivate`, `TestLoopbackAllowsLoopbackHTTP`, `TestLoopbackRefusesCloudMetadata`, `TestAllowListStrictAcceptsAllowedHTTP`, `TestAllowListStrictAcceptsAllowedPrivate` |
 | `NABD_ENDPOINT_POLICY=open` disables both the load-time URL check and the connect-time dial guard | REDUCED | When an operator sets `NABD_ENDPOINT_POLICY=open`, `CheckBaseURL` returns nil for any URL and `Dialer` returns the dialer unchanged without registering a `Control` hook. This is the override for air-gapped or development environments that cannot use HTTPS. Whoever can set this variable can direct all connections to an arbitrary endpoint including plaintext and private addresses. The remaining controls are the 0600 permission and owner check on `providers.json` and `auth.json`. Evidence: `TestOpenLevelDisablesBothLayers`, `TestControlIsNoOpUnderOpenPolicy` |
-
 | OpenAI wire encoding preserves pre-compat baseline structure by default | GUARANTEED | `OpenAICompat.encode` pins the baseline request structure: standard `max_tokens`, `stream_options.include_usage=true`, and canonical `system` → `tool` → `user` message ordering; zero values of future endpoint compat flags preserve this body. Evidence: `TestOpenAIEncodingBaseline` |
 | Skill bodies entering model projection are explicitly classified, user-role, fenced, and fail-closed | REDUCED | `TestSkillBodyEntersTheModelAsUntrustedProjectContent` proves an explicitly classified body is labeled as untrusted project content inside the existing tool fence (`UNTRUSTED_DATA NOT_INSTRUCTIONS`), and that a body whose class is not the explicit untrusted value is dropped rather than projected. The class is fixed by the guarded producer and is never inferred from the body text, the skill name, or its path, so a definition cannot label itself trusted by what it says. Session wiring is active: the user scope loads unconditionally, and the project scope only when `NABD_SKILLS_PROJECT=1` is supplied through user-scoped configuration or environment. This narrows and labels injectable content but does not immunize the model from permitted content. |
 | Skills are progressive-disclosure, project scope is off unless an operator opts in, and every body is re-hashed before it is served | REDUCED | Only name, description and scope reach the prompt; the body is read on invocation. Containment is who may write into each scope plus the recorded SHA-256, not what the body says. The complete binary tool vocabulary is independent of the session's active registry, so continuation can fence historical `skill` calls while an empty skill index leaves the tool inactive. Evidence: `TestProjectSkillsAreAbsentWhenOptInIsOff`, `TestProjectSkillSymlinkEscapeIsRefused`, `TestJournalRecordsHashMatchesLoadedBytes`, `TestSkillToolRefusesBodyChangedSinceLoad`, `TestSkillRegistrationFollowsLoadedIndex`, `TestFenceRejectsUnknownName` |
 | Bash filesystem reach after approval | NOT PROVIDED | On Termux, approved bash runs with the full authority of the Termux app user; there is no filesystem sandbox. |
+| Selected zero-width format controls are stripped at the display boundary | GUARANTEED | `display.SanitizeForDisplay` strips U+200B (ZWSP), U+200C (ZWNJ), and U+FEFF (BOM); ZWJ (U+200D) is preserved for emoji sequences and LRM/RLM (U+200E/U+200F) for legitimate RTL text. Product decision 2026-10-09: ZWNJ stays stripped despite the Persian/Urdu fidelity cost — invisible format controls are a bidi-spoofing vector. U+2028/U+2029 and other bidi/format controls require separate review (V3). Evidence: `TestSanitizeStripsZeroWidthFormatControls` |
+| The headless empty-response decision reads the loop's structural notices, never their wording | GUARANTEED | The decision (`emptyResponse` in `cmd/ag/headless.go`) requires a `NoticeCategoryProviderEmpty` or `NoticeCategoryLengthLimit` notice on the live branch and reads no notice text; the text-blank and tool-activity exclusions are unchanged. `internal/agent/loop.go` keeps length-cut notices under `NoticeCategoryLengthLimit` and marks both non-length empty-response arms with `NoticeCategoryProviderEmpty`; the notice texts and their emission conditions are byte-identical. Rewording or translating a notice cannot change the exit code, and an unrelated notice carrying the old phrase cannot create one. It is not a detector of every cause of silence. Evidence: `TestEmptyResponseReadsCategoryNotWording`, `TestHeadlessEmptyResponse`, `TestHeadlessEmptyResponseWithOtherStopReasonKeepsExitCode`, `TestHeadlessEmptyResponseKeepsRunEndEnded`, `TestEmptyTurnEmitsNotice`, `TestJournalNoticeCategoryRoundTripDoesNotReachModel` |
+
+## Residual-risk register
+
+One line per residual, pointing back to the claim that carries it. Each claim
+row stays authoritative.
+
+| Area | Status in claims | Residual |
+|---|---|---|
+| `bash` filesystem reach after approval | NOT PROVIDED | Approved `bash` runs with the full authority of the Termux app user; there is no filesystem sandbox |
+| Deferred execution via file writes | GUARANTEED for the file tools | `write_file` and `edit_file` answer per call on the target, so a standing grant or YOLO cannot stand in for approving a build, hook, workflow or environment file; internal `.git/`/`.ag/` writes are refused. An approved `bash` command is out of scope and is gated on the displayed command alone (V15) |
+| Tool argument duplicate/unknown-field handling | GUARANTEED | Every tool decodes through decodeStrict; repair drops an undeclared key only where it is inert, reports the drop, and never resolves an ambiguous payload. The guarantee is about the arguments that run, not about what the model intended (V14 closed) |
+| Release dry-run versus the keyless signing path | See "The release configuration is validated on every pull request" and "Release artifacts are signed" | The signing step is tag-only by design (OIDC plus Rekor writes); the dry run exercises the command shape with an ephemeral key, not the real signer |
+| decodeStrict decoder end-of-input rejection | GUARANTEED | A second Decode must return `io.EOF`; every tool decodes through decodeStrict, so the statement covers them all |
+| Compaction label preservation | GUARANTEED | The envelope is applied at the single projection point and cannot be closed from inside; the behavioural limit is recorded under prompt injection through the compaction summary (V17) |
+| Prompt injection through the compaction summary | REDUCED | Fencing is a semantic signal; a summary derived from hostile content can still steer the model while fenced (V17) |
+| Android shared/emulated storage | Prerequisite-dependent | Validate mode and filename semantics before relying on storage-dependent claims (V8) |
+| Same-uid processes | Out of scope (Adversary 4) | Modes 0600/0700 limit cross-user reads only |
+| Prompt injection through ReadOnly output | REDUCED | Nonce fencing is a semantic signal; sensitive actions rely on approval |
+| Tool-call repair | REDUCED | The corrected call is what is prompted and run; inference is one-directional and bounded |
+| Journal, stream and display redaction | REDUCED | Pattern matching is best effort; unrecognized secrets, structural fields and the shadow store are not redacted |
+| Plain headless stdout | NOT PROVIDED | Not redacted, by design |
+| Config opening; path opening after `Resolve` | REDUCED | Parent-directory symlinks are traversed in config reading; `!unix` adapter and `snap.Restore` are path-based |
+| `NABD_ENDPOINT_POLICY=open` | REDUCED | Disables both the load-time check and the dial-time guard |
+| Custom endpoints | See "Custom endpoints: policy-controlled" | The chosen endpoint receives prompts and the key; induced tool calls are still gated; redirect containment is not claimed |
+| Skills | REDUCED | Project skills, when enabled, are instructions authored by whoever wrote the repository |
+| Git status header: user-installed filters and future command paths | NOT PROVIDED | Separate from the repository-controlled-config guarantee; see split claim rows |
+| MCP STDIO servers | NOT PROVIDED | No OS containment on Termux; servers run as the user |
+| Separate per-run MCP opt-in | NOT PROVIDED | An enabled server in user-scoped `~/.ag/mcp.json` needs no extra per-run opt-in flag; `--no-mcp` disables MCP |
+| Excluded-file shadow retention | Local confidentiality risk | Cleartext rollback copies are outside journal redaction; this is not a privacy guarantee |
+| Missing specific evidence citations | Evidence debt | Five claim rows are marked GUARANTEED† and listed individually in EVIDENCE-01 |
+| MCP and local non-disclosure | NOT PROVIDED | `.gitignore` non-disclosure, read-credit and `readCap` do not extend to MCP servers |
+| MCP approval scope | NOT PROVIDED | One server approval opens all its ReadOnly tools until a fingerprint change; no revocation UI |
+| MCP output injection | REDUCED | Permission state is unaffected; output remains untrusted content |
+| Independent security review | NOT PROVIDED | No independent review is established by the supplied evidence; author/owner identity alone does not prove its absence (V19) |
 
 ## Path layer
 
@@ -183,12 +342,15 @@ parent-directory symlinks.
 - Credential files are descriptor-opened and must be regular, user-owned,
   mode 0600, and contain exactly one line.
 - Implicit environment fallback is disabled.
-- Custom `base_url` is recognized but rejected by the minimal schema until
-  redirect and post-DNS transport controls exist.
+- Custom `base_url` is recognized but rejected by the minimal schema. Config v2
+  is the locked-down schema for an operator who wants no custom endpoint; see
+  "Custom endpoints: policy-controlled".
 
-The config package never writes configuration files. Bash child construction
-starts from an empty environment and copies only its allowlist, independently
-of config loading.
+The inherited assertion that the config package never writes configuration
+files is GUARANTEED† evidence debt, not a newly verified guarantee; open item
+EVIDENCE-01 requires a specific test or mechanical guard, or a downgrade. Bash
+child construction starts from an empty environment and copies only its
+allowlist, independently of config loading.
 
 ### Config security invariants
 
@@ -220,6 +382,35 @@ of config loading.
   `TestSourceArabicLiteralRatchet` pins that no non-catalog source file gained
   Arabic text.
 
+### Provider error wording: an installed seam with ASCII defaults
+
+- The last hand-written Arabic in `internal/provider` — the model-unavailable
+  template and the first-byte timeout text, which was duplicated verbatim in
+  `anthropic.go` and `openai.go` — moved into the CLI catalog. The provider now
+  carries ASCII English baselines and renders both messages through
+  `SetModelUnavailableMessage` / `SetFirstByteTimeoutMessage`; `cmd/ag` installs
+  the Arabic wording at the top of `main`, before any provider answer can
+  arrive (ADR-0002 decision 4).
+- The seam sits inside the provider package rather than at a display boundary
+  because both messages are already text before any display boundary is
+  reached: the router folds a route's error string into
+  `RouterExhaustedError.Error()`, and the agent journals `err.Error()` into the
+  `RunError` event. Installing the wording at the renderer is what keeps the
+  feed, the headless stderr line, the journal, and the router details
+  byte-identical to the shapes the move replaced.
+- A caller that never runs the CLI sees the explicit English baseline; no retry
+  or classification decision reads the wording (evidence:
+  `TestModelUnavailableTextNeverReadsAsModelNotFound`,
+  `TestModelUnavailableErrorReadsTheSeam`,
+  `TestProviderLanguageCatalogIsInstalledByteIdentical`,
+  `TestFirstByteTimeoutMessageIsInstalledThroughTheSeam`,
+  `TestFirstByteTimeoutMessageHasOneSourceLiteral`).
+- The language guard's allowlist is now restricted to the ADR-0002 sanctioned
+  catalog files, enforced by
+  `TestArabicLiteralAllowlistIsRestrictedToSanctionedCatalogFiles`; the live
+  `TestSourceArabicLiteralRatchet` still fails any file that gains Arabic
+  outside them. This is the #223 closure criterion made mechanical.
+
 ### Router timing keys
 
 `NABD_ROUTER_PRESTREAM_TIMEOUT` and `NABD_ROUTER_RETRY_AFTER_WAIT` are
@@ -239,46 +430,59 @@ and deadlines remain authoritative. It can therefore never interleave with
 already-delivered output and cannot extend the worst-case latency beyond one
 additional route cycle plus that single wait.
 
-## Custom endpoints are accepted by design
+## Custom endpoints: policy-controlled
 
-`~/.ag/providers.json` accepts any `options.baseURL`: `https` or `http`, public
-host, loopback, RFC 1918, link-local, or a `.internal`/`.local` suffix. This
-section previously listed five admission conditions that a future custom-endpoint
-implementation was required to satisfy — HTTPS only, globally routable hosts only,
-no embedded credentials, no query or fragment, and cross-host redirect
-containment. **All five are withdrawn as of v10.** None of them was ever
-implemented, and the provider registry already accepts arbitrary endpoints, so
-keeping them here claimed a guard the binary does not have.
+> Editorial note (2026-10-15). The previous text of this section (v10–v13) said
+> that none of the endpoint admission conditions is implemented and that every
+> `baseURL` is accepted. That conflicts with the claims-table rows on load-time
+> and dial-time endpoint policy. This rewrite follows those rows because they
+> cite tests. Maintainers must confirm it against the code before merging
+> (open item V1).
 
-The decision behind the withdrawal is one door: adding a provider or a model is a
-JSON edit, with no code change, no rebuild, and no dialect plugin. That is what
-makes a local runtime at `http://127.0.0.1:11434/v1` and a private enterprise
-gateway usable at all, and a rule that rejects plaintext loopback would reject the
-most common legitimate case first.
+`~/.ag/providers.json` accepts `options.baseURL`, and `NABD_BASE_URL` can
+override it. The decision behind the open door is unchanged: adding a provider
+or a model is a JSON edit, with no code change, no rebuild, and no dialect
+plugin. That is what makes a local runtime at `http://127.0.0.1:11434/v1` or a
+private enterprise gateway usable at all.
 
-What is given up, stated plainly:
+**What the policy does.** `NABD_ENDPOINT_POLICY` (default `strict`) selects how
+endpoints are admitted. `NABD_ENDPOINT_ALLOW` permits named exceptions under
+`strict`. The check runs twice: when the URL is loaded, and again on the
+resolved socket address immediately before connect. The exact address classes,
+the `loopback` and `open` behaviour, and the evidence are in the claims-table
+rows beginning "Provider `providers.json` baseURL", "Provider dial-time
+endpoint guard", "No provider can be constructed with an unguarded HTTP
+client", "Local runtimes permit loopback HTTP", and "`NABD_ENDPOINT_POLICY=open`".
 
-- A hostile or mistaken `providers.json` redirects every prompt, file excerpt, and
-  tool result to an endpoint of its choosing.
-- That endpoint receives the provider key in the `authorization` header on every
-  request, in cleartext if the URL is `http`.
+**What it does not provide, stated plainly:**
+
+- Under `open`, both layers are off. Whoever can set that variable can direct
+  every connection anywhere, including plaintext and private addresses.
+- The policy limits *where* a connection may go. It does not make the endpoint
+  that `providers.json` (or the override) names trustworthy. That endpoint
+  receives every prompt, file excerpt and tool result, and the provider key in
+  the request header.
 - That endpoint controls the response stream, so it can emit `tool_calls` the
-  model never proposed; those calls still pass the permission gate, which is the
-  boundary that remains.
-- A host that resolves into private or link-local space (including a cloud
-  metadata address) is reachable, so the binary can be used as an SSRF pivot by
-  whoever writes that file.
+  model never proposed. Those calls still pass the permission gate, which is
+  the boundary that remains.
+- Cross-host and same-origin redirect containment is enforced for provider HTTP
+  clients via `CheckRedirect: noRedirect` (`http.ErrUseLastResponse`), stopping
+  redirection fail-closed before any credentials can be leaked across endpoints.
+  Embedded-credential rejection and query/fragment rejection remain out of scope.
+- When an environment proxy is configured, the claims table says the proxy URL
+  is validated against the policy at request time. No claim covers how the
+  proxy itself resolves the destination (open item V5).
 
-What still holds: both registry files must be regular, owned by the current user,
-and mode 0600, verified from the opened descriptor; only two dialects exist and
-neither is loaded from a package at request time; keys are never written into a
-`bash` child environment and pass through `internal/redact` before any log or
-display; and every tool call the endpoint induces is still classified and
-prompted by the permission layer.
+**What still holds.** Both registry files must be regular, owned by the current
+user, and mode 0600, verified from the opened descriptor. Only two dialects
+exist, and neither is loaded from a package at request time. Keys are never
+written into a `bash` child environment and pass through `internal/redact`
+before any log or display. Every tool call the endpoint induces is still
+classified and prompted by the permission layer.
 
-Minimal strict config v2 continues to reject `base_url`, and that asymmetry is
-deliberate: config v2 is the locked-down schema for an operator who wants no
-custom endpoint at all, while the registry is the open door for one who does.
+Config v2 rejects `base_url` outright, and that asymmetry is deliberate: v2 is
+the locked-down schema for an operator who wants no custom endpoint at all,
+while the registry is the open door for one who does.
 Evidence: `TestCustomEndpointIsAcceptedByDesign`,
 `TestV2CredentialFileAndClosedEndpointPolicy`.
 
@@ -369,7 +573,55 @@ The source file is opened read-only in both modes and is never modified.
 `--redact` requires `--export`, and `--export` is rejected together with any
 run mode. Diagnostics go to stderr; stdout is JSONL only.
 
+## MCP integration
+
+Implementation status: Phases 0–6 implemented, merged 2026-10-11 in PR #264.
+
+The following rows describe the MCP posture per ADR-0003. All phases are
+implemented and tested; GUARANTEED rows name the regression test that proves
+the claim. Rows marked NOT PROVIDED are explicit residual risks or deferred
+work, not design commitments awaiting implementation.
+
+| Claim | Status | Evidence or residual |
+|---|---|---|
+| MCP settings load only from `~/.ag/mcp.json`; any MCP config inside the project root is refused regardless of filename | GUARANTEED | `TestLoadPinnedToDefaultPath`: Load reads only DefaultPath() (a valid config elsewhere is ignored); `TestMCPSec03RepoTreeRejected` and `TestMCPSec03SymlinkToRepoRejected`: path and root are symlink-resolved before comparison, so a symlinked dir cannot smuggle a config in. |
+| MCP config secrets are `${VAR}` references only; explicit secret values are rejected | GUARANTEED | `TestMCPSec02SecretRefs`: plaintext, embedded, empty, and malformed references are refused; values must be exactly `${VAR}`. |
+| MCP config env names cannot shadow spawner-controlled or loader-subverting variables | GUARANTEED | `TestMCPEnvReservedNames`: PATH, HOME, LD_*, DYLD_* are refused so config cannot bypass sanitizePath or the isolated HOME. |
+| MCP config documents respect size and count caps | GUARANTEED | `TestMCPSec16_20SizeLimits`: 256KiB file cap, 16 servers, 256 tools per server, 64 env entries, 64 args, 4096-byte arg cap. |
+| MCP client pins the negotiated protocol version | GUARANTEED | `TestMCPSec21ProtocolPin`: 2024-11-05/2025-11-25/2026-07-28 are accepted and returned as negotiated; newer versions (2027-01-01, 2026-07-29), unverified older versions (2025-06-18, 2025-03-26), and malformed versions are refused. `TestClientSendsRequestedVersion`: the initialize request carries protocolVersion 2026-07-28 (ADR-0003 v6). |
+| MCP client refuses server-initiated methods it does not implement | GUARANTEED | `TestMCPSec22CapabilityRefusal` and `TestMCPSec22CapabilityRefusalSampling`: server requests for roots/list and sampling/createMessage get JSON-RPC -32601 and no action. `TestClientPingReply`: ping is answered with an empty result. |
+| MCP server child processes run with a minimal env allowlist, never inheriting the full environment | GUARANTEED | `TestMCPLifecycleEnvIsolation`: the spawned server sees only PATH (sanitized), TERM, LANG, LC_*, NABD=1, an isolated 0700 HOME (never the real one, removed on Close), and declared `${VAR}` refs; an undeclared secret in the parent env does not reach the child. |
+| Repository-cloned MCP configs never start servers | GUARANTEED | Config loads from `~/.ag/mcp.json` only; in-tree configs are refused at load (`TestMCPSec03RepoTreeRejected`). Session wiring (Phase 5) never consults the repo. |
+| Tool permission classification comes from local user config only, never from server hints | GUARANTEED | `TestMCPSec05ReadOnlyHintIgnored`: a write-classified tool still prompts per call even when the server advertises readOnlyHint; the adapter's `MCPToolDesc` carries only the local classification and never reads server hints. |
+| Tools named `capture_*`/`observe_*` are never ReadOnly | GUARANTEED | `effectiveClassification` raises such tools to at least Mutating ("write") even when the local config says read-only, because driving a browser or observing processes has external effects (`TestEffectiveClassification`). The server cannot opt out: the rule applies after the local classification is read. |
+| Tool fingerprints (SHA-256 over JCS-canonical fields) invalidate approval on any change | GUARANTEED | `TestFingerprintToolChangeDetection`: description/schema/hint/server-id changes all change the fingerprint; `TestMCPSec06_07FingerprintInvalidation`: a changed fingerprint forces re-approval. Approval also binds the executable identity (path, argv, env names, binary SHA-256) — `TestMCPApprovalInvalidation`. |
+| MCP server processes are killed on timeout, session close, or disable, with no orphans | GUARANTEED | `TestMCPS1NoOrphans`: 3 rounds, server + `sleep` grandchild spawned, group confirmed alive, `Close` → whole group gone. `TestMCPS2OversizeKillsServer`: a >64MiB message fails the call closed and the watchdog kills the server. killGroup always runs before Wait (bash.go no-sweep-after-Wait rule). |
+| Journal records server/tool IDs, decisions, and sizes — never raw args or outputs by default | GUARANTEED | `TestMCPSec13JournalPrivacy`: HMAC-SHA256 binds args/outputs without storing them; the journal file contains no secret values. |
+| Core packages (`tools`, `perm`, `safefs`, `redact`, `toolvocab`, `agent`) carry no MCP SDK or network dependencies | GUARANTEED | `TestMCPDependencyIsolation` runs `go list -deps` per core package and fails on any non-allowlisted module (ADR-0003 §12). |
+| A single flag disables all of MCP | GUARANTEED | `TestMCPSec14NoMCPFlag` / `TestMCPSec14NoConfigNoRegistration`: `--no-mcp` loads no config, creates no manager, and never registers `mcp_tool`; with no config or no enabled servers nothing is registered either (lazy startup, `TestMCPSec15LazyStartup`). |
+| Separate per-run CLI opt-in for a server enabled in `~/.ag/mcp.json` | NOT PROVIDED | An enabled server in user-scoped configuration activates MCP without an additional per-run CLI opt-in; `--no-mcp` disables it. With no configuration or no enabled server, nothing is registered (`TestMCPSec15LazyStartup`). This is not comparable to untrusted project-scope skills: user-scope skills also load without project opt-in. Any default-off redesign needs a separate decision (V19). |
+| STDIO server processes are contained by the OS | NOT PROVIDED | No OS-level containment on Termux (Landlock unavailable to the app process). B7 preliminary decision (ADR-0003 §4.2): path 2 — run as user with explicit warning. Residual risk accepted pending named owner. |
+| MCP server file reads bypass local .gitignore non-disclosure | NOT PROVIDED | The .gitignore non-disclosure guarantee covers local tools only. An MCP server running as the user can read files the local tools would refuse. Designed: user must understand this before first approval (ADR-0003 §6.1). |
+| MCP tool outputs grant no read-credit and bypass readCap | NOT PROVIDED | Read-credit (NBD-034) and readCap accounting apply to local tools only. MCP outputs are untrusted content, not measured reads. Designed: stated explicitly so credit is never granted by accident (ADR-0003 P7). |
+| MCP server outputs cannot reverse a Deny or reclassify a tool | GUARANTEED | `TestMCPSec09bPoisonedDeny`: a Deny stays denied deterministically even against poisoned output. `TestMCPSec09cReclassNoEffect`: reclassification requests in output are ignored — classification comes from local config only. |
+| MCP server outputs cannot grant permissions through injection | REDUCED | `TestMCPSec09OutputInjection`: permission-granting injections stay UNTRUSTED and create no permission state. Residual: outputs remain untrusted content and may influence model behavior; this does not guarantee immunity to prompt injection or restrict an approved server process running as the user. |
+| Interrupted or failed MCP writes are never re-executed | GUARANTEED | `TestMCPSec10NoRetryOnWrite`: `tools/call` is invoked exactly once; failures and cancellations propagate without retry (effect-duplication hazard). |
+| YOLO never auto-approves MCP tools | GUARANTEED | Structural: `MCPCheckCall` never returns Allow for write/execute — the verdict matrix asks on every such call regardless of YOLO (`TestMCPCheckCallYOLOExempt`); `perm.Policy.SetYOLOExempt("mcp_tool")` is the policy-level backstop (`TestYOLODoesNotApproveMCPWrite`). No session grants in v1 (`TestMCPNoSessionGrant`); headless denies via the silent asker (`TestMCPHeadless`). |
+| One server approval opens all its ReadOnly tools indefinitely | NOT PROVIDED | Unlike `bash` (which never gets even a session grant), a single MCP server approval opens every ReadOnly tool until fingerprint change. This is a deliberate but significant trust difference, stated here as a residual risk (ADR-0003 §8.2). |
+| Saved approval scope, revocation, and new-tool discovery | NOT PROVIDED | Approval scope is implemented and bound: server-id + tool + JCS fingerprint (over the raw advertised object, all fields — `TestFingerprintUnknownField`) + executable identity (path, argv, env names, binary SHA-256), stored 0600 under `~/.ag/mcp/` with symlink/owner/permission hardening and atomic writes (`TestApprovalStoreSymlinkRefused`). New tools arriving via `notifications/tools_list_changed` are re-listed and start unclassified = refused (`TestMCPSec23ToolListChange`). Still missing: a revocation UI. Write/Execute always require per-execution approval, even under YOLO, and are refused headless. |
+| Unclassified MCP tools are refused before any prompt | GUARANTEED | `TestMCPSec04UnclassifiedDenied`: `Describe` fails for unknown/unclassified tools, the adapter refuses without prompting and never reaches the server. |
+| The reserved adapter name `mcp_tool` cannot address a server tool | GUARANTEED | `TestMCPSec08NameShadowing`: a server tool named `mcp_tool` is refused at the adapter boundary and by the manager's `Describe` (defense in depth). |
+| A hung MCP call times out, kills the server, and re-handshakes on next use | GUARANTEED | `TestMCPSec11_12TimeoutOrphan`: a call exceeding the timeout is cancelled, the server is killed after a 5s grace (no orphan — the old PID is gone), and the next call re-spawns with a full initialize + tools/list + fingerprint check. `tools/call` is never retried. |
+| Parallel MCP calls are capped per server; excess is refused immediately | GUARANTEED | `TestMCPSec24ParallelCap`: beyond `max_parallel_calls` the call is refused at once, never queued (no freeze). |
+| MCP approvals travel the normal permission path | GUARANTEED | The loop's `CallAwareGate` consults `MCPCheckCall` per call, so every approval emits the standard `PermAsk` (modal) / `PermReply` (journal) events; the first-approval content is built locally with no server free text. The adapter's `GuardedResult` is verify-only and fails closed without a recorded approval (`TestMCPAdapterUnapprovedRefused`). |
+| MCP server stderr is sanitized before diagnostics | GUARANTEED | `TestStderrSanitized`: ANSI escapes and control characters are stripped from `StderrTail()` — server stderr is untrusted and never reaches the UI or logs raw. |
+| MCP approval/journal files resist symlink and permission attacks | GUARANTEED | `TestApprovalStoreSymlinkRefused` / `TestJournalSymlinkRefused`: O_NOFOLLOW opens, owner and 0600-or-stricter checks, atomic writes; a symlinked store is refused on read and safely replaced on write. |
+| Independent security review and release acceptance | NOT PROVIDED | The supplied text records single-operator risk acceptance in ADR-0003. This revision does not verify reviewer identity, current acceptance, release settings or mechanical enforcement. Verify those separately before asserting that no independent review exists or that a release gate is absent (V19). |
+
+
+
 ## Operator guidance
+
 
 1. Prefer secure credential files over shell startup exports.
 2. Run nabd as a dedicated OS user on shared systems.
@@ -379,10 +631,32 @@ run mode. Diagnostics go to stderr; stdout is JSONL only.
    Default journal redaction reduces recognized credentials but does not make
    the journal safe: it does not redact the shadow store, structural fields, or
    unrecognized sensitive content. Avoid `NABD_REDACT_JOURNAL=0` except for a
-   deliberate diagnostic run.
+   deliberate diagnostic run. `nabd purge` handles eligible journal files,
+   not `<root>/.ag/shadow`. It considers direct regular files ending in
+   `.jsonl` or containing `.archived-`; it is a dry run until `--yes`.
+   V20 tracks the contradictory rotation comment, not unknown eligibility.
 6. Do not attach raw journals to public issues.
 7. Redact before sharing: `nabd --export <file.jsonl> --redact`. Raw
    `--export` is a deliberate, byte-for-byte copy and warns on stderr.
+8. Keep `~/.ag` and project roots in the Termux private home. File-mode bits
+   are not enforced on Android shared storage, so the 0600/0700 claims do not
+   hold there.
+9. Scope provider keys: one key per project, with a spend limit, and rotate
+   after any session that ran untrusted code. An approved `bash` command can
+   read `~/.ag/auth.json`.
+10. If `termux-api` is installed, an approved `bash` command can call it with
+    whatever Android permissions you granted it. Grant only what you need.
+11. Review agent changes to `.git/`, `Makefile`, `package.json` and `.envrc`
+    before running programs that consume them, even outside nabd. Ordinary
+    write permission is not a separate deferred-execution consent boundary.
+12. If MCP is not needed, use `--no-mcp`. Protect `~/.ag/mcp.json`; an enabled
+    server there needs no separate per-run CLI opt-in. This user-scoped choice
+    differs from enabling repository-authored project skills.
+13. Treat `<root>/.ag/shadow` as sensitive cleartext rollback storage, including
+    excluded-file copies; avoid sharing it. Removing it can prevent undo.
+14. Use `--permission-mode plan` to block classified writes and execution, not
+    to keep readable content out of the provider context. `allow-reads` lifts
+    session exclusions for `read_file` and `grep`; it is not secret protection.
 
 ### Inherited directory permissions
 
@@ -645,6 +919,59 @@ call at all rather than an empty one. Evidence:
 `TestRunErrorEventStaysQuietWhenNoCallIsKnown`,
 `TestSinkFailureNamesTheCallInFlight`.
 
+### Silent-turn exit attribution
+
+The headless empty-response decision depends on the structural notices the loop
+emits, not on their wording, and it keeps the text-exclusion and tool-activity
+conditions unchanged: the final assistant text must be blank, and a turn that
+used a tool is never treated as silent. A run that ends on such a turn therefore
+exits 1 rather than 0, so a scripted caller cannot mistake a silent provider for
+a successful empty answer. It is not an independent detector of every cause of
+silence — it requires one of those two notices on the live branch — so a silent
+turn that emits neither is outside its scope.
+
+The wording it used to match was `strings.Contains(e.Text, "empty response")` and
+`strings.Contains(e.Text, "NABD_MAX_TOKENS")`. Wording is display text, subject
+to rewording and translation, and it is not a contract: a reworded notice would
+have made a silent empty turn exit 0, and an unrelated notice carrying the phrase
+would have exited 1. Neither effect was a reported incident. The supplied review
+reports regression coverage of the wording-dependent decisions before the fix
+and the category-based decisions after it; this document-only revision did not
+run those tests or re-check their historical coverage.
+
+The decision now reads the notice category. `internal/agent/loop.go` keeps
+length-cut notices under `NoticeCategoryLengthLimit` and marks both non-length
+empty-response arms with `NoticeCategoryProviderEmpty`. `emptyResponse` accepts
+those two categories. Notice texts and their emission conditions are
+byte-identical; only the identity of the condition travels structurally, the
+same rule the provider retry decision already follows.
+
+The value is appended last in the `NoticeCategory` block on purpose: it is
+persisted as an integer in the append-only journal (`notice_category`), so
+appending is safe and renumbering an existing value is not. Readers were
+reviewed for the new value: `internal/store/jsonl.go` unmarshals events without
+validating the category, `internal/presentation/projector.go` renders a notice
+from its `Text` and never reads the category, and the category has two consumers:
+`event.NoticeAllowedForModel`, a default-deny map lookup, and `emptyResponse`
+in `cmd/ag/headless.go`, which reads the two categories named above for the
+headless exit decision. No reader switches
+exhaustively, so a reader at this revision drops an unknown value from the model
+context — the intended behaviour. The review covers the readers in this tree, not
+historical binaries.
+
+The category is deliberately absent from `noticeReachesModel`, so it cannot
+enter the model's context. That is the existing default-deny allowlist rather
+than a new mechanism, and it is asserted twice on purpose: statically, and
+behaviourally on what `Messages` actually sends, with pending tool calls and
+idle. Evidence: `TestEmptyResponseReadsCategoryNotWording`,
+`TestHeadlessEmptyResponseWithOtherStopReasonKeepsExitCode`,
+`TestHeadlessEmptyResponseKeepsRunEndEnded`, `TestEmptyTurnEmitsNotice`,
+`TestHeadlessEmptyResponse`,
+`TestBlockedNoticeCategoriesDroppedWhileToolCallsPending`,
+`TestJournalNoticeCategoryRoundTripDoesNotReachModel`,
+`TestNoticeCategoryProviderEmptyIsNotModelFacing`,
+`TestNoticeCategoryValuesAreAppendOnly`.
+
 ### Plan mode
 
 `--permission-mode plan` switches `perm.Policy` into a strict read-only
@@ -747,22 +1074,19 @@ command can read from, or leave behind in, a directory shared with the rest of
 the session; it does not bound the filesystem, which `bash` still reaches with
 the current user's authority and without `Root.Resolve` containment.
 
-**Arguments are decoded strictly before anything runs.** `bash` arguments are
-decoded with `decodeStrict` — the decoder `write_file` already used — instead of
-`json.Unmarshal`, which keeps the last value of a duplicate key and ignores
-undeclared ones. Repair drops undeclared keys and records them before
-classification; the strict decode rejects any undeclared or duplicate key before
-a subprocess starts. The first keeps a stray key from costing a round, the second
-keeps the guarantee from depending on the first. A key may be dropped only where
-it is inert: for `bash` the entire action is the `cmd` string, displayed verbatim
-in the permission prompt, so no other key can change what executes, whereas for
-`write_file` and `edit_file` an undeclared key may be a live field of the other
-tool — dropping `old` there turns a local edit into a whole-file replacement — so
-those calls stay rejected rather than narrowed (NBD-010). Where the layer
-declines — a duplicate key, or more corrections than it will make — the call still
-fails as `invalid args`, starts nothing, and hands the model a reason. Decoding is
-validation only: it grants no authority, and `bash` remains the one tool that
-cannot receive a session-wide grant. Evidence:
+**Argument decoding is a limited mitigation, not a complete strict-JSON
+boundary.** Direct inspection of decode.go at the pinned base shows top-level
+exact-case duplicate checks
+only for objects beginning immediately with `{`, plus unknown-field rejection
+at the decoder. Leading whitespace and case variants bypass duplicate detection;
+trailing values lack an EOF check. The production repair/gate path and action
+shown to the user still require V14 verification. Repair may drop inert
+undeclared bash fields before classification; the decoder cannot reject a field
+already removed. No claim is made here that every duplicate fails or that the
+approval UI exposes the fully decoded action. Trace the repaired payload,
+decoded `cmd` and displayed action together (V2/V14). The existing command
+permission gate remains separate; decoding grants no execution authority.
+Inherited Evidence:
 `TestBashUnknownFieldIsDroppedAndRuns`,
 `TestBashRepairedCallRunsWhenPayloadIsClean`,
 `TestBashStrictDecodeStillFailsThroughLoop`, `TestBashRejectsNonStrictArgs`,
@@ -794,11 +1118,14 @@ in `internal/goal/runner.go`.
 
 ### OSC 52 clipboard boundaries
 
-OSC 52 copy operates only on projected card content after recognized
-credential redaction and display sanitization. Raw journal bytes and raw
-error bodies are not clipboard sources. Unrecognized sensitive text
+OSC 52 copy operates only on canonical projected card content after recognized
+credential redaction and display sanitization. Human-language cards read their
+logical projection fields instead of BiDi display clusters, so visual
+reordering and mirrored punctuation cannot enter copied source. Tool cards
+retain their projected/redacted summary and output contract. Raw journal bytes
+and raw error bodies are not clipboard sources. Unrecognized sensitive text
 remains a residual risk.
-Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand`.
+Evidence: `TestCopyRedactsRecognizedCredentials`, `TestCopyNeverUsesRawJournalContent`, `TestCopyRejectsRawErrorBodies`, `TestCopyIsBlockedByPermissionModal`, `TestCopyNeverExecutesACommand`, `TestCopyUsesLogicalSourceWhenDisplayIsReordered`.
 
 ### @ path picker root resolution
 
@@ -842,13 +1169,16 @@ Evidence: `TestDefaultCandidateLimitIsReachable`, `TestScanRefusesSymlinkedEntri
 
 `read_file` is the primary ReadOnly tool for reading project files. Malformed tool arguments could otherwise bypass containment or smuggle unexpected parameters prior to path resolution or descriptor open.
 
-**Strict JSON decoding before resolution or descriptor opening.** Arguments are unmarshaled via `decodeStrict`, which enforces two defenses before any filesystem operation:
-1. Duplicate key rejection: `rejectDuplicateKeys` tokenizes the raw JSON input stream and compares the number of discovered keys against the unmarshaled key map. Any duplicate key causes an immediate rejection (`invalid args: duplicate key in request`), defeating JSON parameter smuggling attacks where decoders disagree on precedence.
-2. Undeclared field rejection: `DisallowUnknownFields` forbids any JSON fields not declared on the target argument structure unless safely dropped into `DroppedArgs` by the read-only repair layer.
+**Shared decoder limits apply before file access.** `read_file` uses
+`decodeStrict`, but that name is not a guarantee against every duplicate or
+additional JSON value. The shared decodeStrict implementation has the same
+leading-whitespace, case-variant, top-level-only and EOF-check limitations
+stated in the decoder claim; the production repair/gate path remains V14.
+Unknown fields can be rejected by the decoder or removed upstream by repair;
+this must be traced through the production path. Filesystem containment still
+relies on its separate path/descriptor mechanisms, not on duplicate-key checks.
 
-**Boundary behind repair.** The read-only repair layer allows dropping inert undeclared fields for ReadOnly tools to prevent wasted conversational rounds, recording discarded keys in `DroppedArgs`. However, duplicate keys are declined by the repair layer and always fail strictly through `decodeStrict`, preventing argument injection or smuggling prior to path resolution or opening descriptors.
-
-Evidence: `TestReadFileStrictArgs`.
+Inherited Evidence: `TestReadFileStrictArgs`.
 
 ### Disclosed discarded arguments in permission modal
 
@@ -880,3 +1210,312 @@ The agent loop turn ceiling (`max-turns = 40`) is a numerical guard, not a seman
 2. **Hard cut at 5 repeats:** Upon recording 5 identical fingerprints, the loop aborts immediately without further tool execution or provider queries. It emits an explicit `Notice` event and a `RunError` event with `ErrorCode: "loop_detected"`, returning `ErrToolLoop` to the caller.
 
 Evidence: `TestToolLoopNoticeAtThreeRepeats`, `TestToolLoopHardCutAtFiveRepeats`, `TestToolLoopCanonicalJSONKeyOrdering`, `TestToolLoopResetAcrossRuns`.
+
+### Baseline measurement harness
+
+`scripts/capture-baseline.sh` is security-adjacent measurement tooling, not a
+runtime containment boundary. It records build, test, race, static-analysis,
+security-gate, and artifact evidence in `local`, `ci`, and `full-security`
+modes.
+
+The harness does not install tools, modify provider credentials, or treat an
+unavailable required security tool as a successful check. Its output can
+contain command diagnostics and must be reviewed for sensitive data before
+being shared or committed.
+
+Android/arm64 does not support Go's race detector. A Termux result therefore
+records race as `UNAVAILABLE`; the repository's GitHub Actions Linux race run
+remains the authoritative race evidence.
+
+## Open verification items (not claims)
+
+Items below combine document questions and supplied source-review observations.
+The existing citation guard was run, but no Go tests or security reproductions
+were run. Decoder/purge/shadow details were inspected as stated above; other
+inherited code observations were not re-audited. Distinguish an
+inherited observation from a verified runtime result or an unadopted design.
+Resolve each item at an exact commit, recording the evidence and limitations
+before updating the relevant claim. No P0 severity is assigned by this list.
+
+| ID | Question | How to resolve |
+|---|---|---|
+| V1 | Does endpoint policy match the selected baseline? Separately, which non-credential environment overrides still apply under Config v2: `NABD_ENDPOINT_ALLOW`, `NABD_PROVIDERS_FILE`, `NABD_AUTH_FILE`, `NABD_EXPORTS_DIR`, `NABD_CLIPBOARD`, `NABD_PUBLIC_DNS`? | Trace config, registry, endpoint and downstream consumers. Distinguish explicit credential sources from path/policy/utility overrides. Check what `TestCustomEndpointIsAcceptedByDesign` actually pins; cross-reference EVIDENCE-01. |
+| V2 | On the permission modal, is the full `cmd` always visible or scrollable before approval can be armed, at every terminal size? `permModalShape` can drop the args row under vertical constraint | Trace the modal path; table-driven test over widths and heights with long and multi-line commands |
+| V3 | Which modal/display characters are stripped, escaped or preserved beyond the listed zero-width controls: U+2028/U+2029, bidi embedding/override/isolate controls, tag characters, variation selectors, ESC and C1 controls? | Trace the actual modal path and render at constrained sizes; preserve legitimate Unicode where possible rather than deleting all format controls. |
+| V4 | How does the `.gitignore` matcher treat `**`, nested files, `!` and `.git/info/exclude` compared with Git; in which direction does each divergence err; what reaches the provider and the journal? | Pattern tests against Git's behaviour; trace read, redaction and truncation |
+| V5 | Endpoint guard: behaviour under `HTTPS_PROXY`; redirect handling (origin = scheme + host + port, headers carried, every client-construction path); address coverage (IPv4-mapped IPv6, NAT64, `0.0.0.0/8`, multicast) | Read the transport and `endpoint` package; table-driven tests |
+| V6 | MCP: does approval identity cover launcher-based servers (`npx`, `uvx`, `node`, `python`) at script or package level or only the interpreter binary; does MCP output pass through the nonce fence; should ReadOnly tools with network egress need a separate consent dimension; do HMAC-only journal records suffice to reconstruct an incident? | Read the approval-store and fingerprint code; design decision for the last two |
+| V8 | Termux/Android: do owner checks behave correctly under proot's emulated root; what happens on shared storage; which capabilities does `termux-api` expose? | Run the config-open tests under proot; add a startup filesystem check if needed |
+| V9 | Does the stream redactor equal whole-string redaction under random N-way splits within its hold-back limits, and fail closed beyond them? | Fuzz test bounded by `StreamHoldCap` and `StreamPEMHoldCap` |
+| V10 | Can background children outlive a cleanly exited bash call? | Prototype cleanup separately on Android/Linux; process-group membership and leader lifetime matter. Do not claim containment of detached descendants. See V18 for capture races. |
+| V11 | Release pipeline: is the signature verified after signing, is build provenance published, is a vulnerability scan a gate? | Read `release.yml` and `ci.yml` |
+| V12 | Are line endings and table rendering correct in the repository itself, not only in an exported copy? | `git ls-files --eol -- docs/THREAT_MODEL.md`; `git check-attr text eol -- docs/THREAT_MODEL.md`; view the rendered page |
+
+| EVIDENCE-01 | Five GUARANTEED† claim rows lack specific test/guard citations: opened-config validation; config package never writes; Config v2 credential fallback; shadow checksum/publication; undo hash refusal. | Name and validate evidence or downgrade each row. For the credential row also audit the six non-credential overrides in V1. Add a row-aware evidence-presence guard; separately enumerate dagger rows and require EVIDENCE-01 coverage. Existence of a citation is not coverage or test success. |
+| V14 | Tool argument decoding, repair and display — resolved 2026-10-18; what remains? | Every tool now decodes through `decodeStrict` (`glob` and `grep` were the last two on `json.Unmarshal`, and a payload repair cannot make unambiguous is refused rather than reinterpreted). The path is code-grounded, not inherited: repair runs first and reports every drop (`loop.go:836`), the event and the gate carry the repaired call (`loop.go:839`, `loop.go:859`), so the permission prompt is built from what will run (`TestBashPromptShowsTheRepairedCall`), while a ReadOnly call never prompts at all (`TestReadIsFreeWritesAsk`). End-to-end tests: `TestGlobStrictArgumentBoundary`, `TestGlobArgumentsOnTheProductionPath`, `TestGrepStrictArgumentBoundary`, `TestGrepArgumentsOnTheProductionPath`, `TestReadFileStrictArgs`, `TestDecodeStrictRejectsTrailingData`, `TestMCPArgumentsStrictBoundary`, `TestWriteValidationRejectsBeforeSideEffects`. Nothing about decoding, repair ordering or its display stays open; what is deliberately not claimed is that the model *meant* the value it repeated, and that is what the refusal is for. |
+| V15 | Protected write paths — resolved 2026-10-18; what remains? | The design decision is recorded (`docs/DECISIONS/0004-protected-write-paths.md`) and the policy landed for the file tools: `.git/` and `.ag/` writes are refused in every mode, execution-sensitive files ask on every call, and the per-call gate withholds the session option so neither a standing grant nor YOLO can stand in (`TestExecSensitiveWritesAlwaysAsk` drives the production session with both bypasses active and asserts an approval for each of two consecutive calls; `TestInternalRepositoryWritesAreRefused` asserts the refusal and that nothing is created; `TestClassifyWritePath` pins the classification, including case variants and ordinary-file controls). Remaining, and deliberately not claimed: `bash` is gated on the displayed command, so an approved command can still write these paths; and consent is per call, not per path with a remembered approval. |
+| V16 | Older-reader compatibility when a record carries no content blob — resolved 2026-10-18; what remains? | Verified against the actual PR #270 head (`ffce3fe`, still OPEN and not treated as a fix): its writer stores no content blobs for excluded paths, keeps `HashAfter`, keeps `HashBefore` when the file existed, and adds an `Excluded` marker its own reader refuses. The older reader here has no such marker and decided creation from an empty `BlobBefore` alone — reproduced before changing anything: a journal fixture of that exact shape (before-hash present, before-blob absent, unknown `excluded` field) made `/undo` delete the user's file (`note="deleted (write_file)"`). Fixed in the reader, not the writer: creation now requires the record to say there was no before (no before-hash AND no before-blob); a present before-hash beside an absent content reference refuses with `ErrUndoBeforeMissing` and leaves the file in place. The refusal needs no schema addition, so it also covers legacy journals whose reference is gone, and it holds whether or not #270 merges (its `Excluded` refusal is an additional fail-closed path, not a prerequisite). Evidence: `TestPersistedUndoRefusesMissingBeforeBlob` (real journal round-trip including the unknown marker) and the control `TestPersistedUndoDeletesTrueCreation`. Remaining, not claimed: the write side of this tree still stores blobs for excluded paths, PR #270's changes are unmerged, and the actual old/new binary pairing was not exercised — the pinned shape is the record, not a second binary. |
+| V17 | Compaction output fencing — resolved 2026-10-18; what remains? | The projection design landed: `FenceSummary` wraps the summary at the `Compact` case of `Messages` with a fresh `FenceNonceFunc` nonce and one defang contract for both marker families, and the real projection path is tested (`TestCompactSummaryIsFencedWithTheProjectionNonce`, `TestCompactSummaryNonceIsFreshPerProjection`, `TestCompactSummaryPayloadCannotForgeTheFence`, `TestCompactSummaryPayloadStaysIntact`, `TestEveryFenceMarkerFamilyIsDefanged`). Permission gating is unchanged and remains governed by the policy rows. Nothing about the envelope stays open; the behavioural limit lives in the REDUCED prompt-injection row for the summary, not in this item. |
+| V18 | Supplied review reports possible concurrent headTail access after bashDrainGrace while a descendant holds a pipe. Is this related to the timeout-test flake? | Run the actual timeout/capture path under the race detector; inspect failing logs. Evaluate synchronized buffers or closing/draining safely; do not attribute the flake without evidence. |
+| V19 | What independent review or renewed acceptance exists for MCP, and is any release gate mechanically enforced? Should a separate CLI opt-in be required? | Verify ADR-0003, reviewer/acceptance records, release workflows and settings. Distinguish user-scoped enabled-server configuration from project-skill opt-in. Default-off and release gating are design decisions, not established defects. |
+| V20 | Source-comment contradiction: journal_rotation.go says non-jsonl archives are invisible to purge, but purgeCandidates includes regular names containing .archived-. | The predicate is established by [purgeCandidates](https://github.com/amiraq1/Nabd/blob/51859a06b5e4ba7d35babad700a4376acaa84a7d/cmd/ag/purge.go#L85) and the existing archived-file fixture in TestPurgeDeletesOnlyEligibleRegularJournals. Correct the stale maybeRotateOversizedJournal comment in a separate source-comment-only change; no uncertainty about the predicate or new runtime behavior is implied. |
+
+## Revision log
+
+2026-10-21, P0-4 residual capture paths closed (claims-affecting documentation revision):
+
+- Closed the two capture paths that still persisted excluded content into
+  <root>/.ag/shadow after the write-path fix: `rewindRecord` in
+  `internal/tools/undo.go` now refuses an excluded record before its capture,
+  and `ReconcileMutation` in `internal/tools/registry.go` fingerprints the
+  current state through the excluded-path capture instead of writing a blob.
+  `TestP04_CanaryUndoRefusalKeepsFile` and
+  `TestP04_CanaryReconcileMutationNeverStoredInShadow` scan the shadow store
+  after a refused `/undo` and after reconciliation, so the GUARANTEED row is
+  backed by disk-level evidence on every entry point.
+  Status: GUARANTEED (disk scan of .ag/shadow after each operation).
+
+2026-10-18, provider error language seam (claims-affecting documentation revision):
+
+- Moved the last hand-written Arabic out of `internal/provider`: the first-byte
+  timeout text (duplicated verbatim in `anthropic.go` and `openai.go`) and the
+  model-unavailable template. The package now carries ASCII English defaults and
+  renders through a seam that `cmd/ag` installs at startup from its catalog;
+  both user-visible shapes stay byte-identical (ADR-0002 decision 4, provider
+  leg).
+- Recorded why the seam lives inside the provider package and not at a display
+  boundary: both messages are stringified before any display boundary is
+  reached — `RouterExhaustedError.Error()` folds the per-route text into its
+  details and the agent journals `err.Error()` into the `RunError` event — so a
+  display-side rewrite could not have kept the journal and route details
+  unchanged. No schema, event or retry decision changed; the retry verdict
+  still reads the type only.
+- Amended the retryability row's byte-identity sentence and evidence list, and
+  added the provider-wording subsection, so the document records where the
+  wording now lives instead of implying the provider still holds it.
+- Restricted the language guard's allowlist to the ADR-0002 sanctioned catalog
+  files and added `TestArabicLiteralAllowlistIsRestrictedToSanctionedCatalogFiles`
+  — #223's closure criterion made mechanical — while
+  `TestSourceArabicLiteralRatchet` keeps failing any Arabic outside the
+  catalogs.
+
+2026-10-19, security remediation P0/P1 (claims-affecting documentation revision):
+
+- P0: Prevented excluded files (.env, secrets, gitignored files) from being stored
+  as plaintext blobs in the shadow store (<root>/.ag/shadow). Early check in `commit()`
+  identifies excluded paths before any shadow capture; in-memory SHA-256 fingerprints
+  are computed without writing blobs to disk. EditRecords are marked `Excluded: true`,
+  and `/undo` refuses with `ErrUndoExcluded` instead of deleting or restoring files.
+  Evidence: `TestP04_CanaryExcludedPathNeverStoredInShadow`, `TestWriteFileToExcludedPathSucceedsWithUndoTracking`, `TestUndoRevertsWriteToGitignoredFile`.
+  Status: GUARANTEED (Dynamic execution verified on Linux CI runner, GitHub Actions Run 39307645290).
+- P0: Enforced fail-closed HTTP redirect policy for all provider clients via
+  `CheckRedirect: noRedirect` (`http.ErrUseLastResponse`) in `endpoint.ClientWithAllow`.
+  All provider constructors route through this client; redirect responses (301, 302, 303,
+  307, 308) terminate immediately without forwarding `x-api-key`, `Authorization`, or
+  custom credential headers, and error messages redact keys.
+  Evidence: `TestP01_RedirectDoesNotLeakCredentials`, `TestP01_ProviderRefusesRedirectAndRedactsError`.
+  Status: GUARANTEED (Dynamic execution verified on Linux CI runner, GitHub Actions Run 39307645290).
+- P1: Resolved potential data race in `bash.go` output collection. Protected `headTail`
+  buffer with `sync.RWMutex` to synchronize concurrent writes and snapshot reads.
+  Enforced reader pipe closure (`pr.Close()`) on `bashDrainGrace` timeout to unblock
+  `io.Copy` and eliminate reader goroutine leaks when descendants keep stdout open.
+  Clarified header docstring regarding Termux user authority.
+  Evidence: `TestBash_HeadTailConcurrentWritesAndSnapshot`, `TestBash_GrandchildHoldsStdoutOpen`, `TestBash_ExceedsHeadTailCut`.
+  Status: GUARANTEED (Dynamic execution verified on Linux CI runner with -race, GitHub Actions Run 39307645290).
+
+2026-10-18, V16 older-reader compatibility (claims-affecting documentation revision):
+
+- Verified the hypothesis against the actual PR #270 head (`ffce3fe`, open):
+  its writer keeps the hashes and deliberately stores no content blobs for
+  excluded paths, and its own reader refuses on an `Excluded` marker that this
+  tree's schema does not have.
+- Reproduced the data loss before changing anything: a journal fixture of that
+  exact shape, including the unknown `excluded` field, made `/undo` delete the
+  user's file with `note="deleted (write_file)"`. The fixture goes through the
+  real store round-trip, so the claim is about the reader, not about a
+  hand-built struct.
+- Fixed the reader rather than the writer: creation now requires the record to
+  say there was no before (no before-hash and no before-blob), and a present
+  before-hash beside an absent content reference refuses with
+  `ErrUndoBeforeMissing`, leaving the file untouched. No schema field was
+  added — the decision uses data the older record already carries — so legacy
+  journals are covered too.
+- The control test keeps a true creation deleting the file, so the change cannot
+  turn every undo into a refusal. No other undo behaviour changed, and PR #270
+  is still not treated as a merged fix.
+
+2026-10-18, one argument decoder (claims-affecting documentation revision):
+
+- Closed V14 by removing the last two decoder exceptions: `glob` and `grep`
+  decoded their arguments with `json.Unmarshal`, so a repeated key silently ran
+  with the last value (`{"pattern":"a","pattern":"b"}` executed `b`), an
+  undeclared field vanished, and nesting past the ceiling was accepted. They now
+  decode through `decodeStrict`, and every tool shares one single-value
+  contract.
+- Fixed the hole that unifying the decoder exposed: the repair layer could erase
+  an ambiguity. It dropped an undeclared key and re-marshalled the object, which
+  silently resolved a repeated key to its last value; repair now leaves a
+  payload whose keys are repeated as the decoder sees them untouched and hands
+  the refusal to the decoder. A case-varied spelling is treated as that same
+  ambiguity — the layer already refuses to choose between two spellings when
+  both are present, so it does not choose here either. The affected
+  expectations in the `read_file` boundary test were corrected to the stronger
+  rule rather than kept green.
+- Recorded the path rather than leaving it implied: repair first and every drop
+  reported (`loop.go:836`), the event and the gate on the repaired call
+  (`loop.go:839`, `loop.go:859`), the prompt therefore built from what runs,
+  and a ReadOnly call never prompting. V14 is closed with that evidence.
+- Updated the two rows that still described `glob` as an exception, including
+  its link target, so the document does not assert both states at once. This
+  entry supersedes the "kept `glob` out of scope" note in the earlier
+  decoder-hardening entry, which described that revision's state and is left as
+  written.
+
+2026-10-18, protected write paths (claims-affecting documentation revision):
+
+- Recorded the V15 decision and its implementation for the file tools: the gate
+  answers a protected write per call, before the name-based ladder, so a
+  standing grant and YOLO cannot stand in for the approval a build, hook,
+  workflow or environment file requires, and `.git/`/`.ag/` writes are refused
+  in every mode.
+- Added the claim row that replaces the unprovided deferred-execution boundary,
+  with its scope stated in the row itself: the file tools only, because an
+  approved `bash` command is gated on the displayed command and can still write
+  these paths. The trust-boundary table and the residual register were updated
+  to match, and the hostile-content adversary text now names the per-call
+  approval.
+- Recorded the design decision separately in
+  `docs/DECISIONS/0004-protected-write-paths.md`, including the rejected
+  alternative (a remembered per-path approval) and the reason the session option
+  is withheld rather than downgraded silently.
+- No tool behaviour, event schema or permission reason code changed; the new
+  policy rides the existing `CallAwareGate` contract plus an additive
+  `CallGrantPolicy` extension. V15 is closed for the file tools with its
+  `bash` limit stated rather than implied.
+
+2026-10-18, release-config validation (claims-affecting documentation revision):
+
+- Recorded the per-pull-request validation of `.goreleaser.yaml`: the
+  `release-dryrun` job runs `goreleaser check` through the same pinned action
+  commit and the same GoReleaser version `release.yml` uses, before the snapshot
+  release step. A new claim row states the mechanism and its scope.
+- Kept the distinction explicit instead of implying a release rehearsal: the
+  keyless signing path remains tag-only because it depends on OIDC and writes
+  Rekor entries, and the dry run still exercises only the command shape with an
+  ephemeral key — recorded in the new row's scope sentence and in the residual
+  register.
+- Added the action-pinning guard to the claim's evidence: every action reference
+  in every workflow file is held to a full commit SHA, so a moved tag cannot
+  change what CI runs.
+- No signing, release or dry-run behaviour changed; the only CI change is one
+  parse-only step. `RELEASE_DRYRUN_SKIPS_SIGN` in `docs/TECH_DEBT.md` stays open
+  with its rationale and closure criterion unchanged.
+
+2026-10-18, compaction fence (claims-affecting documentation revision):
+
+- Split the compaction claim in two, because one status could not carry both
+  halves honestly: the envelope itself is mechanized and test-proven, while
+  resisting instruction injection through it is not.
+- `Every compaction summary is projected to the model inside the untrusted-data
+  envelope ...` is GUARANTEED: the fence is applied at the single
+  journal-to-wire point, the nonce is fresh per projection, every marker family
+  is defanged before wrapping, and an AST guard keeps the emitted markers and
+  the defang list in agreement.
+- `Prompt injection through the compaction summary` is REDUCED, matching the
+  stance this document already takes on tool output and skill bodies: the fence
+  is a semantic signal, not an injection boundary, and sensitive actions rely on
+  permission approval.
+- Updated the trust-boundary row, the residual register, and the hostile-content
+  adversary text from "the label is lost" to "the label is applied, and the
+  label is not a boundary". V17 is closed for the envelope; its behavioural
+  limit is recorded as a standing residual rather than an open item.
+- No permission behaviour changed, and no claim was added beyond what a test in
+  this revision proves.
+
+2026-10-18, decoder hardening (claims-affecting documentation revision):
+
+- Narrowed the decoding claims to the decoder that now exists, and moved them
+  from REDUCED/NOT PROVIDED to GUARANTEED with the mechanism named in each row:
+  duplicate keys are refused at any depth and compared case-insensitively
+  because encoding/json matches struct fields that way; `decodeStrict` enforces
+  a single-value contract with a second `Decode` that must return `io.EOF`; the
+  depth ceiling `maxJSONDepth` is enforced by the walk rather than by a syntax
+  or type error.
+- Added end-to-end coverage through the production paths (bash, read_file,
+  write_file, edit_file, mcp_tool) and through the repair-disabled boundary,
+  since repair may drop an undeclared key for ReadOnly and Executing tools.
+- Kept `glob` out of scope: it still decodes with `json.Unmarshal`, which
+  rejects trailing data on its own.
+- Left V14 open for what this revision did not trace: the payload the
+  permission prompt shows, and the repair layer's declared-key drop.
+- No claim, boundary row or residual was added beyond what a test in this
+  revision proves; the skill-walk read-ahead closure is recorded in
+  `docs/TECH_DEBT.md`, not here, because it is not a threat boundary.
+
+2026-10-15, v14 draft (claims-affecting documentation revision):
+
+- Built from the supplied editorial v13. The raw v13 base was recovered by
+  reversing the supplied editorial diff. Before PR submission, the document
+  was reconciled with master at 51859a06 and the unmerged PR #279 paragraph
+  and its test citation were excluded. The existing citation guard was run
+  against that pinned snapshot; this checks existence, not execution.
+- Separated decoding mitigation from an unprovided end-of-input boundary,
+  interactive redaction from verbatim stdout, and repository-controlled Git
+  config protections from user-installed/future command paths.
+- Added deferred-execution and MCP per-run-opt-in boundary rows. Recorded
+  compaction label preservation as NOT PROVIDED rather than naming a missing
+  mechanism as REDUCED. Permission gating remains a separate mitigation.
+- Marked the five uncited GUARANTEED claim rows GUARANTEED†. The number is
+  computed from the supplied tables, not copied from the proposed six-row count.
+- Added assets, an endpoint/MCP adversary, storage prerequisites, operator
+  guidance, EVIDENCE-01 and V14–V20 and explicit source/CI validation limitations.
+- Aligned detailed bash/read_file decoding prose with the downgraded claim.
+- Reduced the absolute shadow Git-invisibility claim to ignore-file mitigation
+  with explicit failure/existing-file/forced-add residuals.
+- Retitled the picker and selected-zero-width-control claims; supplied a
+  config-opening residual. Qualified shadow git-shielding and purge eligibility.
+- Recast independent-review assertions as unestablished evidence, not a
+  conclusion inferred from CODEOWNERS or single-operator status.
+- V16 older-reader deletion remains a compatibility hypothesis. No Go changes,
+  runtime reproductions, successful test executions or current PR state are
+  claimed by this draft. All inherited test citations still require validation.
+- Resolved V7 in the YOLO claim itself: standing Mutating grants may survive
+  ModeDeny/ModeAllowReads, but never ModePlan. Removed the resolved open item;
+  source ordering was inspected, not runtime-tested in this revision.
+- Follow-up to PR review: scoped the trailing-data claim to decodeStrict and
+  distinguished glob; cited rejectDuplicateKeys and its exact leading-byte gate.
+  End-to-end repair/gate behavior remains open. Established purge's filename and
+  cutoff predicates and recast V20 as a stale-comment contradiction.
+- Renamed the evidence item to EVIDENCE-01 to distinguish it from version v13;
+  added the MCP injection residual and aligned config prose with evidence debt.
+- Repaired shadow-asset grammar and separated flag names to avoid table/code
+  pipe ambiguity. The actual Go shadow call uses os.O_CREATE and os.O_EXCL;
+  O_CREAT is not substituted for the valid Go identifier.
+- Retained the editorial revision below under explicit superseded provenance;
+  its historical "unchanged" statement does not describe the v14 result.
+
+
+### Superseded provenance — v13 editorial revision only
+
+The following record describes only the earlier editorial step. Its "not
+changed" statement does not describe this v14 result or its follow-up corrections.
+
+2026-10-15, documentation only, applied to the earlier v13 text:
+
+- Added: contents, "How to read this document", "Global assumptions", "Trust
+  boundaries at a glance", "Residual-risk register", "Open verification items",
+  this log, and three operator-guidance items (8–10).
+- Fixed: a blank line that split the claims table before the "OpenAI wire
+  encoding" row.
+- Rewrote "Custom endpoints" to agree with the claims-table rows, and removed
+  the stale reason given for rejecting `base_url` in Config v2 (open item V1).
+- Reworded Adversary 3: the environment allowlist protects the child's
+  environment, not files the user can read.
+- Retitled the `.gitignore` claim to state its matcher scope; status unchanged.
+- Split one MCP row that carried both GUARANTEED and REDUCED tests into one row
+  per status, keeping the original wording.
+- Corrected two statements in "Silent-turn exit attribution": the old "untested"
+  wording, and "only category consumer" (the headless decision also reads it).
+- Moved the MCP implementation-status text out of the heading.
+- At that earlier editorial step only, every other claim row, status, test
+  citation and section was unchanged. Later v14 changes supersede that scope.

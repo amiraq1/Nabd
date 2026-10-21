@@ -35,7 +35,13 @@ func TestToolFailureIsUnderstandableWithoutColor(t *testing.T) {
 	for _, tc := range []struct {
 		status presentation.ToolStatus
 		want   string
-	}{{presentation.ToolFailed, "failed"}, {presentation.ToolDenied, "denied"}, {presentation.ToolCancelled, "cancelled"}, {presentation.ToolRunning, "running"}} {
+	}{
+		{presentation.ToolPending, "awaiting approval"},
+		{presentation.ToolFailed, "failed"},
+		{presentation.ToolDenied, "denied"},
+		{presentation.ToolCancelled, "cancelled"},
+		{presentation.ToolRunning, "running"},
+	} {
 		card := &presentation.ToolCard{Name: "bash", Status: tc.status}
 		plain := ansi.Strip(renderToolSummary(card, 40))
 		if !strings.Contains(plain, tc.want) {
@@ -79,5 +85,57 @@ func TestHugeToolOutputRemainsBounded(t *testing.T) {
 		if ansi.StringWidth(line) > 40 {
 			t.Fatalf("overflow: %q", line)
 		}
+	}
+}
+
+// TestToolStatusSymbolsAndASCIIFallback verifies UI-F3:
+// 1. Table-driven expectation for Unicode and ASCII symbols across all statuses.
+// 2. All status symbols occupy exactly 1 terminal cell according to ansi.StringWidth.
+// 3. No non-ASCII runes (>= 128) leak in ASCII mode.
+func TestToolStatusSymbolsAndASCIIFallback(t *testing.T) {
+	cases := []struct {
+		name      string
+		status    presentation.ToolStatus
+		wantUni   string
+		wantASCII string
+	}{
+		{name: "Pending", status: presentation.ToolPending, wantUni: "○", wantASCII: "o"},
+		{name: "Running", status: presentation.ToolRunning, wantUni: "●", wantASCII: ">"},
+		{name: "Done", status: presentation.ToolDone, wantUni: "✓", wantASCII: "+"},
+		{name: "Failed", status: presentation.ToolFailed, wantUni: "✗", wantASCII: "x"},
+		{name: "Denied", status: presentation.ToolDenied, wantUni: "✗", wantASCII: "x"},
+		{name: "Cancelled", status: presentation.ToolCancelled, wantUni: "✗", wantASCII: "x"},
+		{name: "unknown/default", status: presentation.ToolStatus("unknown_status"), wantUni: "·", wantASCII: "."},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// 1. Unicode mode
+			t.Setenv("NABD_ASCII_ONLY", "")
+			uRaw := toolStatusSymbol(tc.status)
+			uStripped := ansi.Strip(uRaw)
+			if uStripped != tc.wantUni {
+				t.Errorf("%s Unicode symbol = %q, want %q", tc.name, uStripped, tc.wantUni)
+			}
+			if gotW := ansi.StringWidth(uStripped); gotW != 1 {
+				t.Errorf("%s Unicode width = %d, want 1", tc.name, gotW)
+			}
+
+			// 2. ASCII mode
+			t.Setenv("NABD_ASCII_ONLY", "1")
+			aRaw := toolStatusSymbol(tc.status)
+			aStripped := ansi.Strip(aRaw)
+			if aStripped != tc.wantASCII {
+				t.Errorf("%s ASCII symbol = %q, want %q", tc.name, aStripped, tc.wantASCII)
+			}
+			if gotW := ansi.StringWidth(aStripped); gotW != 1 {
+				t.Errorf("%s ASCII width = %d, want 1", tc.name, gotW)
+			}
+			for _, r := range aStripped {
+				if r >= 128 {
+					t.Errorf("%s ASCII symbol %q contains non-ASCII rune %q (U+%04X)", tc.name, aStripped, r, r)
+				}
+			}
+		})
 	}
 }

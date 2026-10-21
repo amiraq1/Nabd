@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"nabd/internal/event"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -35,7 +36,7 @@ func TestCalibrationEventPerTurn(t *testing.T) {
 	prov := &provider.OpenAICompat{Key: "k", Model: "m", BaseURL: srv.URL, Client: &http.Client{}}
 
 	var mu sync.Mutex
-	var calib []agent.Calibration
+	var calib []event.Calibration
 	var notices int
 	l := &agent.Loop{
 		Provider: prov,
@@ -43,13 +44,13 @@ func TestCalibrationEventPerTurn(t *testing.T) {
 		Budget:   agent.NewBudget(),
 		Gate:     noTools{},
 		Human:    noTools{},
-		Sink: sinkFn3(func(e agent.Event) error {
+		Sink: sinkFn3(func(e event.Event) error {
 			mu.Lock()
 			defer mu.Unlock()
-			if e.Type == agent.EventCalib && e.Calib != nil {
+			if e.Type == event.EventCalib && e.Calib != nil {
 				calib = append(calib, *e.Calib)
 			}
-			if e.Type == agent.Notice {
+			if e.Type == event.Notice {
 				notices++
 			}
 			return nil

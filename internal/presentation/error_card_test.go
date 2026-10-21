@@ -6,28 +6,29 @@ import (
 
 	"nabd/internal/agent"
 	"nabd/internal/endpoint"
+	"nabd/internal/event"
 )
 
 func TestLegacyRunErrorProjectsAsUnknown(t *testing.T) {
-	items, err := NewProjector().Build([]agent.Event{{Seq: 1, Type: agent.RunError, Err: "old failure"}})
+	items, err := NewProjector().Build([]event.Event{{Seq: 1, Type: event.RunError, Err: "old failure"}})
 	if err != nil || len(items) != 1 || items[0].Error == nil {
 		t.Fatalf("projection failed: items=%#v err=%v", items, err)
 	}
 	card := items[0].Error
-	if card.Code != agent.ErrCodeUnknown || card.Retryable || card.RetryScope != RetryNone {
+	if card.Code != event.ErrCodeUnknown || card.Retryable || card.RetryScope != RetryNone {
 		t.Fatalf("legacy card = %#v", card)
 	}
 }
 
 func TestProviderTemporaryRetryScope(t *testing.T) {
-	card := NewErrorCard(agent.ErrCodeProviderTemporary, "temporary", "")
+	card := NewErrorCard(event.ErrCodeProviderTemporary, "temporary", "")
 	if !card.Retryable || card.RetryScope != RetryProviderTurn {
 		t.Fatalf("card = %#v", card)
 	}
 }
 
 func TestProviderAuthDoesNotBlindRetry(t *testing.T) {
-	card := NewErrorCard(agent.ErrCodeProviderAuth, "unauthorized", "")
+	card := NewErrorCard(event.ErrCodeProviderAuth, "unauthorized", "")
 	if card.Retryable || card.RetryScope != RetryNone {
 		t.Fatalf("card = %#v", card)
 	}
@@ -38,8 +39,8 @@ func TestProviderAuthDoesNotBlindRetry(t *testing.T) {
 // terminal width above 40 columns and hidden below it, so a card without the
 // field loses the only actionable number on a phone terminal.
 func TestErrorCardCarriesWaitSeconds(t *testing.T) {
-	items, err := NewProjector().Build([]agent.Event{
-		{Seq: 1, Type: agent.RunError, Err: "all 2 route(s) exhausted", ErrorCode: "provider_temporary", RetryAfter: 20},
+	items, err := NewProjector().Build([]event.Event{
+		{Seq: 1, Type: event.RunError, Err: "all 2 route(s) exhausted", ErrorCode: "provider_temporary", RetryAfter: 20},
 	})
 	if err != nil || len(items) != 1 || items[0].Error == nil {
 		t.Fatalf("projection failed: items=%#v err=%v", items, err)
@@ -50,8 +51,8 @@ func TestErrorCardCarriesWaitSeconds(t *testing.T) {
 
 	// A run that reported no retry-after states no wait: 0 means "none", not
 	// "wait zero seconds".
-	items, err = NewProjector().Build([]agent.Event{
-		{Seq: 1, Type: agent.RunError, Err: "auth failed", ErrorCode: "provider_auth"},
+	items, err = NewProjector().Build([]event.Event{
+		{Seq: 1, Type: event.RunError, Err: "auth failed", ErrorCode: "provider_auth"},
 	})
 	if err != nil || len(items) != 1 || items[0].Error == nil {
 		t.Fatalf("projection failed: items=%#v err=%v", items, err)
@@ -89,7 +90,7 @@ func TestCrossPackageEndpointRefusedRemedyFlow(t *testing.T) {
 	}
 
 	// 4. Verify Projector translates the event into an item with remedy intact
-	items, err := NewProjector().Build([]agent.Event{ev})
+	items, err := NewProjector().Build([]event.Event{ev})
 	if err != nil || len(items) != 1 || items[0].Error == nil {
 		t.Fatalf("projector failed to project error item: items=%#v err=%v", items, err)
 	}

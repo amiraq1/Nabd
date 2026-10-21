@@ -125,7 +125,7 @@ func fieldLine(t *testing.T, file, fn, field string) int {
 // other shared fields, so the prompt is not the only thing the entry points
 // agree on: a nil gate denies every call, and a nil budget would panic.
 func TestNewSessionLoopSharesBudgetAndGate(t *testing.T) {
-	loop := newSessionLoop(nil, nil, gate{perm.New(nil)}, nil)
+	loop := newSessionLoop(nil, nil, gate{p: perm.New(nil)}, nil)
 	if loop.Gate == nil {
 		t.Error("constructor left the permission gate nil")
 	}

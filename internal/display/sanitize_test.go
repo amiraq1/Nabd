@@ -102,3 +102,56 @@ func TestSanitizeValidUTF8(t *testing.T) {
 		t.Fatalf("replacement char missing: %q", res)
 	}
 }
+
+func TestSanitizeStripsZeroWidthFormatControls(t *testing.T) {
+	// Product decision 2026-10-09: ZWNJ (U+200C) stays stripped despite the
+	// Persian/Urdu fidelity cost — invisible format controls are a
+	// bidi-spoofing vector at the display boundary. ZWJ (U+200D) is preserved
+	// for emoji sequences; LRM/RLM for legitimate RTL text.
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"ZWSP stripped", "a\u200bb", "ab"},
+		{"ZWNJ stripped", "a\u200cb", "ab"},
+		{"BOM stripped", "a\ufeffb", "ab"},
+		{"Persian ZWNJ stripped (accepted trade-off)", "می\u200cخواهم", "میخواهم"},
+		{"ZWJ preserved for emoji", "a\u200db", "a\u200db"},
+		{"LRM and RLM preserved", "\u200ea\u200fb", "\u200ea\u200fb"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := display.SanitizeForDisplay(tc.input, display.DisplayPolicy{AllowNewline: false})
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeIncompleteANSISequences(t *testing.T) {
+	// Incomplete ANSI sequences: the ESC is removed, but any printable
+	// residue after it is NOT an active escape sequence and is preserved
+	// as harmless text. This pins the behavior; changing it requires
+	// assessing impact on all callers.
+	cases := []struct {
+		in, want string
+	}{
+		{"abc\x1b[3", "abc[3"}, // ESC removed, "[3" is inert text
+		{"abc\x1b[", "abc["},   // ESC removed, "[" is inert text
+		{"abc\x1b", "abc"},     // lone ESC removed entirely
+		{"\x1b[31mRED", "RED"}, // complete sequence stripped
+		{"a\x1bb", "ab"},       // ESC before regular char removed
+	}
+	for _, tc := range cases {
+		got := display.SanitizeForDisplay(tc.in, display.DisplayPolicy{AllowNewline: true})
+		if got != tc.want {
+			t.Errorf("SanitizeForDisplay(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+		// The output must never contain a live ESC byte.
+		if strings.Contains(got, "\x1b") {
+			t.Errorf("SanitizeForDisplay(%q) left live ESC: %q", tc.in, got)
+		}
+	}
+}

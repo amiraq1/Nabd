@@ -52,7 +52,12 @@ func (t grepFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 		IgnoreCase bool   `json:"ignore_case"`
 		Limit      int    `json:"limit"`
 	}
-	if err := json.Unmarshal(raw, &a); err != nil {
+	// The shared strict boundary: see decodeStrict. Arguments arrive here after
+	// repair, and the decoded value is the one the gate classified and the
+	// journal carries; a duplicate key, an undeclared field, data after the
+	// first value, or nesting past the ceiling is refused rather than silently
+	// interpreted. See V14 in docs/THREAT_MODEL.md.
+	if err := decodeStrict(raw, &a); err != nil {
 		return "", false, fmt.Errorf("invalid args: %w", err)
 	}
 	if strings.TrimSpace(a.Pattern) == "" {

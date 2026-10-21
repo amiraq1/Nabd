@@ -1,7 +1,9 @@
-// Package tools: bash.go runs a shell command in its own process group.
-// Two guarantees only: it cannot hang on stdin and it cannot read the
-// provider keys. Everything else about this tool is the human's eye at
-// the permission prompt.
+// Package tools: bash.go runs a shell command in its own process group with the
+// user's full OS permissions (e.g. Termux user permissions). Environment
+// variables are strictly sanitized via an allowlist so provider keys are not
+// inherited via process environment, but an approved command runs with the user's
+// authority and can access any file the user has permission to read.
+// Everything else about this tool is the human's eye at the permission prompt.
 package tools
 
 import (
@@ -14,10 +16,11 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 )
@@ -55,16 +58,16 @@ func (b bashTool) Run(ctx context.Context, raw json.RawMessage) (string, bool, e
 	return o.Text, o.OK, err
 }
 
-func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.Outcome, error) {
+func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (event.Outcome, error) {
 	var a struct {
 		Cmd string `json:"cmd"`
 		T   int    `json:"timeout_s"`
 	}
 	if err := decodeStrict(raw, &a); err != nil {
-		return agent.Outcome{}, fmt.Errorf("invalid args: %w", err)
+		return event.Outcome{}, fmt.Errorf("invalid args: %w", err)
 	}
 	if strings.TrimSpace(a.Cmd) == "" {
-		return agent.Outcome{}, errors.New("empty command")
+		return event.Outcome{}, errors.New("empty command")
 	}
 	to := bashDefaultTimeout
 	if a.T > 0 {
@@ -76,7 +79,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 
 	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
 	if err != nil {
-		return agent.Outcome{}, err
+		return event.Outcome{}, err
 	}
 	defer null.Close()
 
@@ -85,7 +88,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	// still holds the write end. StdoutPipe would deadlock on exactly that.
 	pr, pw, err := os.Pipe()
 	if err != nil {
-		return agent.Outcome{}, err
+		return event.Outcome{}, err
 	}
 	defer pr.Close()
 
@@ -116,7 +119,7 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	started := time.Now()
 	if err := cmd.Start(); err != nil {
 		pw.Close()
-		return agent.Outcome{}, err
+		return event.Outcome{}, err
 	}
 	pw.Close() // the parent's copy, or the reader never sees EOF
 	pgid := cmd.Process.Pid
@@ -151,9 +154,17 @@ func (b bashTool) RunDetailed(ctx context.Context, raw json.RawMessage) (agent.O
 	select {
 	case <-read:
 	case <-time.After(bashDrainGrace):
+		// Drain grace expired because a background grandchild is still holding
+		// the write end of the pipe. Close the read pipe so io.Copy unblocks
+		// immediately, eliminating reader goroutine leaks and race windows.
+		_ = pr.Close()
+		select {
+		case <-read:
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
 
-	out := agent.Outcome{Text: buf.String(), OK: werr == nil}
+	out := event.Outcome{Text: buf.String(), OK: werr == nil}
 	if ee, ok := werr.(*exec.ExitError); ok {
 		if ws, ok := ee.Sys().(syscall.WaitStatus); ok {
 			out.Exit = ws.ExitStatus()
@@ -314,12 +325,16 @@ func newTempDir() (string, error) {
 // headTail keeps the opening and the ending. The middle of a long build log
 // is the part nobody reads and the model pays for twice.
 type headTail struct {
+	mu    sync.RWMutex
 	head  []byte
 	tail  []byte
 	total int
 }
 
 func (h *headTail) Write(p []byte) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	// io.Writer contract: return the number of bytes consumed from the
 	// original slice, not the number appended to tail. Returning less than
 	// len(p) without an error signals a short write and may cause io.Copy to
@@ -344,12 +359,18 @@ func (h *headTail) Write(p []byte) (int, error) {
 }
 
 func (h *headTail) String() string {
-	if h.total <= len(h.head) {
-		return string(h.head)
+	h.mu.RLock()
+	total := h.total
+	head := append([]byte(nil), h.head...)
+	tail := append([]byte(nil), h.tail...)
+	h.mu.RUnlock()
+
+	if total <= len(head) {
+		return string(head)
 	}
-	cut := h.total - len(h.head) - len(h.tail)
+	cut := total - len(head) - len(tail)
 	return fmt.Sprintf("%s\n… %d bytes cut from the middle …\n%s",
-		h.head, cut, trimToRune(h.tail))
+		head, cut, trimToRune(tail))
 }
 
 // trimToRune drops a half rune at the cut, or the JSON encoder emits U+FFFD

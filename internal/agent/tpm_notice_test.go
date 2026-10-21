@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"nabd/internal/event"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,19 +46,19 @@ func TestTPMLimitNoticeEmitted(t *testing.T) {
 	prov := &provider.OpenAICompat{Key: "test", Model: "m", BaseURL: srv.URL, Client: &http.Client{}}
 
 	var mu sync.Mutex
-	var notices []agent.Event
-	var all []agent.Event
+	var notices []event.Event
+	var all []event.Event
 	l := &agent.Loop{
 		Provider: prov,
 		Tools:    noTools{},
 		Budget:   agent.NewBudget(),
 		Gate:     noTools{},
 		Human:    noTools{},
-		Sink: sinkFn3(func(e agent.Event) error {
+		Sink: sinkFn3(func(e event.Event) error {
 			mu.Lock()
 			defer mu.Unlock()
 			all = append(all, e)
-			if e.Type == agent.Notice {
+			if e.Type == event.Notice {
 				notices = append(notices, e)
 			}
 			return nil
@@ -84,7 +85,7 @@ func TestTPMLimitNoticeEmitted(t *testing.T) {
 	// Exactly one terminal marker (RunError) for run 1.
 	terminals := 0
 	for _, e := range all {
-		if e.Type == agent.RunError {
+		if e.Type == event.RunError {
 			terminals++
 		}
 	}
@@ -134,7 +135,7 @@ func TestTPMNoticeNamesTheReadCap_NBD404(t *testing.T) {
 
 	tools := capTools{cap: 3072}
 	var mu sync.Mutex
-	var notices []agent.Event
+	var notices []event.Event
 	l := &agent.Loop{
 		Provider: prov,
 		Tools:    tools,
@@ -142,10 +143,10 @@ func TestTPMNoticeNamesTheReadCap_NBD404(t *testing.T) {
 		Gate:     tools,
 		Human:    tools,
 		MaxTurns: 1,
-		Sink: sinkFn3(func(e agent.Event) error {
+		Sink: sinkFn3(func(e event.Event) error {
 			mu.Lock()
 			defer mu.Unlock()
-			if e.Type == agent.Notice {
+			if e.Type == event.Notice {
 				notices = append(notices, e)
 			}
 			return nil
@@ -201,7 +202,7 @@ func TestLoopDefaultCeilingIsDefaultMaxTurns_NBD404(t *testing.T) {
 		Budget:   agent.NewBudget(),
 		Gate:     allow,
 		Human:    allow,
-		Sink:     sinkFn3(func(agent.Event) error { return nil }),
+		Sink:     sinkFn3(func(event.Event) error { return nil }),
 		// MaxTurns left unset on purpose: the default is the subject.
 	}
 

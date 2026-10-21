@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"fmt"
+	"nabd/internal/event"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -49,10 +50,10 @@ func (slowTools) Run(ctx context.Context, c provider.ToolCall) (string, bool, er
 	return "", false, fmt.Errorf("no tools in this test")
 }
 func (slowTools) Check(tool string) (agent.Verdict, string)              { return agent.VerdictDeny, "no" }
-func (slowTools) Record(tool string, d agent.Decision)                   {}
-func (slowTools) Effective(tool string, d agent.Decision) agent.Decision { return d }
-func (slowTools) Ask(ctx context.Context, c agent.ToolCall) agent.Decision {
-	return agent.Deny
+func (slowTools) Record(tool string, d event.Decision)                   {}
+func (slowTools) Effective(tool string, d event.Decision) event.Decision { return d }
+func (slowTools) Ask(ctx context.Context, c event.ToolCall) event.Decision {
+	return event.Deny
 }
 
 // TestInterruptMidStreamDeterministic proves Band 2 with a fake SSE server:
@@ -73,14 +74,14 @@ func TestInterruptMidStreamDeterministic(t *testing.T) {
 	defer cancel()
 
 	var mu sync.Mutex
-	var events []agent.Event
+	var events []event.Event
 	l := &agent.Loop{
 		Provider: prov,
 		Tools:    slowTools{},
 		Budget:   agent.NewBudget(),
 		Gate:     slowTools{},
 		Human:    slowTools{},
-		Sink:     sinkFunc2(func(e agent.Event) error { mu.Lock(); events = append(events, e); mu.Unlock(); return nil }),
+		Sink:     sinkFunc2(func(e event.Event) error { mu.Lock(); events = append(events, e); mu.Unlock(); return nil }),
 	}
 
 	done := make(chan error, 1)
@@ -90,7 +91,7 @@ func TestInterruptMidStreamDeterministic(t *testing.T) {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		mu.Lock()
-		n := countType(events, agent.TextDelta)
+		n := countType(events, event.TextDelta)
 		mu.Unlock()
 		if n >= 3 {
 			break
@@ -98,7 +99,7 @@ func TestInterruptMidStreamDeterministic(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	mu.Lock()
-	deltasBefore := countType(events, agent.TextDelta)
+	deltasBefore := countType(events, event.TextDelta)
 	mu.Unlock()
 	if deltasBefore < 3 {
 		t.Fatalf("stream did not start: only %d deltas before cancel", deltasBefore)
@@ -112,22 +113,22 @@ func TestInterruptMidStreamDeterministic(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	interrupted := countType(events, agent.Interrupted)
+	interrupted := countType(events, event.Interrupted)
 	if interrupted != 1 {
 		t.Errorf("Interrupted events = %d, want exactly 1", interrupted)
 	}
-	deltasAfter := countType(events, agent.TextDelta)
+	deltasAfter := countType(events, event.TextDelta)
 	if deltasAfter < deltasBefore {
 		t.Errorf("deltas shrank after interrupt: before=%d after=%d", deltasBefore, deltasAfter)
 	}
 	// The journal must end with the Interrupted event, not mid-delta.
 	last := events[len(events)-1]
-	if last.Type != agent.Interrupted {
+	if last.Type != event.Interrupted {
 		t.Errorf("last event after interrupt = %s, want Interrupted", last.Type)
 	}
 }
 
-func countType(evs []agent.Event, typ agent.EventType) int {
+func countType(evs []event.Event, typ event.EventType) int {
 	n := 0
 	for _, e := range evs {
 		if e.Type == typ {

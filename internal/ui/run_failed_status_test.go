@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestRunErrorRetiresProgressStatus pins the E8 regression: a journaled
@@ -18,7 +18,7 @@ func TestRunErrorRetiresProgressStatus(t *testing.T) {
 		t.Fatalf("precondition: want Generating…, got %q", got)
 	}
 
-	m.trackState(agent.Event{Type: agent.RunError, Seq: 1})
+	m.trackState(event.Event{Type: event.RunError, Seq: 1})
 
 	got := m.runtimeStatusText()
 	if got == "Generating…" || got == "Working…" {
@@ -43,7 +43,7 @@ func TestRunErrorKeepsSendGate(t *testing.T) {
 	m.running = true
 	m.busy = true
 
-	m.trackState(agent.Event{Type: agent.RunError, Seq: 1})
+	m.trackState(event.Event{Type: event.RunError, Seq: 1})
 
 	if !m.busy {
 		t.Fatal("busy cleared by RunError: the send gate would open before doneMsg")
@@ -61,7 +61,7 @@ func TestInterruptedRetiresProgressStatus(t *testing.T) {
 	m.busy = true
 	m.runningTool = "Bash"
 
-	m.trackState(agent.Event{Type: agent.Interrupted, Seq: 2})
+	m.trackState(event.Event{Type: event.Interrupted, Seq: 2})
 
 	got := m.runtimeStatusText()
 	if got == "Generating…" || got == "Working…" || got == "Running Bash…" {
@@ -79,7 +79,7 @@ func TestDoneMsgClearsRunFailedStatus(t *testing.T) {
 	m := NewFeed()
 	m.running = true
 	m.busy = true
-	m.trackState(agent.Event{Type: agent.RunError, Seq: 1})
+	m.trackState(event.Event{Type: event.RunError, Seq: 1})
 
 	if _, _ = m.Update(doneMsg{}); m.status != "" {
 		t.Fatalf("status not cleared by doneMsg: %q", m.status)

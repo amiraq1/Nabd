@@ -2,7 +2,10 @@
 // before it runs. The loop never inspects arguments and never guesses.
 package agent
 
-import "context"
+import (
+	"context"
+	"nabd/internal/event"
+)
 
 // Verdict is what the policy says without troubling the human.
 // The zero value asks: silence is never consent.
@@ -21,15 +24,15 @@ const (
 // so the journal records the grant that was given rather than clicked.
 type Gate interface {
 	Check(tool string) (Verdict, string)
-	Record(tool string, d Decision)
-	Effective(tool string, d Decision) Decision
+	Record(tool string, d event.Decision)
+	Effective(tool string, d event.Decision) event.Decision
 }
 
 // ReasonedGate is the additive permission-reason contract. Keeping it optional
 // preserves source compatibility for embedders and test gates while the built-in
 // policy emits stable codes for every new permission event.
 type ReasonedGate interface {
-	CheckReason(tool string) (Verdict, PermissionReason, string)
+	CheckReason(tool string) (Verdict, event.PermissionReason, string)
 }
 
 // SessionGrantPolicy is optional so existing test gates and integrations keep
@@ -39,9 +42,33 @@ type SessionGrantPolicy interface {
 	SessionGrantAllowed(tool string) bool
 }
 
+// CallGrantPolicy is the optional per-call extension of SessionGrantPolicy: a
+// gate that answers per call can also say whether this call may carry a
+// standing grant. decide consults it so a call that must be approved every time
+// neither offers the session choice nor records one — which is what makes
+// "approval required on every write" true rather than merely displayed.
+type CallGrantPolicy interface {
+	SessionGrantAllowedCall(c event.ToolCall) bool
+}
+
+// CallAwareGate is an optional gate extension for tools whose permission
+// verdict depends on the call arguments, not just the tool name
+// (MCP-SEC-09: one adapter name fronts many server tools with different
+// local classifications). When the gate implements it, decide consults
+// CheckCall for the calls HandlesCall accepts and keeps the name-based
+// Check for everything else. RecordCall runs after a handled call is
+// allowed, so per-call grants (e.g. an MCP first-approval) are persisted
+// exactly once per decision. Implementations must not block on the loop;
+// decide is sequential, so no extra synchronization is required.
+type CallAwareGate interface {
+	HandlesCall(c event.ToolCall) bool
+	CheckCall(c event.ToolCall) (Verdict, event.PermissionReason, string)
+	RecordCall(c event.ToolCall, d event.Decision)
+}
+
 // Asker is the human, reached through the UI. It must return on ctx death.
 type Asker interface {
-	Ask(ctx context.Context, call ToolCall) Decision
+	Ask(ctx context.Context, call event.ToolCall) event.Decision
 }
 
 // decide emits the question and the answer into the journal, so a replay
@@ -49,59 +76,82 @@ type Asker interface {
 // PermReply event records both the raw user decision and the effective
 // decision actually applied after policy constraints (e.g. AllowSession
 // for an Executing tool becomes AllowOnce).
-func (l *Loop) decide(ctx context.Context, c ToolCall, emit func(Event) error) (Decision, string) {
+func (l *Loop) decide(ctx context.Context, c event.ToolCall, emit func(event.Event) error) (event.Decision, string) {
 	if l.Gate == nil {
-		return Deny, "no permission gate installed"
+		return event.Deny, "no permission gate installed"
 	}
+	// Per-call verdicts for argument-addressed tools (MCP). The PermAsk /
+	// PermReply journaling and the human prompt below are shared with the
+	// name-based path; only the verdict source and the post-allow recording
+	// differ.
+	var cg CallAwareGate
 	v, reason, why := checkPermission(l.Gate, c.Name)
+	if tmp, ok := l.Gate.(CallAwareGate); ok && tmp.HandlesCall(c) {
+		cg = tmp
+		v, reason, why = cg.CheckCall(c)
+	}
 	switch v {
 	case VerdictAllow:
-		return AllowOnce, ""
+		if cg != nil {
+			cg.RecordCall(c, event.AllowOnce)
+		}
+		return event.AllowOnce, ""
 	case VerdictDeny:
 		if why == "" {
 			why = "unknown or forbidden tool"
-			reason = PermissionReasonUnknownOrForbidden
+			reason = event.PermissionReasonUnknownOrForbidden
 		}
-		if err := emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: why, Reason: reason}); err != nil {
-			return Deny, "permission decision was not journaled: " + err.Error()
+		if err := emit(event.Event{Type: event.PermReply, Call: &c, Decision: event.Deny, RawDecision: event.Deny, Text: why, Reason: reason}); err != nil {
+			return event.Deny, "permission decision was not journaled: " + err.Error()
 		}
-		return Deny, why
+		return event.Deny, why
 	}
 	if l.Human == nil {
 		const noPrompt = "no prompt interface"
-		if err := emit(Event{Type: PermReply, Call: &c, Decision: Deny, RawDecision: Deny, Text: noPrompt, Reason: PermissionReasonNoPrompt}); err != nil {
-			return Deny, "permission decision was not journaled: " + err.Error()
+		if err := emit(event.Event{Type: event.PermReply, Call: &c, Decision: event.Deny, RawDecision: event.Deny, Text: noPrompt, Reason: event.PermissionReasonNoPrompt}); err != nil {
+			return event.Deny, "permission decision was not journaled: " + err.Error()
 		}
-		return Deny, noPrompt
+		return event.Deny, noPrompt
 	}
 	if policy, ok := l.Gate.(SessionGrantPolicy); ok {
 		c.SessionGrantKnown = true
 		c.SessionGrantAllowed = policy.SessionGrantAllowed(c.Name)
 	}
-	if err := emit(Event{Type: PermAsk, Call: &c, Text: why, Reason: reason}); err != nil {
-		return Deny, "permission question was not journaled: " + err.Error()
+	if cgp, ok := l.Gate.(CallGrantPolicy); ok && !cgp.SessionGrantAllowedCall(c) {
+		c.SessionGrantAllowed = false
+	}
+	if err := emit(event.Event{Type: event.PermAsk, Call: &c, Text: why, Reason: reason}); err != nil {
+		return event.Deny, "permission question was not journaled: " + err.Error()
 	}
 	d := l.Human.Ask(ctx, c)
 	if ctx.Err() != nil {
-		d = Deny // ctrl+c must never widen permission
+		d = event.Deny // ctrl+c must never widen permission
 	}
 	// Apply policy constraints: the effective decision may differ from the
 	// raw click (e.g. AllowSession for bash → AllowOnce).
 	effective := l.Gate.Effective(c.Name, d)
-	if err := emit(Event{Type: PermReply, Call: &c, Decision: effective, RawDecision: d, Text: why, Reason: reason}); err != nil {
-		return Deny, "permission reply was not journaled: " + err.Error()
+	if cgp, ok := l.Gate.(CallGrantPolicy); ok && effective == event.AllowSession && !cgp.SessionGrantAllowedCall(c) {
+		// Defence in depth: an asker that answers AllowSession anyway (a test
+		// double, an embedder) gets one-time consent, never a standing grant.
+		effective = event.AllowOnce
 	}
-	if effective == AllowSession {
+	if err := emit(event.Event{Type: event.PermReply, Call: &c, Decision: effective, RawDecision: d, Text: why, Reason: reason}); err != nil {
+		return event.Deny, "permission reply was not journaled: " + err.Error()
+	}
+	if effective == event.AllowSession {
 		l.Gate.Record(c.Name, effective)
+	}
+	if cg != nil && effective == event.AllowOnce {
+		cg.RecordCall(c, effective)
 	}
 	return effective, ""
 }
 
-func checkPermission(g Gate, tool string) (Verdict, PermissionReason, string) {
+func checkPermission(g Gate, tool string) (Verdict, event.PermissionReason, string) {
 	if rg, ok := g.(ReasonedGate); ok {
 		v, reason, text := rg.CheckReason(tool)
 		if reason != "" && !reason.Valid() {
-			return VerdictDeny, PermissionReasonUnknownOrForbidden, "unknown or forbidden tool"
+			return VerdictDeny, event.PermissionReasonUnknownOrForbidden, "unknown or forbidden tool"
 		}
 		return v, reason, text
 	}

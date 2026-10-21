@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/snap"
 )
 
@@ -57,7 +57,7 @@ func TestUndoStillWorksWithShieldedGitignore(t *testing.T) {
 		t.Fatalf(".gitignore = %q, want the single rule *", got)
 	}
 
-	results := reg.PersistedUndo([]*agent.EditRecord{recEdit}, 1)
+	results := reg.PersistedUndo([]*event.EditRecord{recEdit}, 1)
 	if len(results) != 1 || !results[0].OK {
 		t.Fatalf("undo failed: %+v", results)
 	}

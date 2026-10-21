@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"nabd/internal/event"
 	"strings"
 	"sync"
 	"testing"
@@ -70,17 +71,19 @@ func (m *staticMockTools) Specs() []provider.ToolSpec {
 func (m *staticMockTools) Run(_ context.Context, _ provider.ToolCall) (string, bool, error) {
 	return m.output, m.ok, nil
 }
-func (m *staticMockTools) Check(_ string) (Verdict, string)           { return VerdictAllow, "" }
-func (m *staticMockTools) Record(_ string, _ Decision)                {}
-func (m *staticMockTools) Effective(_ string, d Decision) Decision    { return d }
-func (m *staticMockTools) Ask(_ context.Context, _ ToolCall) Decision { return AllowOnce }
+func (m *staticMockTools) Check(_ string) (Verdict, string)                    { return VerdictAllow, "" }
+func (m *staticMockTools) Record(_ string, _ event.Decision)                   {}
+func (m *staticMockTools) Effective(_ string, d event.Decision) event.Decision { return d }
+func (m *staticMockTools) Ask(_ context.Context, _ event.ToolCall) event.Decision {
+	return event.AllowOnce
+}
 
 type eventCollectorSink struct {
 	mu     sync.Mutex
-	events []Event
+	events []event.Event
 }
 
-func (s *eventCollectorSink) Emit(e Event) error {
+func (s *eventCollectorSink) Emit(e event.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, e)
@@ -112,7 +115,7 @@ func TestToolLoopNoticeAtThreeRepeats(t *testing.T) {
 	// Verify that a notice was emitted to the journal.
 	var noticeFound bool
 	for _, ev := range sink.events {
-		if ev.Type == Notice && strings.Contains(ev.Text, "loop detected") && strings.Contains(ev.Text, "3 times") {
+		if ev.Type == event.Notice && strings.Contains(ev.Text, "loop detected") && strings.Contains(ev.Text, "3 times") {
 			noticeFound = true
 			break
 		}
@@ -160,7 +163,7 @@ func TestToolLoopHardCutAtFiveRepeats(t *testing.T) {
 	}
 
 	err := l.Run(context.Background(), "test prompt")
-	if !errors.Is(err, ErrToolLoop) {
+	if !errors.Is(err, event.ErrToolLoop) {
 		t.Fatalf("Run() error = %v, want ErrToolLoop", err)
 	}
 
@@ -173,17 +176,17 @@ func TestToolLoopHardCutAtFiveRepeats(t *testing.T) {
 	}
 
 	// Verify that RunError event was journaled with ErrorCode "loop_detected".
-	var runErrorEvent *Event
+	var runErrorEvent *event.Event
 	for i := range sink.events {
-		if sink.events[i].Type == RunError {
+		if sink.events[i].Type == event.RunError {
 			runErrorEvent = &sink.events[i]
 		}
 	}
 	if runErrorEvent == nil {
 		t.Fatalf("expected RunError event in journal, got none")
 	}
-	if runErrorEvent.ErrorCode != string(ErrCodeLoopDetected) {
-		t.Errorf("RunError ErrorCode = %q, want %q", runErrorEvent.ErrorCode, ErrCodeLoopDetected)
+	if runErrorEvent.ErrorCode != string(event.ErrCodeLoopDetected) {
+		t.Errorf("RunError ErrorCode = %q, want %q", runErrorEvent.ErrorCode, event.ErrCodeLoopDetected)
 	}
 }
 
@@ -241,7 +244,7 @@ func TestToolLoopResetAcrossRuns(t *testing.T) {
 
 	// Verify that the 3-repeat notice was NEVER emitted, because each run had only 2 calls.
 	for _, ev := range sink.events {
-		if ev.Type == Notice && strings.Contains(ev.Text, "loop detected") {
+		if ev.Type == event.Notice && strings.Contains(ev.Text, "loop detected") {
 			t.Fatalf("unexpected loop notice emitted across distinct runs: %s", ev.Text)
 		}
 	}

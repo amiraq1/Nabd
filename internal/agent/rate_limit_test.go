@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"nabd/internal/event"
 	"strings"
 	"testing"
 
@@ -12,10 +13,10 @@ import (
 
 // recordSink captures emitted events for assertions.
 type recordSink struct {
-	evs []Event
+	evs []event.Event
 }
 
-func (r *recordSink) Emit(e Event) error {
+func (r *recordSink) Emit(e event.Event) error {
 	r.evs = append(r.evs, e)
 	return nil
 }
@@ -78,9 +79,9 @@ func TestLoopEmitsRateLimitEventToJournal(t *testing.T) {
 		t.Fatal("expected errTurnRateLimited from a 429 turn")
 	}
 
-	var rlEvent *Event
+	var rlEvent *event.Event
 	for _, e := range sink.evs {
-		if e.Type == EventRateLimit {
+		if e.Type == event.EventRateLimit {
 			rlEvent = &e
 			break
 		}
@@ -89,7 +90,7 @@ func TestLoopEmitsRateLimitEventToJournal(t *testing.T) {
 		t.Fatalf("expected EventRateLimit to be emitted, got %d events", len(sink.evs))
 	}
 	for _, e := range sink.evs {
-		if e.Type == EventRateLimit {
+		if e.Type == event.EventRateLimit {
 			rlEvent = &e
 			break
 		}
@@ -165,16 +166,16 @@ func TestCircuitBreaker(t *testing.T) {
 	}
 
 	err := l.Run(context.Background(), "hi")
-	if !errors.Is(err, ErrRateLimitBudget) {
+	if !errors.Is(err, event.ErrRateLimitBudget) {
 		t.Fatalf("expected ErrRateLimitBudget, got: %v", err)
 	}
 
 	var hasNotice, hasRunError bool
 	for _, e := range sink.evs {
-		if e.Type == Notice && strings.Contains(e.Text, "rate limit budget exhausted") {
+		if e.Type == event.Notice && strings.Contains(e.Text, "rate limit budget exhausted") {
 			hasNotice = true
 		}
-		if e.Type == RunError && e.Err == ErrRateLimitBudget.Error() {
+		if e.Type == event.RunError && e.Err == event.ErrRateLimitBudget.Error() {
 			hasRunError = true
 		}
 	}

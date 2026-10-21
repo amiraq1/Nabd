@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	"github.com/charmbracelet/x/ansi"
@@ -15,8 +15,8 @@ func TestAssistantTextCannotInjectTerminalControls(t *testing.T) {
 	// ESC[2J clears screen, ESC[H moves cursor to home
 	malicious := "Hello \x1b[2J\x1b[Hworld! \x1b[31mRed text\x1b[0m"
 	f := newFeedAt(t, 80, 24)
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.TextDelta, Text: malicious},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.TextDelta, Text: malicious},
 	}})
 	v := f.View()
 	if strings.Contains(v, "\x1b[2J") || strings.Contains(v, "\x1b[H") {
@@ -152,9 +152,9 @@ func TestJournalBytesRemainUnsanitized(t *testing.T) {
 	// Invariant: journal event bytes are untouched by display sanitization
 	rawPayload := "original \x1b[31muntouched\x1b[0m bytes"
 	p := presentation.NewProjector()
-	_ = p.Apply(agent.Event{
+	_ = p.Apply(event.Event{
 		Seq:  1,
-		Type: agent.UserMsg,
+		Type: event.UserMsg,
 		Text: rawPayload,
 	})
 	items := p.Items()

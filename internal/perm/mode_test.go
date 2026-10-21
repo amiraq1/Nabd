@@ -3,7 +3,7 @@ package perm
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 func TestModeTable(t *testing.T) {
@@ -47,7 +47,7 @@ func TestModePlanOverridesGrants(t *testing.T) {
 	cls := fakeClassifier{"write_file": Mutating, "bash": Executing}
 	p := New(cls)
 	p.SetMode(ModePlan)
-	p.Record("write_file", agent.AllowSession)
+	p.Record("write_file", event.AllowSession)
 	p.SetYOLO(true)
 
 	if v, why := p.Check("write_file"); v != Deny {
@@ -96,5 +96,29 @@ func TestParseModeRoundTrip(t *testing.T) {
 	}
 	if _, err := ParseMode("nope"); err == nil {
 		t.Fatal("bogus mode accepted")
+	}
+}
+
+// TestModeDenyOverridesYOLO: a deny mode is the session's explicit policy — a
+// blanket YOLO flag must not auto-approve mutating tools under it. An explicit
+// per-tool session grant still stands.
+func TestModeDenyOverridesYOLO(t *testing.T) {
+	for _, mode := range []Mode{ModeDeny, ModeAllowReads} {
+		cls := fakeClassifier{"write_file": Mutating, "read_file": ReadOnly}
+		p := New(cls)
+		p.SetMode(mode)
+		p.SetYOLO(true)
+
+		if v, why := p.Check("write_file"); v != Deny {
+			t.Fatalf("mode %v let a yolo write through: %v (%q)", mode, v, why)
+		}
+		if v, _ := p.Check("read_file"); v != Allow {
+			t.Fatalf("mode %v denied a read: %v", mode, v)
+		}
+
+		p.Record("write_file", event.AllowSession)
+		if v, _ := p.Check("write_file"); v != Allow {
+			t.Fatalf("mode %v ignored an explicit session grant: %v", mode, v)
+		}
 	}
 }

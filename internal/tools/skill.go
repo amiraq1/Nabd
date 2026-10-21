@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/skill"
@@ -48,23 +49,23 @@ func (t skillTool) GuardedResult(ctx context.Context, raw json.RawMessage) (agen
 	return agent.GuardedResult{Event: ev, OK: true}, nil
 }
 
-func (t skillTool) guardedEvent(ctx context.Context, raw json.RawMessage) (agent.Event, error) {
+func (t skillTool) guardedEvent(ctx context.Context, raw json.RawMessage) (event.Event, error) {
 	var a struct {
 		Name string `json:"name"`
 	}
 	if err := decodeStrict(raw, &a); err != nil {
-		return agent.Event{}, fmt.Errorf("invalid args: %w", err)
+		return event.Event{}, fmt.Errorf("invalid args: %w", err)
 	}
 	for _, s := range t.reg.skillList() {
 		if s.Name == strings.TrimSpace(a.Name) {
 			body, err := skill.OpenBody(s)
 			if err != nil {
-				return agent.Event{}, err
+				return event.Event{}, err
 			}
-			return agent.Event{Type: agent.EventSkillBody, SkillBody: &agent.SkillBodyEvent{Body: body, Scope: s.Scope, Class: agent.SkillContentClassUntrusted}}, nil
+			return event.Event{Type: event.EventSkillBody, SkillBody: &event.SkillBodyEvent{Body: body, Scope: s.Scope, Class: event.SkillContentClassUntrusted}}, nil
 		}
 	}
-	return agent.Event{}, fmt.Errorf("unknown skill %q; the skill index lists the available names", a.Name)
+	return event.Event{}, fmt.Errorf("unknown skill %q; the skill index lists the available names", a.Name)
 }
 
 func (t skillTool) Run(ctx context.Context, raw json.RawMessage) (string, bool, error) {

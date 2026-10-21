@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"context"
+	"nabd/internal/event"
 	"testing"
 
 	"nabd/internal/agent"
@@ -29,7 +30,7 @@ func (f fakeProviderBatch) Stream(ctx context.Context, req provider.Request) (<-
 	return ch, nil
 }
 
-func setupLoop(calls []provider.ToolCall, answer agent.Decision) (*agent.Loop, func() []agent.Event) {
+func setupLoop(calls []provider.ToolCall, answer event.Decision) (*agent.Loop, func() []event.Event) {
 	root, _ := tools.NewRoot(".")
 	sh, _ := snap.New(root.Dir())
 	reg := tools.NewRegistry(root, sh)
@@ -45,17 +46,17 @@ func setupLoop(calls []provider.ToolCall, answer agent.Decision) (*agent.Loop, f
 		Tools:    reg,
 	}
 
-	var events []agent.Event
-	loop.Sink = testSink(func(e agent.Event) error {
+	var events []event.Event
+	loop.Sink = testSink(func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	})
 
-	return loop, func() []agent.Event { return events }
+	return loop, func() []event.Event { return events }
 }
 
-func checkPairing(t *testing.T, events []agent.Event, name string) {
-	live := agent.Live(events)
+func checkPairing(t *testing.T, events []event.Event, name string) {
+	live := event.Live(events)
 	msgs := agent.Messages(live)
 
 	// We check if every tool result is paired with a tool call in the same turn or earlier.
@@ -87,19 +88,19 @@ func checkPairing(t *testing.T, events []agent.Event, name string) {
 
 func TestMessagesPairingIntegration(t *testing.T) {
 	t.Run("denied tool", func(t *testing.T) {
-		l, get := setupLoop([]provider.ToolCall{{ID: "1", Name: "bash", Input: []byte(`{}`)}}, agent.Deny)
+		l, get := setupLoop([]provider.ToolCall{{ID: "1", Name: "bash", Input: []byte(`{}`)}}, event.Deny)
 		_ = l.Run(context.Background(), "do it")
 		checkPairing(t, get(), "denied tool")
 	})
 
 	t.Run("unknown tool", func(t *testing.T) {
-		l, get := setupLoop([]provider.ToolCall{{ID: "1", Name: "magic", Input: []byte(`{}`)}}, agent.AllowOnce)
+		l, get := setupLoop([]provider.ToolCall{{ID: "1", Name: "magic", Input: []byte(`{}`)}}, event.AllowOnce)
 		_ = l.Run(context.Background(), "do it")
 		checkPairing(t, get(), "unknown tool")
 	})
 
 	t.Run("allowed tool", func(t *testing.T) {
-		l, get := setupLoop([]provider.ToolCall{{ID: "1", Name: "bash", Input: []byte(`{"command":"echo"}`)}}, agent.AllowOnce)
+		l, get := setupLoop([]provider.ToolCall{{ID: "1", Name: "bash", Input: []byte(`{"command":"echo"}`)}}, event.AllowOnce)
 		_ = l.Run(context.Background(), "do it")
 		checkPairing(t, get(), "allowed tool")
 	})
@@ -108,13 +109,13 @@ func TestMessagesPairingIntegration(t *testing.T) {
 		l, get := setupLoop([]provider.ToolCall{
 			{ID: "1", Name: "read_file", Input: []byte(`{"path":"main.go"}`)}, // implicitly allowed
 			{ID: "2", Name: "bash", Input: []byte(`{"command":"rm -rf /"}`)},  // denied
-		}, agent.Deny)
+		}, event.Deny)
 		_ = l.Run(context.Background(), "do it")
 		checkPairing(t, get(), "partial denial")
 	})
 
 	t.Run("canceled context", func(t *testing.T) {
-		l, get := setupLoop([]provider.ToolCall{{ID: "1", Name: "bash", Input: []byte(`{}`)}}, agent.AllowOnce)
+		l, get := setupLoop([]provider.ToolCall{{ID: "1", Name: "bash", Input: []byte(`{}`)}}, event.AllowOnce)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel() // immediately cancel
 		_ = l.Run(ctx, "do it")
@@ -125,21 +126,21 @@ func TestMessagesPairingIntegration(t *testing.T) {
 		l, get := setupLoop([]provider.ToolCall{
 			{ID: "1", Name: "read_file", Input: []byte(`{"path":"main.go"}`)},
 			{ID: "2", Name: "bash", Input: []byte(`{}`)},
-		}, agent.AllowOnce)
+		}, event.AllowOnce)
 		ctx, cancel := context.WithCancel(context.Background())
 		// Cancel inside the first tool result emission to simulate ctrl+c during batch
-		l.Sink = testSink(func(e agent.Event) error {
-			if e.Type == agent.ToolEnd && e.Call.ID == "1" {
+		l.Sink = testSink(func(e event.Event) error {
+			if e.Type == event.ToolEnd && e.Call.ID == "1" {
 				cancel()
 			}
 			get() // just for side effects, we will append locally
 			return nil
 		})
 		// Re-implement appending to events array for this custom sink
-		var evs []agent.Event
-		l.Sink = testSink(func(e agent.Event) error {
+		var evs []event.Event
+		l.Sink = testSink(func(e event.Event) error {
 			evs = append(evs, e)
-			if e.Type == agent.ToolEnd && e.Call != nil && e.Call.ID == "1" {
+			if e.Type == event.ToolEnd && e.Call != nil && e.Call.ID == "1" {
 				cancel()
 			}
 			return nil
@@ -149,15 +150,15 @@ func TestMessagesPairingIntegration(t *testing.T) {
 	})
 
 	t.Run("legacy session orphan ToolEnd", func(t *testing.T) {
-		events := []agent.Event{
-			{Seq: 1, Type: agent.UserMsg, Text: "do it"},
-			{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "orphan1", Name: "bash", Output: "done", OK: true}},
-			{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "orphan2", Name: "", Output: "fail", OK: false}}, // missing name
+		events := []event.Event{
+			{Seq: 1, Type: event.UserMsg, Text: "do it"},
+			{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "orphan1", Name: "bash", Output: "done", OK: true}},
+			{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "orphan2", Name: "", Output: "fail", OK: false}}, // missing name
 		}
 		checkPairing(t, events, "legacy orphan")
 
 		// specifically assert that orphan2 gets name="unknown" and pairing succeeds
-		msgs := agent.Messages(agent.Live(events))
+		msgs := agent.Messages(event.Live(events))
 		if len(msgs) < 2 {
 			t.Fatalf("expected msgs to have generated calls")
 		}

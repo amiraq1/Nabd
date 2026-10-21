@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // A failed durable intent must stop the mutation before writeFromRoot can
@@ -19,8 +19,8 @@ import (
 func TestMutationIntentFailureDoesNotPublish(t *testing.T) {
 	r, dir := newReg(t)
 	sentinel := errors.New("journal unavailable")
-	var prepared *agent.EditRecord
-	r.OnMutationPrepared = func(rec *agent.EditRecord) error {
+	var prepared *event.EditRecord
+	r.OnMutationPrepared = func(rec *event.EditRecord) error {
 		prepared = rec
 		return sentinel
 	}

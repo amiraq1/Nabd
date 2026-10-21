@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"nabd/internal/event"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -32,20 +33,20 @@ func (m *mockTraceProvider) Stream(ctx context.Context, req provider.Request) (<
 
 type traceRecorderSink struct {
 	mu     sync.Mutex
-	events []Event
+	events []event.Event
 }
 
-func (s *traceRecorderSink) Emit(e Event) error {
+func (s *traceRecorderSink) Emit(e event.Event) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.events = append(s.events, e)
 	return nil
 }
 
-func (s *traceRecorderSink) Events() []Event {
+func (s *traceRecorderSink) Events() []event.Event {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	copied := make([]Event, len(s.events))
+	copied := make([]event.Event, len(s.events))
 	copy(copied, s.events)
 	return copied
 }
@@ -53,11 +54,11 @@ func (s *traceRecorderSink) Events() []Event {
 // ─── 1. Schema & Serialization Tests ──────────────────────────────────────────
 
 func TestProviderRouteEventSchema(t *testing.T) {
-	ev := Event{
+	ev := event.Event{
 		Seq:  1,
 		Time: time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC),
-		Type: EventProviderRoute,
-		Route: &ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			StreamID: "0123456789abcdef0123456789abcdef",
 			Provider: "groq",
 			Model:    "qwen-2.5-32b",
@@ -107,10 +108,10 @@ func TestProviderRouteEventSchema(t *testing.T) {
 }
 
 func TestProviderRouteEventOmitsEmptyReason(t *testing.T) {
-	ev := Event{
+	ev := event.Event{
 		Seq:  1,
-		Type: EventProviderRoute,
-		Route: &ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			StreamID: "stream1",
 			Provider: "anthropic",
 			Model:    "claude-3",
@@ -172,9 +173,9 @@ func TestRouteTraceConvertedToJournalEvent(t *testing.T) {
 		t.Fatalf("streamTurn error: %v", err)
 	}
 
-	var routeEvents []Event
+	var routeEvents []event.Event
 	for _, e := range sink.Events() {
-		if e.Type == EventProviderRoute {
+		if e.Type == event.EventProviderRoute {
 			routeEvents = append(routeEvents, e)
 		}
 	}
@@ -212,9 +213,9 @@ func TestRouteTracePreservesStreamID(t *testing.T) {
 		t.Fatalf("streamTurn error: %v", err)
 	}
 
-	var routeEvents []Event
+	var routeEvents []event.Event
 	for _, e := range sink.Events() {
-		if e.Type == EventProviderRoute {
+		if e.Type == event.EventProviderRoute {
 			routeEvents = append(routeEvents, e)
 		}
 	}
@@ -252,7 +253,7 @@ func TestRouteTracePreservesAttemptOrder(t *testing.T) {
 
 	var attempts []int
 	for _, e := range sink.Events() {
-		if e.Type == EventProviderRoute {
+		if e.Type == event.EventProviderRoute {
 			attempts = append(attempts, e.Route.Attempt)
 		}
 	}
@@ -284,7 +285,7 @@ func TestSelectedRouteRecordedExactlyOnce(t *testing.T) {
 
 	var selectedCount int
 	for _, e := range sink.Events() {
-		if e.Type == EventProviderRoute && e.Route.Status == "selected" {
+		if e.Type == event.EventProviderRoute && e.Route.Status == "selected" {
 			selectedCount++
 		}
 	}
@@ -313,7 +314,7 @@ func TestExhaustedRouteRecordedExactlyOnce(t *testing.T) {
 
 	var exhaustedCount int
 	for _, e := range sink.Events() {
-		if e.Type == EventProviderRoute && e.Route.Status == "exhausted" {
+		if e.Type == event.EventProviderRoute && e.Route.Status == "exhausted" {
 			exhaustedCount++
 		}
 	}
@@ -344,7 +345,7 @@ func TestParentCancellationDoesNotRecordSelectedRoute(t *testing.T) {
 
 	var gotSelected bool
 	for _, e := range sink.Events() {
-		if e.Type == EventProviderRoute && e.Route.Status == "selected" {
+		if e.Type == event.EventProviderRoute && e.Route.Status == "selected" {
 			gotSelected = true
 		}
 	}
@@ -357,12 +358,12 @@ func TestParentCancellationDoesNotRecordSelectedRoute(t *testing.T) {
 // ─── 3. Replay & Model Message Isolation (O.4) ────────────────────────────────
 
 func TestProviderRouteEventNeverReachesModelMessages(t *testing.T) {
-	events := []Event{
-		{Seq: 1, Type: UserMsg, Text: "hello"},
+	events := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
 		{
 			Seq:  2,
-			Type: EventProviderRoute,
-			Route: &ProviderRoute{
+			Type: event.EventProviderRoute,
+			Route: &event.ProviderRoute{
 				StreamID: "stream1",
 				Provider: "groq",
 				Model:    "qwen",
@@ -370,8 +371,8 @@ func TestProviderRouteEventNeverReachesModelMessages(t *testing.T) {
 				Status:   "selected",
 			},
 		},
-		{Seq: 3, Type: TextDelta, Text: "world"},
-		{Seq: 4, Type: TurnEnd},
+		{Seq: 3, Type: event.TextDelta, Text: "world"},
+		{Seq: 4, Type: event.TurnEnd},
 	}
 
 	msgs := Messages(events)
@@ -386,9 +387,9 @@ func TestProviderRouteEventNeverReachesModelMessages(t *testing.T) {
 
 func TestReplayExplicitlyIgnoresProviderRouteEvent(t *testing.T) {
 	// Replaying a stream with only EventProviderRoute events must yield no messages
-	events := []Event{
-		{Seq: 1, Type: EventProviderRoute, Route: &ProviderRoute{Status: "attempted"}},
-		{Seq: 2, Type: EventProviderRoute, Route: &ProviderRoute{Status: "selected"}},
+	events := []event.Event{
+		{Seq: 1, Type: event.EventProviderRoute, Route: &event.ProviderRoute{Status: "attempted"}},
+		{Seq: 2, Type: event.EventProviderRoute, Route: &event.ProviderRoute{Status: "selected"}},
 	}
 
 	msgs := Messages(events)
@@ -399,8 +400,8 @@ func TestReplayExplicitlyIgnoresProviderRouteEvent(t *testing.T) {
 
 func TestReplayDoesNotWarnForProviderRouteEvent(t *testing.T) {
 	// Replay should process EventProviderRoute without hitting the default case
-	events := []Event{
-		{Seq: 1, Type: EventProviderRoute, Route: &ProviderRoute{Status: "selected"}},
+	events := []event.Event{
+		{Seq: 1, Type: event.EventProviderRoute, Route: &event.ProviderRoute{Status: "selected"}},
 	}
 	msgs := Messages(events)
 	if len(msgs) != 0 {
@@ -410,10 +411,10 @@ func TestReplayDoesNotWarnForProviderRouteEvent(t *testing.T) {
 
 func TestProviderRouteJournalNeverContainsConfiguredKeys(t *testing.T) {
 	key := "gsk_myverysensitiveapikeydo_not_leak"
-	ev := Event{
+	ev := event.Event{
 		Seq:  1,
-		Type: EventProviderRoute,
-		Route: &ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			StreamID: "s1",
 			Provider: "groq",
 			Model:    "m",
@@ -438,10 +439,10 @@ func TestProviderRouteReasonIsSanitizedAndBounded(t *testing.T) {
 	hugeMsg := strings.Repeat("x", 10000)
 	sanitized := provider.SanitizeBody(hugeMsg, nil)
 
-	ev := Event{
+	ev := event.Event{
 		Seq:  1,
-		Type: EventProviderRoute,
-		Route: &ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			StreamID: "s1",
 			Reason:   sanitized,
 		},
@@ -486,7 +487,7 @@ func TestConcurrentStreamsPreservePerStreamEventOrder(t *testing.T) {
 			}
 			_, _, _ = l.streamTurn(context.Background(), nil)
 			for _, e := range sink.Events() {
-				if e.Type == EventProviderRoute {
+				if e.Type == event.EventProviderRoute {
 					record(e.Route.StreamID, e.Route.Attempt)
 				}
 			}
@@ -540,11 +541,11 @@ func TestRouteTraceDoesNotDuplicateToolExecution(t *testing.T) {
 
 func TestUnknownHistoricalEventsRemainBackwardCompatible(t *testing.T) {
 	// Replay should safely skip unknown event types without crashing
-	events := []Event{
-		{Seq: 1, Type: EventType("future_event_type_v2"), Text: "future content"},
-		{Seq: 2, Type: UserMsg, Text: "hi"},
-		{Seq: 3, Type: TextDelta, Text: "hello"},
-		{Seq: 4, Type: TurnEnd},
+	events := []event.Event{
+		{Seq: 1, Type: event.EventType("future_event_type_v2"), Text: "future content"},
+		{Seq: 2, Type: event.UserMsg, Text: "hi"},
+		{Seq: 3, Type: event.TextDelta, Text: "hello"},
+		{Seq: 4, Type: event.TurnEnd},
 	}
 
 	msgs := Messages(events)

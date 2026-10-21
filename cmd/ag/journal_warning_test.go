@@ -15,6 +15,7 @@ func TestNewSessionJournalWarnsRedactionIsEnabledByDefault(t *testing.T) {
 	journal, path, err := newSessionJournalWithWarning(
 		t.TempDir(),
 		&warnings,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("newSessionJournalWithWarning: %v", err)
@@ -62,7 +63,7 @@ func TestNewSessionJournalWarnsOnExplicitRedactionOptOut(t *testing.T) {
 	t.Setenv(journalRedactionEnv, "0")
 
 	var warnings bytes.Buffer
-	journal, _, err := newSessionJournalWithWarning(t.TempDir(), &warnings)
+	journal, _, err := newSessionJournalWithWarning(t.TempDir(), &warnings, nil)
 	if err != nil {
 		t.Fatalf("newSessionJournalWithWarning: %v", err)
 	}
@@ -80,6 +81,7 @@ func TestNewSessionJournalAllowsNilWarningWriter(t *testing.T) {
 	journal, _, err := newSessionJournalWithWarning(
 		t.TempDir(),
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("newSessionJournalWithWarning: %v", err)
@@ -92,7 +94,7 @@ func TestNewSessionJournalAllowsNilWarningWriter(t *testing.T) {
 func TestStartupNoticeStatesNoSandbox(t *testing.T) {
 	isolateJournalConfig(t)
 	var warnings bytes.Buffer
-	journal, _, err := newSessionJournalWithWarning(t.TempDir(), &warnings)
+	journal, _, err := newSessionJournalWithWarning(t.TempDir(), &warnings, nil)
 	if err != nil {
 		t.Fatalf("newSessionJournalWithWarning: %v", err)
 	}

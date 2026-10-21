@@ -4,15 +4,15 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestRenderEvent_ProviderRoute_Failed tests rendering a failed provider route in Classic/Replay UI.
 func TestRenderEvent_ProviderRoute_Failed(t *testing.T) {
-	ev := agent.Event{
+	ev := event.Event{
 		Seq:  10,
-		Type: agent.EventProviderRoute,
-		Route: &agent.ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			Status:   "failed",
 			Provider: "anthropic",
 			Model:    "claude-3-5-sonnet",
@@ -48,10 +48,10 @@ func TestRenderEvent_ProviderRoute_Failed(t *testing.T) {
 
 // TestRenderEvent_ProviderRoute_FallbackSelected tests rendering a fallback selected route in Classic/Replay UI.
 func TestRenderEvent_ProviderRoute_FallbackSelected(t *testing.T) {
-	ev := agent.Event{
+	ev := event.Event{
 		Seq:  11,
-		Type: agent.EventProviderRoute,
-		Route: &agent.ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			Status:   "selected",
 			Provider: "openrouter",
 			Model:    "deepseek/deepseek-chat",
@@ -83,13 +83,13 @@ func TestRenderEvent_ProviderRoute_FallbackSelected(t *testing.T) {
 func TestRenderEvent_ProviderRoute_HiddenCases(t *testing.T) {
 	cases := []struct {
 		name  string
-		event agent.Event
+		event event.Event
 	}{
 		{
 			name: "selected attempt 1",
-			event: agent.Event{
-				Type: agent.EventProviderRoute,
-				Route: &agent.ProviderRoute{
+			event: event.Event{
+				Type: event.EventProviderRoute,
+				Route: &event.ProviderRoute{
 					Status:   "selected",
 					Provider: "anthropic",
 					Model:    "claude-3-5-sonnet",
@@ -99,9 +99,9 @@ func TestRenderEvent_ProviderRoute_HiddenCases(t *testing.T) {
 		},
 		{
 			name: "selected attempt 0",
-			event: agent.Event{
-				Type: agent.EventProviderRoute,
-				Route: &agent.ProviderRoute{
+			event: event.Event{
+				Type: event.EventProviderRoute,
+				Route: &event.ProviderRoute{
 					Status:   "selected",
 					Provider: "anthropic",
 					Model:    "claude-3-5-sonnet",
@@ -111,9 +111,9 @@ func TestRenderEvent_ProviderRoute_HiddenCases(t *testing.T) {
 		},
 		{
 			name: "selected negative attempt",
-			event: agent.Event{
-				Type: agent.EventProviderRoute,
-				Route: &agent.ProviderRoute{
+			event: event.Event{
+				Type: event.EventProviderRoute,
+				Route: &event.ProviderRoute{
 					Status:   "selected",
 					Provider: "anthropic",
 					Model:    "claude-3-5-sonnet",
@@ -123,9 +123,9 @@ func TestRenderEvent_ProviderRoute_HiddenCases(t *testing.T) {
 		},
 		{
 			name: "attempted status",
-			event: agent.Event{
-				Type: agent.EventProviderRoute,
-				Route: &agent.ProviderRoute{
+			event: event.Event{
+				Type: event.EventProviderRoute,
+				Route: &event.ProviderRoute{
 					Status:   "attempted",
 					Provider: "anthropic",
 					Model:    "claude-3-5-sonnet",
@@ -135,9 +135,9 @@ func TestRenderEvent_ProviderRoute_HiddenCases(t *testing.T) {
 		},
 		{
 			name: "exhausted status",
-			event: agent.Event{
-				Type: agent.EventProviderRoute,
-				Route: &agent.ProviderRoute{
+			event: event.Event{
+				Type: event.EventProviderRoute,
+				Route: &event.ProviderRoute{
 					Status:   "exhausted",
 					Provider: "anthropic",
 					Model:    "claude-3-5-sonnet",
@@ -148,16 +148,16 @@ func TestRenderEvent_ProviderRoute_HiddenCases(t *testing.T) {
 		},
 		{
 			name: "nil route pointer",
-			event: agent.Event{
-				Type:  agent.EventProviderRoute,
+			event: event.Event{
+				Type:  event.EventProviderRoute,
 				Route: nil,
 			},
 		},
 		{
 			name: "unknown status",
-			event: agent.Event{
-				Type: agent.EventProviderRoute,
-				Route: &agent.ProviderRoute{
+			event: event.Event{
+				Type: event.EventProviderRoute,
+				Route: &event.ProviderRoute{
 					Status:   "unknown_status",
 					Provider: "anthropic",
 					Model:    "claude-3-5-sonnet",
@@ -179,10 +179,10 @@ func TestRenderEvent_ProviderRoute_HiddenCases(t *testing.T) {
 
 // TestRenderEvent_ProviderRoute_Redaction verifies that sensitive tokens in route reasons are sanitized before rendering.
 func TestRenderEvent_ProviderRoute_Redaction(t *testing.T) {
-	ev := agent.Event{
+	ev := event.Event{
 		Seq:  12,
-		Type: agent.EventProviderRoute,
-		Route: &agent.ProviderRoute{
+		Type: event.EventProviderRoute,
+		Route: &event.ProviderRoute{
 			Status:   "failed",
 			Provider: "openrouter",
 			Model:    "anthropic/claude-3",
@@ -205,22 +205,22 @@ func TestFeed_ProviderRoute_Integration(t *testing.T) {
 	f.width = 80
 	f.height = 20
 
-	batch := []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "run started"},
-		{Seq: 2, Type: agent.EventProviderRoute, Route: &agent.ProviderRoute{
+	batch := []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "run started"},
+		{Seq: 2, Type: event.EventProviderRoute, Route: &event.ProviderRoute{
 			Status:   "attempted",
 			Provider: "anthropic",
 			Model:    "claude-3-5-sonnet",
 			Attempt:  1,
 		}},
-		{Seq: 3, Type: agent.EventProviderRoute, Route: &agent.ProviderRoute{
+		{Seq: 3, Type: event.EventProviderRoute, Route: &event.ProviderRoute{
 			Status:   "failed",
 			Provider: "anthropic",
 			Model:    "claude-3-5-sonnet",
 			Attempt:  1,
 			Reason:   "429 Too Many Requests",
 		}},
-		{Seq: 4, Type: agent.EventProviderRoute, Route: &agent.ProviderRoute{
+		{Seq: 4, Type: event.EventProviderRoute, Route: &event.ProviderRoute{
 			Status:   "selected",
 			Provider: "openrouter",
 			Model:    "deepseek-v3",

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/providercmd"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -26,7 +26,7 @@ func TestChatModelsRunsOffTheEventLoop(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
 
-	c := NewChat(runnerStub{}, make(chan agent.Event, 1))
+	c := NewChat(runnerStub{}, make(chan event.Event, 1))
 	c.SetCallbacks(&SessionCallbacks{
 		OnModels: func(ctx context.Context, providerID string) ([]string, string, error) {
 			close(entered)
@@ -114,7 +114,7 @@ func TestChatModelsCancelShowsCanceled(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := NewChat(runnerStub{}, make(chan agent.Event, 1))
+			c := NewChat(runnerStub{}, make(chan event.Event, 1))
 			c.SetCallbacks(&SessionCallbacks{
 				OnModels: func(ctx context.Context, providerID string) ([]string, string, error) {
 					return nil, "", tc.run(ctx)

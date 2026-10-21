@@ -5,7 +5,7 @@ import (
 	"sort"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // SessionPhase describes the current user-visible phase of a run.
@@ -37,21 +37,21 @@ type UsageStatus struct {
 	Complete         bool
 }
 
-type ErrorCode = agent.ErrorCode
+type ErrorCode = event.ErrorCode
 
 const (
-	ErrCodeProviderTemporary = agent.ErrCodeProviderTemporary
-	ErrCodeProviderAuth      = agent.ErrCodeProviderAuth
-	ErrCodePersist           = agent.ErrCodePersist
-	ErrCodeBudget            = agent.ErrCodeBudget
-	ErrCodeMaxTurns          = agent.ErrCodeMaxTurns
-	ErrCodeCanceled          = agent.ErrCodeCanceled
-	ErrCodeLoopDetected      = agent.ErrCodeLoopDetected
-	ErrCodeEndpointRefused   = agent.ErrCodeEndpointRefused
-	ErrCodeUnknown           = agent.ErrCodeUnknown
+	ErrCodeProviderTemporary = event.ErrCodeProviderTemporary
+	ErrCodeProviderAuth      = event.ErrCodeProviderAuth
+	ErrCodePersist           = event.ErrCodePersist
+	ErrCodeBudget            = event.ErrCodeBudget
+	ErrCodeMaxTurns          = event.ErrCodeMaxTurns
+	ErrCodeCanceled          = event.ErrCodeCanceled
+	ErrCodeLoopDetected      = event.ErrCodeLoopDetected
+	ErrCodeEndpointRefused   = event.ErrCodeEndpointRefused
+	ErrCodeUnknown           = event.ErrCodeUnknown
 )
 
-const RemedyEndpointRefused = agent.RemedyEndpointRefused
+const RemedyEndpointRefused = event.RemedyEndpointRefused
 
 type PresentedError struct {
 	Code      ErrorCode
@@ -105,30 +105,30 @@ func (p *StatusProjector) Reset() {
 	p.endedAt = time.Time{}
 }
 
-func (p *StatusProjector) Apply(e agent.Event) {
+func (p *StatusProjector) Apply(e event.Event) {
 	if p.tools == nil {
 		p.Reset()
 	}
 	switch e.Type {
-	case agent.RunStart:
+	case event.RunStart:
 		p.status.Phase = PhaseIdle
 		p.status.LastError = nil
 		p.startedAt = e.Time
 		p.endedAt = time.Time{}
-	case agent.TurnStart:
+	case event.TurnStart:
 		p.status.Turn++
 		p.status.Phase = PhaseThinking
 		p.status.CanCancel = true
 		if p.startedAt.IsZero() {
 			p.startedAt = e.Time
 		}
-	case agent.ToolStart:
+	case event.ToolStart:
 		if e.Call != nil {
 			p.tools[e.Call.ID] = ActiveTool{CallID: e.Call.ID, Name: e.Call.Name, Summary: summarizeCall(e.Call), StartedAt: e.Time}
 		}
 		p.status.Phase = PhaseTool
 		p.status.CanCancel = true
-	case agent.ToolEnd:
+	case event.ToolEnd:
 		if e.Call != nil {
 			delete(p.tools, e.Call.ID)
 			if !e.Call.OK {
@@ -136,18 +136,18 @@ func (p *StatusProjector) Apply(e agent.Event) {
 			}
 		}
 		p.status.Phase = phaseAfterTools(p.tools)
-	case agent.PermAsk:
+	case event.PermAsk:
 		p.status.Phase = PhasePermission
 		p.status.CanCancel = true
-	case agent.PermReply:
+	case event.PermReply:
 		p.status.Phase = phaseAfterTools(p.tools)
-	case agent.Compact:
+	case event.Compact:
 		p.status.Phase = PhaseCompacting
-	case agent.Interrupted:
+	case event.Interrupted:
 		p.status.Phase = PhaseCanceling
 		p.status.LastError = &PresentedError{Code: ErrCodeCanceled, Message: "run canceled", Retryable: true}
 		p.endedAt = e.Time
-	case agent.RunError:
+	case event.RunError:
 		code := ErrorCode(e.ErrorCode)
 		if code == "" {
 			code = ErrCodeUnknown
@@ -155,17 +155,17 @@ func (p *StatusProjector) Apply(e agent.Event) {
 		p.status.LastError = &PresentedError{Code: code, Message: e.Err, Retryable: code != ErrCodePersist}
 		p.status.Phase = PhaseError
 		p.endedAt = e.Time
-	case agent.RunEnd:
+	case event.RunEnd:
 		p.status.Phase = PhaseEnded
 		p.status.CanCancel = false
 		p.endedAt = e.Time
-	case agent.EventProviderUsage:
+	case event.EventProviderUsage:
 		if e.Usage != nil {
 			p.status.Usage.PromptTokens = e.Usage.PromptTokens
 			p.status.Usage.CompletionTokens = e.Usage.CompletionTokens
 			p.status.Usage.Complete = true
 		}
-	case agent.EventProviderRoute:
+	case event.EventProviderRoute:
 		// Only a committed route is reported. "attempted", "failed", "waiting",
 		// and "blocked" describe routes that did not serve the request, so
 		// showing them as the current provider would be a false claim.
@@ -177,7 +177,7 @@ func (p *StatusProjector) Apply(e agent.Event) {
 	p.status.ActiveTools = p.activeTools()
 }
 
-func (p *StatusProjector) Build(events []agent.Event) SessionStatus {
+func (p *StatusProjector) Build(events []event.Event) SessionStatus {
 	p.Reset()
 	for _, e := range events {
 		p.Apply(e)
@@ -211,7 +211,7 @@ func phaseAfterTools(tools map[string]ActiveTool) SessionPhase {
 	return PhaseThinking
 }
 
-func summarizeCall(c *agent.ToolCall) string {
+func summarizeCall(c *event.ToolCall) string {
 	if c == nil || len(c.Args) == 0 {
 		return ""
 	}

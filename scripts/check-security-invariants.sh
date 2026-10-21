@@ -7,6 +7,15 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
+# RG_EXEC_COVERAGE_VACUOUS_PASS: fail closed if rg is absent. Without rg the
+# exec-coverage sub-check below would scan zero files and exit 0, producing a
+# false-green result. Refusing to run is the only safe behavior.
+if ! command -v rg >/dev/null 2>&1; then
+  echo "FAIL: 'rg' (ripgrep) is not installed; cannot verify exec coverage." >&2
+  echo "Refusing to pass vacuously (RG_EXEC_COVERAGE_VACUOUS_PASS)." >&2
+  exit 1
+fi
+
 failures=0
 
 check_guarded_provider_client() {

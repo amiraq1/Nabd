@@ -4,21 +4,21 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // TestBatcherFlushesBySize verifies that the batcher flushes when maxSize is reached.
 func TestBatcherFlushesBySize(t *testing.T) {
-	var flushed [][]agent.Event
-	b := NewBatcher(time.Hour, 3, func(batch []agent.Event) {
+	var flushed [][]event.Event
+	b := NewBatcher(time.Hour, 3, func(batch []event.Event) {
 		flushed = append(flushed, batch)
 	})
-	b.Add(agent.Event{Seq: 1, Type: agent.TextDelta, Text: "a"})
-	b.Add(agent.Event{Seq: 2, Type: agent.TextDelta, Text: "b"})
+	b.Add(event.Event{Seq: 1, Type: event.TextDelta, Text: "a"})
+	b.Add(event.Event{Seq: 2, Type: event.TextDelta, Text: "b"})
 	if len(flushed) != 0 {
 		t.Fatalf("expected no flush yet, got %d", len(flushed))
 	}
-	b.Add(agent.Event{Seq: 3, Type: agent.TextDelta, Text: "c"})
+	b.Add(event.Event{Seq: 3, Type: event.TextDelta, Text: "c"})
 	if len(flushed) != 1 {
 		t.Fatalf("expected 1 flush, got %d", len(flushed))
 	}
@@ -29,17 +29,17 @@ func TestBatcherFlushesBySize(t *testing.T) {
 
 // TestBatcherSensitiveEventFlushesImmediately verifies sensitive events trigger immediate flush.
 func TestBatcherSensitiveEventFlushesImmediately(t *testing.T) {
-	var flushed [][]agent.Event
-	b := NewBatcher(time.Hour, 100, func(batch []agent.Event) {
+	var flushed [][]event.Event
+	b := NewBatcher(time.Hour, 100, func(batch []event.Event) {
 		flushed = append(flushed, batch)
 	})
-	b.Add(agent.Event{Seq: 1, Type: agent.TextDelta, Text: "a"})
-	b.Add(agent.Event{Seq: 2, Type: agent.TextDelta, Text: "b"})
+	b.Add(event.Event{Seq: 1, Type: event.TextDelta, Text: "a"})
+	b.Add(event.Event{Seq: 2, Type: event.TextDelta, Text: "b"})
 	if len(flushed) != 0 {
 		t.Fatalf("expected no flush yet, got %d", len(flushed))
 	}
 	// ToolEnd is sensitive.
-	b.Add(agent.Event{Seq: 3, Type: agent.ToolEnd})
+	b.Add(event.Event{Seq: 3, Type: event.ToolEnd})
 	if len(flushed) != 1 {
 		t.Fatalf("expected immediate flush on sensitive event, got %d", len(flushed))
 	}
@@ -50,12 +50,12 @@ func TestBatcherSensitiveEventFlushesImmediately(t *testing.T) {
 
 // TestBatcherStopFlushesRemaining verifies Stop flushes pending events.
 func TestBatcherStopFlushesRemaining(t *testing.T) {
-	var flushed [][]agent.Event
-	b := NewBatcher(time.Hour, 100, func(batch []agent.Event) {
+	var flushed [][]event.Event
+	b := NewBatcher(time.Hour, 100, func(batch []event.Event) {
 		flushed = append(flushed, batch)
 	})
-	b.Add(agent.Event{Seq: 1, Type: agent.TextDelta, Text: "a"})
-	b.Add(agent.Event{Seq: 2, Type: agent.TextDelta, Text: "b"})
+	b.Add(event.Event{Seq: 1, Type: event.TextDelta, Text: "a"})
+	b.Add(event.Event{Seq: 2, Type: event.TextDelta, Text: "b"})
 	b.Stop()
 	if len(flushed) != 1 {
 		t.Fatalf("expected flush on Stop, got %d", len(flushed))
@@ -64,18 +64,18 @@ func TestBatcherStopFlushesRemaining(t *testing.T) {
 
 // TestBatcherPreservesOrderAndMetadata verifies events keep their order and metadata.
 func TestBatcherPreservesOrderAndMetadata(t *testing.T) {
-	var flushed [][]agent.Event
-	b := NewBatcher(50*time.Millisecond, 100, func(batch []agent.Event) {
+	var flushed [][]event.Event
+	b := NewBatcher(50*time.Millisecond, 100, func(batch []event.Event) {
 		flushed = append(flushed, batch)
 	})
 	b.Start()
 	defer b.Stop()
 
-	events := []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hi"},
-		{Seq: 2, Type: agent.TextDelta, Text: "Hello "},
-		{Seq: 3, Type: agent.TextDelta, Text: "world"},
-		{Seq: 4, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "c1", OK: true}},
+	events := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hi"},
+		{Seq: 2, Type: event.TextDelta, Text: "Hello "},
+		{Seq: 3, Type: event.TextDelta, Text: "world"},
+		{Seq: 4, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", OK: true}},
 	}
 	for _, e := range events {
 		b.Add(e)
@@ -87,7 +87,7 @@ func TestBatcherPreservesOrderAndMetadata(t *testing.T) {
 	if len(flushed) == 0 {
 		t.Fatal("expected at least one flush")
 	}
-	var got []agent.Event
+	var got []event.Event
 	for _, batch := range flushed {
 		got = append(got, batch...)
 	}

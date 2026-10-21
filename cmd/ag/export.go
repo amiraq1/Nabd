@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"nabd/internal/event"
+	"nabd/internal/provider"
 	"nabd/internal/store"
 )
 
@@ -64,17 +66,27 @@ func exportJournal(path string, redactOutput bool, stdout, stderr io.Writer) err
 		return copyJournalBytes(path, stdout)
 	}
 
-	events, err := store.Read(path)
+	// Stream the journal instead of loading it: a long session's export no
+	// longer costs O(journal) memory.
+	sink := jsonlStdout{w: stdout, redact: func(e event.Event) event.Event {
+		return redactJournalEvent(e, exportExactKeys(redactOutput))
+	}}
+	return store.Scan(path, sink.Emit)
+}
+
+// exportExactKeys resolves the currently configured provider's exact secret
+// values on a best-effort basis for --export --redact. A resolution failure
+// keeps pattern-only redaction rather than failing the export; the journal
+// being exported may predate the current provider configuration anyway.
+func exportExactKeys(want bool) []string {
+	if !want {
+		return nil
+	}
+	prov, err := pickProvider()
 	if err != nil {
-		return err
+		return nil
 	}
-	sink := jsonlStdout{w: stdout, redact: redactJournalEvent}
-	for _, e := range events {
-		if err := sink.Emit(e); err != nil {
-			return err
-		}
-	}
-	return nil
+	return provider.ExactKeys(prov)
 }
 
 // copyJournalBytes streams the journal to stdout without parsing it.

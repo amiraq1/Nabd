@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"nabd/internal/event"
 	"strings"
 	"testing"
 )
@@ -9,28 +10,28 @@ import (
 // and unclassified notices are filtered out from the model's wire projection,
 // while world-changing notices (such as /undo results) pass through properly tagged.
 func TestCalibrationNoticeNeverReachesTheModel(t *testing.T) {
-	evs := []Event{
-		{Seq: 1, Type: UserMsg, Text: "اقرأ README.md"},
+	evs := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "اقرأ README.md"},
 		{
 			Seq:            2,
 			Parent:         1,
-			Type:           Notice,
-			NoticeCategory: NoticeCategoryCalibration,
-			Calib:          &Calibration{PromptTokens: 500},
+			Type:           event.Notice,
+			NoticeCategory: event.NoticeCategoryCalibration,
+			Calib:          &event.Calibration{PromptTokens: 500},
 			Text:           "calibration: token ratio (observed prompt_tokens ÷ heuristic estimate) adopted 2.00 · conservative ratchet, rises only (measured prompt_tokens=500)",
 		},
 		{
 			Seq:            3,
 			Parent:         2,
-			Type:           Notice,
-			NoticeCategory: NoticeCategoryUndoResult,
+			Type:           event.Notice,
+			NoticeCategory: event.NoticeCategoryUndoResult,
 			Text:           "/undo 1 - ok main.go - restored from shadow",
 		},
 		{
 			Seq:            4,
 			Parent:         3,
-			Type:           Notice,
-			NoticeCategory: NoticeCategoryUnknown, // Unclassified/unknown notice
+			Type:           event.Notice,
+			NoticeCategory: event.NoticeCategoryUnknown, // Unclassified/unknown notice
 			Text:           "unknown diagnostic notice: memory pressure normal",
 		},
 	}
@@ -96,15 +97,15 @@ func TestCalibrationNoticeNeverReachesTheModel(t *testing.T) {
 func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 	t.Run("CaseA_truncated_incomplete", func(t *testing.T) {
 		// A truncated read with lines_read=120, total_lines=340 that is never completed.
-		events := []Event{
-			{Seq: 1, Type: UserMsg, Text: "اقرأ README.md"},
-			{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "c1", Name: "read_file"}},
-			{Seq: 3, Parent: 2, Type: ToolEnd, Call: &ToolCall{ID: "c1", Name: "read_file", Output: "line 1...120", OK: true}},
+		events := []event.Event{
+			{Seq: 1, Type: event.UserMsg, Text: "اقرأ README.md"},
+			{Seq: 2, Parent: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "read_file"}},
+			{Seq: 3, Parent: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "read_file", Output: "line 1...120", OK: true}},
 			{
 				Seq:    4,
 				Parent: 3,
-				Type:   EventRead,
-				Read: &ReadRecord{
+				Type:   event.EventRead,
+				Read: &event.ReadRecord{
 					Path:       "README.md",
 					Truncated:  true,
 					NextOffset: 121,
@@ -113,9 +114,9 @@ func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 					Offset:     1,
 				},
 			},
-			{Seq: 5, Parent: 4, Type: TurnStart},
-			{Seq: 6, Parent: 5, Type: TextDelta, Text: "هذا ملخص الملف بناءً على ما قرأت."},
-			{Seq: 7, Parent: 6, Type: TurnEnd},
+			{Seq: 5, Parent: 4, Type: event.TurnStart},
+			{Seq: 6, Parent: 5, Type: event.TextDelta, Text: "هذا ملخص الملف بناءً على ما قرأت."},
+			{Seq: 7, Parent: 6, Type: event.TurnEnd},
 		}
 
 		incomplete := EvaluateTruncatedReads(events)
@@ -139,11 +140,11 @@ func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 		}
 
 		// When emitted as a display notice, verify it does NOT enter model messages.
-		displayEvs := append(events, Event{
+		displayEvs := append(events, event.Event{
 			Seq:            8,
 			Parent:         7,
-			Type:           Notice,
-			NoticeCategory: NoticeCategoryDisplay,
+			Type:           event.Notice,
+			NoticeCategory: event.NoticeCategoryDisplay,
 			Text:           warning,
 		})
 		msgs := Messages(displayEvs)
@@ -159,15 +160,15 @@ func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 
 	t.Run("CaseB_completed_from_start", func(t *testing.T) {
 		// A complete read from the start (truncated=false).
-		events := []Event{
-			{Seq: 1, Type: UserMsg, Text: "اقرأ small.go"},
-			{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "c1", Name: "read_file"}},
-			{Seq: 3, Parent: 2, Type: ToolEnd, Call: &ToolCall{ID: "c1", Name: "read_file", Output: "package main", OK: true}},
+		events := []event.Event{
+			{Seq: 1, Type: event.UserMsg, Text: "اقرأ small.go"},
+			{Seq: 2, Parent: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "read_file"}},
+			{Seq: 3, Parent: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "read_file", Output: "package main", OK: true}},
 			{
 				Seq:    4,
 				Parent: 3,
-				Type:   EventRead,
-				Read: &ReadRecord{
+				Type:   event.EventRead,
+				Read: &event.ReadRecord{
 					Path:       "small.go",
 					Truncated:  false,
 					LinesRead:  50,
@@ -175,9 +176,9 @@ func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 					Offset:     1,
 				},
 			},
-			{Seq: 5, Parent: 4, Type: TurnStart},
-			{Seq: 6, Parent: 5, Type: TextDelta, Text: "هذا هو الملف بالكامل."},
-			{Seq: 7, Parent: 6, Type: TurnEnd},
+			{Seq: 5, Parent: 4, Type: event.TurnStart},
+			{Seq: 6, Parent: 5, Type: event.TextDelta, Text: "هذا هو الملف بالكامل."},
+			{Seq: 7, Parent: 6, Type: event.TurnEnd},
 		}
 
 		incomplete := EvaluateTruncatedReads(events)
@@ -189,15 +190,15 @@ func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 	t.Run("CaseC_truncated_then_completed", func(t *testing.T) {
 		// Read 1 is cut at line 100 of 200.
 		// Read 2 continues from line 101 and reads the remaining 100 lines to EOF.
-		events := []Event{
-			{Seq: 1, Type: UserMsg, Text: "اقرأ doc.txt"},
-			{Seq: 2, Parent: 1, Type: ToolStart, Call: &ToolCall{ID: "c1", Name: "read_file"}},
-			{Seq: 3, Parent: 2, Type: ToolEnd, Call: &ToolCall{ID: "c1", Name: "read_file", Output: "part 1", OK: true}},
+		events := []event.Event{
+			{Seq: 1, Type: event.UserMsg, Text: "اقرأ doc.txt"},
+			{Seq: 2, Parent: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "c1", Name: "read_file"}},
+			{Seq: 3, Parent: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c1", Name: "read_file", Output: "part 1", OK: true}},
 			{
 				Seq:    4,
 				Parent: 3,
-				Type:   EventRead,
-				Read: &ReadRecord{
+				Type:   event.EventRead,
+				Read: &event.ReadRecord{
 					Path:       "doc.txt",
 					Truncated:  true,
 					NextOffset: 101,
@@ -206,13 +207,13 @@ func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 					Offset:     1,
 				},
 			},
-			{Seq: 5, Parent: 4, Type: ToolStart, Call: &ToolCall{ID: "c2", Name: "read_file"}},
-			{Seq: 6, Parent: 5, Type: ToolEnd, Call: &ToolCall{ID: "c2", Name: "read_file", Output: "part 2", OK: true}},
+			{Seq: 5, Parent: 4, Type: event.ToolStart, Call: &event.ToolCall{ID: "c2", Name: "read_file"}},
+			{Seq: 6, Parent: 5, Type: event.ToolEnd, Call: &event.ToolCall{ID: "c2", Name: "read_file", Output: "part 2", OK: true}},
 			{
 				Seq:    7,
 				Parent: 6,
-				Type:   EventRead,
-				Read: &ReadRecord{
+				Type:   event.EventRead,
+				Read: &event.ReadRecord{
 					Path:       "doc.txt",
 					Truncated:  false,
 					NextOffset: 0,
@@ -221,9 +222,9 @@ func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 					Offset:     101,
 				},
 			},
-			{Seq: 8, Parent: 7, Type: TurnStart},
-			{Seq: 9, Parent: 8, Type: TextDelta, Text: "الملف مكتمل."},
-			{Seq: 10, Parent: 9, Type: TurnEnd},
+			{Seq: 8, Parent: 7, Type: event.TurnStart},
+			{Seq: 9, Parent: 8, Type: event.TextDelta, Text: "الملف مكتمل."},
+			{Seq: 10, Parent: 9, Type: event.TurnEnd},
 		}
 
 		incomplete := EvaluateTruncatedReads(events)
@@ -235,11 +236,11 @@ func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 	t.Run("CaseD_insufficient_continuation", func(t *testing.T) {
 		// Subtest D1: Continuation also ends in truncated=true.
 		t.Run("continuation_still_truncated", func(t *testing.T) {
-			events := []Event{
+			events := []event.Event{
 				{
 					Seq:  1,
-					Type: EventRead,
-					Read: &ReadRecord{
+					Type: event.EventRead,
+					Read: &event.ReadRecord{
 						Path:       "huge.txt",
 						Truncated:  true,
 						NextOffset: 101,
@@ -250,8 +251,8 @@ func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 				},
 				{
 					Seq:  2,
-					Type: EventRead,
-					Read: &ReadRecord{
+					Type: event.EventRead,
+					Read: &event.ReadRecord{
 						Path:       "huge.txt",
 						Truncated:  true,
 						NextOffset: 201,
@@ -276,11 +277,11 @@ func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 
 		// Subtest D2: Continuation leaves an unread gap.
 		t.Run("continuation_leaves_gap", func(t *testing.T) {
-			events := []Event{
+			events := []event.Event{
 				{
 					Seq:  1,
-					Type: EventRead,
-					Read: &ReadRecord{
+					Type: event.EventRead,
+					Read: &event.ReadRecord{
 						Path:       "gap.txt",
 						Truncated:  true,
 						NextOffset: 101,
@@ -291,8 +292,8 @@ func TestAnswerOnTruncatedReadIsMarked(t *testing.T) {
 				},
 				{
 					Seq:  2,
-					Type: EventRead,
-					Read: &ReadRecord{
+					Type: event.EventRead,
+					Read: &event.ReadRecord{
 						Path:       "gap.txt",
 						Truncated:  false, // reaches EOF of its own chunk
 						LinesRead:  100,

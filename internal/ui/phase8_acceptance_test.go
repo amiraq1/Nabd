@@ -5,26 +5,26 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
 
-func acceptanceEvents() []agent.Event {
-	read := &agent.ToolCall{ID: "read-1", Name: "read_file", Args: []byte(`{"path":"src/ملف.go"}`)}
-	failed := &agent.ToolCall{ID: "bash-1", Name: "bash", Args: []byte(`{"cmd":"go test ./..."}`)}
-	permission := &agent.ToolCall{ID: "perm-1", Name: "bash", Args: []byte(`{"cmd":"rm build.tmp"}`)}
-	return []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "افحص الملف src/ملف.go"},
-		{Seq: 2, Type: agent.TextDelta, Text: "Checking the file.\nSecond line."},
-		{Seq: 3, Type: agent.ToolStart, Call: read},
-		{Seq: 4, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: read.ID, Name: read.Name, Args: read.Args, OK: true, Output: "1|package main\n...[truncated 80 bytes]\nnext_offset=170"}},
-		{Seq: 5, Type: agent.ToolStart, Call: failed},
-		{Seq: 6, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: failed.ID, Name: failed.Name, Args: failed.Args, OK: false, Exit: 1, Output: "tests failed"}},
-		{Seq: 7, Type: agent.PermAsk, Call: permission},
-		{Seq: 8, Type: agent.PermReply, Call: permission, Decision: agent.Deny, RawDecision: agent.Deny},
-		{Seq: 9, Type: agent.RunError, Err: "provider unavailable", ErrorCode: string(agent.ErrCodeProviderTemporary)},
+func acceptanceEvents() []event.Event {
+	read := &event.ToolCall{ID: "read-1", Name: "read_file", Args: []byte(`{"path":"src/ملف.go"}`)}
+	failed := &event.ToolCall{ID: "bash-1", Name: "bash", Args: []byte(`{"cmd":"go test ./..."}`)}
+	permission := &event.ToolCall{ID: "perm-1", Name: "bash", Args: []byte(`{"cmd":"rm build.tmp"}`)}
+	return []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "افحص الملف src/ملف.go"},
+		{Seq: 2, Type: event.TextDelta, Text: "Checking the file.\nSecond line."},
+		{Seq: 3, Type: event.ToolStart, Call: read},
+		{Seq: 4, Type: event.ToolEnd, Call: &event.ToolCall{ID: read.ID, Name: read.Name, Args: read.Args, OK: true, Output: "1|package main\n...[truncated 80 bytes]\nnext_offset=170"}},
+		{Seq: 5, Type: event.ToolStart, Call: failed},
+		{Seq: 6, Type: event.ToolEnd, Call: &event.ToolCall{ID: failed.ID, Name: failed.Name, Args: failed.Args, OK: false, Exit: 1, Output: "tests failed"}},
+		{Seq: 7, Type: event.PermAsk, Call: permission},
+		{Seq: 8, Type: event.PermReply, Call: permission, Decision: event.Deny, RawDecision: event.Deny},
+		{Seq: 9, Type: event.RunError, Err: "provider unavailable", ErrorCode: string(event.ErrCodeProviderTemporary)},
 	}
 }
 
@@ -62,8 +62,8 @@ func TestLiveReplaySemanticParity(t *testing.T) {
 
 	live := NewFeed()
 	live.Update(tea.WindowSizeMsg{Width: 80, Height: 60})
-	for _, event := range events {
-		live.applyBatch([]agent.Event{event})
+	for _, ev := range events {
+		live.applyBatch([]event.Event{ev})
 	}
 	got := strings.Join(live.lines, "\n")
 	want := strings.Join(replay.lines, "\n")
@@ -92,9 +92,9 @@ func TestAcceptanceStatesRemainUnderstandableWithoutColor(t *testing.T) {
 }
 
 func BenchmarkAcceptanceReplay1000(b *testing.B) {
-	events := make([]agent.Event, 1000)
+	events := make([]event.Event, 1000)
 	for i := range events {
-		events[i] = agent.Event{Seq: i + 1, Type: agent.UserMsg, Text: fmt.Sprintf("message %d", i)}
+		events[i] = event.Event{Seq: i + 1, Type: event.UserMsg, Text: fmt.Sprintf("message %d", i)}
 	}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
@@ -104,9 +104,9 @@ func BenchmarkAcceptanceReplay1000(b *testing.B) {
 }
 
 func BenchmarkAcceptanceReplay10000(b *testing.B) {
-	events := make([]agent.Event, 10000)
+	events := make([]event.Event, 10000)
 	for i := range events {
-		events[i] = agent.Event{Seq: i + 1, Type: agent.UserMsg, Text: fmt.Sprintf("message %d", i)}
+		events[i] = event.Event{Seq: i + 1, Type: event.UserMsg, Text: fmt.Sprintf("message %d", i)}
 	}
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {

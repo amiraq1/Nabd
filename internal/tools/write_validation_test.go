@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // fileSHA256 returns the SHA-256 hex of a file's current contents.
@@ -58,7 +58,7 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 			// target file's path and content hash match what was staged.
 			const stagedCredit = 7
 			beforeHash := fileSHA256(t, target)
-			r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
+			r.SetReadCredit(event.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
 
 			beforeMode := fileMode(t, target)
 
@@ -73,6 +73,9 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 				{"content object", `{"path":"target.txt","content":{"x":1}}`},
 				{"content array", `{"path":"target.txt","content":[1,2]}`},
 				{"duplicate content key", `{"path":"target.txt","content":"a","content":"b"}`},
+				{"mixed-case duplicate content key", `{"path":"target.txt","content":"a","Content":"b"}`},
+				{"nested duplicate key", `{"path":"target.txt","content":"x","opts":{"a":1,"a":2}}`},
+				{"trailing object", `{"path":"target.txt","content":"x"}{"content":"y"}`},
 				{"unknown field", `{"path":"target.txt","content":"x","bogus":1}`},
 				{"invalid JSON", `{"path":"target.txt",`},
 			}
@@ -85,6 +88,9 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 					{"new object", `{"path":"target.txt","old":"original content","new":{"x":1}}`},
 					{"new array", `{"path":"target.txt","old":"original content","new":[1,2]}`},
 					{"old absent", `{"path":"target.txt","new":"replacement"}`},
+					{"duplicate new key", `{"path":"target.txt","old":"original content","new":"a","new":"b"}`},
+					{"mixed-case duplicate new key", `{"path":"target.txt","old":"original content","new":"a","New":"b"}`},
+					{"trailing object", `{"path":"target.txt","old":"original content","new":"x"}{}`},
 					{"unknown field", `{"path":"target.txt","old":"original content","new":"x","bogus":1}`},
 					{"invalid JSON", `{"path":"target.txt",`},
 				}
@@ -96,7 +102,7 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 					// prior subtest's invariant check resets the slot.
 					// Credit is bound to path+hash so it can only be consumed
 					// when the target file matches what was staged.
-					r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
+					r.SetReadCredit(event.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
 					var raw json.RawMessage = json.RawMessage(c.raw)
 					_, ok, err := r.Run(ctx, providerToolCall(name, raw))
 					if ok || err == nil {
@@ -121,7 +127,7 @@ func TestWriteValidationRejectsBeforeSideEffects(t *testing.T) {
 			}
 
 			// Restore credit for the directory-creation check.
-			r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
+			r.SetReadCredit(event.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
 			// Invariant 3 & 4: no directory created, MkdirAll not reached.
 			// A valid path under a non-existent subdirectory would trigger
 			// MkdirAll for write_file; an invalid request must not.
@@ -314,7 +320,7 @@ func TestWriteValidationRejectsCrossToolFields(t *testing.T) {
 			// the target file's path and content hash match what was staged.
 			const stagedCredit = 7
 			beforeHash := fileSHA256(t, target)
-			r.SetReadCredit(agent.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
+			r.SetReadCredit(event.ReadCredit{Path: target, Hash: beforeHash, LinesRead: stagedCredit})
 
 			beforeMode := fileMode(t, target)
 

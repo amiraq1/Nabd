@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"nabd/internal/event"
 	"strings"
 	"testing"
 
@@ -20,9 +21,9 @@ const guardedBody = "SKILL-BODY-SENTINEL-do-not-leak"
 // execution branch and nothing else.
 type allowGate struct{}
 
-func (allowGate) Check(string) (Verdict, string)          { return VerdictAllow, "" }
-func (allowGate) Record(string, Decision)                 {}
-func (allowGate) Effective(_ string, d Decision) Decision { return d }
+func (allowGate) Check(string) (Verdict, string)                      { return VerdictAllow, "" }
+func (allowGate) Record(string, event.Decision)                       {}
+func (allowGate) Effective(_ string, d event.Decision) event.Decision { return d }
 
 // plainFakeTools registers a tool name and runs it through the plain path. It
 // deliberately does NOT implement guardedTools: this is the shape of a tool
@@ -62,7 +63,7 @@ func (f guardedFakeTools) GuardedFor(name string) (GuardedOutcome, bool) {
 type fakeGuard struct {
 	hits  *int
 	err   error
-	class SkillContentClass
+	class event.SkillContentClass
 }
 
 func (g fakeGuard) GuardedResult(context.Context, json.RawMessage) (GuardedResult, error) {
@@ -72,7 +73,7 @@ func (g fakeGuard) GuardedResult(context.Context, json.RawMessage) (GuardedResul
 	if g.err != nil {
 		return GuardedResult{}, g.err
 	}
-	return GuardedResult{Event: Event{Type: EventSkillBody, SkillBody: &SkillBodyEvent{
+	return GuardedResult{Event: event.Event{Type: event.EventSkillBody, SkillBody: &event.SkillBodyEvent{
 		Body:  guardedBody,
 		Scope: skill.ScopeProject,
 		Class: g.class,
@@ -89,21 +90,21 @@ func runSkillOnce(t *testing.T, tools Tools) (*recSink, error) {
 	return sink, err
 }
 
-func toolEndOf(t *testing.T, evs []Event) Event {
+func toolEndOf(t *testing.T, evs []event.Event) event.Event {
 	t.Helper()
 	for _, e := range evs {
-		if e.Type == ToolEnd {
+		if e.Type == event.ToolEnd {
 			return e
 		}
 	}
 	t.Fatalf("no ToolEnd among %d events", len(evs))
-	return Event{}
+	return event.Event{}
 }
 
-func skillBodyEvents(evs []Event) []Event {
-	var out []Event
+func skillBodyEvents(evs []event.Event) []event.Event {
+	var out []event.Event
 	for _, e := range evs {
-		if e.Type == EventSkillBody {
+		if e.Type == event.EventSkillBody {
 			out = append(out, e)
 		}
 	}
@@ -111,10 +112,10 @@ func skillBodyEvents(evs []Event) []Event {
 }
 
 func TestLoopInputForGuardedCallIsEmpty(t *testing.T) {
-	if got := loopInput(Outcome{Text: guardedBody}, true); got != "" {
+	if got := loopInput(event.Outcome{Text: guardedBody}, true); got != "" {
 		t.Fatalf("guarded loop input=%q, want empty", got)
 	}
-	if got := loopInput(Outcome{Text: guardedBody}, false); got != guardedBody {
+	if got := loopInput(event.Outcome{Text: guardedBody}, false); got != guardedBody {
 		t.Fatalf("plain loop input=%q, want producer text", got)
 	}
 }
@@ -125,7 +126,7 @@ func TestGuardedOutcomeTextNeverLeavesTheGuardedPath(t *testing.T) {
 	var runHits, guardHits int
 	tools := guardedFakeTools{
 		plainFakeTools: plainFakeTools{name: "skill", runHits: &runHits},
-		guard:          fakeGuard{hits: &guardHits, class: SkillContentClassUntrusted},
+		guard:          fakeGuard{hits: &guardHits, class: event.SkillContentClassUntrusted},
 		found:          true,
 	}
 	sink := &recSink{}
@@ -135,7 +136,7 @@ func TestGuardedOutcomeTextNeverLeavesTheGuardedPath(t *testing.T) {
 		calls[i] = provider.ToolCall{ID: fmt.Sprintf("c%d", i+1), Name: "skill", Input: json.RawMessage(`{"name":"greet"}`)}
 	}
 	interrupted, err := l.runCalls(context.Background(), calls)
-	if interrupted || !errors.Is(err, ErrToolLoop) {
+	if interrupted || !errors.Is(err, event.ErrToolLoop) {
 		t.Fatalf("repeated guarded calls: interrupted=%v err=%v", interrupted, err)
 	}
 	if guardHits != 5 || runHits != 0 {
@@ -143,16 +144,16 @@ func TestGuardedOutcomeTextNeverLeavesTheGuardedPath(t *testing.T) {
 	}
 	notices := 0
 	for _, e := range sink.events {
-		if e.Type == ToolEnd && e.Call.Output != "" {
+		if e.Type == event.ToolEnd && e.Call.Output != "" {
 			t.Fatalf("guarded output leaked: %q", e.Call.Output)
 		}
-		if e.Type == Notice && strings.Contains(e.Text, guardedBody) {
+		if e.Type == event.Notice && strings.Contains(e.Text, guardedBody) {
 			t.Fatalf("guarded body leaked into notice: %q", e.Text)
 		}
-		if e.Type == Notice && e.NoticeCategory == NoticeCategoryLoopLimit {
+		if e.Type == event.Notice && e.NoticeCategory == event.NoticeCategoryLoopLimit {
 			notices++
 		}
-		if e.Type == RunError && strings.Contains(e.Err, guardedBody) {
+		if e.Type == event.RunError && strings.Contains(e.Err, guardedBody) {
 			t.Fatalf("guarded body leaked into abort: %q", e.Err)
 		}
 	}
@@ -165,7 +166,7 @@ func TestGuardedOutcomeProjectsBodyAndSkipsPlainExecution(t *testing.T) {
 	var runHits, guardHits int
 	tools := guardedFakeTools{
 		plainFakeTools: plainFakeTools{name: "skill", runHits: &runHits},
-		guard:          fakeGuard{hits: &guardHits, class: SkillContentClassUntrusted},
+		guard:          fakeGuard{hits: &guardHits, class: event.SkillContentClassUntrusted},
 		found:          true,
 	}
 
@@ -187,7 +188,7 @@ func TestGuardedOutcomeProjectsBodyAndSkipsPlainExecution(t *testing.T) {
 	if got := bodies[0].SkillBody.Body; got != guardedBody {
 		t.Fatalf("skill body event body = %q", got)
 	}
-	if got := bodies[0].SkillBody.Class; got != SkillContentClassUntrusted {
+	if got := bodies[0].SkillBody.Class; got != event.SkillContentClassUntrusted {
 		t.Fatalf("skill body class = %v, want the fixed untrusted class", got)
 	}
 
@@ -209,7 +210,7 @@ func TestGuardedBodyEventPrecedesToolEnd(t *testing.T) {
 	var runHits, guardHits int
 	tools := guardedFakeTools{
 		plainFakeTools: plainFakeTools{name: "skill", runHits: &runHits},
-		guard:          fakeGuard{hits: &guardHits, class: SkillContentClassUntrusted},
+		guard:          fakeGuard{hits: &guardHits, class: event.SkillContentClassUntrusted},
 		found:          true,
 	}
 	sink, err := runSkillOnce(t, tools)
@@ -219,9 +220,9 @@ func TestGuardedBodyEventPrecedesToolEnd(t *testing.T) {
 	bodyIdx, endIdx := -1, -1
 	for i, e := range sink.events {
 		switch e.Type {
-		case EventSkillBody:
+		case event.EventSkillBody:
 			bodyIdx = i
-		case ToolEnd:
+		case event.ToolEnd:
 			endIdx = i
 		}
 	}

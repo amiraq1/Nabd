@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/provider"
 )
 
@@ -69,9 +69,9 @@ func TestUIStringLiteralsEnforceASCIISymbolWhitelist(t *testing.T) {
 // output of the two visible UI strings identified in the forensic session.
 func TestUIVisibleStringsAssertEnglishReplacements(t *testing.T) {
 	// 1. Truncated read render: "✂ <path> · partially read"
-	ev := agent.Event{
-		Type: agent.EventRead,
-		Read: &agent.ReadRecord{
+	ev := event.Event{
+		Type: event.EventRead,
+		Read: &event.ReadRecord{
 			Path:      "NOTES.md",
 			Truncated: true,
 		},
@@ -85,9 +85,9 @@ func TestUIVisibleStringsAssertEnglishReplacements(t *testing.T) {
 	}
 
 	// 2. Chat status on doneMsg with error: must be "error" (or "error: ..."), not "خطأ"
-	ch := make(chan agent.Event, 1)
+	ch := make(chan event.Event, 1)
 	chatMdl := asChat(t, NewChat(runnerStub{}, ch))
-	testErr := agent.ErrMaxTurns
+	testErr := event.ErrMaxTurns
 	mdl, _ := chatMdl.Update(doneMsg{err: testErr})
 	m := asChat(t, mdl)
 	if strings.Contains(m.status, "خطأ") {
@@ -102,7 +102,7 @@ func TestUIVisibleStringsAssertEnglishReplacements(t *testing.T) {
 // packages with Arabic text is intercepted and sanitized to 'error: execution failed',
 // preventing Arabic text from leaking through doneMsg into the terminal interface.
 func TestUIBackDoorLeakPrevented(t *testing.T) {
-	ch := make(chan agent.Event, 1)
+	ch := make(chan event.Event, 1)
 	chatMdl := asChat(t, NewChat(runnerStub{}, ch))
 	arabicErr := os.ErrInvalid
 	_ = arabicErr
@@ -127,7 +127,7 @@ func (e *simulatedArabicError) Error() string { return e.msg }
 // while the UI chat.status receives only the sanitized errSummary.
 func TestOriginalErrorPreservedInJournal(t *testing.T) {
 	origErr := errors.New("تفاصيل الخطأ الأصلي الكاملة")
-	ev := agent.Event{Type: agent.RunError, Err: origErr.Error()}
+	ev := event.Event{Type: event.RunError, Err: origErr.Error()}
 
 	// Check that event contains the full verbatim error
 	if ev.Err != "تفاصيل الخطأ الأصلي الكاملة" {
@@ -146,15 +146,15 @@ func TestOriginalErrorPreservedInJournal(t *testing.T) {
 
 // TestPermAllowReasonNeverReachesUIOrModel asserts that the session-grant reason
 // is purely internal: internal/perm/policy.go returns the ASCII baseline
-// ("allowed for this session") beside agent.PermissionReasonSessionGrant, and the
+// ("allowed for this session") beside event.PermissionReasonSessionGrant, and the
 // Arabic prose lives only at the display boundary
 // (internal/presentation/permission_reason.go). It must never be rendered by
 // RenderEvent and never be formatted into provider messages.
 func TestPermAllowReasonNeverReachesUIOrModel(t *testing.T) {
 	// 1. PermReply rendering: only renders mark and decision, never the internal why
-	ev := agent.Event{
-		Type:     agent.PermReply,
-		Decision: agent.AllowSession,
+	ev := event.Event{
+		Type:     event.PermReply,
+		Decision: event.AllowSession,
 	}
 	rendered := RenderEvent(ev, DefaultWidth)
 	if strings.Contains(rendered, "مسموح") {
@@ -162,10 +162,10 @@ func TestPermAllowReasonNeverReachesUIOrModel(t *testing.T) {
 	}
 
 	// 2. ToolCall / ToolEnd rendering on allowed tool: never includes internal why
-	tc := agent.ToolCall{
+	tc := event.ToolCall{
 		ID: "t1", Name: "write_file", OK: true, Output: "ok",
 	}
-	evEnd := agent.Event{Type: agent.ToolEnd, Call: &tc}
+	evEnd := event.Event{Type: event.ToolEnd, Call: &tc}
 	renderedEnd := RenderEvent(evEnd, DefaultWidth)
 	if strings.Contains(renderedEnd, "مسموح") {
 		t.Fatalf("RenderEvent ToolEnd leaked policy internal reason: %q", renderedEnd)

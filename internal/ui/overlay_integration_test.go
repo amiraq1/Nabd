@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -100,8 +100,8 @@ func TestOverlayFullEndToEndIntegration(t *testing.T) {
 
 	// 7. Permission request arrives: Modal appears
 	initialFollow := f.follow
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{
 			ID:                  "call_1",
 			Name:                "write_file",
 			Args:                json.RawMessage(`"main.go"`),
@@ -117,8 +117,8 @@ func TestOverlayFullEndToEndIntegration(t *testing.T) {
 	}
 
 	// 8. Event arrives behind the modal: feed projects, auto-scroll pauses
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 2, Type: agent.TextDelta, Text: "background stream"},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 2, Type: event.TextDelta, Text: "background stream"},
 	}})
 	if f.unseen == 0 {
 		t.Fatal("step 8: unseen count must increment behind modal")
@@ -157,7 +157,7 @@ func TestOverlayFullEndToEndIntegration(t *testing.T) {
 	// Verify reply reached Approver channel
 	select {
 	case d := <-ap.reply:
-		if d != agent.AllowSession {
+		if d != event.AllowSession {
 			t.Fatalf("step 11: expected Approver received AllowSession, got %v", d)
 		}
 	default:
@@ -172,8 +172,8 @@ func TestOverlayFullEndToEndIntegration(t *testing.T) {
 	}
 
 	// 12. Core emits PermReply: Modal closes, focus restored, follow restored
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "call_1"}, Decision: agent.AllowSession, RawDecision: agent.AllowSession},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 3, Type: event.PermReply, Call: &event.ToolCall{ID: "call_1"}, Decision: event.AllowSession, RawDecision: event.AllowSession},
 	}})
 	if f.modalVisible {
 		t.Fatal("step 12: modal must close on PermReply")

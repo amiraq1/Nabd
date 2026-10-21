@@ -6,7 +6,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -33,36 +33,36 @@ func degradationScenarios() []degradationScenario {
 	return []degradationScenario{
 		{"idle", func(f *Feed) {}},
 		{"streaming", func(f *Feed) {
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.TextDelta, Text: fix.arabicMsg},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.TextDelta, Text: fix.arabicMsg},
 			}})
 		}},
 		{"tool-running", func(f *Feed) {
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"pwd"`)}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"pwd"`)}},
 			}})
 		}},
 		{"modal", func(f *Feed) {
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "m1", Name: "bash", Args: json.RawMessage(`"cat /etc/hosts"`)}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "m1", Name: "bash", Args: json.RawMessage(`"cat /etc/hosts"`)}},
 			}})
 		}},
 		{"slash-menu", func(f *Feed) {
 			f.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
 		}},
 		{"unseen", func(f *Feed) {
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.UserMsg, Text: "msg1"},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.UserMsg, Text: "msg1"},
 			}})
 			f.follow = false
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 2, Type: agent.UserMsg, Text: "msg2"},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 2, Type: event.UserMsg, Text: "msg2"},
 			}})
 		}},
 		{"long-tool-output", func(f *Feed) {
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash"}},
-				{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash"}},
+				{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "bash", Output: fix.longLsOutput, OK: true}},
 			}})
 		}},
 	}
@@ -129,8 +129,8 @@ func TestSmallScreenKeepsModalTitleAndSelectedChoice(t *testing.T) {
 	for _, sz := range []termSize{{"20x10", 20, 10}, {"20x12", 20, 12}, {"24x10", 24, 10}} {
 		t.Run(sz.name, func(t *testing.T) {
 			f := newFeedAt(t, sz.width, sz.height)
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "m1", Name: "bash", Args: json.RawMessage(`"cat /etc/hosts"`)}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.PermAsk, Call: &event.ToolCall{ID: "m1", Name: "bash", Args: json.RawMessage(`"cat /etc/hosts"`)}},
 			}})
 			v := f.View()
 			if !strings.Contains(v, "Permission") {
@@ -152,8 +152,8 @@ func TestSmallScreenKeepsRunningToolName(t *testing.T) {
 	for _, sz := range []termSize{{"20x10", 20, 10}, {"20x12", 20, 12}} {
 		t.Run(sz.name, func(t *testing.T) {
 			f := newFeedAt(t, sz.width, sz.height)
-			f.Update(agentEventBatchMsg{Events: []agent.Event{
-				{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"sleep 10"`)}},
+			f.Update(agentEventBatchMsg{Events: []event.Event{
+				{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "bash", Args: json.RawMessage(`"sleep 10"`)}},
 			}})
 			v := f.View()
 			if !strings.Contains(v, "bash") {

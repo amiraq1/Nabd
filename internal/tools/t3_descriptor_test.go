@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // The invariant T3 must not break: undo rebuilds the "current" state through
@@ -65,7 +65,7 @@ func TestUndoRefusesModifiedAfterAgentWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res := r.PersistedUndo([]*agent.EditRecord{rec}, 1)
+	res := r.PersistedUndo([]*event.EditRecord{rec}, 1)
 	if len(res) != 1 || res[0].OK || res[0].Note != ErrUndoConflictChanged.Error() {
 		t.Fatalf("expected refusal with ErrUndoConflictChanged, got %+v", res)
 	}

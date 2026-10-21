@@ -3,6 +3,7 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"nabd/internal/event"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,8 +71,8 @@ func TestLoopEmitsReadRecordWhenTruncated(t *testing.T) {
 		Gate:     allowGate{},
 		Human:    allowGate{},
 	}
-	var events []agent.Event
-	l.Sink = sinkFunc2(func(e agent.Event) error {
+	var events []event.Event
+	l.Sink = sinkFunc2(func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -80,9 +81,9 @@ func TestLoopEmitsReadRecordWhenTruncated(t *testing.T) {
 	}
 
 	// Event truth: a read_record event with truncated=true must exist.
-	var found *agent.Event
+	var found *event.Event
 	for i := range events {
-		if events[i].Type == agent.EventRead {
+		if events[i].Type == event.EventRead {
 			found = &events[i]
 		}
 	}
@@ -102,7 +103,7 @@ func TestLoopEmitsReadRecordWhenTruncated(t *testing.T) {
 	// Tool result truth: the model saw the truncation tail.
 	var toolResult string
 	for _, e := range events {
-		if e.Type == agent.ToolEnd && e.Call != nil && e.Call.Name == "read_file" {
+		if e.Type == event.ToolEnd && e.Call != nil && e.Call.Name == "read_file" {
 			toolResult = e.Call.Output
 		}
 	}
@@ -118,10 +119,10 @@ func TestLoopEmitsReadRecordWhenTruncated(t *testing.T) {
 type allowGate struct{}
 
 func (allowGate) Check(tool string) (agent.Verdict, string)              { return agent.VerdictAllow, "" }
-func (allowGate) Record(tool string, d agent.Decision)                   {}
-func (allowGate) Effective(tool string, d agent.Decision) agent.Decision { return d }
-func (allowGate) Ask(ctx context.Context, c agent.ToolCall) agent.Decision {
-	return agent.AllowOnce
+func (allowGate) Record(tool string, d event.Decision)                   {}
+func (allowGate) Effective(tool string, d event.Decision) event.Decision { return d }
+func (allowGate) Ask(ctx context.Context, c event.ToolCall) event.Decision {
+	return event.AllowOnce
 }
 
 // loopTools2 satisfies agent.Tools with a real Registry.
@@ -131,11 +132,11 @@ func (l loopTools2) Specs() []provider.ToolSpec { return l.reg.Specs() }
 func (l loopTools2) Run(ctx context.Context, c provider.ToolCall) (string, bool, error) {
 	return l.reg.Run(ctx, c)
 }
-func (l loopTools2) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (agent.Outcome, error) {
+func (l loopTools2) RunDetailed(ctx context.Context, name string, raw json.RawMessage) (event.Outcome, error) {
 	return l.reg.RunDetailed(ctx, name, raw)
 }
 
 // sinkFunc2 adapts a func to the agent.Sink interface.
-type sinkFunc2 func(agent.Event) error
+type sinkFunc2 func(event.Event) error
 
-func (f sinkFunc2) Emit(e agent.Event) error { return f(e) }
+func (f sinkFunc2) Emit(e event.Event) error { return f(e) }

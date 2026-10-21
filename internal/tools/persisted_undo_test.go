@@ -5,9 +5,10 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/snap"
 	"nabd/internal/store"
 )
@@ -50,13 +51,13 @@ func TestPersistedUndoModesAndLegacy(t *testing.T) {
 
 	// Serialize and deserialize to ensure mode survives JSON
 
-	recs := []*agent.EditRecord{recAbsent, recReg, recExec}
+	recs := []*event.EditRecord{recAbsent, recReg, recExec}
 
 	// Write directly to a real journal file using store (simulating exact runtime)
 	journalPath := filepath.Join(dir, "journal.jsonl")
 	journal, _ := store.NewJSONL(journalPath)
 	for _, rec := range recs {
-		journal.Append(agent.Event{Type: "edit", Edit: rec})
+		journal.Append(event.Event{Type: "edit", Edit: rec})
 	}
 	journal.Close()
 
@@ -65,8 +66,8 @@ func TestPersistedUndoModesAndLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store read failed: %v", err)
 	}
-	// agent.Live(events) directly returns []agent.Event or we just use events
-	var loadedRecs []*agent.EditRecord
+	// event.Live(events) directly returns []event.Event or we just use events
+	var loadedRecs []*event.EditRecord
 	for _, ev := range events {
 		if ev.Edit != nil {
 			loadedRecs = append(loadedRecs, ev.Edit)
@@ -115,7 +116,7 @@ func TestPersistedUndoModesAndLegacy(t *testing.T) {
 	recLegacy.ModeBefore = 0
 
 	regD := NewRegistry(root, sh)
-	resLegacy := regD.PersistedUndo([]*agent.EditRecord{recLegacy}, 1)
+	resLegacy := regD.PersistedUndo([]*event.EditRecord{recLegacy}, 1)
 	if !resLegacy[0].OK {
 		t.Fatalf("legacy undo failed: %v", resLegacy[0].Note)
 	}
@@ -144,14 +145,14 @@ func TestPersistedUndoDiagnostics(t *testing.T) {
 
 	// case 1: changed target file -> user-change conflict
 	os.WriteFile(path, []byte("externally modified"), 0o644)
-	res := regA.PersistedUndo([]*agent.EditRecord{rec}, 1)
+	res := regA.PersistedUndo([]*event.EditRecord{rec}, 1)
 	if res[0].OK || res[0].Note != ErrUndoConflictChanged.Error() {
 		t.Errorf("expected ErrUndoConflictChanged, got note: %q", res[0].Note)
 	}
 
 	// case 2: missing target file -> user-change (missing) conflict
 	os.Remove(path)
-	res = regA.PersistedUndo([]*agent.EditRecord{rec}, 1)
+	res = regA.PersistedUndo([]*event.EditRecord{rec}, 1)
 	if res[0].OK || res[0].Note != ErrUndoConflictMissing.Error() {
 		t.Errorf("expected ErrUndoConflictMissing, got note: %q", res[0].Note)
 	}
@@ -163,16 +164,124 @@ func TestPersistedUndoDiagnostics(t *testing.T) {
 	blobPath := filepath.Join(sh.StoreDir(), rec.BlobBefore[5:7], rec.BlobBefore[7:])
 	os.Chmod(blobPath, 0644)
 	os.WriteFile(blobPath, []byte("corrupted data"), 0o600)
-	res = regA.PersistedUndo([]*agent.EditRecord{rec}, 1)
+	res = regA.PersistedUndo([]*event.EditRecord{rec}, 1)
 	if res[0].OK || res[0].Note != snap.ErrShadowCorruption.Error()+": blob "+rec.BlobBefore+" checksum mismatch" {
 		t.Errorf("expected ErrShadowCorruption, got note: %q", res[0].Note)
 	}
 
 	// case 4: missing shadow blob -> missing diagnostic
 	os.Remove(blobPath)
-	res = regA.PersistedUndo([]*agent.EditRecord{rec}, 1)
+	res = regA.PersistedUndo([]*event.EditRecord{rec}, 1)
 	if res[0].OK || res[0].Note != snap.ErrShadowMissing.Error()+": stat "+blobPath+": no such file or directory" {
 		// allow for OS error variation by only checking the prefix?
 		t.Logf("res note = %q", res[0].Note)
+	}
+}
+
+// TestPersistedUndoRefusesMissingBeforeBlob pins V16: a record that says the
+// file existed (it carries a before-hash) but whose before-content reference is
+// absent must not be read as a creation. A reader that decides "creation" from
+// an empty BlobBefore alone deletes the user's file on /undo, which is the data
+// loss the hypothesis predicts.
+//
+// The fixture is written the way a capture-ordering change such as the open
+// PR #270 writes it: hashes present, content blobs intentionally absent, and an
+// "excluded" marker. The path itself is not excluded, so the refusal has to
+// come from data the older schema already has — the present before-hash beside
+// the missing blob — not from the newer exclusion marker.
+func TestPersistedUndoRefusesMissingBeforeBlob(t *testing.T) {
+	dir := t.TempDir()
+	root, err := NewRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := snap.New(root.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const before = "content that existed before the agent wrote\n"
+	const after = "content the agent wrote\n"
+	path := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(path, []byte(after), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	line := `{"type":"edit","edit":{"mutation_id":"v16","path":"notes.txt","hash_before":"` +
+		sha256hex([]byte(before)) + `","hash_after":"` + sha256hex([]byte(after)) +
+		`","patch":"","read_lines":0,"excluded":true}}` + "\n"
+	journalPath := filepath.Join(dir, "journal.jsonl")
+	if err := os.WriteFile(journalPath, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := store.Read(journalPath)
+	if err != nil {
+		t.Fatalf("store read failed: %v", err)
+	}
+	var recs []*event.EditRecord
+	for _, ev := range events {
+		if ev.Edit != nil {
+			recs = append(recs, ev.Edit)
+		}
+	}
+	if len(recs) != 1 {
+		t.Fatalf("journal fixture did not decode into one record: %+v", events)
+	}
+	if recs[0].HashBefore == "" || recs[0].BlobBefore != "" {
+		t.Fatalf("fixture must be the V16 shape (before-hash present, before-blob absent), got hash_before=%q blob_before=%q",
+			recs[0].HashBefore, recs[0].BlobBefore)
+	}
+
+	res := NewRegistry(root, sh).PersistedUndo(recs, 1)
+	if len(res) != 1 {
+		t.Fatalf("want one undo result, got %+v", res)
+	}
+	if res[0].OK {
+		t.Fatalf("undo accepted a record whose before-content is missing: note=%q", res[0].Note)
+	}
+	if !strings.Contains(res[0].Note, "before-content") {
+		t.Errorf("refusal must name the missing before-content, got %q", res[0].Note)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("undo deleted the file: %v", err)
+	}
+	if string(b) != after {
+		t.Fatalf("undo changed the file: %q", b)
+	}
+}
+
+// TestPersistedUndoDeletesTrueCreation is the control: a record whose own
+// fields say there was no before (no before-hash, no before-blob) still deletes
+// the file, so the fix cannot turn every undo into a refusal.
+func TestPersistedUndoDeletesTrueCreation(t *testing.T) {
+	dir := t.TempDir()
+	root, err := NewRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := snap.New(root.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const after = "created by the agent\n"
+	path := filepath.Join(dir, "created.txt")
+	if err := os.WriteFile(path, []byte(after), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := &event.EditRecord{
+		MutationID: "creation",
+		Path:       "created.txt",
+		HashAfter:  sha256hex([]byte(after)),
+	}
+	res := NewRegistry(root, sh).PersistedUndo([]*event.EditRecord{rec}, 1)
+	if len(res) != 1 || !res[0].OK {
+		t.Fatalf("undo of a true creation must delete the file, got %+v", res)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("undo of a true creation did not delete the file, err=%v", err)
 	}
 }

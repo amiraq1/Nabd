@@ -10,6 +10,7 @@ import (
 )
 
 func renderToolSummary(t *presentation.ToolCard, width int) string {
+	ch := newFeedChrome()
 	if width <= 0 {
 		width = DefaultWidth
 	}
@@ -21,13 +22,13 @@ func renderToolSummary(t *presentation.ToolCard, width int) string {
 		parts = append(parts, subject)
 	}
 	if len(meta) > 0 {
-		parts = append(parts, strings.Join(meta, " · "))
+		parts = append(parts, strings.Join(meta, ch.sep))
 	}
 	if line := strings.Join(parts, "  "); ansi.StringWidth(line) <= width {
 		return line
 	}
 	if important := toolImportantMetadata(t); important != "" {
-		line := prefix + " · " + important
+		line := prefix + ch.sep + important
 		if ansi.StringWidth(line) <= width {
 			return line
 		}
@@ -35,7 +36,7 @@ func renderToolSummary(t *presentation.ToolCard, width int) string {
 	if subject != "" {
 		avail := width - ansi.StringWidth(prefix) - 2
 		if avail > 0 {
-			return prefix + "  " + truncateToWidth(subject, avail, "…")
+			return prefix + "  " + truncateToWidth(subject, avail, ch.tail)
 		}
 	}
 	return truncateToWidth(prefix, width, "")
@@ -79,7 +80,7 @@ func toolSummaryMetadata(t *presentation.ToolCard) []string {
 func toolImportantMetadata(t *presentation.ToolCard) string {
 	switch t.Status {
 	case presentation.ToolPending:
-		return "pending"
+		return "awaiting approval"
 	case presentation.ToolRunning:
 		return "running"
 	case presentation.ToolDenied:
@@ -100,11 +101,29 @@ func toolImportantMetadata(t *presentation.ToolCard) string {
 }
 
 func toolStatusSymbol(status presentation.ToolStatus) string {
+	if asciiOnly() {
+		switch status {
+		case presentation.ToolPending:
+			return dim.Render("o")
+		case presentation.ToolRunning:
+			return warn.Render(">")
+		case presentation.ToolDone:
+			return good.Render("+")
+		case presentation.ToolFailed:
+			return bad.Render("x")
+		case presentation.ToolDenied:
+			return bad.Render("x")
+		case presentation.ToolCancelled:
+			return dim.Render("x")
+		default:
+			return dim.Render(".")
+		}
+	}
 	switch status {
 	case presentation.ToolPending:
-		return dim.Render("o")
+		return dim.Render("○")
 	case presentation.ToolRunning:
-		return warn.Render("~")
+		return warn.Render("●")
 	case presentation.ToolDone:
 		return good.Render("✓")
 	case presentation.ToolFailed:
@@ -126,13 +145,14 @@ func toolOutputAvailable(t *presentation.ToolCard) bool {
 }
 
 func renderToolMetadata(t *presentation.ToolCard, width int) []string {
+	ch := newFeedChrome()
 	var rows []string
 	add := func(label, value string) {
 		value = toolSummaryText(value)
 		if value == "" {
 			return
 		}
-		rows = append(rows, dim.Render(truncateToWidth("  "+label+": "+value, width, "…")))
+		rows = append(rows, dim.Render(truncateToWidth("  "+label+": "+value, width, ch.tail)))
 	}
 	add("arguments", t.Args)
 	if t.ExitCode != 0 {

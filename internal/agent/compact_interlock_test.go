@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"nabd/internal/event"
 	"strings"
 	"testing"
 
@@ -15,8 +16,8 @@ func TestCompactInterlockRejectsConcurrentHistoryMutation(t *testing.T) {
 	prov := &readyBlockingProvider{readyCh: ready, unblock: unblock}
 	l := &Loop{Provider: prov, Budget: NewBudget()}
 
-	l.emit(Event{Type: UserMsg, Text: strings.Repeat("large first turn ", 120)})
-	l.emit(Event{Type: UserMsg, Text: "short second turn"})
+	l.emit(event.Event{Type: event.UserMsg, Text: strings.Repeat("large first turn ", 120)})
+	l.emit(event.Event{Type: event.UserMsg, Text: "short second turn"})
 
 	compactErr := make(chan error, 1)
 	go func() {
@@ -52,7 +53,7 @@ func TestCompactInterlockReleasesAfterEarlyFailure(t *testing.T) {
 		t.Fatal("Compact without a boundary unexpectedly succeeded")
 	}
 
-	l.emit(Event{Type: UserMsg, Text: "turn after failed compact"})
+	l.emit(event.Event{Type: event.UserMsg, Text: "turn after failed compact"})
 	if _, err := l.Rewind(1); err != nil {
 		t.Fatalf("interlock remained held after early failure: %v", err)
 	}
@@ -62,7 +63,7 @@ func seedTurnsUntilPressure(t *testing.T, l *Loop, targetPressure float64) {
 	l.EstimateMessages = func(ms []provider.Message) int {
 		return int(float64(l.Budget.Usable()) * targetPressure)
 	}
-	l.emit(Event{Type: UserMsg, Text: "prior turn"})
+	l.emit(event.Event{Type: event.UserMsg, Text: "prior turn"})
 }
 
 func captureNotices(t *testing.T, l *Loop) func() []string {
@@ -70,7 +71,7 @@ func captureNotices(t *testing.T, l *Loop) func() []string {
 	return func() []string {
 		var out []string
 		for _, e := range l.Hist()[start:] {
-			if e.Type == Notice {
+			if e.Type == event.Notice {
 				out = append(out, e.Text)
 			}
 		}

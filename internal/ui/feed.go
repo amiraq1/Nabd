@@ -11,9 +11,11 @@ import (
 	"unicode/utf8"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // This file owns the Feed model itself: its state, its wiring, and the
@@ -52,6 +54,19 @@ type Feed struct {
 	selectedItem   int
 	navigationMode bool
 
+	// fpCache memoizes FeedItem fingerprints by item Key(). The projector
+	// reports exactly which items an event batch touched, so refresh()
+	// re-hashes only those instead of every visible item's full text/output
+	// on every frame (L15). Entries for items that leave the feed are
+	// evicted alongside the line cache.
+	fpCache map[presentation.ItemKey]uint64
+	// lastStructSig is the structural signature of the last full render;
+	// when no fingerprint changed and the signature matches, the rendered
+	// lines are provably identical and refresh() skips re-rendering and the
+	// O(lines) output fingerprint entirely.
+	lastStructSig  uint64
+	structSigValid bool
+
 	// Cached rendered lines for the current viewport.
 	lines   []string
 	offsets []int
@@ -83,6 +98,8 @@ type Feed struct {
 	gitDirty         int
 	gitFailures      int
 	gitDir           string
+	gitRepoSig       string
+	gitPolls         int
 
 	// Callbacks wired by the CLI.
 	callbacks SessionCallbacks
@@ -120,7 +137,7 @@ type Feed struct {
 
 	// pending holds the tool call awaiting a permission decision while the
 	// modal is visible (for help text and tests).
-	pending *agent.ToolCall
+	pending *event.ToolCall
 
 	// Run state.
 	running     bool // an agent/model/tool run is in flight
@@ -206,6 +223,7 @@ type cacheEntry struct {
 	fp       uint64
 	expanded expandState
 	selected bool // part of the key, not an invalidator: see refresh()
+	rtlMode  uint8
 	lines    []string
 }
 
@@ -304,7 +322,7 @@ func NewFeed() *Feed {
 func (m *Feed) Init() tea.Cmd {
 	if m.gitHeaderEnabled && isGitRepo(m.gitDir) {
 		dir := m.gitDir
-		return gitStatusCmd(dir)
+		return gitStatusCmd(dir, "", true)
 	}
 	return nil
 }
@@ -374,14 +392,15 @@ func (m *Feed) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addErrorNotice(card, msg.err.Error())
 			return m, nil
 		}
-		var b strings.Builder
-		for _, mod := range msg.models {
-			b.WriteString(mod + "\n")
-		}
+		text := formatModelGrid(msg.models, m.width)
 		if msg.disclaimer != "" {
-			b.WriteString(msg.disclaimer)
+			if text != "" {
+				text += "\n" + msg.disclaimer
+			} else {
+				text = msg.disclaimer
+			}
 		}
-		m.addNotice(presentation.ItemNotice, strings.TrimRight(b.String(), "\n"))
+		m.addNotice(presentation.ItemNotice, text)
 		return m, nil
 	case clipboardResultMsg:
 		if msg.err != nil {
@@ -423,7 +442,7 @@ type modelsResultMsg struct {
 // applyBatch processes a batch of events through the projector. The batch
 // arrives as a Bubble Tea message on the event loop, never from a
 // goroutine, so mutating model state here is safe.
-func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
+func (m *Feed) applyBatch(events []event.Event) (tea.Model, tea.Cmd) {
 	for _, e := range events {
 		if err := m.proj.Apply(e); err != nil {
 			m.addDiagnostic(fmt.Sprintf("unable to project event %s seq=%d: %v", e.Type, e.Seq, err))
@@ -433,6 +452,17 @@ func (m *Feed) applyBatch(events []agent.Event) (tea.Model, tea.Cmd) {
 		}
 		m.statusProj.Apply(e)
 		m.trackState(e)
+		if e.Type == event.ToolEnd && e.Call != nil {
+			// Tools that can write files may have dirtied the working tree,
+			// which the git header's repository signature does not cover:
+			// drop the signature so the next header poll runs the real git
+			// subprocesses. Provably read-only tools keep it.
+			switch e.Call.Name {
+			case "read_file", "glob", "grep":
+			default:
+				m.gitRepoSig = ""
+			}
+		}
 		if e.Seq > m.lastSeq {
 			m.lastSeq = e.Seq
 		}
@@ -481,16 +511,16 @@ func (m *Feed) markRunFailed() {
 // session), not per-turn boundaries, so the feed manages busy/running from
 // trySend/doneMsg instead. The one exception is a terminal failure, which
 // retires the progress claims through markRunFailed.
-func (m *Feed) trackState(e agent.Event) {
+func (m *Feed) trackState(e event.Event) {
 	t := e.Time
 	if t.IsZero() {
 		t = time.Now()
 	}
 
 	switch e.Type {
-	case agent.RunStart:
+	case event.RunStart:
 		m.reqStartedAt = t
-	case agent.TurnStart:
+	case event.TurnStart:
 		// Reset per-turn stream state so separate provider turns in a multi-turn
 		// run do not mix durations, characters, or previous turn usage.
 		m.streamStartedAt = t
@@ -501,18 +531,18 @@ func (m *Feed) trackState(e agent.Event) {
 		m.lastThroughputAt = time.Time{}
 		m.cachedLiveRate = ""
 		m.cachedLiveTok = ""
-	case agent.RunError:
+	case event.RunError:
 		m.errorSeenSinceSend = true
 		m.markRunFailed()
-	case agent.ToolStart:
+	case event.ToolStart:
 		m.running = true
 		m.busy = true
 		if e.Call != nil {
 			m.runningTool = e.Call.Name
 		}
-	case agent.ToolEnd:
+	case event.ToolEnd:
 		m.runningTool = ""
-	case agent.TextDelta:
+	case event.TextDelta:
 		// Track streaming throughput for the current turn.
 		// Uses event timestamp e.Time rather than batch arrival time to avoid
 		// artificial tok/s inflation from microsecond batch processing loops.
@@ -525,11 +555,11 @@ func (m *Feed) trackState(e agent.Event) {
 			m.lastThroughputAt = t
 			m.updateLiveThroughput()
 		}
-	case agent.EventProviderUsage:
+	case event.EventProviderUsage:
 		if e.Usage != nil {
 			m.turnCompletionTokens = e.Usage.CompletionTokens
 		}
-	case agent.PermAsk:
+	case event.PermAsk:
 		m.runningTool = ""
 		if !m.modalVisible && !m.decisionPending {
 			m.followBeforeModal = m.follow
@@ -545,12 +575,12 @@ func (m *Feed) trackState(e agent.Event) {
 		// owns the keyboard, and a visible highlighted row would look
 		// answerable while every key goes to the modal.
 		m.picker.close()
-	case agent.PermReply, agent.Interrupted:
-		if e.Type == agent.Interrupted {
+	case event.PermReply, event.Interrupted:
+		if e.Type == event.Interrupted {
 			m.errorSeenSinceSend = true
 			m.markRunFailed()
 		}
-		if e.Type == agent.PermReply && e.Decision != agent.Deny && e.Call != nil {
+		if e.Type == event.PermReply && e.Decision != event.Deny && e.Call != nil {
 			m.runningTool = e.Call.Name
 		}
 		m.modalVisible = false
@@ -575,7 +605,7 @@ func (m *Feed) trackState(e agent.Event) {
 // model off the Bubble Tea loop; the events are parked and delivered as a
 // message instead. When no program is wired (tests drive Update directly)
 // the batch is applied synchronously.
-func (m *Feed) SendBatch(events []agent.Event) {
+func (m *Feed) SendBatch(events []event.Event) {
 	if len(events) == 0 {
 		return
 	}
@@ -605,7 +635,7 @@ func (m *Feed) SendBatch(events []agent.Event) {
 // The batcher delivers this same message through a live program; it is exported
 // so a caller outside this package — the CLI's interactive-redaction test — can
 // drive the identical Update path without a running Bubble Tea program.
-func AgentEventBatch(events []agent.Event) tea.Msg {
+func AgentEventBatch(events []event.Event) tea.Msg {
 	return agentEventBatchMsg{Events: events}
 }
 
@@ -663,10 +693,14 @@ func (m *Feed) updateLiveThroughput() {
 // BuildFromEvents initializes the feed from a complete event list (replay
 // or --continue). UI history is rebuilt from the live user_msg events only,
 // so rewind-cancelled messages never enter history.
-func (m *Feed) BuildFromEvents(events []agent.Event) {
+func (m *Feed) BuildFromEvents(events []event.Event) {
 	m.proj = presentation.NewProjector()
 	m.notices = nil
 	m.lastSeq = 0
+	// New projector: drop all cached fingerprints and the structural
+	// signature — every item is new.
+	m.fpCache = nil
+	m.structSigValid = false
 	for _, e := range events {
 		_ = m.proj.Apply(e)
 		m.trackState(e)
@@ -692,11 +726,60 @@ func (m *Feed) BuildFromEvents(events []agent.Event) {
 
 // agentEventBatchMsg carries a batch of events from the batcher.
 type agentEventBatchMsg struct {
-	Events []agent.Event
+	Events []event.Event
 }
 
 // permReplyMsg carries a permission decision from the modal keys to the
 // Update handler that forwards it to the approver.
 type permReplyMsg struct {
-	Decision agent.Decision
+	Decision event.Decision
+}
+
+// formatModelGrid formats a slice of model names into a columnar grid that fits
+// within the specified width, ensuring that catalogs fit within terminal viewports
+// without scrolling the earlier entries off-screen.
+func formatModelGrid(models []string, width int) string {
+	if len(models) == 0 {
+		return ""
+	}
+	avail := width - 4
+	if avail < 20 {
+		avail = 20
+	}
+	maxLen := 0
+	for _, m := range models {
+		if l := ansi.StringWidth(m); l > maxLen {
+			maxLen = l
+		}
+	}
+	if maxLen == 0 {
+		return ""
+	}
+	colWidth := maxLen + 2 // 2 spaces between columns
+	cols := avail / colWidth
+	if cols < 1 {
+		cols = 1
+	}
+	if cols > len(models) {
+		cols = len(models)
+	}
+	rows := (len(models) + cols - 1) / cols
+	var b strings.Builder
+	for r := 0; r < rows; r++ {
+		for c := 0; c < cols; c++ {
+			idx := c*rows + r
+			if idx >= len(models) {
+				continue
+			}
+			if c == cols-1 || (c+1)*rows+r >= len(models) {
+				b.WriteString(models[idx])
+			} else {
+				fmt.Fprintf(&b, "%-*s", colWidth, models[idx])
+			}
+		}
+		if r < rows-1 {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
 }

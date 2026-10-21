@@ -93,3 +93,36 @@ func TestSeparatorGlyphWidth(t *testing.T) {
 		}
 	}
 }
+
+// TestAsciiOnlyContract verifies the NABD_ASCII_ONLY environment variable contract
+// documented in docs/CONFIG.md: any non-empty string enables ASCII-only mode,
+// while unset or empty string disables it.
+func TestAsciiOnlyContract(t *testing.T) {
+	cases := []struct {
+		name string
+		set  bool
+		val  string
+		want bool
+	}{
+		{name: "unset", set: false, want: false},
+		{name: "empty", set: true, val: "", want: false},
+		{name: "zero", set: true, val: "0", want: true},
+		{name: "one", set: true, val: "1", want: true},
+		{name: "false_string", set: true, val: "false", want: true},
+		{name: "true_string", set: true, val: "true", want: true},
+		{name: "unknown_value", set: true, val: "arbitrary_value", want: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.set {
+				t.Setenv("NABD_ASCII_ONLY", tc.val)
+			} else {
+				t.Setenv("NABD_ASCII_ONLY", "")
+			}
+			if got := asciiOnly(); got != tc.want {
+				t.Errorf("asciiOnly() with %s (%q) = %v, want %v", tc.name, tc.val, got, tc.want)
+			}
+		})
+	}
+}

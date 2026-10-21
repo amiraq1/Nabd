@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/store"
 )
 
@@ -38,10 +38,10 @@ func TestSessionPathConcurrentAllocationsAreDistinct(t *testing.T) {
 				return
 			}
 			base := frozen
-			evs := []agent.Event{
-				{Seq: 1, Time: base, Type: agent.RunStart, Text: "session-" + string(rune('A'+idx)), ProjectRoot: "/repo"},
-				{Seq: 2, Parent: 1, Time: base.Add(1e6), Type: agent.UserMsg, Text: "hello from session " + string(rune('A'+idx))},
-				{Seq: 3, Parent: 2, Time: base.Add(2e6), Type: agent.TurnEnd},
+			evs := []event.Event{
+				{Seq: 1, Time: base, Type: event.RunStart, Text: "session-" + string(rune('A'+idx)), ProjectRoot: "/repo"},
+				{Seq: 2, Parent: 1, Time: base.Add(1e6), Type: event.UserMsg, Text: "hello from session " + string(rune('A'+idx))},
+				{Seq: 3, Parent: 2, Time: base.Add(2e6), Type: event.TurnEnd},
 			}
 			for _, e := range evs {
 				if err := j.Append(e); err != nil {
@@ -110,7 +110,7 @@ func TestSessionPathConcurrentAllocationsAreDistinct(t *testing.T) {
 		}
 		var txt string
 		for _, e := range evs {
-			if e.Type == agent.RunStart {
+			if e.Type == event.RunStart {
 				txt = e.Text
 			}
 		}

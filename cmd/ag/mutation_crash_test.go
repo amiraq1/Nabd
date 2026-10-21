@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/snap"
 	"nabd/internal/store"
 	"nabd/internal/tools"
@@ -117,7 +118,7 @@ func TestMutationCrashRecoveryMatrix(t *testing.T) {
 			sink := &testNoticeSink{}
 			loop := &agent.Loop{Sink: sink}
 			noteMutationRecovery(loop, reg, events)
-			if len(sink.events) != 1 || sink.events[0].Type != agent.Notice {
+			if len(sink.events) != 1 || sink.events[0].Type != event.Notice {
 				t.Fatalf("recovery notice events=%+v, want one notice", sink.events)
 			}
 			for _, state := range []string{"not_published=0", "published=0", "missing=0", "conflict=0"} {
@@ -172,7 +173,7 @@ func TestMutationCrashHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	loop := &agent.Loop{Sink: journal}
-	rec := &agent.EditRecord{
+	rec := &event.EditRecord{
 		MutationID: "crash-" + phase,
 		Path:       "notes.txt",
 		HashBefore: crashHash(crashBefore),

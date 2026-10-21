@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"nabd/internal/event"
 	"testing"
 )
 
@@ -9,7 +10,7 @@ type syncTrackingSink struct {
 	syncs int
 }
 
-func (s *syncTrackingSink) Emit(Event) error {
+func (s *syncTrackingSink) Emit(event.Event) error {
 	s.emits++
 	return nil
 }
@@ -25,9 +26,9 @@ func TestCriticalEventsSyncDurableSink(t *testing.T) {
 	sink := &syncTrackingSink{}
 	l := &Loop{Sink: sink}
 
-	if err := l.emit(Event{
-		Type: EventEditIntent,
-		Edit: &EditRecord{MutationID: "mutation-test"},
+	if err := l.emit(event.Event{
+		Type: event.EventEditIntent,
+		Edit: &event.EditRecord{MutationID: "mutation-test"},
 	}); err != nil {
 		t.Fatalf("emit edit intent: %v", err)
 	}
@@ -35,16 +36,16 @@ func TestCriticalEventsSyncDurableSink(t *testing.T) {
 		t.Fatalf("after edit intent emits=%d syncs=%d, want 1/1", sink.emits, sink.syncs)
 	}
 
-	if err := l.emit(Event{Type: Notice, Text: "ordinary"}); err != nil {
+	if err := l.emit(event.Event{Type: event.Notice, Text: "ordinary"}); err != nil {
 		t.Fatalf("emit ordinary event: %v", err)
 	}
 	if sink.emits != 2 || sink.syncs != 1 {
 		t.Fatalf("after ordinary event emits=%d syncs=%d, want 2/1", sink.emits, sink.syncs)
 	}
 
-	if err := l.emit(Event{
-		Type: EventEdit,
-		Edit: &EditRecord{MutationID: "mutation-test"},
+	if err := l.emit(event.Event{
+		Type: event.EventEdit,
+		Edit: &event.EditRecord{MutationID: "mutation-test"},
 	}); err != nil {
 		t.Fatalf("emit edit record: %v", err)
 	}
@@ -63,22 +64,22 @@ func TestJournalIntegrity(t *testing.T) {
 	l := &Loop{Budget: NewBudget()}
 
 	// Two realistic turns with tools, mirroring what the loop emits.
-	l.emit(Event{Type: RunStart, Text: "nabd test"})
-	l.emit(Event{Type: UserMsg, Text: "اقرأ واكتب"})
-	l.emit(Event{Type: TurnStart})
-	l.emit(Event{Type: TextDelta, Text: "سأقرأ "})
-	l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: "t1", Name: "read_file", Args: []byte(`{"path":"a.go"}`)}})
-	l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: "t1", Name: "read_file", Output: "1|x", OK: true}})
-	l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: "t2", Name: "write_file", Args: []byte(`{"path":"a.go"}`)}})
-	l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: "t2", Name: "write_file", Output: "ok", OK: true}})
-	l.emit(Event{Type: EventEdit, Edit: &EditRecord{Path: "a.go", HashAfter: "x", ReadLines: 1}})
-	l.emit(Event{Type: TurnEnd})
-	l.emit(Event{Type: UserMsg, Text: "مرة أخرى"})
-	l.emit(Event{Type: TurnStart})
-	l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: "t3", Name: "grep", Args: []byte(`{"pattern":"x"}`)}})
-	l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: "t3", Name: "grep", Output: "a.go:1", OK: true}})
-	l.emit(Event{Type: TurnEnd})
-	l.emit(Event{Type: RunError, Err: "انتهى الدور"})
+	l.emit(event.Event{Type: event.RunStart, Text: "nabd test"})
+	l.emit(event.Event{Type: event.UserMsg, Text: "اقرأ واكتب"})
+	l.emit(event.Event{Type: event.TurnStart})
+	l.emit(event.Event{Type: event.TextDelta, Text: "سأقرأ "})
+	l.emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file", Args: []byte(`{"path":"a.go"}`)}})
+	l.emit(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "read_file", Output: "1|x", OK: true}})
+	l.emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: "t2", Name: "write_file", Args: []byte(`{"path":"a.go"}`)}})
+	l.emit(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: "t2", Name: "write_file", Output: "ok", OK: true}})
+	l.emit(event.Event{Type: event.EventEdit, Edit: &event.EditRecord{Path: "a.go", HashAfter: "x", ReadLines: 1}})
+	l.emit(event.Event{Type: event.TurnEnd})
+	l.emit(event.Event{Type: event.UserMsg, Text: "مرة أخرى"})
+	l.emit(event.Event{Type: event.TurnStart})
+	l.emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: "t3", Name: "grep", Args: []byte(`{"pattern":"x"}`)}})
+	l.emit(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: "t3", Name: "grep", Output: "a.go:1", OK: true}})
+	l.emit(event.Event{Type: event.TurnEnd})
+	l.emit(event.Event{Type: event.RunError, Err: "انتهى الدور"})
 
 	evs := l.hist
 
@@ -93,7 +94,7 @@ func TestJournalIntegrity(t *testing.T) {
 	}
 
 	// 2. Parent points at an older existing Seq.
-	bySeq := map[int]Event{}
+	bySeq := map[int]event.Event{}
 	for _, e := range evs {
 		bySeq[e.Seq] = e
 	}
@@ -113,7 +114,7 @@ func TestJournalIntegrity(t *testing.T) {
 	// 3. Every ToolStart has a matching ToolEnd with the same ID.
 	open := map[string]bool{}
 	for _, e := range evs {
-		if e.Type == ToolStart {
+		if e.Type == event.ToolStart {
 			if e.Call == nil {
 				t.Fatal("ToolStart without call")
 			}
@@ -122,7 +123,7 @@ func TestJournalIntegrity(t *testing.T) {
 			}
 			open[e.Call.ID] = true
 		}
-		if e.Type == ToolEnd {
+		if e.Type == event.ToolEnd {
 			if e.Call == nil {
 				t.Fatal("ToolEnd without call")
 			}
@@ -137,7 +138,7 @@ func TestJournalIntegrity(t *testing.T) {
 	}
 
 	// 4. Live() keeps the same invariants on the branch.
-	live := Live(evs)
+	live := event.Live(evs)
 	if len(live) == 0 {
 		t.Fatal("Live() empty")
 	}
@@ -160,30 +161,30 @@ func TestJournalIntegrity(t *testing.T) {
 // (a double marker would lie about the turn's outcome).
 func TestExactlyOneEndMarkerPerTurn(t *testing.T) {
 	l := &Loop{Budget: NewBudget()}
-	l.emit(Event{Type: RunStart, Text: "x"})
-	l.emit(Event{Type: UserMsg, Text: "دور أول"})
-	l.emit(Event{Type: TurnStart})
-	l.emit(Event{Type: TextDelta, Text: "جواب"})
-	l.emit(Event{Type: TurnEnd}) // settled normally
+	l.emit(event.Event{Type: event.RunStart, Text: "x"})
+	l.emit(event.Event{Type: event.UserMsg, Text: "دور أول"})
+	l.emit(event.Event{Type: event.TurnStart})
+	l.emit(event.Event{Type: event.TextDelta, Text: "جواب"})
+	l.emit(event.Event{Type: event.TurnEnd}) // settled normally
 
-	l.emit(Event{Type: UserMsg, Text: "دور ثانٍ"})
-	l.emit(Event{Type: TurnStart})
-	l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: "t", Name: "read_file"}})
-	l.emit(Event{Type: Interrupted, Text: "ctrl+c"}) // interrupted
+	l.emit(event.Event{Type: event.UserMsg, Text: "دور ثانٍ"})
+	l.emit(event.Event{Type: event.TurnStart})
+	l.emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: "t", Name: "read_file"}})
+	l.emit(event.Event{Type: event.Interrupted, Text: "ctrl+c"}) // interrupted
 
-	l.emit(Event{Type: UserMsg, Text: "دور ثالث"})
-	l.emit(Event{Type: TurnStart})
-	l.emit(Event{Type: TextDelta, Text: "نص"})
-	l.emit(Event{Type: RunError, Err: "فشل"}) // errored
+	l.emit(event.Event{Type: event.UserMsg, Text: "دور ثالث"})
+	l.emit(event.Event{Type: event.TurnStart})
+	l.emit(event.Event{Type: event.TextDelta, Text: "نص"})
+	l.emit(event.Event{Type: event.RunError, Err: "فشل"}) // errored
 
 	evs := l.hist
 	markers := 0
 	first := true
 	for _, e := range evs {
 		switch e.Type {
-		case TurnEnd, RunError, Interrupted:
+		case event.TurnEnd, event.RunError, event.Interrupted:
 			markers++
-		case UserMsg:
+		case event.UserMsg:
 			// A new turn: the previous one must have closed with exactly one
 			// marker before a new user message is allowed. The first UserMsg
 			// is the start of the first turn — no previous turn to check.

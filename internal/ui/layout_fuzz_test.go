@@ -5,7 +5,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -81,45 +81,45 @@ func FuzzLayoutInvariants(f *testing.F) {
 				feed.Update(tea.KeyMsg{Type: tea.KeyTab})
 			case 15:
 				// Open modal
-				feed.Update(agentEventBatchMsg{Events: []agent.Event{
-					{Seq: int(action) + 100, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "fz1", Name: "bash"}},
+				feed.Update(agentEventBatchMsg{Events: []event.Event{
+					{Seq: int(action) + 100, Type: event.PermAsk, Call: &event.ToolCall{ID: "fz1", Name: "bash"}},
 				}})
 			case 16:
 				// Close modal with y
 				if feed.modalVisible {
 					feed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-					feed.Update(agentEventBatchMsg{Events: []agent.Event{
-						{Seq: int(action) + 200, Type: agent.PermReply, Call: &agent.ToolCall{ID: "fz1"}, Decision: agent.AllowOnce, RawDecision: agent.AllowOnce},
+					feed.Update(agentEventBatchMsg{Events: []event.Event{
+						{Seq: int(action) + 200, Type: event.PermReply, Call: &event.ToolCall{ID: "fz1"}, Decision: event.AllowOnce, RawDecision: event.AllowOnce},
 					}})
 				}
 			case 17:
 				// Close modal with n
 				if feed.modalVisible {
 					feed.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
-					feed.Update(agentEventBatchMsg{Events: []agent.Event{
-						{Seq: int(action) + 300, Type: agent.PermReply, Call: &agent.ToolCall{ID: "fz1"}, Decision: agent.Deny, RawDecision: agent.Deny},
+					feed.Update(agentEventBatchMsg{Events: []event.Event{
+						{Seq: int(action) + 300, Type: event.PermReply, Call: &event.ToolCall{ID: "fz1"}, Decision: event.Deny, RawDecision: event.Deny},
 					}})
 				}
 			case 18:
 				// Feed event: text delta
-				feed.Update(agentEventBatchMsg{Events: []agent.Event{
-					{Seq: int(action) + 400, Type: agent.TextDelta, Text: "hello world line"},
+				feed.Update(agentEventBatchMsg{Events: []event.Event{
+					{Seq: int(action) + 400, Type: event.TextDelta, Text: "hello world line"},
 				}})
 			case 19:
 				// Feed event: long tool output
-				feed.Update(agentEventBatchMsg{Events: []agent.Event{
-					{Seq: int(action) + 500, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "fz2", Name: "bash"},
+				feed.Update(agentEventBatchMsg{Events: []event.Event{
+					{Seq: int(action) + 500, Type: event.ToolEnd, Call: &event.ToolCall{ID: "fz2", Name: "bash"},
 						Text: strings.Repeat("long output line that exceeds any narrow terminal width ", 10)},
 				}})
 			case 20:
 				// Feed event: Arabic text
-				feed.Update(agentEventBatchMsg{Events: []agent.Event{
-					{Seq: int(action) + 600, Type: agent.TextDelta, Text: "هذا نص عربي للاختبار"},
+				feed.Update(agentEventBatchMsg{Events: []event.Event{
+					{Seq: int(action) + 600, Type: event.TextDelta, Text: "هذا نص عربي للاختبار"},
 				}})
 			case 21:
 				// Feed event: emoji
-				feed.Update(agentEventBatchMsg{Events: []agent.Event{
-					{Seq: int(action) + 700, Type: agent.TextDelta, Text: "hello 🚀🔥🎉"},
+				feed.Update(agentEventBatchMsg{Events: []event.Event{
+					{Seq: int(action) + 700, Type: event.TextDelta, Text: "hello 🚀🔥🎉"},
 				}})
 			case 22:
 				// Paste a slash command (must not execute)

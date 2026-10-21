@@ -1,4 +1,4 @@
-package agent
+package event
 
 // PermissionReason is the stable, language-neutral reason carried by
 // permission journal events. Text remains an English compatibility fallback;

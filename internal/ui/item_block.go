@@ -65,11 +65,14 @@ func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsE
 			expandVal = expandOpened
 		}
 		isSelected := m.navigationMode && i == m.selectedItem
-		fp := it.Fingerprint()
+		// Incremental fingerprint: only items the projector reports as
+		// touched are re-hashed; the rest reuse the cached value (L15).
+		fp := m.fpOf(it)
 		cached := m.lineCache[it.ID]
 		canUseCache := it.ID != "" && idCount[it.ID] == 1 &&
 			cached.fp == fp && cached.expanded == expandVal &&
-			cached.selected == isSelected
+			cached.selected == isSelected &&
+			cached.rtlMode == uint8(rtlDisplayMode())
 		needsSep := hasLines && (isMsg || prevIsMsg)
 		if canUseCache {
 			n := len(cached.lines)
@@ -109,6 +112,7 @@ func renderItemsCached(m *Feed, items []presentation.FeedItem, width int, toolsE
 					fp:       fp,
 					expanded: expandVal,
 					selected: isSelected,
+					rtlMode:  uint8(rtlDisplayMode()),
 					lines:    copyLines(content),
 				}
 			}

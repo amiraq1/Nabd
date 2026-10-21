@@ -48,6 +48,12 @@ Ambiguity in which configuration file is active presents a serious security risk
 **Migration:**
 To migrate from v1 to v2, create `~/.ag/config.v2.json` and remove or archive `~/.ag/config`.
 
+**Diagnosing:**
+`nabd config path` prints which configuration file is active (and its source),
+`nabd config validate` checks the active file without starting a session, and
+`nabd config show --redacted` prints the effective configuration with secrets
+masked.
+
 ---
 
 ## 3. Security Invariants and Hardening
@@ -144,7 +150,7 @@ A minimal valid `config.v2.json` file:
 
 ---
 
-## 5. Credential Separation in v2
+## 6. Credential Separation in v2
 
 Config v2 introduces explicit credential declarations, completely disabling implicit environment variable leakage:
 
@@ -184,7 +190,7 @@ In Config v1, any missing key fell back to `os.Getenv(key)`. In Config v2, **imp
 
 ---
 
-## 6. Multi-Provider Router Example
+## 7. Multi-Provider Router Example
 
 ```json
 {
@@ -221,7 +227,7 @@ In this example:
 
 ---
 
-## 7. Journal Redaction and Export (operational)
+## 8. Journal Redaction and Export (operational)
 
 `NABD_REDACT_JOURNAL` is a user-scoped Config v1 key in `~/.ag/config` (or the
 absolute path selected by `NABD_CONFIG`). The environment variable remains
@@ -303,12 +309,12 @@ mode (`-p`, `--continue`, `--replay`, `--feed`, `--feed-touch`, `--json`,
 `--dir`, `--version`, `--max-turns`, `--permission-mode`, `--speed`) or with
 positional arguments. Diagnostics go to stderr; stdout is JSONL only.
 
-## 8. Provider registry (`~/.ag/providers.json`)
+## 9. Provider registry (`~/.ag/providers.json`)
 
 User-defined providers live in `~/.ag/providers.json`; the path can be
 overridden with `NABD_PROVIDERS_FILE`. API keys are not stored here — they live
 in `~/.ag/auth.json` (override `NABD_AUTH_FILE`) and are enrolled with
-`nabd connect` or `nabd provider add`. The file is optional, and its document is
+`nabd connect`. The file is optional, and its document is
 a single object keyed by `provider`, whose keys are your provider IDs:
 
 ```json
@@ -362,7 +368,7 @@ and v1 config (`PrecedenceDocumentation` in `internal/registry/registry.go`).
 
 ---
 
-## 9. Network and DNS Configuration (Environment Only)
+## 10. Network and DNS Configuration (Environment Only)
 
 ### `NABD_PUBLIC_DNS`
 
@@ -374,16 +380,74 @@ On Termux (`android/arm64`), Go's standard library does not use system `libc` re
 
 ---
 
-## 10. Display Configuration (Environment Only)
+## 11. Display Configuration (Environment Only)
 
 ### `NABD_ASCII_ONLY`
 
 - **Environment-only variable:** `NABD_ASCII_ONLY` is read strictly from the process environment (`os.Getenv`). It is **not** a configuration file key and cannot be set in `~/.ag/config` or `~/.ag/config.v2.json`. Setting it in a config file triggers an unknown key warning (in v1) or validation error (in v2).
-- **Scope:** Controls decorative UI glyphs only. When set to any non-empty value (e.g. `NABD_ASCII_ONLY=1`), Nabd replaces Unicode decorative symbols with plain ASCII equivalents:
+- **Scope:** Controls decorative UI glyphs only. When set to any non-empty value (including `1`, `0`, or `false`), Nabd replaces Unicode decorative symbols with plain ASCII equivalents:
   - Error indicator glyph: `✗ ` becomes `x ` (or `! ` depending on width).
+  - Tool execution status symbols: running tool symbol `●` becomes `* `, and completed tool symbol `○` becomes `- `.
+  - Slash command menu: header banner (`-- Commands ` instead of `── Commands `), item truncation tails (`...` instead of `…`), and separator/border lines use `-`.
   - Truncation tail: `…` becomes `...`.
   - Border and separator lines: Unicode box-drawing character `─` becomes ASCII hyphen `-`.
+- **Disabling:** Unsetting the variable or setting it to an empty string (`NABD_ASCII_ONLY=""`) disables ASCII-only mode and restores default Unicode glyphs.
 - **Preserves Arabic and content text:** `NABD_ASCII_ONLY` affects only decorative framing glyphs and punctuation markers. It does **not** strip or alter Arabic text, user input, assistant responses, or error message bodies.
 
+### `NABD_RTL`
 
+- **Environment-only variable:** `NABD_RTL` selects the terminal display
+  policy. It is not a v1 or v2 configuration-file key.
+- Unset, `off`, or `logical`: preserve logical source order. This is the
+  default and rollback mode.
+- `reorder`: apply Unicode BiDi visual ordering without mirroring.
+- `mirror`, `auto`, or `reorder-and-mirror`: apply visual ordering and
+  contextual mirroring.
+- Unknown values fail closed to `logical`.
+- The variable changes display layout only. Journal events, copying, search,
+  and replay source remain logical text.
+- Arabic cursive shaping is disabled in all modes. `NABD_RTL` does not enable
+  joining forms, Presentation Forms substitutions, or GSUB.
 
+---
+
+## 12. Operational Environment Variables (Environment Only)
+
+The following variables are read from the process environment (`os.Getenv`) and
+**cannot** be set in `~/.ag/config` or `~/.ag/config.v2.json`.  Placing them
+in a config file has no effect (v1 ignores unknown keys with a warning; v2
+rejects the file outright).
+
+### Provider selection and routing
+
+| Variable | Purpose |
+|---|---|
+| `NABD_PROVIDER` | Override the active provider (`groq`, `anthropic`, `openrouter`, `nvidia`, `router`). Ignored when config v2 is active. |
+| `NABD_MODEL` | Override the model ID for the standalone (non-router) path. Ignored when `NABD_PROVIDER=router`. |
+| `NABD_BASE_URL` | Override the provider base URL. **Security-sensitive**: the endpoint policy (`NABD_ENDPOINT_POLICY`) applies, and an invalid policy value now produces a warning on stderr and defaults to `strict`. Forbidden when `NABD_PROVIDER=router`. |
+| `NABD_ROUTES` | Comma-separated `provider:model` pairs for the router provider, e.g. `groq:model-a,openrouter:model-b:free`. Provider names are lowercased, surrounding spaces/tabs are trimmed, at most 16 routes, and exact duplicates are rejected. Required when `NABD_PROVIDER=router`. |
+| `NABD_ROUTER_MODE` | Router fallback strategy. Currently only `fallback` is accepted. |
+| `NABD_ROUTER_PRESTREAM_TIMEOUT` | Duration string (e.g. `15s`) — time the router waits for a first byte before trying the next route. |
+| `NABD_ROUTER_RETRY_AFTER_WAIT` | Maximum duration (e.g. `30s`) the router will honour a `Retry-After` response header before failing over. |
+
+### Operational limits (v1 overrides)
+
+These variables override the corresponding `limits.*` fields in config v2.  In
+v2 prefer the structured config keys; these variables are provided for
+quick one-off overrides and v1 compatibility.
+
+| Variable | Purpose |
+|---|---|
+| `NABD_CTX` | Context window size in tokens. In v2 use `limits.context`. |
+| `NABD_MAX_TOKENS` | Maximum output tokens per provider turn. In v2 use `limits.max_tokens`. |
+| `NABD_MAX_TOKENS_PER_RUN` | Budget cap on total tokens per run. In v2 use `limits.max_tokens_per_run`. |
+| `NABD_MAX_READ` | Maximum bytes returned by a single `read_file` call. Overrides `limits.max_read` and per-provider `readCap` at runtime. |
+
+### UI and input
+
+| Variable | Purpose |
+|---|---|
+| `NABD_NO_MOUSE` | Any non-empty value disables mouse cell-motion input even when touch is detected. |
+| `NABD_FORCE_TOUCH` | `1` enables touch/mouse input on platforms where it is disabled by default (e.g. non-Termux terminals). |
+| `NABD_CLIPBOARD` | Clipboard transport override. `exec` forces the subprocess-based path. Unset uses the default heuristic. |
+| `NABD_EXPORTS_DIR` | Directory where `/export` session reports are written. Defaults to `~/.ag/exports`. |

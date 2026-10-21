@@ -16,7 +16,7 @@ The installable binary is `nabd`; the package path remains `./cmd/ag`.
 | `v2.1.2` | Published with signed `android/arm64` binary and Syft SBOM | Streamed redactor secret boundary hardening, permission modal arm delay |
 | `v2.1.1` | Published with signed `android/arm64` binary and Syft SBOM | Streaming redaction fixes at hold-back boundaries |
 | `v2.1.0` | Published with signed `android/arm64` binary and Syft SBOM | Streamed-chunk redaction, extended credentials, error remedy cards |
-| `v2.0.0` | Published with signed `android/arm64` binary and Syft SBOM | Scoped exclusively to Termux (`android/arm64`) |
+| `v2.0.0` | Published with signed `android/arm64` binary and Syft SBOM | Release artifacts scoped to Termux (`android/arm64`) |
 | `v1.6.1` | Published with binaries and `checksums.txt` | Last release supporting Linux & macOS desktop |
 | `v1.5.0` | Published with binaries and `checksums.txt` | |
 | `v1.4.0` | Published with binaries and `checksums.txt` | |
@@ -74,13 +74,15 @@ go build -o nabd ./cmd/ag
 
 ./nabd                            # interactive feed in the current directory
 ./nabd --continue                 # resume the latest session
+./nabd --dir <sessions>           # session directory (default ~/.ag/sessions)
 ./nabd --replay <file.jsonl>      # replay a session; --speed 0 is instant
-./nabd -feed                      # scrollable feed UI
+./nabd --feed=false               # legacy line-oriented chat UI (feed is the default)
 ./nabd --version                  # version · commit · date
 
 ./nabd connect <provider>         # store API key in ~/.ag/auth.json (hidden prompt, mode 0600)
 ./nabd models <provider>          # list live advertised models from provider endpoint
 ./nabd provider                   # list configured providers, sources, and key status
+./nabd config <path|validate|show> # config diagnostics: active file path, validation, redacted view
 ./nabd migrate                    # migrate legacy v1 config to ~/.ag/auth.json and providers.json
 ./nabd purge --dir <sessions>     # dry-run cleanup of session journals
 ./nabd purge --dir <sessions> --yes
@@ -96,7 +98,9 @@ go build -o nabd ./cmd/ag
 ./nabd --export <file.jsonl> --redact     # redact recognized credential patterns
 ```
 
-`--export` writes the journal as JSONL to stdout and exits; diagnostics go to stderr. Without `--redact` the source is copied verbatim (unknown fields, blank lines, and a truncated final line are preserved) and a stderr warning notes the output may be sensitive. With `--redact` the journal is re-encoded through the same redaction and encoding path as the live journal and `--json`: recognized credential patterns become `[REDACTED]`, but unknown JSON fields are dropped, a truncated final line is ignored, and unrecognized sensitive content stays cleartext. The source file is never written. `--redact` requires `--export`, and `--export` cannot be combined with any run mode (`-p`, `--continue`, `--replay`, `--feed`, `--json`, `--dir`, `--version`, and the headless tuning flags).
+`--export` writes the journal as JSONL to stdout and exits; diagnostics go to stderr. Without `--redact` the source is copied verbatim (unknown fields, blank lines, and a truncated final line are preserved) and a stderr warning notes the output may be sensitive. With `--redact` the journal is re-encoded through the same redaction and encoding path as the live journal and `--json`: recognized credential patterns become `[REDACTED]`, but unknown JSON fields are dropped, a truncated final line is ignored, and unrecognized sensitive content stays cleartext. The source file is never written. `--redact` requires `--export`, and `--export` cannot be combined with any run mode (`-p`, `--continue`, `--replay`, `--feed`, `--feed-touch`, `--json`, `--dir`, `--version`, `--max-turns`, `--permission-mode`, `--speed`) or with positional arguments.
+
+`--feed-touch` enables finger-swipe touch scrolling in the feed UI. On Termux it is rejected unless `NABD_FORCE_TOUCH=1` is set, because capturing touch events as mouse input prevents the on-screen keyboard from opening; keyboard navigation (Esc browse, Up/Down, Enter expand) works without it.
 
 `nabd purge` lists regular `*.jsonl` session journals directly inside the
 selected directory and performs a dry run by default. Pass `--yes` to delete
@@ -166,6 +170,8 @@ stdout contains only the final assistant text, or JSONL with `--json`. Notices a
 | GOOS/GOARCH | Status |
 |---|---|
 | android/arm64 | supported (Termux) |
+
+Release binaries are published for `android/arm64` only; the source still builds on other platforms (`go build ./cmd/ag`), but those builds are unsigned and unsupported.
 
 ## Core architecture
 

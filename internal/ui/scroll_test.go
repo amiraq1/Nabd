@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -13,11 +13,11 @@ import (
 
 // Helper to populate the feed with N distinct numbered lines
 func populateFeedWithLines(f *Feed, n int) {
-	var events []agent.Event
+	var events []event.Event
 	for i := 1; i <= n; i++ {
-		events = append(events, agent.Event{
+		events = append(events, event.Event{
 			Seq:  i,
-			Type: agent.UserMsg,
+			Type: event.UserMsg,
 			Text: fmt.Sprintf("line_content_%03d", i),
 		})
 	}
@@ -126,8 +126,8 @@ func TestStreamingWhileFollowingKeepsLatestDeltaVisible(t *testing.T) {
 
 	// Stream new text deltas
 	for i := 1; i <= 10; i++ {
-		f.Update(agentEventBatchMsg{Events: []agent.Event{
-			{Seq: 25 + i, Type: agent.TextDelta, Text: fmt.Sprintf("stream_chunk_%d\n", i)},
+		f.Update(agentEventBatchMsg{Events: []event.Event{
+			{Seq: 25 + i, Type: event.TextDelta, Text: fmt.Sprintf("stream_chunk_%d\n", i)},
 		}})
 	}
 
@@ -236,8 +236,8 @@ func TestUnseenClearsOnlyAtBottom(t *testing.T) {
 	}
 
 	// Add new message while browsing
-	f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 31, Type: agent.UserMsg, Text: "new_msg_while_scrolled"},
+	f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 31, Type: event.UserMsg, Text: "new_msg_while_scrolled"},
 	}})
 
 	if f.unseen == 0 {

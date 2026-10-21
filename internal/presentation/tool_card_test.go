@@ -3,16 +3,16 @@ package presentation_test
 import (
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 )
 
 func TestToolEndPairsByCallID(t *testing.T) {
 	p := presentation.NewProjector()
-	events := []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "call-a", Name: "read_file", Args: []byte(`{"path":"README.md"}`)}},
-		{Seq: 2, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "call-b", Name: "read_file", Args: []byte(`{"path":"internal/agent/loop.go"}`)}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "call-a", Name: "read_file", Output: "first", OK: true}},
+	events := []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "call-a", Name: "read_file", Args: []byte(`{"path":"README.md"}`)}},
+		{Seq: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "call-b", Name: "read_file", Args: []byte(`{"path":"internal/agent/loop.go"}`)}},
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "call-a", Name: "read_file", Output: "first", OK: true}},
 	}
 	for _, e := range events {
 		if err := p.Apply(e); err != nil {
@@ -30,10 +30,10 @@ func TestToolEndPairsByCallID(t *testing.T) {
 
 func TestReadFileCarriesNextOffset(t *testing.T) {
 	p := presentation.NewProjector()
-	for _, e := range []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "read-a", Name: "read_file", Args: []byte(`{"path":"README.md","offset":132}`)}},
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "read-a", Name: "read_file", Output: "132|hello", OK: true}},
-		{Seq: 3, Type: agent.EventRead, Read: &agent.ReadRecord{Path: "README.md", Truncated: true, NextOffset: 170}},
+	for _, e := range []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "read-a", Name: "read_file", Args: []byte(`{"path":"README.md","offset":132}`)}},
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "read-a", Name: "read_file", Output: "132|hello", OK: true}},
+		{Seq: 3, Type: event.EventRead, Read: &event.ReadRecord{Path: "README.md", Truncated: true, NextOffset: 170}},
 	} {
 		if err := p.Apply(e); err != nil {
 			t.Fatal(err)
@@ -50,10 +50,10 @@ func TestReadFileCarriesNextOffset(t *testing.T) {
 
 func TestReadRecordBeforeToolEndStillAttaches(t *testing.T) {
 	p := presentation.NewProjector()
-	for _, e := range []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "read-a", Name: "read_file", Args: []byte(`{"path":"README.md"}`)}},
-		{Seq: 2, Type: agent.EventRead, Read: &agent.ReadRecord{Path: "README.md", Truncated: true, NextOffset: 170}},
-		{Seq: 3, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "read-a", Name: "read_file", Output: "content", OK: true}},
+	for _, e := range []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "read-a", Name: "read_file", Args: []byte(`{"path":"README.md"}`)}},
+		{Seq: 2, Type: event.EventRead, Read: &event.ReadRecord{Path: "README.md", Truncated: true, NextOffset: 170}},
+		{Seq: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "read-a", Name: "read_file", Output: "content", OK: true}},
 	} {
 		if err := p.Apply(e); err != nil {
 			t.Fatal(err)
@@ -67,10 +67,10 @@ func TestReadRecordBeforeToolEndStillAttaches(t *testing.T) {
 
 func TestOutputStatesDistinguishExecutionAndPersistenceTruncation(t *testing.T) {
 	p := presentation.NewProjector()
-	for _, e := range []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "read-a", Name: "read_file", Args: []byte(`{"path":"README.md"}`)}},
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "read-a", Name: "read_file", Output: "part\n...[truncated 100 bytes]", OK: true}},
-		{Seq: 3, Type: agent.EventRead, Read: &agent.ReadRecord{Path: "README.md", Truncated: true, NextOffset: 20}},
+	for _, e := range []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "read-a", Name: "read_file", Args: []byte(`{"path":"README.md"}`)}},
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "read-a", Name: "read_file", Output: "part\n...[truncated 100 bytes]", OK: true}},
+		{Seq: 3, Type: event.EventRead, Read: &event.ReadRecord{Path: "README.md", Truncated: true, NextOffset: 20}},
 	} {
 		_ = p.Apply(e)
 	}
@@ -82,14 +82,14 @@ func TestOutputStatesDistinguishExecutionAndPersistenceTruncation(t *testing.T) 
 
 func TestMissingOutputIsNotShownAsSaved(t *testing.T) {
 	p := presentation.NewProjector()
-	_ = p.Apply(agent.Event{Seq: 1, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "empty", Name: "bash", OK: true}})
+	_ = p.Apply(event.Event{Seq: 1, Type: event.ToolEnd, Call: &event.ToolCall{ID: "empty", Name: "bash", OK: true}})
 	card := toolCardsByCallID(p.Items())["empty"]
 	if card == nil || card.OutputState != presentation.OutputNone {
 		t.Fatalf("card=%+v, want none", card)
 	}
 	orphan := presentation.NewProjector()
-	_ = orphan.Apply(agent.Event{Seq: 1, Type: agent.EventRead, Read: &agent.ReadRecord{Path: "lost.go", Truncated: true, NextOffset: 10}})
-	_ = orphan.Apply(agent.Event{Seq: 2, Type: agent.TurnEnd})
+	_ = orphan.Apply(event.Event{Seq: 1, Type: event.EventRead, Read: &event.ReadRecord{Path: "lost.go", Truncated: true, NextOffset: 10}})
+	_ = orphan.Apply(event.Event{Seq: 2, Type: event.TurnEnd})
 	items := orphan.Items()
 	if len(items) != 1 || items[0].Tool == nil || items[0].Tool.OutputState != presentation.OutputUnavailable {
 		t.Fatalf("items=%+v", items)
@@ -98,13 +98,13 @@ func TestMissingOutputIsNotShownAsSaved(t *testing.T) {
 
 func TestPermissionDenialIsNotConfusedWithToolFailure(t *testing.T) {
 	p := presentation.NewProjector()
-	for _, e := range []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "denied", Name: "bash"}},
-		{Seq: 2, Type: agent.PermAsk, Call: &agent.ToolCall{ID: "denied", Name: "bash"}},
-		{Seq: 3, Type: agent.PermReply, Call: &agent.ToolCall{ID: "denied", Name: "bash"}, Decision: agent.Deny, RawDecision: agent.Deny},
-		{Seq: 4, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "denied", Name: "bash", Output: "refused", OK: false}},
-		{Seq: 5, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "failed", Name: "read_file"}},
-		{Seq: 6, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "failed", Name: "read_file", Output: "not found", OK: false}},
+	for _, e := range []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "denied", Name: "bash"}},
+		{Seq: 2, Type: event.PermAsk, Call: &event.ToolCall{ID: "denied", Name: "bash"}},
+		{Seq: 3, Type: event.PermReply, Call: &event.ToolCall{ID: "denied", Name: "bash"}, Decision: event.Deny, RawDecision: event.Deny},
+		{Seq: 4, Type: event.ToolEnd, Call: &event.ToolCall{ID: "denied", Name: "bash", Output: "refused", OK: false}},
+		{Seq: 5, Type: event.ToolStart, Call: &event.ToolCall{ID: "failed", Name: "read_file"}},
+		{Seq: 6, Type: event.ToolEnd, Call: &event.ToolCall{ID: "failed", Name: "read_file", Output: "not found", OK: false}},
 	} {
 		_ = p.Apply(e)
 	}
@@ -116,10 +116,10 @@ func TestPermissionDenialIsNotConfusedWithToolFailure(t *testing.T) {
 
 func TestToolCardNextOffsetIsDeepCopied(t *testing.T) {
 	p := presentation.NewProjector()
-	for _, e := range []agent.Event{
-		{Seq: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "r", Name: "read_file", Args: []byte(`{"path":"a.go"}`)}},
-		{Seq: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "r", Name: "read_file", Output: "1|x", OK: true}},
-		{Seq: 3, Type: agent.EventRead, Read: &agent.ReadRecord{Path: "a.go", Truncated: true, NextOffset: 2}},
+	for _, e := range []event.Event{
+		{Seq: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "r", Name: "read_file", Args: []byte(`{"path":"a.go"}`)}},
+		{Seq: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "r", Name: "read_file", Output: "1|x", OK: true}},
+		{Seq: 3, Type: event.EventRead, Read: &event.ReadRecord{Path: "a.go", Truncated: true, NextOffset: 2}},
 	} {
 		_ = p.Apply(e)
 	}

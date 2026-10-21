@@ -2,6 +2,7 @@ package agent_test
 
 import (
 	"fmt"
+	"nabd/internal/event"
 	"regexp"
 	"slices"
 	"strings"
@@ -42,30 +43,30 @@ func TestFabricatedReadContinuationIsJournaledNotJudged(t *testing.T) {
 	fabricated := "متابعة من السطر 170:\n\n" + readBlock(170, 173)
 
 	evs := eventChain(
-		agent.Event{Type: agent.RunStart, Text: "nabd test"},
-		agent.Event{Type: agent.UserMsg, Text: "تابع من السطر 130"},
-		agent.Event{Type: agent.TurnStart},
-		agent.Event{Type: agent.TextDelta, Text: "سأقرأ الجزء التالي."},
-		agent.Event{Type: agent.TurnEnd},
-		agent.Event{Type: agent.ToolStart, Call: &agent.ToolCall{
+		event.Event{Type: event.RunStart, Text: "nabd test"},
+		event.Event{Type: event.UserMsg, Text: "تابع من السطر 130"},
+		event.Event{Type: event.TurnStart},
+		event.Event{Type: event.TextDelta, Text: "سأقرأ الجزء التالي."},
+		event.Event{Type: event.TurnEnd},
+		event.Event{Type: event.ToolStart, Call: &event.ToolCall{
 			ID: "c3", Name: "read_file",
 			Args: []byte(`{"path":"README.md","offset":132,"limit":200}`),
 		}},
-		agent.Event{Type: agent.ToolEnd, Call: &agent.ToolCall{
+		event.Event{Type: event.ToolEnd, Call: &event.ToolCall{
 			ID: "c3", Name: "read_file", Output: readOut, OK: true,
 		}},
-		agent.Event{Type: agent.EventRead, Read: &agent.ReadRecord{
+		event.Event{Type: event.EventRead, Read: &event.ReadRecord{
 			Path: "README.md", Truncated: true, NextOffset: 170,
 		}},
-		agent.Event{Type: agent.TurnStart},
-		agent.Event{Type: agent.TextDelta, Text: fabricated},
-		agent.Event{Type: agent.TurnEnd},
-		agent.Event{Type: agent.RunEnd},
+		event.Event{Type: event.TurnStart},
+		event.Event{Type: event.TextDelta, Text: fabricated},
+		event.Event{Type: event.TurnEnd},
+		event.Event{Type: event.RunEnd},
 	)
 
 	// 1. Out of scope for the journal layer: the fabricated block reaches the
 	//    wire verbatim. There is no suppression and no synthetic event.
-	wire := assistantText(agent.Messages(agent.Live(evs)))
+	wire := assistantText(agent.Messages(event.Live(evs)))
 	if !strings.Contains(wire, "170|content of line 170") {
 		t.Fatalf("journal layer must relay the fabricated block verbatim; wire=%q", wire)
 	}
@@ -75,7 +76,7 @@ func TestFabricatedReadContinuationIsJournaledNotJudged(t *testing.T) {
 	var readRecordSeq int
 	var readsAfter int
 	for _, e := range evs {
-		if e.Type == agent.EventRead {
+		if e.Type == event.EventRead {
 			readRecordSeq = e.Seq
 		}
 	}
@@ -83,7 +84,7 @@ func TestFabricatedReadContinuationIsJournaledNotJudged(t *testing.T) {
 		if e.Seq <= readRecordSeq {
 			continue
 		}
-		if (e.Type == agent.ToolStart || e.Type == agent.ToolEnd) &&
+		if (e.Type == event.ToolStart || e.Type == event.ToolEnd) &&
 			e.Call != nil && e.Call.Name == "read_file" {
 			readsAfter++
 		}
@@ -121,19 +122,19 @@ func TestReadContinuationGuardControls(t *testing.T) {
 		readOut := readBlock(132, 173)
 		legit := "متابعة من السطر 170:\n\n" + readBlock(170, 173)
 		evs := eventChain(
-			agent.Event{Type: agent.UserMsg, Text: "تابع"},
-			agent.Event{Type: agent.TurnStart},
-			agent.Event{Type: agent.ToolStart, Call: &agent.ToolCall{
+			event.Event{Type: event.UserMsg, Text: "تابع"},
+			event.Event{Type: event.TurnStart},
+			event.Event{Type: event.ToolStart, Call: &event.ToolCall{
 				ID: "c4", Name: "read_file",
 				Args: []byte(`{"path":"README.md","offset":170,"limit":200}`),
 			}},
-			agent.Event{Type: agent.ToolEnd, Call: &agent.ToolCall{
+			event.Event{Type: event.ToolEnd, Call: &event.ToolCall{
 				ID: "c4", Name: "read_file", Output: readOut, OK: true,
 			}},
-			agent.Event{Type: agent.TurnEnd},
-			agent.Event{Type: agent.TurnStart},
-			agent.Event{Type: agent.TextDelta, Text: legit},
-			agent.Event{Type: agent.TurnEnd},
+			event.Event{Type: event.TurnEnd},
+			event.Event{Type: event.TurnStart},
+			event.Event{Type: event.TextDelta, Text: legit},
+			event.Event{Type: event.TurnEnd},
 		)
 		if got := uncorroboratedReadBlocks(evs); len(got) != 0 {
 			t.Fatalf("corroborated continuation must not be flagged, got %q", got)
@@ -142,10 +143,10 @@ func TestReadContinuationGuardControls(t *testing.T) {
 
 	t.Run("prose without a gutter block is not flagged", func(t *testing.T) {
 		evs := eventChain(
-			agent.Event{Type: agent.UserMsg, Text: "لخّص"},
-			agent.Event{Type: agent.TurnStart},
-			agent.Event{Type: agent.TextDelta, Text: "README يشرح موجّه المزودين. لا مزيد."},
-			agent.Event{Type: agent.TurnEnd},
+			event.Event{Type: event.UserMsg, Text: "لخّص"},
+			event.Event{Type: event.TurnStart},
+			event.Event{Type: event.TextDelta, Text: "README يشرح موجّه المزودين. لا مزيد."},
+			event.Event{Type: event.TurnEnd},
 		)
 		if got := uncorroboratedReadBlocks(evs); len(got) != 0 {
 			t.Fatalf("plain prose must not be flagged, got %q", got)
@@ -162,7 +163,7 @@ var readGutterLineRE = regexp.MustCompile(`^\s*\d+\|`)
 // is structural: it compares the assistant's claimed lines against the events'
 // real tool output, so it cannot be fooled by prose and does not need a phrase
 // blocklist.
-func uncorroboratedReadBlocks(evs []agent.Event) []string {
+func uncorroboratedReadBlocks(evs []event.Event) []string {
 	var (
 		out       []string
 		toolOut   []string
@@ -187,13 +188,13 @@ func uncorroboratedReadBlocks(evs []agent.Event) []string {
 		toolOut = nil
 		assistant.Reset()
 	}
-	for _, e := range agent.Live(evs) {
+	for _, e := range event.Live(evs) {
 		switch e.Type {
-		case agent.UserMsg:
+		case event.UserMsg:
 			flush()
-		case agent.TextDelta:
+		case event.TextDelta:
 			assistant.WriteString(e.Text)
-		case agent.ToolEnd:
+		case event.ToolEnd:
 			if e.Call != nil && e.Call.Name == "read_file" {
 				toolOut = append(toolOut, e.Call.Output)
 			}
@@ -225,7 +226,7 @@ func readBlock(start, end int) string {
 
 // eventChain stamps Seq and Parent the way Loop.emit does, so Live() can walk
 // the branch.
-func eventChain(evs ...agent.Event) []agent.Event {
+func eventChain(evs ...event.Event) []event.Event {
 	for i := range evs {
 		evs[i].Seq = i + 1
 		if i > 0 {

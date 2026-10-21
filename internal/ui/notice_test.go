@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -32,8 +32,8 @@ func TestFeedRunErrorEntersFeedPermanently(t *testing.T) {
 	f.height = 12
 	f.SetRunner(runnerFunc(func(string) error { return errors.New("boom") }))
 
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "start"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "start"},
 	}})
 	before := len(f.lines)
 
@@ -80,9 +80,9 @@ func TestFeedRunErrorNotDuplicatedWhenJournaled(t *testing.T) {
 		t.Fatal("send must produce a run command")
 	}
 	// The loop journals the failure before Run returns.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "hello"},
-		{Seq: 2, Type: agent.RunError, Err: "boom"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "hello"},
+		{Seq: 2, Type: event.RunError, Err: "boom"},
 	}})
 	_, _ = f.Update(cmd())
 
@@ -99,15 +99,15 @@ func TestFeedNoticeKeepsChronologicalOrder(t *testing.T) {
 	f.height = 12
 	f.SetRunner(runnerFunc(func(string) error { return errors.New("first failure") }))
 
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "alpha"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "alpha"},
 	}})
 	typeIntoFeed(t, f, "x")
 	_, cmd := f.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	_, _ = f.Update(cmd())
 
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 5, Type: agent.UserMsg, Text: "omega"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 5, Type: event.UserMsg, Text: "omega"},
 	}})
 
 	idx := func(s string) int {
@@ -135,9 +135,9 @@ func TestFeedNoticeCountsInScroll(t *testing.T) {
 	_, _ = f.Update(tea.WindowSizeMsg{Width: 60, Height: 8})
 	f.SetRunner(runnerFunc(func(string) error { return errors.New("scroll me") }))
 
-	var evs []agent.Event
+	var evs []event.Event
 	for i := 1; i <= 20; i++ {
-		evs = append(evs, agent.Event{Seq: i, Type: agent.UserMsg, Text: "line"})
+		evs = append(evs, event.Event{Seq: i, Type: event.UserMsg, Text: "line"})
 	}
 	_, _ = f.Update(agentEventBatchMsg{Events: evs})
 	base := len(f.lines)

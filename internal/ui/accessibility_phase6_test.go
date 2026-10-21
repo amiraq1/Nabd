@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 
 	"github.com/charmbracelet/x/ansi"
@@ -44,7 +44,7 @@ func TestMixedArabicPathPreservesCopyableOrder(t *testing.T) {
 }
 
 func TestAdaptiveErrorCardWidths(t *testing.T) {
-	card := presentation.NewErrorCard(agent.ErrCodeProviderTemporary, "temporary provider failure", "")
+	card := presentation.NewErrorCard(event.ErrCodeProviderTemporary, "temporary provider failure", "")
 	for _, width := range []int{20, 39, 40, 79, 80, 120} {
 		for _, line := range renderErrorCard(card, width) {
 			if ansi.StringWidth(line) > width {

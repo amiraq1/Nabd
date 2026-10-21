@@ -1,6 +1,9 @@
 package agent
 
-import "errors"
+import (
+	"errors"
+	"nabd/internal/event"
+)
 
 // ToolCallError attributes a failure to the tool call that was in flight when
 // it happened.
@@ -45,7 +48,7 @@ func (e *ToolCallError) Unwrap() error {
 // call with no identity to report, and for an error that already carries
 // attribution — the innermost call is the one that failed, so an outer frame
 // must not overwrite it.
-func WrapToolCallError(c ToolCall, err error) error {
+func WrapToolCallError(c event.ToolCall, err error) error {
 	if err == nil {
 		return nil
 	}

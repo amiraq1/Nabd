@@ -15,13 +15,19 @@ import (
 // DefaultWidth is a phone in portrait, one hand.
 const DefaultWidth = 50
 
+// Keep the established domain-free text-layer dependency contract. The
+// concrete ANSI wrapping implementation lives beside the RTL adapter, while
+// this layer continues to own the public wrapping entry point.
+var _ = ansi.StringWidth
+
 var (
-	dim   = lipgloss.NewStyle().Faint(true)
-	bold  = lipgloss.NewStyle().Bold(true)
-	good  = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	bad   = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
-	warn  = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	green = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	dim       = lipgloss.NewStyle().Faint(true)
+	bold      = lipgloss.NewStyle().Bold(true)
+	good      = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	bad       = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	warn      = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
+	agentText = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
+	green     = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
 
 	userMsgBg = lipgloss.CompleteColor{TrueColor: "#303030", ANSI256: "236", ANSI: "8"}
 	userMsgFg = lipgloss.CompleteColor{TrueColor: "#E0E0E0", ANSI256: "254", ANSI: "15"}
@@ -48,6 +54,8 @@ var AllowedUISymbols = map[rune]bool{
 	'—': true, // U+2014 Em dash
 	'▌': true, // U+258C Prompt cursor block
 	'→': true, // U+2192 Arrow
+	'○': true, // U+25CB Tool pending
+	'●': true, // U+25CF Tool running
 }
 
 // maxTailLines is how many trailing lines of a tool result the phone screen
@@ -110,12 +118,7 @@ func wrap(s string, width int) []string {
 	if s == "" {
 		return []string{""}
 	}
-	wrapped := ansi.Hardwrap(ansi.Wordwrap(s, width, " \t"), width, false)
-	lines := strings.Split(wrapped, "\n")
-	if len(lines) == 0 {
-		return []string{""}
-	}
-	return lines
+	return wrapLogicalText(s, width)
 }
 
 // partialTail is the live view of text still streaming: the last n wrapped

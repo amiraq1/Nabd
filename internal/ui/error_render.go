@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	"nabd/internal/presentation"
@@ -15,14 +14,9 @@ func renderErrorCard(card *presentation.ErrorCard, width int) []string {
 	if width <= 0 {
 		width = DefaultWidth
 	}
-	asciiOnly := os.Getenv("NABD_ASCII_ONLY") != ""
-
-	tail := "…"
-	mark := "✗ "
-	if asciiOnly {
-		tail = "..."
-		mark = "x "
-	}
+	ch := newFeedChrome()
+	tail := ch.tail
+	mark := ch.cross + " "
 	if card.Code == "budget" || card.Code == "max_turns" {
 		mark = "! "
 	}

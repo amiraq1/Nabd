@@ -11,6 +11,7 @@ import (
 	"nabd/internal/agent"
 	"nabd/internal/build"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/payload"
 )
 
@@ -205,10 +206,10 @@ func TestConflictLine(t *testing.T) {
 }
 
 type testNoticeSink struct {
-	events []agent.Event
+	events []event.Event
 }
 
-func (s *testNoticeSink) Emit(e agent.Event) error {
+func (s *testNoticeSink) Emit(e event.Event) error {
 	s.events = append(s.events, e)
 	return nil
 }
@@ -233,7 +234,7 @@ func TestStartupNoticeBehavior(t *testing.T) {
 
 	var foundNotice bool
 	for _, e := range sink.events {
-		if e.Type == agent.Notice && strings.Contains(e.Text, "NABD_MODEL") {
+		if e.Type == event.Notice && strings.Contains(e.Text, "NABD_MODEL") {
 			foundNotice = true
 			break
 		}
@@ -256,7 +257,7 @@ func TestStartupNoticeBehavior(t *testing.T) {
 	}
 
 	for _, e := range sinkEmpty.events {
-		if e.Type == agent.Notice {
+		if e.Type == event.Notice {
 			t.Fatalf("unexpected notice emitted when conflicts slice is empty")
 		}
 	}

@@ -1,10 +1,12 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // TestSlashMenuOpenOnSlash confirms that typing '/' into an empty composer opens the menu.
@@ -222,4 +224,81 @@ func TestSlashMenuBusyPolicyBlocked(t *testing.T) {
 
 	close(r.release)
 	r.waitReturned(t)
+}
+
+// TestSlashMenuHonorsASCIIOnly verifies UI-F5:
+// 1. Default mode preserves Unicode header ("── Commands ") and horizontal rules ("─").
+// 2. ASCII mode produces ASCII header ("-- Commands "), hyphens ("-"), and zero non-ASCII runes.
+// 3. Truncation tail produces "…" in Unicode mode and "..." in ASCII mode.
+// 4. Narrow width (<= 20) renders cleanly without panic or overflow.
+func TestSlashMenuHonorsASCIIOnly(t *testing.T) {
+	menu := &slashMenu{
+		items: []SlashCommand{
+			{Name: "/test", Usage: "/test", Description: "a very long description that forces truncation in narrow viewports"},
+		},
+		visible: true,
+	}
+
+	// 1. Default (Unicode) mode
+	t.Setenv("NABD_ASCII_ONLY", "")
+	uView := menu.view(50)
+	if !strings.Contains(uView, "── Commands ") {
+		t.Fatalf("Unicode view missing '── Commands ' header:\n%s", uView)
+	}
+	if !strings.Contains(uView, "─") {
+		t.Fatalf("Unicode view missing U+2500 box drawing:\n%s", uView)
+	}
+
+	// 2. ASCII mode
+	t.Setenv("NABD_ASCII_ONLY", "1")
+	aView := menu.view(50)
+	if !strings.Contains(aView, "-- Commands ") {
+		t.Fatalf("ASCII view missing '-- Commands ' header:\n%s", aView)
+	}
+	if strings.Contains(aView, "─") {
+		t.Fatalf("ASCII view must not contain U+2500 box drawing:\n%s", aView)
+	}
+	for i, r := range aView {
+		if r >= 128 {
+			t.Errorf("ASCII view contains non-ASCII rune %q (U+%04X) at index %d", r, r, i)
+		}
+	}
+
+	// 3. Forced truncation test: compact width (w=45) includes description and forces truncation
+	truncWidth := 45
+	item := menu.items[0]
+	rawLine := fmt.Sprintf("%-12s %s", item.Usage, item.Description)
+	budget := truncWidth - 2
+	if rawW := ansi.StringWidth(rawLine); rawW <= budget {
+		t.Fatalf("test precondition failed: rawLine width %d <= budget %d, truncation would not occur", rawW, budget)
+	}
+
+	t.Setenv("NABD_ASCII_ONLY", "")
+	uTruncView := menu.view(truncWidth)
+	if !strings.Contains(uTruncView, "…") {
+		t.Fatalf("Unicode truncated view missing '…' tail:\n%s", uTruncView)
+	}
+
+	t.Setenv("NABD_ASCII_ONLY", "1")
+	aTruncView := menu.view(truncWidth)
+	if !strings.Contains(aTruncView, "...") {
+		t.Fatalf("ASCII truncated view missing '...' tail:\n%s", aTruncView)
+	}
+	if strings.Contains(aTruncView, "…") {
+		t.Fatalf("ASCII truncated view must not contain Unicode '…':\n%s", aTruncView)
+	}
+	if strings.Contains(aTruncView, "─") {
+		t.Fatalf("ASCII truncated view must not contain '─':\n%s", aTruncView)
+	}
+	for i, r := range aTruncView {
+		if r >= 128 {
+			t.Errorf("ASCII truncated view contains non-ASCII rune %q (U+%04X) at index %d", r, r, i)
+		}
+	}
+
+	// 4. Narrow width floor (w=20)
+	narrowView := menu.view(20)
+	if narrowView == "" {
+		t.Fatal("menu.view(20) returned empty string")
+	}
 }

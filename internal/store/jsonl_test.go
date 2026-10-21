@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 const fixture = "../../testdata/session.jsonl"
@@ -52,15 +53,15 @@ func TestFixtureCoversAllTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[agent.EventType]bool{}
+	got := map[event.EventType]bool{}
 	for _, e := range ev {
 		got[e.Type] = true
 	}
-	all := []agent.EventType{
-		agent.RunStart, agent.UserMsg, agent.TurnStart, agent.TextDelta,
-		agent.ToolStart, agent.PermAsk, agent.PermReply, agent.ToolEnd,
-		agent.Notice, agent.RunError, agent.Interrupted, agent.TurnEnd,
-		agent.Compact,
+	all := []event.EventType{
+		event.RunStart, event.UserMsg, event.TurnStart, event.TextDelta,
+		event.ToolStart, event.PermAsk, event.PermReply, event.ToolEnd,
+		event.Notice, event.RunError, event.Interrupted, event.TurnEnd,
+		event.Compact,
 	}
 	for _, ty := range all {
 		if !got[ty] {
@@ -76,11 +77,11 @@ func TestLiveHonoursCompaction(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	live := agent.Live(ev)
+	live := event.Live(ev)
 	if len(live) != 12 {
 		t.Fatalf("got %d live events, want 12", len(live))
 	}
-	if live[0].Type != agent.Compact {
+	if live[0].Type != event.Compact {
 		t.Errorf("live[0] is %q, want compact summary first", live[0].Type)
 	}
 	for _, e := range live[1:] {
@@ -101,12 +102,12 @@ func TestAppendRoundTrip(t *testing.T) {
 	}
 
 	base := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
-	in := []agent.Event{
-		{Seq: 1, Time: base, Type: agent.RunStart, Text: "start"},
-		{Seq: 2, Parent: 1, Time: base.Add(time.Second), Type: agent.UserMsg, Text: "مرحبا"},
-		{Seq: 3, Parent: 2, Time: base.Add(2 * time.Second), Type: agent.PermReply, Decision: agent.AllowOnce},
-		{Seq: 4, Parent: 3, Time: base.Add(3 * time.Second), Type: agent.ToolEnd,
-			Call: &agent.ToolCall{ID: "t1", Name: "bash", OK: true, Exit: 0, MS: 12}},
+	in := []event.Event{
+		{Seq: 1, Time: base, Type: event.RunStart, Text: "start"},
+		{Seq: 2, Parent: 1, Time: base.Add(time.Second), Type: event.UserMsg, Text: "مرحبا"},
+		{Seq: 3, Parent: 2, Time: base.Add(2 * time.Second), Type: event.PermReply, Decision: event.AllowOnce},
+		{Seq: 4, Parent: 3, Time: base.Add(3 * time.Second), Type: event.ToolEnd,
+			Call: &event.ToolCall{ID: "t1", Name: "bash", OK: true, Exit: 0, MS: 12}},
 	}
 	for _, e := range in {
 		if err := j.Append(e); err != nil {
@@ -142,7 +143,7 @@ func TestAppendRoundTrip(t *testing.T) {
 // Deny is the zero value, so it is never written; anything unrecognised
 // must read back as Deny.
 func TestDecisionFailsClosed(t *testing.T) {
-	b, err := json.Marshal(agent.Event{Seq: 1, Type: agent.PermReply, Decision: agent.Deny})
+	b, err := json.Marshal(event.Event{Seq: 1, Type: event.PermReply, Decision: event.Deny})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,11 +157,11 @@ func TestDecisionFailsClosed(t *testing.T) {
 		`{"seq":1,"type":"perm_reply","decision":""}`,
 		`{"seq":1,"type":"perm_reply","decision":"ALLOW"}`,
 	} {
-		var e agent.Event
+		var e event.Event
 		if err := json.Unmarshal([]byte(raw), &e); err != nil {
 			t.Fatalf("%s: %v", raw, err)
 		}
-		if e.Decision != agent.Deny {
+		if e.Decision != event.Deny {
 			t.Errorf("%s decoded to %v, want deny", raw, e.Decision)
 		}
 	}
@@ -205,8 +206,8 @@ func TestReadTolerance(t *testing.T) {
 // Output is capped on disk but must stay valid UTF-8 and stay marked.
 func TestForStoreTruncatesOnRuneBoundary(t *testing.T) {
 	long := strings.Repeat("ب", 10000) // 20000 bytes > 16384, boundary lands mid-rune
-	e := agent.Event{Seq: 1, Type: agent.ToolEnd,
-		Call: &agent.ToolCall{ID: "t1", Name: "bash", Output: long}}
+	e := event.Event{Seq: 1, Type: event.ToolEnd,
+		Call: &event.ToolCall{ID: "t1", Name: "bash", Output: long}}
 
 	s := e.ForStore()
 	if s.Call.Output == long {
@@ -222,8 +223,8 @@ func TestForStoreTruncatesOnRuneBoundary(t *testing.T) {
 		t.Error("ForStore mutated the original event")
 	}
 
-	short := agent.Event{Seq: 2, Type: agent.ToolEnd,
-		Call: &agent.ToolCall{ID: "t2", Name: "bash", Output: "ok"}}
+	short := event.Event{Seq: 2, Type: event.ToolEnd,
+		Call: &event.ToolCall{ID: "t2", Name: "bash", Output: "ok"}}
 	if short.ForStore().Call.Output != "ok" {
 		t.Error("small output must pass through untouched")
 	}
@@ -254,10 +255,10 @@ func TestToolResultTailPreservedOnDisk(t *testing.T) {
 	tail := "\n[TRUNCATED: read lines 1-27 of 193; continue with offset=28]\nlines_read=27  total_lines=193  next_offset=28\n"
 	fullOutput := body + tail
 
-	ev := agent.Event{
+	ev := event.Event{
 		Seq:  1,
-		Type: agent.ToolEnd,
-		Call: &agent.ToolCall{
+		Type: event.ToolEnd,
+		Call: &event.ToolCall{
 			ID:     "t1",
 			Name:   "read_file",
 			OK:     true,
@@ -279,7 +280,7 @@ func TestToolResultTailPreservedOnDisk(t *testing.T) {
 
 	if !strings.Contains(content, "lines_read=27") {
 		t.Fatalf("persisted tool_result lost lines_read tail: len=%d MaxPersistedOutput=%d",
-			len(fullOutput), agent.MaxPersistedOutput)
+			len(fullOutput), event.MaxPersistedOutput)
 	}
 	if !strings.Contains(content, "total_lines=193") {
 		t.Fatalf("persisted tool_result lost total_lines tail")
@@ -294,10 +295,10 @@ func TestToolResultTailPreservedOnDisk(t *testing.T) {
 // computed from the true network payload rather than disk-clipped persistence.
 func TestEncodedBytesCalculatedPreForStore(t *testing.T) {
 	longOutput := strings.Repeat("x", 20000)
-	ev := agent.Event{
+	ev := event.Event{
 		Seq:  1,
-		Type: agent.ToolEnd,
-		Call: &agent.ToolCall{ID: "t1", Name: "read_file", OK: true, Output: longOutput},
+		Type: event.ToolEnd,
+		Call: &event.ToolCall{ID: "t1", Name: "read_file", OK: true, Output: longOutput},
 	}
 
 	// Disk persistence clips via ForStore()
@@ -309,5 +310,239 @@ func TestEncodedBytesCalculatedPreForStore(t *testing.T) {
 	// But in-memory event is completely unclipped
 	if len(ev.Call.Output) != 20000 {
 		t.Fatalf("in-memory event output was mutated: %d", len(ev.Call.Output))
+	}
+}
+
+func writeTestJournal(t *testing.T, lines []string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "sess.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func marshalLine(t *testing.T, e event.Event) string {
+	t.Helper()
+	b, err := json.Marshal(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// branchedFixture builds a journal with a compaction and a rewind, so the
+// live branch is a strict subset of the file.
+func branchedFixture(t *testing.T) (string, []event.Event) {
+	t.Helper()
+	evs := []event.Event{
+		{Seq: 1, Parent: 0, Type: event.UserMsg, Text: "q1"},
+		{Seq: 2, Parent: 1, Type: event.TextDelta, Text: "a1"},
+		{Seq: 3, Parent: 2, Type: event.UserMsg, Text: "q2"},
+		{Seq: 4, Parent: 3, Type: event.TextDelta, Text: "a2"},
+		{Seq: 5, Parent: 4, Type: event.Compact, FirstKept: 3, Text: "summary"},
+		{Seq: 6, Parent: 5, Type: event.UserMsg, Text: "q3"},
+		{Seq: 7, Parent: 6, Type: event.TextDelta, Text: "a3"},
+		// Rewind the last turn: seq 8's parent points back before seq 6,
+		// making seqs 6-7 unreachable to Live().
+		{Seq: 8, Parent: 5, Type: event.Rewind, Text: "rewound 1 turns"},
+		{Seq: 9, Parent: 8, Type: event.UserMsg, Text: "q3 retry"},
+		{Seq: 10, Parent: 9, Type: event.TextDelta, Text: "a3 retry"},
+	}
+	lines := make([]string, 0, len(evs))
+	for _, e := range evs {
+		lines = append(lines, marshalLine(t, e))
+	}
+	return writeTestJournal(t, lines), evs
+}
+
+func TestReadLiveBranchMatchesLive(t *testing.T) {
+	path, evs := branchedFixture(t)
+	live, raw, total, err := ReadLiveBranch(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if raw != nil {
+		t.Fatal("keepRaw=false must not return raw lines")
+	}
+	if total != len(evs) {
+		t.Fatalf("total=%d, want %d", total, len(evs))
+	}
+	want := event.Live(evs)
+	if len(live) != len(want) {
+		t.Fatalf("live=%d events, want %d", len(live), len(want))
+	}
+	for i := range want {
+		if live[i].Seq != want[i].Seq {
+			t.Fatalf("live[%d].Seq=%d, want %d", i, live[i].Seq, want[i].Seq)
+		}
+	}
+	// The rewound turn (6,7) must be excluded, the pre-compact q1 (1,2) too.
+	for _, e := range live {
+		if e.Seq == 1 || e.Seq == 2 || e.Seq == 6 || e.Seq == 7 {
+			t.Fatalf("unreachable event seq=%d in live branch", e.Seq)
+		}
+	}
+}
+
+func TestReadLiveBranchRawPreservesBytes(t *testing.T) {
+	path, evs := branchedFixture(t)
+	// Inject an unknown field into one live line: rotation must preserve it.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	var tmp []string
+	for _, ln := range lines {
+		var e event.Event
+		if err := json.Unmarshal([]byte(ln), &e); err != nil {
+			t.Fatal(err)
+		}
+		if e.Seq == 9 {
+			ln = strings.TrimSuffix(ln, "}") + `,"future_field":"keepme"}`
+		}
+		tmp = append(tmp, ln)
+	}
+	path = writeTestJournal(t, tmp)
+
+	live, raw, total, err := ReadLiveBranch(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != len(evs) {
+		t.Fatalf("total=%d, want %d", total, len(evs))
+	}
+	if len(raw) != len(live) {
+		t.Fatalf("raw lines=%d, live events=%d", len(raw), len(live))
+	}
+	for i, e := range live {
+		var re event.Event
+		if err := json.Unmarshal(raw[i], &re); err != nil {
+			t.Fatalf("raw[%d] does not parse: %v", i, err)
+		}
+		if re.Seq != e.Seq {
+			t.Fatalf("raw[%d].Seq=%d, want %d", i, re.Seq, e.Seq)
+		}
+		if e.Seq == 9 && !strings.Contains(string(raw[i]), `"future_field":"keepme"`) {
+			t.Fatal("rotation raw lines must preserve unknown fields")
+		}
+		if !strings.HasSuffix(string(raw[i]), "\n") {
+			t.Fatalf("raw[%d] missing trailing newline", i)
+		}
+	}
+}
+
+func TestReadLiveBranchNoCompactFallsBack(t *testing.T) {
+	evs := []event.Event{
+		{Seq: 1, Parent: 0, Type: event.UserMsg, Text: "q1"},
+		{Seq: 2, Parent: 1, Type: event.TextDelta, Text: "a1"},
+	}
+	var lines []string
+	for _, e := range evs {
+		lines = append(lines, marshalLine(t, e))
+	}
+	path := writeTestJournal(t, lines)
+	live, _, total, err := ReadLiveBranch(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 2 || len(live) != 2 {
+		t.Fatalf("total=%d live=%d, want 2/2", total, len(live))
+	}
+}
+
+func TestReadLiveBranchRewindWithoutCompact(t *testing.T) {
+	// A rewind-only journal has no Compact event. The abandoned branch must
+	// not come back on resume, and raw lines must align with the live
+	// branch for rotation.
+	evs := []event.Event{
+		{Seq: 1, Parent: 0, Type: event.UserMsg, Text: "q1"},
+		{Seq: 2, Parent: 1, Type: event.TextDelta, Text: "a1"},
+		{Seq: 3, Parent: 2, Type: event.UserMsg, Text: "q2"},
+		{Seq: 4, Parent: 3, Type: event.TextDelta, Text: "a2"},
+		{Seq: 5, Parent: 2, Type: event.Rewind, Text: "rewound"},
+		{Seq: 6, Parent: 5, Type: event.UserMsg, Text: "q2 retry"},
+	}
+	lines := make([]string, 0, len(evs))
+	for _, e := range evs {
+		lines = append(lines, marshalLine(t, e))
+	}
+	path := writeTestJournal(t, lines)
+
+	live, raw, total, err := ReadLiveBranch(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != len(evs) {
+		t.Fatalf("total=%d, want %d", total, len(evs))
+	}
+	wantSeq := []int{1, 2, 5, 6}
+	if len(live) != len(wantSeq) {
+		t.Fatalf("live=%d, want %d (seqs 3-4 abandoned by rewind)", len(live), len(wantSeq))
+	}
+	for i, want := range wantSeq {
+		if live[i].Seq != want {
+			t.Fatalf("live[%d].Seq=%d, want %d", i, live[i].Seq, want)
+		}
+	}
+	if len(raw) != len(live) {
+		t.Fatalf("raw/live line mismatch: %d vs %d", len(raw), len(live))
+	}
+	for i, e := range live {
+		var decoded event.Event
+		if err := json.Unmarshal(bytes.TrimSuffix(raw[i], []byte("\n")), &decoded); err != nil {
+			t.Fatal(err)
+		}
+		if decoded.Seq != e.Seq {
+			t.Fatalf("raw[%d].Seq=%d, want live seq %d", i, decoded.Seq, e.Seq)
+		}
+	}
+}
+
+func TestReadLiveBranchLegacyNoParentLinks(t *testing.T) {
+	// Journals predating Parent links have Parent==0 everywhere. Live()
+	// cannot see a branch there; the fallback must keep the whole file
+	// rather than resuming from a single event.
+	evs := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "q1"},
+		{Seq: 2, Type: event.TextDelta, Text: "a1"},
+		{Seq: 3, Type: event.UserMsg, Text: "q2"},
+	}
+	lines := make([]string, 0, len(evs))
+	for _, e := range evs {
+		lines = append(lines, marshalLine(t, e))
+	}
+	path := writeTestJournal(t, lines)
+
+	live, _, total, err := ReadLiveBranch(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 3 || len(live) != 3 {
+		t.Fatalf("total=%d live=%d, want 3/3", total, len(live))
+	}
+}
+
+func TestScanStreamsEvents(t *testing.T) {
+	path, evs := branchedFixture(t)
+	var count, seqSum int
+	err := Scan(path, func(e event.Event) error {
+		count++
+		seqSum += e.Seq
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != len(evs) {
+		t.Fatalf("scanned %d events, want %d", count, len(evs))
+	}
+	wantSum := 0
+	for _, e := range evs {
+		wantSum += e.Seq
+	}
+	if seqSum != wantSum {
+		t.Fatalf("seq sum=%d, want %d", seqSum, wantSum)
 	}
 }

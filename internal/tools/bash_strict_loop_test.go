@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // The tests here drive the whole loop (agent.Loop with a real Registry), not
@@ -129,12 +130,12 @@ func TestBashPromptShowsTheRepairedCall(t *testing.T) {
 		raw: json.RawMessage(`{"command":"touch prompt.txt","bogus":1}`),
 	})
 
-	startIdx, askIdx, ask := -1, -1, agent.ToolCall{}
+	startIdx, askIdx, ask := -1, -1, event.ToolCall{}
 	for i, e := range events {
 		switch e.Type {
-		case agent.ToolStart:
+		case event.ToolStart:
 			startIdx = i
-		case agent.PermAsk:
+		case event.PermAsk:
 			askIdx, ask = i, *e.Call
 		}
 	}
@@ -161,24 +162,24 @@ func TestBashPromptShowsTheRepairedCall(t *testing.T) {
 	}
 }
 
-func lastToolStart(t *testing.T, events []agent.Event) agent.ToolCall {
+func lastToolStart(t *testing.T, events []event.Event) event.ToolCall {
 	t.Helper()
 	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Type == agent.ToolStart && events[i].Call != nil {
+		if events[i].Type == event.ToolStart && events[i].Call != nil {
 			return *events[i].Call
 		}
 	}
 	t.Fatal("no ToolStart in the run")
-	return agent.ToolCall{}
+	return event.ToolCall{}
 }
 
-func lastToolEnd(t *testing.T, events []agent.Event) agent.ToolCall {
+func lastToolEnd(t *testing.T, events []event.Event) event.ToolCall {
 	t.Helper()
 	for i := len(events) - 1; i >= 0; i-- {
-		if events[i].Type == agent.ToolEnd && events[i].Call != nil {
+		if events[i].Type == event.ToolEnd && events[i].Call != nil {
 			return *events[i].Call
 		}
 	}
 	t.Fatal("no ToolEnd in the run")
-	return agent.ToolCall{}
+	return event.ToolCall{}
 }

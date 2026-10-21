@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"nabd/internal/event"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,23 +50,23 @@ func TestCompactBoundaryValidationRace(t *testing.T) {
 		unblock := make(chan struct{})
 		l := &Loop{Provider: &readyBlockingProvider{readyCh: ready, unblock: unblock}, Budget: NewBudget()}
 		orphanID := "orphan-call-1"
-		l.emit(Event{Type: UserMsg, Text: strings.Repeat("bulk-turn-one-text-", 100)})
-		l.emit(Event{Type: TurnStart})
-		l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: orphanID, Name: "read_file"}})
-		l.emit(Event{Type: UserMsg, Text: "short user turn two"})
+		l.emit(event.Event{Type: event.UserMsg, Text: strings.Repeat("bulk-turn-one-text-", 100)})
+		l.emit(event.Event{Type: event.TurnStart})
+		l.emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: orphanID, Name: "read_file"}})
+		l.emit(event.Event{Type: event.UserMsg, Text: "short user turn two"})
 
 		errCh := make(chan error, 1)
 		go func() { errCh <- l.Compact(context.Background(), 50) }()
 		<-ready
-		l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: orphanID, OK: true, Output: "done"}})
-		l.emit(Event{Type: TurnEnd})
+		l.emit(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: orphanID, OK: true, Output: "done"}})
+		l.emit(event.Event{Type: event.TurnEnd})
 		close(unblock)
 
 		if err := <-errCh; !errors.Is(err, ErrCompactBoundaryStale) {
 			t.Fatalf("Compact error = %v, want ErrCompactBoundaryStale", err)
 		}
 		for _, e := range l.Hist() {
-			if e.Type == Compact {
+			if e.Type == event.Compact {
 				t.Fatal("Compact event appended after stale-boundary rejection")
 			}
 		}
@@ -75,22 +76,22 @@ func TestCompactBoundaryValidationRace(t *testing.T) {
 		ready := make(chan struct{}, 1)
 		unblock := make(chan struct{})
 		l := &Loop{Provider: &readyBlockingProvider{readyCh: ready, unblock: unblock}, Budget: NewBudget()}
-		l.emit(Event{Type: UserMsg, Text: strings.Repeat("bulk-turn-one-text-", 100)})
-		l.emit(Event{Type: UserMsg, Text: "short user turn two"})
+		l.emit(event.Event{Type: event.UserMsg, Text: strings.Repeat("bulk-turn-one-text-", 100)})
+		l.emit(event.Event{Type: event.UserMsg, Text: "short user turn two"})
 
 		errCh := make(chan error, 1)
 		go func() { errCh <- l.Compact(context.Background(), 50) }()
 		<-ready
-		l.emit(Event{Type: UserMsg, Text: "safe concurrent turn"})
-		l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: "safe-call", Name: "read_file"}})
-		l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: "safe-call", OK: true, Output: "done"}})
-		l.emit(Event{Type: TurnEnd})
+		l.emit(event.Event{Type: event.UserMsg, Text: "safe concurrent turn"})
+		l.emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: "safe-call", Name: "read_file"}})
+		l.emit(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: "safe-call", OK: true, Output: "done"}})
+		l.emit(event.Event{Type: event.TurnEnd})
 		close(unblock)
 
 		if err := <-errCh; err != nil {
 			t.Fatalf("safe concurrent append rejected: %v", err)
 		}
-		if !rawPairingInvariantHolds(Live(l.Hist())) {
+		if !rawPairingInvariantHolds(event.Live(l.Hist())) {
 			t.Fatal("successful compact produced invalid raw pairing")
 		}
 	})
@@ -100,10 +101,10 @@ func TestCompactBoundaryValidationRace(t *testing.T) {
 		unblock := make(chan struct{})
 		close(unblock)
 		l := &Loop{Provider: &readyBlockingProvider{readyCh: ready, unblock: unblock}, Budget: NewBudget()}
-		l.emit(Event{Type: UserMsg, Text: strings.Repeat("bulk-turn-one-text-", 100)})
-		l.emit(Event{Type: UserMsg, Text: "legacy turn"})
-		l.emit(Event{Type: ToolEnd})
-		l.emit(Event{Type: ToolEnd, Call: &ToolCall{Name: "read_file"}})
+		l.emit(event.Event{Type: event.UserMsg, Text: strings.Repeat("bulk-turn-one-text-", 100)})
+		l.emit(event.Event{Type: event.UserMsg, Text: "legacy turn"})
+		l.emit(event.Event{Type: event.ToolEnd})
+		l.emit(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{Name: "read_file"}})
 		if err := l.Compact(context.Background(), 50); err != nil {
 			t.Fatalf("malformed legacy ToolEnd blocked compact: %v", err)
 		}
@@ -112,10 +113,10 @@ func TestCompactBoundaryValidationRace(t *testing.T) {
 	t.Run("pre_validation_avoids_provider", func(t *testing.T) {
 		prov := &countingProvider{}
 		l := &Loop{Provider: prov, Budget: NewBudget()}
-		l.emit(Event{Type: UserMsg, Text: strings.Repeat("bulk-turn-one-text-", 100)})
-		l.emit(Event{Type: ToolStart, Call: &ToolCall{ID: "orphan", Name: "read_file"}})
-		l.emit(Event{Type: UserMsg, Text: "short user turn"})
-		l.emit(Event{Type: ToolEnd, Call: &ToolCall{ID: "orphan", OK: true}})
+		l.emit(event.Event{Type: event.UserMsg, Text: strings.Repeat("bulk-turn-one-text-", 100)})
+		l.emit(event.Event{Type: event.ToolStart, Call: &event.ToolCall{ID: "orphan", Name: "read_file"}})
+		l.emit(event.Event{Type: event.UserMsg, Text: "short user turn"})
+		l.emit(event.Event{Type: event.ToolEnd, Call: &event.ToolCall{ID: "orphan", OK: true}})
 		if err := l.Compact(context.Background(), 50); !errors.Is(err, ErrCompactBoundaryStale) {
 			t.Fatalf("Compact error = %v, want ErrCompactBoundaryStale", err)
 		}
@@ -128,8 +129,8 @@ func TestCompactBoundaryValidationRace(t *testing.T) {
 		ready := make(chan struct{}, 1)
 		unblock := make(chan struct{})
 		l := &Loop{Provider: &readyBlockingProvider{readyCh: ready, unblock: unblock}, Budget: NewBudget()}
-		l.emit(Event{Type: UserMsg, Text: strings.Repeat("bulk-turn-one-text-", 100)})
-		l.emit(Event{Type: UserMsg, Text: "short user turn"})
+		l.emit(event.Event{Type: event.UserMsg, Text: strings.Repeat("bulk-turn-one-text-", 100)})
+		l.emit(event.Event{Type: event.UserMsg, Text: "short user turn"})
 
 		errCh := make(chan error, 1)
 		go func() { errCh <- l.Compact(context.Background(), 50) }()
@@ -162,7 +163,7 @@ func seedTurns(t *testing.T, l *Loop, count int) {
 		if i == 1 {
 			text = strings.Repeat("bulk-turn-one-text-", 100)
 		}
-		l.emit(Event{Type: UserMsg, Text: text})
+		l.emit(event.Event{Type: event.UserMsg, Text: text})
 	}
 }
 
@@ -189,7 +190,7 @@ func (p *boundaryDroppingProvider) Name() string { return "boundary-dropping" }
 func (p *boundaryDroppingProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Chunk, error) {
 	p.once.Do(func() {
 		p.l.mu.Lock()
-		kept := make([]Event, 0, len(p.l.hist))
+		kept := make([]event.Event, 0, len(p.l.hist))
 		for _, e := range p.l.hist {
 			if e.Seq < p.cutSeq {
 				kept = append(kept, e)
@@ -212,7 +213,7 @@ func TestCompactRejectsBoundaryDroppedDuringSummarisation(t *testing.T) {
 	seedTurns(t, l, 4) // must produce >= 2 UserMsg events so chooseBoundary succeeds
 
 	l.mu.Lock()
-	live := Live(l.hist)
+	live := event.Live(l.hist)
 	l.mu.Unlock()
 
 	firstKept, _, ok := chooseBoundaryWith(live, testCompactTarget, l.estimateMessages)
@@ -241,11 +242,11 @@ func TestCompactRejectsBoundaryDroppedDuringSummarisation(t *testing.T) {
 	}
 
 	l.mu.Lock()
-	after := Live(l.hist)
+	after := event.Live(l.hist)
 	l.mu.Unlock()
 
 	for _, e := range after {
-		if e.Type == Compact {
+		if e.Type == event.Compact {
 			t.Errorf("a stale Compact event was appended (FirstKept=%d)", e.FirstKept)
 		}
 	}

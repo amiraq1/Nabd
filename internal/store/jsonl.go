@@ -14,13 +14,13 @@ import (
 	"sync"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // EventRedactor returns the event representation that may be persisted.
 // Implementations must not mutate the supplied event and must be safe for
 // concurrent use.
-type EventRedactor func(agent.Event) agent.Event
+type EventRedactor func(event.Event) event.Event
 
 // Options controls optional JSONL persistence behavior.
 // The zero value preserves the original raw-journal behavior.
@@ -44,6 +44,9 @@ type JSONL struct {
 //
 // Security contract (NBD-306):
 //   - New files are created with mode 0o600 (owner read/write only).
+//   - The append target is opened with O_NOFOLLOW: a symlink at the journal
+//     path fails closed instead of redirecting a continued session's appends
+//     into an attacker-chosen file.
 //   - Existing files that are wider than 0o600 are hardened via Fchmod before
 //     any data is written. If Fchmod fails the file is closed and an error is
 //     returned; we never continue with an exposed journal.
@@ -63,11 +66,22 @@ func NewJSONLWithOptions(path string, opts Options) (*JSONL, error) {
 	if err := ensurePrivateParent(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
+	// Fail closed before touching the target: a symlink at the journal path
+	// must never be followed for reading, tail recovery, or appending. The
+	// opens below additionally use O_NOFOLLOW to cover a symlink planted in
+	// the (tiny) window after this check.
+	if fi, err := os.Lstat(path); err == nil {
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil, fmt.Errorf("store: journal path is a symlink: %s", path)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
 	needsSeparator, err := prepareExistingJournal(path)
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := openAppendFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +162,7 @@ func (j *JSONL) Path() string { return j.path }
 // one corruption replay cannot recover from. Sync is deliberately absent
 // on the hot path -- on a phone it costs more than the crash it prevents,
 // and Read already tolerates a truncated final line.
-func (j *JSONL) Append(e agent.Event) error {
+func (j *JSONL) Append(e event.Event) error {
 	persisted := e
 	if j.redact != nil {
 		persisted = j.redact(e)
@@ -204,7 +218,7 @@ func prepareExistingJournal(path string) (bool, error) {
 		}
 		raw := bytes.TrimSpace(data[offset:end])
 		if len(raw) != 0 {
-			var event agent.Event
+			var event event.Event
 			if err := json.Unmarshal(raw, &event); err != nil {
 				finalLine := end == len(data) || (hasNewline && end+1 == len(data))
 				if !finalLine {
@@ -229,7 +243,7 @@ func recoverTornTail(path string, data []byte, validBytes int) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_WRONLY, 0)
+	f, err := openFileNoFollow(path, os.O_WRONLY, 0)
 	if err != nil {
 		return fmt.Errorf("store: open journal for tail recovery: %w", err)
 	}
@@ -311,20 +325,54 @@ func (j *JSONL) Close() error {
 	return err
 }
 
+// MaxJournalBytes is the size trigger for journal rotation: when --continue
+// opens a journal larger than this, the full history is archived aside and
+// the live file is rewritten to contain only the live branch (see
+// ReadLiveBranch). A single session journal has no other size bound —
+// append-only by design — so without rotation a very long session would grow
+// without limit on disk (and force --continue to parse it all).
+const MaxJournalBytes = 32 << 20
+
 // Read parses a whole session. It is deliberately forgiving: a blank line
 // is skipped, and an unparsable final line is assumed to be a crash during
 // Append and dropped. An unparsable line anywhere else is a real error.
-func Read(path string) ([]agent.Event, error) {
-	f, err := os.Open(path)
+func Read(path string) ([]event.Event, error) {
+	var out []event.Event
+	err := Scan(path, func(e event.Event) error {
+		out = append(out, e)
+		return nil
+	})
 	if err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// Scan streams the journal at path in file order, invoking fn for each
+// parsed event. It carries Read's forgiveness (blank lines skipped, a
+// truncated final line dropped) but keeps only O(1) events in memory, so
+// --export --redact and --continue can process huge journals without loading
+// them wholesale.
+func Scan(path string, fn func(event.Event) error) error {
+	return scanLines(path, func(_ []byte, e event.Event, _ int) error {
+		return fn(e)
+	})
+}
+
+// scanLines streams the journal's raw lines, applying Read's forgiveness
+// rules: blank lines are skipped and an unparsable final line is assumed to
+// be a torn Append and dropped. An unparsable line anywhere else is an error.
+// The raw slice is only valid for the duration of fn.
+func scanLines(path string, fn func(raw []byte, e event.Event, line int) error) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
 	}
 	defer f.Close()
 
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
-	var out []agent.Event
 	line := 0
 	for sc.Scan() {
 		line++
@@ -332,20 +380,127 @@ func Read(path string) ([]agent.Event, error) {
 		if len(raw) == 0 {
 			continue
 		}
-		var e agent.Event
+		var e event.Event
 		if err := json.Unmarshal(raw, &e); err != nil {
 			// Tolerate a truncated final line only if nothing follows it.
 			if sc.Scan() {
-				return nil, fmt.Errorf("%s:%d: %w", path, line, err)
+				return fmt.Errorf("%s:%d: %w", path, line, err)
 			}
 			break
 		}
-		out = append(out, e)
+		if err := fn(raw, e, line); err != nil {
+			return err
+		}
 	}
 	if err := sc.Err(); err != nil {
 		if !errors.Is(err, io.ErrUnexpectedEOF) {
-			return nil, err
+			return err
 		}
 	}
-	return out, nil
+	return nil
+}
+
+// ReadLiveBranch returns the journal's live branch — the events --continue
+// needs to seed a session — plus the total event count, without loading the
+// whole file. It streams the file twice: the first pass finds the newest
+// Compact event (and counts events); the second keeps only that Compact
+// event and events with Seq >= its FirstKept, then resolves the branch with
+// event.Live. Memory stays O(live branch) instead of O(journal).
+//
+// When keepRaw is true the raw source lines of the live events are also
+// returned, so rotation can rewrite the journal byte-for-byte (unknown
+// fields and formatting preserved).
+func ReadLiveBranch(path string, keepRaw bool) (live []event.Event, raw [][]byte, total int, err error) {
+	var newestCompact *event.Event
+	if err := Scan(path, func(e event.Event) error {
+		total++
+		if e.Type == event.Compact {
+			cp := e
+			newestCompact = &cp
+		}
+		return nil
+	}); err != nil {
+		return nil, nil, 0, err
+	}
+	if newestCompact == nil {
+		// No compaction: resolve the live branch through the Parent chain
+		// rather than assuming the whole file is live. A rewind-only
+		// journal has no Compact event, but the abandoned branch must not
+		// come back on resume or rotate into the new journal.
+		evs, err := Read(path)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		live := event.Live(evs)
+		if len(evs) > 1 && len(live) <= 1 && evs[len(evs)-1].Parent == 0 {
+			// Journals predating Parent links: the chain is absent, not
+			// short. Keep the whole file rather than resuming from a
+			// single event.
+			live = evs
+		}
+		if !keepRaw {
+			return live, nil, len(evs), nil
+		}
+		// Align raw lines with the live branch: only lines whose event
+		// survived the branch resolution rotate into the new journal.
+		liveSeq := make(map[int]bool, len(live))
+		for _, e := range live {
+			liveSeq[e.Seq] = true
+		}
+		var rawLines [][]byte
+		if err := scanLines(path, func(raw []byte, e event.Event, _ int) error {
+			if !liveSeq[e.Seq] {
+				return nil
+			}
+			cp := make([]byte, len(raw)+1)
+			copy(cp, raw)
+			cp[len(raw)] = '\n'
+			rawLines = append(rawLines, cp)
+			return nil
+		}); err != nil {
+			return nil, nil, 0, err
+		}
+		return live, rawLines, len(evs), nil
+	}
+	firstKept := newestCompact.FirstKept
+	if firstKept < 1 {
+		firstKept = 1
+	}
+	var kept []event.Event
+	var keptRaw [][]byte
+	if err := scanLines(path, func(raw []byte, e event.Event, _ int) error {
+		if e.Type != event.Compact && e.Seq < firstKept {
+			return nil
+		}
+		kept = append(kept, e)
+		if keepRaw {
+			cp := make([]byte, len(raw)+1)
+			copy(cp, raw)
+			cp[len(raw)] = '\n'
+			keptRaw = append(keptRaw, cp)
+		}
+		return nil
+	}); err != nil {
+		return nil, nil, 0, err
+	}
+	live = event.Live(kept)
+	if !keepRaw {
+		return live, nil, total, nil
+	}
+	// Align raw lines with the resolved live branch: the branch is the newest
+	// Compact event plus kept events with Seq >= firstKept. Seq order is file
+	// order, so map raw lines by Seq.
+	bySeq := make(map[int][]byte, len(keptRaw))
+	for i, e := range kept {
+		bySeq[e.Seq] = keptRaw[i]
+	}
+	raw = make([][]byte, 0, len(live))
+	for _, e := range live {
+		line, ok := bySeq[e.Seq]
+		if !ok {
+			return nil, nil, 0, fmt.Errorf("%s: live event seq %d missing from kept set", path, e.Seq)
+		}
+		raw = append(raw, line)
+	}
+	return live, raw, total, nil
 }

@@ -3,7 +3,7 @@ package ui
 import (
 	"strings"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // maxHistoryEntries caps the in-memory UI history of user messages. When
@@ -46,12 +46,12 @@ func (h *userHistory) add(s string) {
 }
 
 // buildFromEvents reconstructs the UI history from live user_msg events.
-// Feed it agent.Live(...) so rewind-cancelled messages (which are not on
+// Feed it event.Live(...) so rewind-cancelled messages (which are not on
 // the live branch) never enter history.
-func (h *userHistory) buildFromEvents(events []agent.Event) {
+func (h *userHistory) buildFromEvents(events []event.Event) {
 	h.entries = nil
 	for _, e := range events {
-		if e.Type == agent.UserMsg {
+		if e.Type == event.UserMsg {
 			h.add(e.Text)
 		}
 	}

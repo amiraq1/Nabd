@@ -4,14 +4,14 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/presentation"
 )
 
 func TestFormatRouteNoticeVisibility(t *testing.T) {
 	cases := []struct {
 		name        string
-		route       *agent.ProviderRoute
+		route       *event.ProviderRoute
 		wantVisible bool
 		wantSubstr  string
 	}{
@@ -22,7 +22,7 @@ func TestFormatRouteNoticeVisibility(t *testing.T) {
 		},
 		{
 			name: "attempted status hidden",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "groq",
 				Model:    "llama-3",
 				Attempt:  1,
@@ -32,7 +32,7 @@ func TestFormatRouteNoticeVisibility(t *testing.T) {
 		},
 		{
 			name: "exhausted status hidden",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "groq",
 				Model:    "llama-3",
 				Attempt:  3,
@@ -43,7 +43,7 @@ func TestFormatRouteNoticeVisibility(t *testing.T) {
 		},
 		{
 			name: "unknown status hidden",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "groq",
 				Model:    "llama-3",
 				Attempt:  1,
@@ -54,7 +54,7 @@ func TestFormatRouteNoticeVisibility(t *testing.T) {
 		},
 		{
 			name: "selected attempt 1 hidden (primary)",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "anthropic",
 				Model:    "claude-3-5-sonnet",
 				Attempt:  1,
@@ -64,7 +64,7 @@ func TestFormatRouteNoticeVisibility(t *testing.T) {
 		},
 		{
 			name: "selected attempt 0 hidden",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "anthropic",
 				Model:    "claude-3-5-sonnet",
 				Attempt:  0,
@@ -74,7 +74,7 @@ func TestFormatRouteNoticeVisibility(t *testing.T) {
 		},
 		{
 			name: "selected attempt negative hidden",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "anthropic",
 				Model:    "claude-3-5-sonnet",
 				Attempt:  -1,
@@ -84,7 +84,7 @@ func TestFormatRouteNoticeVisibility(t *testing.T) {
 		},
 		{
 			name: "selected attempt 2 visible (fallback)",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "groq",
 				Model:    "llama-3-70b",
 				Attempt:  2,
@@ -96,7 +96,7 @@ func TestFormatRouteNoticeVisibility(t *testing.T) {
 		},
 		{
 			name: "failed attempt 1 visible",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "anthropic",
 				Model:    "claude-3-5-sonnet",
 				Attempt:  1,
@@ -108,7 +108,7 @@ func TestFormatRouteNoticeVisibility(t *testing.T) {
 		},
 		{
 			name: "failed attempt 0 visible (preserves signed number)",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "anthropic",
 				Model:    "claude-3-5-sonnet",
 				Attempt:  0,
@@ -120,7 +120,7 @@ func TestFormatRouteNoticeVisibility(t *testing.T) {
 		},
 		{
 			name: "failed attempt negative visible (preserves signed number)",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "anthropic",
 				Model:    "claude-3-5-sonnet",
 				Attempt:  -1,
@@ -163,7 +163,7 @@ func TestFormatRouteNoticeSpecificHTTPStatuses(t *testing.T) {
 
 	for _, s := range statuses {
 		t.Run(s.code, func(t *testing.T) {
-			r := &agent.ProviderRoute{
+			r := &event.ProviderRoute{
 				Provider: "groq",
 				Model:    "llama-3",
 				Attempt:  1,
@@ -184,12 +184,12 @@ func TestFormatRouteNoticeSpecificHTTPStatuses(t *testing.T) {
 func TestFormatRouteNoticePlaceholders(t *testing.T) {
 	cases := []struct {
 		name     string
-		route    *agent.ProviderRoute
+		route    *event.ProviderRoute
 		wantText string
 	}{
 		{
 			name: "blank provider",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "   \t  ",
 				Model:    "m",
 				Attempt:  1,
@@ -200,7 +200,7 @@ func TestFormatRouteNoticePlaceholders(t *testing.T) {
 		},
 		{
 			name: "blank model",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "p",
 				Model:    "",
 				Attempt:  1,
@@ -211,7 +211,7 @@ func TestFormatRouteNoticePlaceholders(t *testing.T) {
 		},
 		{
 			name: "blank reason",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "p",
 				Model:    "m",
 				Attempt:  1,
@@ -222,7 +222,7 @@ func TestFormatRouteNoticePlaceholders(t *testing.T) {
 		},
 		{
 			name: "all fields blank",
-			route: &agent.ProviderRoute{
+			route: &event.ProviderRoute{
 				Provider: "",
 				Model:    "",
 				Attempt:  2,
@@ -265,7 +265,7 @@ func TestFormatRouteNoticeSecurityMatrix(t *testing.T) {
 	for _, f := range fields {
 		for _, s := range sentinels {
 			t.Run(f+"_"+s.name, func(t *testing.T) {
-				r := &agent.ProviderRoute{
+				r := &event.ProviderRoute{
 					StreamID: "secret-stream-id-12345",
 					Provider: "prov",
 					Model:    "mod",
@@ -315,7 +315,7 @@ func TestFormatRouteNoticeTerminalInjections(t *testing.T) {
 
 	for _, inj := range injections {
 		t.Run(inj.name, func(t *testing.T) {
-			r := &agent.ProviderRoute{
+			r := &event.ProviderRoute{
 				Provider: "p_" + inj.hostile,
 				Model:    "m_" + inj.hostile,
 				Attempt:  1,
@@ -336,7 +336,7 @@ func TestFormatRouteNoticeTerminalInjections(t *testing.T) {
 }
 
 func TestFormatRouteNoticeImmutability(t *testing.T) {
-	original := &agent.ProviderRoute{
+	original := &event.ProviderRoute{
 		StreamID: "stream-123",
 		Provider: "groq",
 		Model:    "llama-3",

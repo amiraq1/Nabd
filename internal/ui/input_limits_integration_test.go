@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -162,8 +162,8 @@ func TestNoticeNotRepeatedOnEveryKeypress(t *testing.T) {
 func TestLimitNoticeNotInJournal(t *testing.T) {
 	f := NewFeed()
 	// Feed some events; count the projector items.
-	_, _ = f.Update(agentEventBatchMsg{Events: []agent.Event{
-		{Seq: 1, Type: agent.RunStart, Text: "start"},
+	_, _ = f.Update(agentEventBatchMsg{Events: []event.Event{
+		{Seq: 1, Type: event.RunStart, Text: "start"},
 	}})
 	pasteInto(f, strings.Repeat("a\n", 250))
 	if f.status == "" {

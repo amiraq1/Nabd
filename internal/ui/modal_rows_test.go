@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // The permission modal must render exactly the rows the layout reserved for
@@ -40,7 +40,7 @@ func TestPermModalRowsMatchLineCount(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			m := newPermissionModal()
-			call := &agent.ToolCall{ID: "call_1", Name: "write_file", DroppedArgs: tc.dropped}
+			call := &event.ToolCall{ID: "call_1", Name: "write_file", DroppedArgs: tc.dropped}
 			if tc.args != "" {
 				call.Args = json.RawMessage(tc.args)
 			}
@@ -100,7 +100,7 @@ func TestPermModalClosedTakesNoRows(t *testing.T) {
 		t.Fatalf("closed modal rendered %q, want empty", got)
 	}
 
-	m.open(&agent.ToolCall{ID: "call_1", Name: "write_file"})
+	m.open(&event.ToolCall{ID: "call_1", Name: "write_file"})
 	m.close()
 	if got := m.lineCount(); got != 0 {
 		t.Fatalf("reopened-then-closed modal reserved %d rows, want 0", got)
@@ -114,10 +114,10 @@ func TestPermModalClosedTakesNoRows(t *testing.T) {
 // to the full lineCount and only when DroppedArgs is non-empty.
 func TestPermModalDroppedArgsAddsRow(t *testing.T) {
 	mWithout := newPermissionModal()
-	mWithout.open(&agent.ToolCall{ID: "c1", Name: "write_file", Args: json.RawMessage(`{"path":"main.go"}`)})
+	mWithout.open(&event.ToolCall{ID: "c1", Name: "write_file", Args: json.RawMessage(`{"path":"main.go"}`)})
 
 	mWith := newPermissionModal()
-	mWith.open(&agent.ToolCall{ID: "c2", Name: "write_file", Args: json.RawMessage(`{"path":"main.go"}`), DroppedArgs: []string{"bogus"}})
+	mWith.open(&event.ToolCall{ID: "c2", Name: "write_file", Args: json.RawMessage(`{"path":"main.go"}`), DroppedArgs: []string{"bogus"}})
 
 	if mWith.lineCount() != mWithout.lineCount()+1 {
 		t.Fatalf("expected DroppedArgs to add exactly 1 row to lineCount: without=%d, with=%d",

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 )
 
 // Batcher collects agent events into batches to avoid sending one Bubble Tea
@@ -12,11 +12,11 @@ import (
 // size limit is reached. Sensitive events trigger an immediate flush.
 type Batcher struct {
 	mu        sync.Mutex
-	events    []agent.Event
+	events    []event.Event
 	interval  time.Duration
 	maxSize   int
-	sensitive map[agent.EventType]bool
-	onFlush   func([]agent.Event)
+	sensitive map[event.EventType]bool
+	onFlush   func([]event.Event)
 
 	startOnce      sync.Once
 	stopOnce       sync.Once
@@ -30,7 +30,7 @@ type Batcher struct {
 }
 
 // NewBatcher creates a batcher with the given configuration.
-func NewBatcher(interval time.Duration, maxSize int, onFlush func([]agent.Event)) *Batcher {
+func NewBatcher(interval time.Duration, maxSize int, onFlush func([]event.Event)) *Batcher {
 	b := &Batcher{
 		interval: interval,
 		maxSize:  maxSize,
@@ -38,14 +38,14 @@ func NewBatcher(interval time.Duration, maxSize int, onFlush func([]agent.Event)
 		done:     make(chan struct{}),
 		loopDone: make(chan struct{}),
 	}
-	b.sensitive = map[agent.EventType]bool{
-		agent.PermAsk:     true,
-		agent.PermReply:   true,
-		agent.ToolStart:   true,
-		agent.ToolEnd:     true,
-		agent.RunError:    true,
-		agent.Interrupted: true,
-		agent.RunEnd:      true,
+	b.sensitive = map[event.EventType]bool{
+		event.PermAsk:     true,
+		event.PermReply:   true,
+		event.ToolStart:   true,
+		event.ToolEnd:     true,
+		event.RunError:    true,
+		event.Interrupted: true,
+		event.RunEnd:      true,
 	}
 	return b
 }
@@ -87,7 +87,7 @@ func (b *Batcher) Stop() {
 
 // Add appends an event. Sensitive events trigger an immediate flush.
 // If the batcher is stopped, Add is a safe no-op.
-func (b *Batcher) Add(e agent.Event) {
+func (b *Batcher) Add(e event.Event) {
 	b.mu.Lock()
 	if b.stopped {
 		b.mu.Unlock()
@@ -118,7 +118,7 @@ func (b *Batcher) Flush() {
 		}
 		return
 	}
-	batch := make([]agent.Event, len(b.events))
+	batch := make([]event.Event, len(b.events))
 	copy(batch, b.events)
 	b.events = b.events[:0]
 	b.resetTimerLocked()

@@ -55,10 +55,17 @@ func TestVocabCoversEveryConstructedTool(t *testing.T) {
 			t.Errorf("tool %q: vocab ReadOnly=%v, Class=%v", tool.Name(), toolvocab.IsReadOnly(tool.Name()), c.Class())
 		}
 	}
-	if got, want := len(toolvocab.Names()), len(constructed); got != want {
-		t.Fatalf("vocab has %d names, package constructs %d tools", got, want)
+	// mcp_tool is registered lazily via RegisterMCP only when MCP is
+	// configured, so it is absent from AllTools by design. Its vocabulary
+	// entry is pinned by TestClassifications and its registration by
+	// TestMCPToolRegistered.
+	if got, want := len(toolvocab.Names()), len(constructed)+1; got != want {
+		t.Fatalf("vocab has %d names, package constructs %d tools (+1 lazy mcp_tool)", got, want)
 	}
 	for _, name := range toolvocab.Names() {
+		if name == "mcp_tool" {
+			continue // lazy registration, see above
+		}
 		found := false
 		for _, tool := range constructed {
 			if tool.Name() == name {
@@ -190,6 +197,9 @@ func TestFenceToolNameAllowlistMatchesRegistry(t *testing.T) {
 		}
 	}
 	for name := range fenced {
+		if name == "mcp_tool" {
+			continue // lazy registration via RegisterMCP; fence must still know it
+		}
 		if !registered[name] {
 			t.Errorf("fence allowlist accepts %q, which the registry does not register", name)
 		}

@@ -3,6 +3,7 @@ package agent_test
 import (
 	"encoding/json"
 	"math"
+	"nabd/internal/event"
 	"path/filepath"
 	"testing"
 
@@ -23,9 +24,9 @@ func TestEventRateLimitRawFieldRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	src := agent.Event{
+	src := event.Event{
 		Seq:        1,
-		Type:       agent.EventRateLimit,
+		Type:       event.EventRateLimit,
 		Code:       429,
 		Limit:      8000,
 		Used:       1859,
@@ -51,7 +52,7 @@ func TestEventRateLimitRawFieldRoundTrip(t *testing.T) {
 		t.Fatalf("expected 1 event after round trip, got %d", len(got))
 	}
 	e := got[0]
-	if e.Type != agent.EventRateLimit {
+	if e.Type != event.EventRateLimit {
 		t.Fatalf("expected EventRateLimit, got %s", e.Type)
 	}
 	const want = 4.7775
@@ -82,15 +83,15 @@ func TestEventRateLimitDoesNotShiftSerializedPromptContent(t *testing.T) {
 	agent.FenceNonceFunc = func() string { return "0123456789abcdef" }
 	t.Cleanup(func() { agent.FenceNonceFunc = restoreNonce })
 
-	base := []agent.Event{
-		{Seq: 1, Type: agent.UserMsg, Text: "start"},
-		{Seq: 2, Parent: 1, Type: agent.ToolStart, Call: &agent.ToolCall{ID: "t1", Name: "read_file", Args: json.RawMessage(`{"path":"main.go"}`)}},
-		{Seq: 3, Parent: 2, Type: agent.ToolEnd, Call: &agent.ToolCall{ID: "t1", Name: "read_file", Output: "content", OK: true}},
-		{Seq: 4, Parent: 3, Type: agent.TurnEnd},
+	base := []event.Event{
+		{Seq: 1, Type: event.UserMsg, Text: "start"},
+		{Seq: 2, Parent: 1, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file", Args: json.RawMessage(`{"path":"main.go"}`)}},
+		{Seq: 3, Parent: 2, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "read_file", Output: "content", OK: true}},
+		{Seq: 4, Parent: 3, Type: event.TurnEnd},
 	}
-	withRL := append(append([]agent.Event{}, base...), agent.Event{
+	withRL := append(append([]event.Event{}, base...), event.Event{
 		Seq:        5,
-		Type:       agent.EventRateLimit,
+		Type:       event.EventRateLimit,
 		Code:       429,
 		Limit:      8000,
 		Used:       1859,

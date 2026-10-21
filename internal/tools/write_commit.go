@@ -14,10 +14,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 
-	"nabd/internal/agent"
+	"nabd/internal/event"
 	"nabd/internal/safefs"
 	"nabd/internal/snap"
 )
@@ -60,8 +61,8 @@ func mutationID() string {
 //
 // eventEnvelopeAllowance: the journal (agent.Loop.emitAt) stamps Seq, Parent,
 // and Time on the Event before serializing — fields that boundEditEvent does
-// not set when it marshals agent.Event{Type, Edit: rec} for the baseline.
-// Measured directly by field (see internal/agent/event.go for the JSON tags):
+// not set when it marshals event.Event{Type, Edit: rec} for the baseline.
+// Measured directly by field (see internal/event/event.go for the JSON tags):
 //
 //	Seq    int       json:"seq"              → "seq":9223372036854775807 = 18 B
 //	Parent int       json:"parent,omitempty" → ,"parent":9223372036854775806 = 29 B (omitted when 0)
@@ -85,7 +86,7 @@ type Edit struct {
 	Rel    string
 	Before snap.State
 	After  snap.State
-	Record *agent.EditRecord // persisted fingerprint, emitted as an event
+	Record *event.EditRecord // persisted fingerprint, emitted as an event
 }
 
 type editLog struct {
@@ -154,8 +155,14 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	if err != nil {
 		return snap.State{}, snap.State{}, err
 	}
+	isExcluded := reg != nil && reg.isPathExcluded(relative)
 
-	before, err := captureFromRoot(sh, root, relative, absPath)
+	var before snap.State
+	if isExcluded {
+		before, err = captureExcludedFromRoot(sh, root, relative, absPath)
+	} else {
+		before, err = captureFromRoot(sh, root, relative, absPath)
+	}
 	if err != nil {
 		return before, snap.State{}, err
 	}
@@ -164,9 +171,15 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 		mode = before.Mode
 	}
 	// Compute the "after" state from the in-memory data before any project-file
-	// write. CaptureBytes stores content in the shadow (a separate dir), not
-	// on the project disk path, so a diff failure leaves no on-disk trace.
-	after, err := sh.CaptureBytes(absPath, data, mode)
+	// write. For ordinary paths, CaptureBytes stores content in the shadow (a separate dir).
+	// For excluded paths (P0-4), FingerprintBytes calculates the digest without
+	// storing content in shadow, so sensitive files (.env) never touch .ag/shadow.
+	var after snap.State
+	if isExcluded {
+		after, err = sh.FingerprintBytes(absPath, data, mode)
+	} else {
+		after, err = sh.CaptureBytes(absPath, data, mode)
+	}
 	if err != nil {
 		return before, snap.State{}, err
 	}
@@ -176,8 +189,14 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	if reg != nil {
 		var beforeHash string
 		if !before.Absent {
-			if b, err := sh.Read(before.Blob); err == nil {
-				beforeHash = sha256hex(b)
+			if isExcluded {
+				if strings.HasPrefix(before.Blob, "s256:") {
+					beforeHash = before.Blob[5:]
+				}
+			} else {
+				if b, err := sh.Read(before.Blob); err == nil {
+					beforeHash = sha256hex(b)
+				}
 			}
 		}
 		readLines = reg.ConsumeLinesRead(relative, beforeHash)
@@ -185,10 +204,10 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 
 	// The diff (LCS matrix allocation) runs here — BEFORE the write. If it
 	// aborts (budget exceeded, ctx cancelled), the project file is untouched.
-	var rec *agent.EditRecord
+	var rec *event.EditRecord
 	var rerr error
-	if reg != nil && reg.isPathExcluded(relative) {
-		rec, rerr = buildExcludedRecord(sh, before, after, data, readLines)
+	if isExcluded {
+		rec, rerr = buildExcludedRecord(before, after, data, readLines)
 	} else {
 		var budget *diffBudget
 		if reg != nil {
@@ -198,33 +217,50 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 	}
 	if rerr != nil {
 		// Clean up the orphan blob that CaptureBytes wrote to the shadow
-		// store. The mutation is aborted, so no Edit will ever reference it;
-		// leaving it would accumulate garbage across repeated rejections.
-		_ = sh.Discard(after.Blob)
+		// store. Excluded paths never write blobs, so no cleanup needed.
+		if !isExcluded {
+			_ = sh.Discard(after.Blob)
+		}
 		return before, after, rerr
 	}
 	prepared := false
 	if reg != nil && reg.OnMutationPrepared != nil {
 		if err := reg.OnMutationPrepared(rec); err != nil {
-			_ = sh.Discard(after.Blob)
+			if !isExcluded {
+				_ = sh.Discard(after.Blob)
+			}
 			return before, after, err
 		}
 		prepared = true
 	}
-	if err := writeFromRoot(root, relative, absPath, data, mode); err != nil {
-		if prepared && !safefs.WasPublished(err) && reg != nil && reg.OnMutationAborted != nil {
-			if abortErr := reg.OnMutationAborted(rec, err); abortErr != nil {
-				return before, after, errors.Join(err, abortErr)
+	// Re-verify the pre-mutation hash immediately before publishing. The
+	// before-state was captured before the (potentially slow) diff above;
+	// if the file changed under us since, writing now would record a stale
+	// before-state in the journal and make /undo restore the wrong content.
+	publishErr := verifyUnchanged(sh, root, relative, absPath, before, isExcluded)
+	if publishErr == nil {
+		publishErr = writeFromRoot(root, relative, absPath, data, mode)
+	}
+	if publishErr != nil {
+		if prepared && !safefs.WasPublished(publishErr) && reg != nil && reg.OnMutationAborted != nil {
+			if abortErr := reg.OnMutationAborted(rec, publishErr); abortErr != nil {
+				return before, after, errors.Join(publishErr, abortErr)
 			}
 		}
-		return before, after, err
+		return before, after, publishErr
 	}
 	// From here the disk has already changed. Every exit below must leave a
 	// record behind, or /undo goes blind exactly when it is needed most.
 	log.add(Edit{Tool: tool, Rel: root.Rel(absPath), Before: before, After: after, Record: rec})
-	// Verify the write by re-reading through the same secure capture and
+	// Verify the write by re-reading through the appropriate capture path and
 	// comparing against the expected state computed from data above.
-	actual, aerr := captureFromRoot(sh, root, relative, absPath)
+	var actual snap.State
+	var aerr error
+	if isExcluded {
+		actual, aerr = captureExcludedFromRoot(sh, root, relative, absPath)
+	} else {
+		actual, aerr = captureFromRoot(sh, root, relative, absPath)
+	}
 	if aerr != nil {
 		return before, after, aerr
 	}
@@ -232,6 +268,31 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 		return before, after, errors.New("write did not verify on disk as-is")
 	}
 	return before, after, nil
+}
+
+// verifyUnchanged re-captures the current on-disk state through the same
+// secure path used for the before-state and compares content hashes. A
+// mismatch means the file changed between capture and write; the write is
+// aborted so the journal never records a stale before-state.
+func verifyUnchanged(sh *snap.Shadow, root *Root, relative, absolute string, before snap.State, isExcluded bool) error {
+	var current snap.State
+	var err error
+	if isExcluded {
+		current, err = captureExcludedFromRoot(sh, root, relative, absolute)
+	} else {
+		current, err = captureFromRoot(sh, root, relative, absolute)
+	}
+	if err != nil {
+		return err
+	}
+	if !snap.Unchanged(before, current) {
+		if !isExcluded {
+			// The re-captured blob is unreferenced garbage; drop it.
+			_ = sh.Discard(current.Blob)
+		}
+		return errors.New("file changed since it was read; re-read and retry the write")
+	}
+	return nil
 }
 
 // buildRecord fingerprints one mutation for the journal: SHA-256 of the
@@ -244,8 +305,8 @@ func commit(ctx context.Context, root *Root, sh *snap.Shadow, log *editLog, reg 
 // event stays within the configured budget (dropping only Patch if needed).
 // If the event still exceeds the budget after dropping Patch, an error is
 // returned so commit() can abort before WriteAtomic.
-func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*agent.EditRecord, error) {
-	rec := &agent.EditRecord{
+func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*event.EditRecord, error) {
+	rec := &event.EditRecord{
 		MutationID: mutationID(),
 		Path:       after.Rel,
 		HashAfter:  sha256hex(data),
@@ -272,21 +333,23 @@ func buildRecord(ctx context.Context, budget *diffBudget, sh *snap.Shadow, befor
 }
 
 // buildExcludedRecord fingerprints a mutation on an excluded path without computing
-// a unified diff, guaranteeing that excluded content is never disclosed in diffs
-// while retaining shadow blobs and hashes so /undo reversibility remains guaranteed.
-func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte, readLines int) (*agent.EditRecord, error) {
-	rec := &agent.EditRecord{
+// a unified diff and WITHOUT storing content blobs in shadow (P0-4). Excluded content
+// is never written to the shadow store; the record is marked Excluded so
+// /undo refuses with ErrUndoExcluded instead of deleting the file.
+func buildExcludedRecord(before, after snap.State, data []byte, readLines int) (*event.EditRecord, error) {
+	rec := &event.EditRecord{
 		MutationID: mutationID(),
 		Path:       after.Rel,
 		HashAfter:  sha256hex(data),
 		ReadLines:  readLines,
-		BlobAfter:  after.Blob,
-		BlobBefore: before.Blob,
+		Excluded:   true,
 		ModeBefore: before.Mode,
+		// BlobBefore and BlobAfter intentionally empty: excluded content
+		// must not enter the shadow store (P0-4).
 	}
 	if !before.Absent {
-		if b, err := sh.Read(before.Blob); err == nil {
-			rec.HashBefore = sha256hex(b)
+		if strings.HasPrefix(before.Blob, "s256:") {
+			rec.HashBefore = before.Blob[5:]
 		}
 	}
 	return boundEditEvent(rec)
@@ -299,7 +362,7 @@ func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte,
 //
 // The measurement accounts for the journal envelope: emitAt (in the agent
 // loop) adds Seq, Parent, and Time to the Event before serializing, fields
-// absent from the bare agent.Event{Type, Edit: rec} that this function
+// absent from the bare event.Event{Type, Edit: rec} that this function
 // marshals. The eventEnvelopeAllowance constant covers those fields. The
 // Patch contribution is estimated with jsonEscapeWorstCaseFactor (6x, the
 // worst case for \uXXXX encoding) rather than fully serialized, so the phone
@@ -309,7 +372,7 @@ func buildExcludedRecord(sh *snap.Shadow, before, after snap.State, data []byte,
 // After dropping Patch, the size is re-checked: if the bare record still
 // exceeds the budget, an error is returned so commit() can abort before
 // WriteAtomic instead of writing an oversized event.
-func boundEditEvent(rec *agent.EditRecord) (*agent.EditRecord, error) {
+func boundEditEvent(rec *event.EditRecord) (*event.EditRecord, error) {
 	if maxEventBytes <= 0 {
 		return rec, nil
 	}
@@ -319,7 +382,7 @@ func boundEditEvent(rec *agent.EditRecord) (*agent.EditRecord, error) {
 	// non-patch portion.
 	bare := *rec
 	bare.Patch = ""
-	baseline, err := json.Marshal(agent.Event{Type: agent.EventEdit, Edit: &bare})
+	baseline, err := json.Marshal(event.Event{Type: event.EventEdit, Edit: &bare})
 	if err != nil {
 		return rec, nil
 	}

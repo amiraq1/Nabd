@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"nabd/internal/agent"
 	"nabd/internal/config"
+	"nabd/internal/event"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
 	"nabd/internal/snap"
@@ -25,6 +25,7 @@ type scriptTurn struct {
 	call       *provider.ToolCall
 	err        error
 	rateLimits int
+	stop       string
 }
 
 type scriptedProvider struct {
@@ -71,7 +72,11 @@ func (p *scriptedProvider) Stream(ctx context.Context, req provider.Request) (<-
 			ch <- provider.Chunk{Kind: provider.ChunkStop, Stop: "tool_use"}
 			return
 		}
-		ch <- provider.Chunk{Kind: provider.ChunkStop, Stop: "end_turn"}
+		stop := "end_turn"
+		if t.stop != "" {
+			stop = t.stop
+		}
+		ch <- provider.Chunk{Kind: provider.ChunkStop, Stop: stop}
 	}()
 	return ch, nil
 }
@@ -149,14 +154,14 @@ func TestHeadlessJSONEmitsJournal(t *testing.T) {
 		if line == "" {
 			continue
 		}
-		var e agent.Event
+		var e event.Event
 		if err := json.Unmarshal([]byte(line), &e); err != nil {
 			t.Fatalf("not journal JSONL %q: %v", line, err)
 		}
 		switch e.Type {
-		case agent.UserMsg:
+		case event.UserMsg:
 			sawUser = true
-		case agent.TextDelta:
+		case event.TextDelta:
 			sawDelta = true
 		}
 	}
@@ -229,6 +234,132 @@ func TestHeadlessRateLimitBudget(t *testing.T) {
 	}
 }
 
+func TestHeadlessEmptyResponse(t *testing.T) {
+	t.Run("upstream empty response", func(t *testing.T) {
+		code, stdout, stderr := runHL(t, headlessConfig{
+			prompt:   "hello",
+			provider: &scriptedProvider{turns: []scriptTurn{{text: ""}}},
+		})
+		if code == 0 {
+			t.Fatalf("exit %d, want non-zero", code)
+		}
+		if stdout != "" {
+			t.Fatalf("expected empty stdout, got %q", stdout)
+		}
+		if !strings.Contains(stderr, "provider returned an empty response (upstream issue)") {
+			t.Fatalf("expected stderr to contain upstream issue notice, got %q", stderr)
+		}
+		if strings.Contains(stderr, "NABD_MAX_TOKENS") {
+			t.Fatalf("expected stderr NOT to blame NABD_MAX_TOKENS on upstream empty response, got %q", stderr)
+		}
+	})
+
+	t.Run("length cut empty response", func(t *testing.T) {
+		code, stdout, stderr := runHL(t, headlessConfig{
+			prompt:   "hello",
+			provider: &scriptedProvider{turns: []scriptTurn{{text: "", stop: "max_tokens"}}},
+		})
+		if code == 0 {
+			t.Fatalf("exit %d, want non-zero", code)
+		}
+		if stdout != "" {
+			t.Fatalf("expected empty stdout, got %q", stdout)
+		}
+		if !strings.Contains(stderr, "NABD_MAX_TOKENS") || !strings.Contains(stderr, "1024") {
+			t.Fatalf("expected stderr to contain NABD_MAX_TOKENS notice, got %q", stderr)
+		}
+	})
+}
+
+// TestEmptyResponseReadsCategoryNotWording pins the headless exit decision to
+// the notice category. The notice wording is display text that may be reworded
+// or translated; the category is the producer's own structural claim about what
+// happened. A wording-based decision silently returns 0 when the text changes,
+// and silently returns 1 when an unrelated notice happens to contain the phrase.
+func TestEmptyResponseReadsCategoryNotWording(t *testing.T) {
+	// silentTurn builds a turn that produced no assistant text and no tool
+	// calls, carrying the given notice.
+	silentTurn := func(n event.Event) []event.Event {
+		n.Seq, n.Parent, n.Type = 2, 1, event.Notice
+		return []event.Event{
+			{Seq: 1, Type: event.TurnStart},
+			n,
+			{Seq: 3, Parent: 2, Type: event.TurnEnd},
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		evs  []event.Event
+		want bool
+	}{
+		{
+			name: "provider empty category with completely different wording",
+			evs:  silentTurn(event.Event{NoticeCategory: event.NoticeCategoryProviderEmpty, Text: "the upstream sent nothing back"}),
+			want: true,
+		},
+		{
+			name: "display notice carrying the old empty-response wording is not an empty response",
+			evs:  silentTurn(event.Event{NoticeCategory: event.NoticeCategoryDisplay, Text: "provider returned an empty response (upstream issue)"}),
+			want: false,
+		},
+		{
+			name: "display notice carrying NABD_MAX_TOKENS is not an empty response",
+			evs:  silentTurn(event.Event{NoticeCategory: event.NoticeCategoryDisplay, Text: "raise NABD_MAX_TOKENS and retry"}),
+			want: false,
+		},
+		{
+			name: "length limit category with unrelated wording still counts",
+			evs:  silentTurn(event.Event{NoticeCategory: event.NoticeCategoryLengthLimit, Text: "cut short"}),
+			want: true,
+		},
+		{
+			name: "unclassified notice is not an empty response",
+			evs:  silentTurn(event.Event{NoticeCategory: event.NoticeCategoryUnknown, Text: "provider returned an empty response (upstream issue)"}),
+			want: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := emptyResponse(tc.evs, ""); got != tc.want {
+				t.Fatalf("emptyResponse = %v, want %v; events: %+v", got, tc.want, tc.evs)
+			}
+		})
+	}
+
+	t.Run("a turn that used tools is never an empty response", func(t *testing.T) {
+		evs := []event.Event{
+			{Seq: 1, Type: event.TurnStart},
+			{Seq: 2, Parent: 1, Type: event.Notice, NoticeCategory: event.NoticeCategoryProviderEmpty, Text: "the upstream sent nothing back"},
+			{Seq: 3, Parent: 2, Type: event.ToolStart, Call: &event.ToolCall{ID: "t1", Name: "read_file"}},
+			{Seq: 4, Parent: 3, Type: event.ToolEnd, Call: &event.ToolCall{ID: "t1", Name: "read_file", OK: true}},
+			{Seq: 5, Parent: 4, Type: event.TurnEnd},
+		}
+		if emptyResponse(evs, "") {
+			t.Fatal("a turn with tool activity must not be classified as an empty response")
+		}
+	})
+}
+
+// TestHeadlessEmptyResponseWithOtherStopReasonKeepsExitCode covers the loop's
+// remaining silent-turn branch: a stop reason that is neither a length cut nor
+// a clean stop (content_filter and friends) still emits the empty-response
+// notice, so the headless exit code must be unchanged.
+func TestHeadlessEmptyResponseWithOtherStopReasonKeepsExitCode(t *testing.T) {
+	code, stdout, stderr := runHL(t, headlessConfig{
+		prompt:   "hello",
+		provider: &scriptedProvider{turns: []scriptTurn{{text: "", stop: "content_filter"}}},
+	})
+	if code != exitError {
+		t.Fatalf("exit %d, want %d", code, exitError)
+	}
+	if stdout != "" {
+		t.Fatalf("expected empty stdout, got %q", stdout)
+	}
+	if !strings.Contains(stderr, "provider returned an empty response (upstream issue)") {
+		t.Fatalf("expected stderr to contain the upstream issue notice, got %q", stderr)
+	}
+}
+
 func TestParsePermMode(t *testing.T) {
 	m, err := perm.ParseMode("allow-reads")
 	if err != nil || m != perm.ModeAllowReads {
@@ -247,10 +378,10 @@ func TestMapHeadlessExit(t *testing.T) {
 	if mapHeadlessExit(nil) != 0 {
 		t.Fatal()
 	}
-	if mapHeadlessExit(agent.ErrMaxTurns) != 2 {
+	if mapHeadlessExit(event.ErrMaxTurns) != 2 {
 		t.Fatal()
 	}
-	if mapHeadlessExit(agent.ErrRateLimitBudget) != 3 {
+	if mapHeadlessExit(event.ErrRateLimitBudget) != 3 {
 		t.Fatal()
 	}
 	if mapHeadlessExit(errPermissionStuck) != 4 {
@@ -320,9 +451,9 @@ func TestRemovedBashKeysFailBeforeProviderOrTool(t *testing.T) {
 }
 
 // yoloSink records every event so the test can inspect the permission reply.
-type yoloSink func(agent.Event) error
+type yoloSink func(event.Event) error
 
-func (s yoloSink) Emit(e agent.Event) error { return s(e) }
+func (s yoloSink) Emit(e event.Event) error { return s(e) }
 
 // TestHeadlessYOLOBashDoesNotHang is the headless counterpart to the enforce
 // decision. Headless has no TTY: silentAsker is the Human and it answers Deny
@@ -348,10 +479,10 @@ func TestHeadlessYOLOBashDoesNotHang(t *testing.T) {
 		{call: &provider.ToolCall{ID: "b1", Name: "bash", Input: []byte(`{"cmd":"echo hi"}`)}},
 		{text: "done"},
 	}}
-	loop := newSessionLoop(prov, reg, gate{pol}, silentAsker{})
+	loop := newSessionLoop(prov, reg, gate{p: pol}, silentAsker{})
 
-	var events []agent.Event
-	loop.Sink = yoloSink(func(e agent.Event) error {
+	var events []event.Event
+	loop.Sink = yoloSink(func(e event.Event) error {
 		events = append(events, e)
 		return nil
 	})
@@ -367,7 +498,7 @@ func TestHeadlessYOLOBashDoesNotHang(t *testing.T) {
 
 	var denied bool
 	for _, e := range events {
-		if e.Type == agent.PermReply && e.Call != nil && e.Call.Name == "bash" && e.Decision == agent.Deny {
+		if e.Type == event.PermReply && e.Call != nil && e.Call.Name == "bash" && e.Decision == event.Deny {
 			denied = true
 		}
 	}
@@ -400,14 +531,14 @@ func TestHeadlessJSONAllLinesValidJSON(t *testing.T) {
 		if err := json.Unmarshal([]byte(line), &raw); err != nil {
 			t.Fatalf("line %d on stdout is not valid JSON: %q (err: %v)", i, line, err)
 		}
-		var ev agent.Event
+		var ev event.Event
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			t.Fatalf("line %d on stdout cannot unmarshal into agent.Event: %q (err: %v)", i, line, err)
+			t.Fatalf("line %d on stdout cannot unmarshal into event.Event: %q (err: %v)", i, line, err)
 		}
-		if ev.Type == agent.RunError {
+		if ev.Type == event.RunError {
 			sawRunError = true
 		}
-		if ev.Type == agent.RunEnd {
+		if ev.Type == event.RunEnd {
 			sawRunEnd = true
 		}
 	}
@@ -438,10 +569,10 @@ func TestHeadlessRunEndReflectsFailureAfterRunError(t *testing.T) {
 		t.Fatalf("exit %d, want %d", code, exitError)
 	}
 
-	var runEndEvent *agent.Event
+	var runEndEvent *event.Event
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		var ev agent.Event
-		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+		var ev event.Event
+		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == event.RunEnd {
 			runEndEvent = &ev
 			break
 		}
@@ -504,10 +635,10 @@ func TestHeadlessRunEndReflectsStoppedAfterInterruption(t *testing.T) {
 		t.Fatalf("exit %d, want %d", code, exitInterrupted)
 	}
 
-	var runEndEvent *agent.Event
+	var runEndEvent *event.Event
 	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		var ev agent.Event
-		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+		var ev event.Event
+		if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == event.RunEnd {
 			runEndEvent = &ev
 			break
 		}
@@ -541,10 +672,10 @@ func TestHeadlessRunEndNormalOnSuccessAndMaxTurns(t *testing.T) {
 			t.Fatalf("exit %d, want %d", code, exitSettled)
 		}
 
-		var runEndEvent *agent.Event
+		var runEndEvent *event.Event
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-			var ev agent.Event
-			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+			var ev event.Event
+			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == event.RunEnd {
 				runEndEvent = &ev
 				break
 			}
@@ -573,10 +704,10 @@ func TestHeadlessRunEndNormalOnSuccessAndMaxTurns(t *testing.T) {
 			t.Fatalf("exit %d, want %d", code, exitMaxTurns)
 		}
 
-		var runEndEvent *agent.Event
+		var runEndEvent *event.Event
 		for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-			var ev agent.Event
-			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == agent.RunEnd {
+			var ev event.Event
+			if err := json.Unmarshal([]byte(line), &ev); err == nil && ev.Type == event.RunEnd {
 				runEndEvent = &ev
 				break
 			}
