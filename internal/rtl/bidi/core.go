@@ -563,8 +563,14 @@ func (s *isolatingRunSequence) resolveWeakTypes() {
 			if t == EN {
 				setTypes(s.types[runStart:runEnd], EN)
 			}
-			// continue at end of sequence
-			i = runEnd
+			// No skip is needed: assigning to i has no effect in a range loop. Later
+			// iterations re-read the updated types, so they fall through once setTypes
+			// has rewritten the run to EN. If the neighbors are not EN the run is not
+			// rewritten and its elements are re-examined, which is quadratic. Measured
+			// on Termux/arm64: about 19ms at 5,000 and 51ms at 10,000 consecutive ET
+			// runes with no EN neighbor. Reachable only on a single very long line that
+			// also contains a non-ASCII rune, digit or bracket (otherwise layout.go's
+			// ASCII fast path skips the engine) and has no EN adjacent to the ET run.
 		}
 	}
 
@@ -642,8 +648,8 @@ func (s *isolatingRunSequence) resolveNeutralTypes() {
 
 			setTypes(s.types[runStart:runEnd], resolvedType)
 
-			// skip over run of (former) neutrals
-			i = runEnd
+			// No skip is needed: assigning to i has no effect in a range loop. setTypes
+			// rewrites the neutrals to L or R, so later iterations no longer match this case.
 		}
 	}
 }

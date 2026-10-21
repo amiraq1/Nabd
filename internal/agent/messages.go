@@ -208,8 +208,12 @@ func Messages(evs []event.Event) []provider.Message {
 
 		case event.Compact:
 			flush()
+			// The summary is model output derived from untrusted history, so it
+			// enters the context inside an untrusted-data envelope — the same
+			// contract as tool output — rather than as bare user text. The
+			// envelope is a label, not an injection boundary: see V17.
 			out = append(out, provider.Message{
-				Role: provider.User, Text: "Session summary of what came before:\n" + ev.Text,
+				Role: provider.User, Text: "Session summary of what came before:\n" + FenceSummary(ev.Text),
 			})
 
 		case event.Notice:

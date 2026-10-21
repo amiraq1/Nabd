@@ -39,6 +39,30 @@ func captureFromRoot(sh *snap.Shadow, root *Root, relative, absolute string) (sn
 	return sh.CaptureBytes(absolute, data, fi.Mode().Perm())
 }
 
+// captureExcludedFromRoot captures the fingerprint of an excluded file beneath root
+// via descriptor-relative open (safefs.OpenRead) without storing its content in shadow.
+// Used for excluded paths (P0-4).
+func captureExcludedFromRoot(sh *snap.Shadow, root *Root, relative, absolute string) (snap.State, error) {
+	f, err := safefs.OpenRead(root.Dir(), relative)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return sh.CaptureAbsent(absolute)
+		}
+		return snap.State{}, err
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return snap.State{}, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return snap.State{}, err
+	}
+	return sh.FingerprintBytes(absolute, data, fi.Mode().Perm())
+}
+
 // writeFromRoot publishes data to relative beneath root atomically, through
 // descriptor-relative operations (safefs.WriteFileAtomic): a temporary file in
 // the parent descriptor, fsynced and renamed over the target, then the parent

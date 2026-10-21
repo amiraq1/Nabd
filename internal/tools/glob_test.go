@@ -11,6 +11,100 @@ import (
 	"time"
 )
 
+// TestGlobStrictArgumentBoundary pins the decoder behind glob with repair
+// disabled: this is the net behind RepairCall, so a bypass the repair layer
+// happens to drop must still be refused on its own.
+func TestGlobStrictArgumentBoundary(t *testing.T) {
+	r, _ := newReg(t)
+	r.repairOff = true
+
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"exact duplicate key", `{"pattern":"*","pattern":"*.go"}`, "duplicate key"},
+		{"case-varied duplicate key", `{"pattern":"*","Pattern":"*.go"}`, "duplicate key"},
+		{"escaped spelling of the same key", `{"pattern":"*","\u0070attern":"*.go"}`, "duplicate key"},
+		{"undeclared field", `{"pattern":"*","bogus":1}`, "unknown field"},
+		{"nesting past the ceiling", `{"pattern":"*","deep":` + nestedObject(maxJSONDepth+1) + `}`, "nest deeper than"},
+		{"trailing object", `{"pattern":"*"}{"pattern":"x"}`, "unexpected trailing data"},
+		{"trailing primitive", `{"pattern":"*"} 5`, "unexpected trailing data"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, ok, err := r.Run(context.Background(), providerToolCall("glob", json.RawMessage(tc.raw)))
+			if err == nil || ok {
+				t.Fatalf("glob accepted %s: ok=%v err=%v out=%q", tc.name, ok, err, out)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("glob %s: error %q does not contain %q", tc.name, err, tc.want)
+			}
+		})
+	}
+}
+
+// TestGlobArgumentsOnTheProductionPath pins the layering for glob, which is
+// ReadOnly: the repair layer may drop a key the tool does not declare, and it
+// must report the drop; a duplicate the tool does declare is refused by the
+// decoder instead.
+func TestGlobArgumentsOnTheProductionPath(t *testing.T) {
+	t.Run("duplicate key rejected", func(t *testing.T) {
+		r, _ := newReg(t)
+		out, ok, err := r.Run(context.Background(), providerToolCall("glob", json.RawMessage(`{"pattern":"*","pattern":"*.go"}`)))
+		if err == nil || ok {
+			t.Fatalf("glob accepted a duplicate key: ok=%v err=%v out=%q", ok, err, out)
+		}
+		if !strings.Contains(err.Error(), "duplicate key") {
+			t.Fatalf("error %q does not contain %q", err, "duplicate key")
+		}
+	})
+
+	t.Run("case-varied key is refused, not guessed", func(t *testing.T) {
+		r, _ := newReg(t)
+		out, ok, err := r.Run(context.Background(), providerToolCall("glob", json.RawMessage(`{"pattern":"*","Pattern":"*.go"}`)))
+		if err == nil || ok {
+			t.Fatalf("a case-varied duplicate was accepted: ok=%v err=%v out=%q", ok, err, out)
+		}
+		if !strings.Contains(err.Error(), "duplicate key") {
+			t.Fatalf("expected a duplicate-key refusal, got: %v", err)
+		}
+	})
+
+	t.Run("undeclared field dropped and reported", func(t *testing.T) {
+		r, _ := newReg(t)
+		var fixes []Fix
+		r.OnRepair = func(f Fix) { fixes = append(fixes, f) }
+		defer func() { r.OnRepair = nil }()
+
+		_, ok, err := r.Run(context.Background(), providerToolCall("glob", json.RawMessage(`{"pattern":"*","bogus":1}`)))
+		if err != nil || !ok {
+			t.Fatalf("glob failed: ok=%v err=%v", ok, err)
+		}
+		if got := DroppedKeys(fixes); len(got) != 1 || got[0] != "bogus" {
+			t.Fatalf("the dropped key must be reported, got fixes=%+v dropped=%v", fixes, got)
+		}
+	})
+
+	t.Run("duplicate plus an undeclared key is refused, not repaired", func(t *testing.T) {
+		// Repair re-marshals the object after dropping the undeclared key, and
+		// that would silently keep only the last value of the repeated key:
+		// the ambiguity has to reach the decoder instead.
+		r, _ := newReg(t)
+		var fixes []Fix
+		r.OnRepair = func(f Fix) { fixes = append(fixes, f) }
+		defer func() { r.OnRepair = nil }()
+
+		out, ok, err := r.Run(context.Background(), providerToolCall("glob", json.RawMessage(`{"pattern":"a","pattern":"b","bogus":1}`)))
+		if err == nil || ok {
+			t.Fatalf("repair erased a duplicate key instead of leaving the refusal to the decoder: ok=%v err=%v out=%q fixes=%+v", ok, err, out, fixes)
+		}
+		if !strings.Contains(err.Error(), "duplicate key") {
+			t.Fatalf("error %q does not contain %q", err, "duplicate key")
+		}
+	})
+}
+
 // TestGlobStarMatchesRootFiles: a bare "*" must match every root-level
 // file — including dotfiles — and must not cross a separator. A live
 // session once saw ".goreleaser.yml" alone from `glob *`; on the current
