@@ -460,7 +460,18 @@ func (m *Feed) View() string {
 	// anchors the composer/footer chrome to the bottom row of the grid.
 	if lm.ViewportRows > 0 {
 		topPad := m.viewportTopPadding(lm)
+		welcome := []string(nil)
+		if m.emptyStateActive() {
+			welcome = emptyStateLines(w)
+			if len(welcome) > topPad {
+				welcome = welcome[len(welcome)-topPad:]
+			}
+		}
+		welcomeStart := topPad - len(welcome)
 		for i := 0; i < topPad; i++ {
+			if i >= welcomeStart {
+				b.WriteString(welcome[i-welcomeStart])
+			}
 			b.WriteByte('\n')
 		}
 
