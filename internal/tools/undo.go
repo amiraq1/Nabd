@@ -15,6 +15,10 @@ var (
 	// to restore it is absent. Deleting the file there would destroy exactly
 	// the content the record says was replaced.
 	ErrUndoBeforeMissing = errors.New("before-content reference is missing for an existing file; refusing to delete it")
+	// ErrUndoExcluded is the P0-4 refusal: excluded paths were never stored in
+	// shadow; refusing is safer than deleting the user's file or attempting
+	// restoration from non-existent shadow blobs.
+	ErrUndoExcluded = errors.New("excluded path was never stored in shadow; cannot undo")
 )
 
 // UndoResult is one attempted rewind, in the order attempted.
@@ -57,6 +61,29 @@ func (r *Registry) rewindRecord(rec *event.EditRecord) UndoResult {
 	if err != nil {
 		return UndoResult{Rel: rec.Path, Note: err.Error()}
 	}
+	// P0-4: an excluded path was never stored in shadow. Refuse before the
+	// capture below, because captureFromRoot writes the current bytes to the
+	// shadow store and would persist exactly the content this path must never
+	// store, even though the rewind is about to be refused. The current path
+	// policy is authoritative; a record stamped Excluded for a path that is no
+	// longer excluded is handled below.
+	if r.pathGate != nil && r.pathGate.IsPathExcluded(rel) {
+		return UndoResult{Rel: rec.Path, Note: ErrUndoExcluded.Error()}
+	}
+	// V16: creation is a statement the record makes about itself: no before
+	// content AND no before hash. HashBefore is written exactly when the file
+	// existed (buildRecord), so an absent content reference beside a before-hash
+	// is a record this reader cannot restore — a writer that stores no content
+	// blobs (the capture-ordering change proposed in the open PR #270) or a
+	// legacy record whose reference is gone. Refuse before any capture.
+	if rec.BlobBefore == "" && rec.HashBefore != "" {
+		return UndoResult{Rel: rec.Path, Note: ErrUndoBeforeMissing.Error()}
+	}
+	// P0-4: a record stamped Excluded (a true creation on an excluded path)
+	// carries no shadow content even if the path is no longer excluded.
+	if rec.Excluded {
+		return UndoResult{Rel: rec.Path, Note: ErrUndoExcluded.Error()}
+	}
 	now, err := captureFromRoot(r.sh, r.root, rel, abs)
 	if err != nil {
 		return UndoResult{Rel: rec.Path, Note: err.Error()}
@@ -77,19 +104,9 @@ func (r *Registry) rewindRecord(rec *event.EditRecord) UndoResult {
 	}
 
 	if rec.BlobBefore == "" {
-		// Creation is a statement the record makes about itself: no before
-		// content AND no before hash. HashBefore is written exactly when the
-		// file existed (buildRecord), so an absent content reference beside a
-		// before-hash is a record this reader cannot restore — a writer that
-		// stores no content blobs (V16: the capture-ordering change proposed in
-		// the open PR #270) or a legacy record whose reference is gone. The
-		// marker such a writer adds is not needed: whatever this schema does not
-		// know it ignores, and the hashes decide. Fail closed, because deleting
-		// the file would destroy the content the record says it replaced.
-		if rec.HashBefore != "" {
-			return UndoResult{Rel: rec.Path, Note: ErrUndoBeforeMissing.Error()}
-		}
-		// Creation: the "before" was absence.
+		// Creation: the "before" was absence. The V16 guard above already
+		// refused a record that claims the file existed without a content
+		// reference.
 		if err := removeFromRoot(r.root, rel, abs); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return UndoResult{Rel: rec.Path, Note: err.Error()}
 		}

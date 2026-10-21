@@ -308,11 +308,21 @@ func ClientWithPolicy(pol Policy, timeout time.Duration) *http.Client {
 	return ClientWithAllow(pol, CurrentAllowList(), timeout)
 }
 
+// noRedirect refuses all HTTP redirects. Provider clients must never follow
+// a redirect: Go's default CheckRedirect strips Authorization on cross-host
+// redirects but forwards other sensitive headers (e.g. x-api-key) to the
+// redirect target. LLM APIs do not use redirects; refusing them is the
+// simplest fail-closed policy (P0-1).
+func noRedirect(_ *http.Request, _ []*http.Request) error {
+	return http.ErrUseLastResponse
+}
+
 // ClientWithAllow returns an *http.Client configured with the specified policy and allowList.
 func ClientWithAllow(pol Policy, allowList *AllowList, timeout time.Duration) *http.Client {
 	return &http.Client{
-		Transport: TransportWithAllow(pol, allowList),
-		Timeout:   timeout,
+		Transport:     TransportWithAllow(pol, allowList),
+		Timeout:       timeout,
+		CheckRedirect: noRedirect,
 	}
 }
 

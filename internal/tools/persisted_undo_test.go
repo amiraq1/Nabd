@@ -186,9 +186,9 @@ func TestPersistedUndoDiagnostics(t *testing.T) {
 //
 // The fixture is written the way a capture-ordering change such as the open
 // PR #270 writes it: hashes present, content blobs intentionally absent, and an
-// "excluded" marker this branch's schema does not know. Unknown fields are
-// ignored by design, so the refusal has to come from data the older schema
-// already has.
+// "excluded" marker. The path itself is not excluded, so the refusal has to
+// come from data the older schema already has — the present before-hash beside
+// the missing blob — not from the newer exclusion marker.
 func TestPersistedUndoRefusesMissingBeforeBlob(t *testing.T) {
 	dir := t.TempDir()
 	root, err := NewRoot(dir)

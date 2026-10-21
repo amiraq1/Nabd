@@ -291,8 +291,9 @@ const (
 )
 
 // ReconcileMutation classifies an unresolved edit_intent against the current
-// descriptor-relative file state. The current bytes may be captured into the
-// existing shadow store for hashing, but no project file is changed.
+// descriptor-relative file state. For ordinary paths the current bytes may be
+// captured into the existing shadow store for hashing; excluded paths are
+// fingerprinted without persisting content. No project file is changed.
 func (r *Registry) ReconcileMutation(rec *event.EditRecord) (MutationRecoveryState, error) {
 	if rec == nil {
 		return "", fmt.Errorf("nil mutation record")
@@ -301,7 +302,15 @@ func (r *Registry) ReconcileMutation(rec *event.EditRecord) (MutationRecoverySta
 	if err != nil {
 		return "", err
 	}
-	current, err := captureFromRoot(r.sh, r.root, relative, absolute)
+	// P0-4: excluded paths must never enter the shadow store. Fingerprint the
+	// current state instead of capturing it; the digest still decides the
+	// classification.
+	var current snap.State
+	if rec.Excluded || (r.pathGate != nil && r.pathGate.IsPathExcluded(relative)) {
+		current, err = captureExcludedFromRoot(r.sh, r.root, relative, absolute)
+	} else {
+		current, err = captureFromRoot(r.sh, r.root, relative, absolute)
+	}
 	if err != nil {
 		return "", err
 	}
