@@ -143,7 +143,7 @@ func (m Replay) advance() (tea.Model, tea.Cmd) {
 	if m.next >= len(m.events) {
 		m.done = true
 		if *m.buf != "" { // a session whose last event is text
-			s := block(" ", *m.buf, m.width, lipgloss.NewStyle())
+			s := block(" ", sanitizeStreamText(*m.buf), m.width, lipgloss.NewStyle())
 			*m.buf = ""
 			return m, tea.Sequence(tea.Println(s), tea.Quit)
 		}
@@ -173,7 +173,7 @@ func (m Replay) View() string {
 	case m.paused:
 		s += " · paused · space/→"
 	}
-	if p := partialTail(*m.buf, 6, m.width); p != "" {
+	if p := partialTail(sanitizeStreamText(*m.buf), 6, m.width); p != "" {
 		return p + "\n" + dim.Render(s)
 	}
 	return dim.Render(s)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"nabd/internal/display"
 	"nabd/internal/event"
 	"nabd/internal/presentation"
 
@@ -52,7 +53,7 @@ func RenderEvent(e event.Event, width int) string {
 		return toolEnd(e.Call, width)
 
 	case event.Notice:
-		return block("⚑", e.Text, width, warn)
+		return block("⚑", sanitizeEventText(e.Text), width, warn)
 
 	case event.RunError:
 		// The failure carries three separate facts: what failed, why each
@@ -68,7 +69,7 @@ func RenderEvent(e event.Event, width int) string {
 		return dim.Render("⊘ " + s)
 
 	case event.Compact:
-		return block("≡", e.Text, width, dim)
+		return block("≡", sanitizeEventText(e.Text), width, dim)
 
 	case event.EventEdit:
 		// Summary only: the patch lives in the journal, not on the screen.
@@ -141,6 +142,23 @@ func RenderEvent(e event.Event, width int) string {
 		}
 		return dim.Render(fmt.Sprintf("⚑ %d skills · %d project", len(e.Skills), proj))
 
+	case event.EventMCPToolResult:
+		// MCP tool output is untrusted server content: show the call
+		// identity and a sanitized preview, never raw output.
+		if e.MCPResult == nil {
+			return ""
+		}
+		mr := e.MCPResult
+		status := "ok"
+		if mr.IsError {
+			status = "error"
+		}
+		out := sanitizeToolOutput(mr.Output)
+		if len(out) > 500 {
+			out = out[:500] + "…"
+		}
+		return dim.Render(fmt.Sprintf("⚙ mcp %s/%s · %s", mr.Server, mr.Tool, status)) + "\n" + out
+
 	case event.Rewind:
 		// A rewind is a branch point in the session tree. Hiding it makes
 		// replay show an unexplained jump. Reuses the RunStart separator.
@@ -161,10 +179,15 @@ func callLine(c *event.ToolCall) string {
 	if c == nil {
 		return "?"
 	}
+	// Tool names and arguments are model-controlled: sanitize at the render
+	// boundary. Same policy as the feed tool summary (single line, no
+	// newlines/tabs, redaction enabled). Both ToolStart and PermAsk render
+	// through here; the permission prompt is the security-critical path.
+	name := display.SanitizeForDisplay(c.Name, display.DisplayPolicy{Redact: true})
 	if a := argSummary(c); a != "" {
-		return c.Name + " " + a
+		return name + " " + display.SanitizeForDisplay(a, display.DisplayPolicy{Redact: true})
 	}
-	return c.Name
+	return name
 }
 
 // argSummary shows the one argument a human actually wants to see.
@@ -210,6 +233,11 @@ func toolEnd(c *event.ToolCall, width int) string {
 	// The head is wrapped rather than emitted as one line: it now carries
 	// enough facts to exceed a phone terminal, and an overflowing row breaks
 	// the layout's width contract.
+	// The header is built from the model-controlled tool name plus status facts:
+	// sanitize the assembled head at the render boundary before wrapping.
+	// Single-line policy (no newlines/tabs), redaction enabled.
+	head = display.SanitizeForDisplay(head, display.DisplayPolicy{Redact: true})
+
 	lines := wrap(head, width-2)
 	var b strings.Builder
 	b.WriteString(st.Render(mark + " "))
@@ -218,10 +246,34 @@ func toolEnd(c *event.ToolCall, width int) string {
 		b.WriteString("\n  " + dim.Render(l))
 	}
 	out := b.String()
-	if t := tail(c.Output); t != "" {
+	if t := tail(sanitizeToolOutput(c.Output)); t != "" {
 		out += "\n" + block(" ", t, width, dim)
 	}
 	return out
+}
+
+// sanitizeToolOutput applies the display policy to tool output at the render
+// boundary. Same policy as the feed path (truncate_output.go): newlines and
+// tabs allowed, credential redaction enabled -- tool output can contain
+// secrets (unlike streamed model text). The stored event keeps the raw output.
+func sanitizeToolOutput(s string) string {
+	return display.SanitizeForDisplay(s, display.DisplayPolicy{AllowNewline: true, AllowTab: true, Redact: true})
+}
+
+// sanitizeEventText applies the display policy to untrusted event text (Notice,
+// Compact) at the render boundary. Same policy as the feed notice renderer:
+// newlines allowed, credential redaction enabled. The stored event keeps the
+// raw text.
+func sanitizeEventText(s string) string {
+	return display.SanitizeForDisplay(s, display.DisplayPolicy{AllowNewline: true, Redact: true})
+}
+
+// sanitizeStreamText applies the display policy to streamed model text at
+// the render boundary. The accumulation buffer stays raw; only what reaches
+// the screen is cleaned. Same policy as feed assistant text: newlines and
+// tabs allowed, no credential redaction (model output, not secrets).
+func sanitizeStreamText(s string) string {
+	return display.SanitizeForDisplay(s, display.DisplayPolicy{AllowNewline: true, AllowTab: true, Redact: false})
 }
 
 // flushJoin is the one place text-delta buffers turn into scrollback. Both
@@ -232,7 +284,7 @@ func toolEnd(c *event.ToolCall, width int) string {
 func flushJoin(buf *string, e event.Event, width int) string {
 	var prints []string
 	if *buf != "" {
-		prints = append(prints, block(" ", *buf, width, lipgloss.NewStyle()))
+		prints = append(prints, renderAgentText(sanitizeStreamText(*buf), width))
 		*buf = ""
 	}
 	if s := RenderEvent(e, width); s != "" {

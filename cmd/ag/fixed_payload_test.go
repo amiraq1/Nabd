@@ -134,7 +134,7 @@ func captureLoopWire(t *testing.T, format, systemText string) []byte {
 	reg := newToolsRegistry(t, dir)
 
 	tr := &captureTransport{}
-	loop := newSessionLoop(captureProvider(t, format, tr), reg, gate{perm.New(reg)}, silentAsker{})
+	loop := newSessionLoop(captureProvider(t, format, tr), reg, gate{p: perm.New(reg)}, silentAsker{})
 	loop.Sink = &recordSink{}
 	// The system text is a parameter so the guard can be exercised with an
 	// inflated prompt (the negative proof); the guard passes the real one.

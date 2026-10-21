@@ -16,10 +16,10 @@ import (
 // PR 1 implements exactly these steps: bidi levels (UAX #9 through rule L2),
 // cluster-safe rule L3 (grapheme clusters are the only reordering unit; raw
 // runes are never reversed), and rule L4 glyph mirroring. Arabic cursive
-// shaping is NOT implemented. A ShapingMode decision — after measuring Termux
-// rendering to avoid double shaping — is required before Layout is wired into
-// the feed, and PR 2 must not treat ReorderAndMirror as a complete Arabic
-// solution. See provenance.md, "Arabic shaping gate for PR 2".
+// shaping is NOT implemented in Layout. Per the resolved decision (see
+// docs/termux-shaping-measurements.md), shaping is applied at the UI layer
+// (internal/ui/shaping.go) as an explicit policy, not as an implicit engine
+// side effect. See provenance.md, "Arabic shaping gate for PR 2".
 type Mode uint8
 
 const (
@@ -72,8 +72,10 @@ const (
 	RTL
 )
 
-// Policy controls one Layout call. Shaping is deliberately absent: it will be
-// a separate policy after the ShapingMode decision (see provenance.md).
+// Policy controls one Layout call. Shaping is deliberately absent here: it is
+// applied at the UI layer via shapeArabicText (see docs/termux-shaping-
+// measurements.md for the decision). The engine's shaping option remains
+// internal/test-only.
 type Policy struct {
 	Mode Mode
 	Base Direction

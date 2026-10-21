@@ -398,7 +398,7 @@ func TestLiveRewindThenContinueKeepsJournalChain(t *testing.T) {
 		{chunks: []string{"turn one ", secret[:13], secret[13:26], secret[26:], " end"}, call: writeCall("x.txt", "hi")},
 		{chunks: []string{"turn two"}},
 		{chunks: []string{"turn three"}},
-	}}, reg, gate{pol}, silentAsker{})
+	}}, reg, gate{p: pol}, silentAsker{})
 	loop.Sink = newStreamRedactSink(agent.Fanout{journal}, nil)
 
 	if err := loop.Start("t", root.Dir()); err != nil {
@@ -527,7 +527,7 @@ func TestRewindToReusedParentKeepsChainResolvable(t *testing.T) {
 		}, call: writeCall("x.txt", "hi")},
 		{chunks: []string{"two"}},
 		{chunks: []string{"three"}},
-	}}, reg, gate{pol}, silentAsker{})
+	}}, reg, gate{p: pol}, silentAsker{})
 	loop.Sink = newStreamRedactSink(agent.Fanout{journal}, nil)
 
 	if err := loop.Start("t", root.Dir()); err != nil {

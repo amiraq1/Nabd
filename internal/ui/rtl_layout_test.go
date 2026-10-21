@@ -19,20 +19,26 @@ func TestRTLDisplayModeContract(t *testing.T) {
 		value string
 		want  rtl.Mode
 	}{
-		{"", rtl.Logical},
 		{"logical", rtl.Logical},
 		{"off", rtl.Logical},
-		{"reorder", rtl.Reorder},
-		{"mirror", rtl.ReorderAndMirror},
-		{"auto", rtl.ReorderAndMirror},
-		{"reorder-and-mirror", rtl.ReorderAndMirror},
+		{"no", rtl.Logical},
+		{"disable", rtl.Logical},
+		{"0", rtl.Logical},
+		{"false", rtl.Logical},
+		{"none", rtl.Logical},
 		{"unknown", rtl.Logical},
+		{"reorder", rtl.Reorder},
+		{"on", rtl.Reorder},
+		{"1", rtl.Reorder},
+		{"true", rtl.Reorder},
+		{"mirror", rtl.ReorderAndMirror},
+		{"reorder-and-mirror", rtl.ReorderAndMirror},
 	}
 	for _, tc := range cases {
 		t.Run(tc.value, func(t *testing.T) {
 			t.Setenv("NABD_RTL", tc.value)
-			if got := rtlDisplayMode(); got != tc.want {
-				t.Fatalf("rtlDisplayMode()=%v, want %v", got, tc.want)
+			if got := readRTLMode(); got != tc.want {
+				t.Fatalf("readRTLMode()=%v, want %v", got, tc.want)
 			}
 		})
 	}
@@ -54,6 +60,7 @@ func TestMarkdownProducesSemanticCodeSpan(t *testing.T) {
 
 func TestSemanticANSIIsEmittedAfterRTLLayout(t *testing.T) {
 	t.Setenv("NABD_RTL", "mirror")
+	resetRTLModeCache()
 	logical, spans := parseInlineSemantic("\u0646\u0635 **bold**", styleNone)
 	if strings.Contains(logical, "\x1b") {
 		t.Fatal("semantic input contains ANSI")
@@ -73,6 +80,7 @@ func TestSemanticANSIIsEmittedAfterRTLLayout(t *testing.T) {
 
 func TestRTLWidthsAndGraphemeSafety(t *testing.T) {
 	t.Setenv("NABD_RTL", "mirror")
+	resetRTLModeCache()
 	text := "\u0645\u064e\u0631\u0652\u062d\u064e\u0628\u064b\u0627 internal/ui/feed.go \U0001f469\u200d\U0001f4bb"
 	for _, width := range []int{20, 39, 40, 79, 80, 120} {
 		lines := wrap(text, width)
@@ -89,6 +97,7 @@ func TestRTLWidthsAndGraphemeSafety(t *testing.T) {
 
 func TestInvalidSemanticSpansFallBackWithoutMutation(t *testing.T) {
 	t.Setenv("NABD_RTL", "mirror")
+	resetRTLModeCache()
 	logical := "\u0646\u0635"
 	bad := []rtl.Span{{Start: 1, End: len(logical), Kind: rtl.Code}}
 	if _, err := layoutSemanticText(logical, bad, 20); err == nil {
@@ -102,6 +111,7 @@ func TestInvalidSemanticSpansFallBackWithoutMutation(t *testing.T) {
 
 func TestRenderDoesNotMutateCanonicalFeedText(t *testing.T) {
 	t.Setenv("NABD_RTL", "mirror")
+	resetRTLModeCache()
 	source := "\u0645\u0631\u062d\u0628\u0627 (go test ./...)"
 	item := presentation.FeedItem{Type: presentation.ItemAssistant, Text: source}
 	_ = renderItem(item, 39)
@@ -112,6 +122,7 @@ func TestRenderDoesNotMutateCanonicalFeedText(t *testing.T) {
 
 func TestCopyUsesLogicalSourceWhenDisplayIsReordered(t *testing.T) {
 	t.Setenv("NABD_RTL", "mirror")
+	resetRTLModeCache()
 	source := "\u0645\u0631\u062d\u0628\u0627 (test)"
 	m := feedWithCustomTexts(t, []string{source}, 39)
 	m.enterNavigation()
@@ -127,6 +138,7 @@ func TestCopyUsesLogicalSourceWhenDisplayIsReordered(t *testing.T) {
 
 func TestSearchUsesLogicalSourceWhenDisplayIsReordered(t *testing.T) {
 	t.Setenv("NABD_RTL", "mirror")
+	resetRTLModeCache()
 	source := "\u0645\u0631\u062d\u0628\u0627 \u0628\u0627\u0644\u0639\u0627\u0644\u0645"
 	m := feedWithCustomTexts(t, []string{source}, 39)
 	m.enterNavigation()
@@ -139,6 +151,7 @@ func TestSearchUsesLogicalSourceWhenDisplayIsReordered(t *testing.T) {
 
 func TestLineCacheIncludesRTLMode(t *testing.T) {
 	t.Setenv("NABD_RTL", "logical")
+	resetRTLModeCache()
 	f := NewFeed()
 	f.width = 39
 	f.BuildFromEvents([]event.Event{{
@@ -147,6 +160,7 @@ func TestLineCacheIncludesRTLMode(t *testing.T) {
 	f.refresh()
 	firstCount := f.renderCount
 	t.Setenv("NABD_RTL", "mirror")
+	resetRTLModeCache()
 	f.refresh()
 	if f.renderCount <= firstCount {
 		t.Fatal("changing RTL mode reused a stale line-cache entry")
@@ -155,6 +169,7 @@ func TestLineCacheIncludesRTLMode(t *testing.T) {
 
 func TestPTYRTLFrameWidth39(t *testing.T) {
 	t.Setenv("NABD_RTL", "mirror")
+	resetRTLModeCache()
 	sess := StartPTYSession(t, 39, 24)
 	defer sess.Close()
 

@@ -12,26 +12,31 @@ permissions:
 jobs:
   module-tidiness:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.1'
+          go-version-file: .go-version
       - run: go mod tidy -diff
       - run: go mod tidy -diff
         working-directory: third_party/bubbles
 
   vulnerability-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.1'
+          go-version-file: .go-version
       - name: Run govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           "$(go env GOPATH)/bin/govulncheck" ./...
+      - name: Run govulncheck (nested bubbles module)
+        working-directory: third_party/bubbles
+        run: '"$(go env GOPATH)/bin/govulncheck" ./...'
 
   build:
     runs-on: ubuntu-latest
@@ -43,7 +48,7 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version: '1.27.1'
+        go-version-file: .go-version
     - name: Environment diagnostics
       run: go env GOOS GOARCH CGO_ENABLED CC
     - name: Threat model freshness guard tests
@@ -61,6 +66,27 @@ jobs:
       run: go build ./...
     - name: Vet
       run: go vet ./...
+    - name: Task 1 focused test evidence
+      shell: bash
+      run: |
+        set -euo pipefail
+        {
+          git rev-parse HEAD
+          go version
+          go env GOOS GOARCH
+        } | tee task1-environment.txt
+        go test -json -count=1 ./internal/event/ ./internal/agent/ ./cmd/ag/ \
+          -run '^(TestNoticeCategoryValuesAreAppendOnly|TestNoticeCategoryProviderEmptyIsNotModelFacing|TestBlockedNoticeCategoriesDroppedWhileToolCallsPending|TestJournalNoticeCategoryRoundTripDoesNotReachModel|TestEmptyTurnEmitsNotice|TestEmptyTurnEmitsNoticeWithCustomMaxTokens|TestEmptyResponseReadsCategoryNotWording|TestHeadlessEmptyResponse|TestHeadlessEmptyResponseWithOtherStopReasonKeepsExitCode|TestHeadlessEmptyResponseKeepsRunEndEnded)$' \
+          2>&1 | tee task1-tests.jsonl
+    - name: Upload Task 1 focused test evidence
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: task1-evidence-${{ github.sha }}
+        path: |
+          task1-environment.txt
+          task1-tests.jsonl
+        if-no-files-found: error
     - name: Unit tests without race
       run: go test ./... -count=1
     - name: Nested bubbles unit tests
@@ -68,7 +94,7 @@ jobs:
       run: go test ./... -count=1
     - name: Install pinned staticcheck
       run: |
-        go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+        go install honnef.co/go/tools/cmd/staticcheck@v0.8.2
         export PATH="$(go env GOPATH)/bin:$PATH"
         staticcheck -version
         staticcheck ./...
@@ -106,8 +132,17 @@ jobs:
         if-no-files-found: warn
     - name: Exec.Cmd.Env static audit
       run: bash scripts/check-exec-env.sh
+    - name: Install ripgrep (required by check-security-invariants.sh)
+      run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+    - name: Verify ripgrep availability
+      # RG_EXEC_COVERAGE_VACUOUS_PASS: check-security-invariants.sh fails
+      # closed without rg; this step makes the requirement explicit on the
+      # runner so a missing rg is never a silent surprise.
+      run: command -v rg && rg --version
     - name: Security invariants static audit
       run: bash scripts/check-security-invariants.sh
+    - name: Security invariants rg regression test
+      run: bash scripts/test-security-invariants-rg.sh
     - name: Git diff check
       run: git diff --check
     - name: Clean local clone verification
@@ -128,7 +163,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.27.1'
+          go-version-file: .go-version
       - name: Install syft
         uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
       - name: Extract notes for the next release
@@ -138,6 +173,17 @@ jobs:
           bash scripts/release-notes.sh "$v" > "${RUNNER_TEMP}/release-notes.md"
       - name: Assert clean tree
         run: test -z "$(git status --porcelain)" || { git status --porcelain; exit 1; }
+      - name: Validate the GoReleaser config
+        # `check` parses .goreleaser.yaml with the same pinned GoReleaser build
+        # the release runs, so a config that no longer loads fails on the pull
+        # request instead of at tag time. It publishes nothing and needs no
+        # credentials. The keyless signing path stays tag-only: it depends on
+        # OIDC and writes Rekor entries, neither of which belongs in a PR run.
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          distribution: goreleaser
+          version: "v2.18.2"
+          args: check
       - name: Snapshot release, no publish, no sign
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -197,7 +243,7 @@ jobs:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
-        go-version: '1.27.1'
+        go-version-file: .go-version
     - name: Build and vet for Termux (android/arm64)
       env:
         CGO_ENABLED: "0"

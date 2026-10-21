@@ -385,10 +385,13 @@ On Termux (`android/arm64`), Go's standard library does not use system `libc` re
 ### `NABD_ASCII_ONLY`
 
 - **Environment-only variable:** `NABD_ASCII_ONLY` is read strictly from the process environment (`os.Getenv`). It is **not** a configuration file key and cannot be set in `~/.ag/config` or `~/.ag/config.v2.json`. Setting it in a config file triggers an unknown key warning (in v1) or validation error (in v2).
-- **Scope:** Controls decorative UI glyphs only. When set to any non-empty value (e.g. `NABD_ASCII_ONLY=1`), Nabd replaces Unicode decorative symbols with plain ASCII equivalents:
+- **Scope:** Controls decorative UI glyphs only. When set to any non-empty value (including `1`, `0`, or `false`), Nabd replaces Unicode decorative symbols with plain ASCII equivalents:
   - Error indicator glyph: `✗ ` becomes `x ` (or `! ` depending on width).
+  - Tool execution status symbols: running tool symbol `●` becomes `* `, and completed tool symbol `○` becomes `- `.
+  - Slash command menu: header banner (`-- Commands ` instead of `── Commands `), item truncation tails (`...` instead of `…`), and separator/border lines use `-`.
   - Truncation tail: `…` becomes `...`.
   - Border and separator lines: Unicode box-drawing character `─` becomes ASCII hyphen `-`.
+- **Disabling:** Unsetting the variable or setting it to an empty string (`NABD_ASCII_ONLY=""`) disables ASCII-only mode and restores default Unicode glyphs.
 - **Preserves Arabic and content text:** `NABD_ASCII_ONLY` affects only decorative framing glyphs and punctuation markers. It does **not** strip or alter Arabic text, user input, assistant responses, or error message bodies.
 
 ### `NABD_RTL`
@@ -422,7 +425,7 @@ rejects the file outright).
 | `NABD_PROVIDER` | Override the active provider (`groq`, `anthropic`, `openrouter`, `nvidia`, `router`). Ignored when config v2 is active. |
 | `NABD_MODEL` | Override the model ID for the standalone (non-router) path. Ignored when `NABD_PROVIDER=router`. |
 | `NABD_BASE_URL` | Override the provider base URL. **Security-sensitive**: the endpoint policy (`NABD_ENDPOINT_POLICY`) applies, and an invalid policy value now produces a warning on stderr and defaults to `strict`. Forbidden when `NABD_PROVIDER=router`. |
-| `NABD_ROUTES` | JSON array of `{"provider":"…","model":"…"}` objects for the router provider. Required when `NABD_PROVIDER=router`. |
+| `NABD_ROUTES` | Comma-separated `provider:model` pairs for the router provider, e.g. `groq:model-a,openrouter:model-b:free`. Provider names are lowercased, surrounding spaces/tabs are trimmed, at most 16 routes, and exact duplicates are rejected. Required when `NABD_PROVIDER=router`. |
 | `NABD_ROUTER_MODE` | Router fallback strategy. Currently only `fallback` is accepted. |
 | `NABD_ROUTER_PRESTREAM_TIMEOUT` | Duration string (e.g. `15s`) — time the router waits for a first byte before trying the next route. |
 | `NABD_ROUTER_RETRY_AFTER_WAIT` | Maximum duration (e.g. `30s`) the router will honour a `Retry-After` response header before failing over. |
@@ -448,3 +451,9 @@ quick one-off overrides and v1 compatibility.
 | `NABD_FORCE_TOUCH` | `1` enables touch/mouse input on platforms where it is disabled by default (e.g. non-Termux terminals). |
 | `NABD_CLIPBOARD` | Clipboard transport override. `exec` forces the subprocess-based path. Unset uses the default heuristic. |
 | `NABD_EXPORTS_DIR` | Directory where `/export` session reports are written. Defaults to `~/.ag/exports`. |
+
+### Diagnostics
+
+| Variable | Purpose |
+|---|---|
+| `NABD_DEBUG` | Any non-empty value enables `slog` warnings on stderr. Today it reports an unknown event type encountered while translating the journal to the wire (`internal/agent/messages.go`). Leave it unset in interactive sessions: a stray stderr line corrupts the rendered frame, so the default path stays silent. |

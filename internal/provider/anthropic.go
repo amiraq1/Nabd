@@ -148,7 +148,7 @@ func (a *Anthropic) run(ctx context.Context, body []byte, out chan<- Chunk) {
 		}
 		if sent.Load() || attempt >= maxAttempts || !transient(err) {
 			if attempt >= maxAttempts && !sent.Load() && errors.Is(err, context.Canceled) {
-				err = fmt.Errorf("الخادم لم يبدأ الردّ خلال 25 ثانية — جرّب NABD_MODEL آخر")
+				err = errors.New(FirstByteTimeoutMessage())
 			}
 			out <- Chunk{Kind: ChunkError, Err: err, Retryable: !sent.Load()}
 			return
@@ -424,7 +424,7 @@ func (e *modelUnavailableError) Error() string {
 	if e.Message != "" {
 		return e.Message
 	}
-	return fmt.Sprintf("الموديل %q غير متاح على هذا الخادم (%d)%s", e.Model, e.Status, e.Suffix)
+	return ModelUnavailableMessage(e.Model, e.Status, e.Suffix)
 }
 
 // transient decides whether trying again could plausibly help. A 401 or

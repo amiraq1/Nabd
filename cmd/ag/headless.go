@@ -90,6 +90,7 @@ type headlessConfig struct {
 	maxTurns int
 	mode     perm.Mode
 	sessDir  string
+	noMCP    bool
 	stdout   io.Writer
 	stderr   io.Writer
 	stdin    io.Reader
@@ -134,6 +135,15 @@ func deniedAndStuck(evs []event.Event, text string) bool {
 	return false
 }
 
+// emptyResponse reports whether the last turn ended silently because the
+// provider returned nothing. The decision reads the notice category, never the
+// notice wording: the wording is display text that may be reworded or
+// translated, so a decision keyed on it would return 0 for a silent empty turn
+// after any rewording, and 1 for an unrelated notice that happens to contain the
+// phrase. The category is the producer's own structural claim —
+// event.NoticeCategoryProviderEmpty for a provider that returned nothing,
+// event.NoticeCategoryLengthLimit for a cut before any output was produced. A
+// turn that used a tool is never silent.
 func emptyResponse(evs []event.Event, text string) bool {
 	if strings.TrimSpace(text) != "" {
 		return false
@@ -144,7 +154,7 @@ func emptyResponse(evs []event.Event, text string) bool {
 		}
 	}
 	for _, e := range event.Live(evs) {
-		if e.Type == event.Notice && (strings.Contains(e.Text, "empty response") || strings.Contains(e.Text, "NABD_MAX_TOKENS") || e.NoticeCategory == event.NoticeCategoryLengthLimit) {
+		if e.Type == event.Notice && (e.NoticeCategory == event.NoticeCategoryProviderEmpty || e.NoticeCategory == event.NoticeCategoryLengthLimit) {
 			return true
 		}
 	}
@@ -279,6 +289,15 @@ func runHeadlessErr(cfg headlessConfig) error {
 	pol := perm.New(reg)
 	wirePathRule(root, reg, pol)
 	pol.SetMode(cfg.mode)
+	g := &gate{p: pol}
+	mcpMgr, err := wireMCPForSession(cfg.noMCP, root.Dir(), reg, pol, g)
+	if err != nil {
+		journal.Close()
+		return err
+	}
+	if mcpMgr != nil {
+		defer mcpMgr.Close()
+	}
 
 	var sinks agent.Fanout
 	sinks = append(sinks, journal, noticeStderr{w: cfg.stderr})
@@ -289,7 +308,7 @@ func runHeadlessErr(cfg headlessConfig) error {
 		})
 	}
 
-	loop := newSessionLoop(prov, reg, gate{pol}, silentAsker{})
+	loop := newSessionLoop(prov, reg, *g, silentAsker{})
 	promptSkills, promptDiag := skill.FormatForPrompt(allSkills)
 	for _, d := range promptDiag {
 		fmt.Fprintln(cfg.stderr, d.String())

@@ -261,6 +261,16 @@ func readSkill(base, rel string, scope Scope) (Skill, error) {
 	return parseSkill(base, rel, scope, data)
 }
 
+// readBatch returns how many directory entries the next read may pull in, seen
+// being the number of entries already visited in this walk. A fixed batch would
+// allocate up to 64 DirEntry structs after the ceiling was reached and discard
+// them; the batch instead stops at what is still admissible, plus the single
+// entry that proves truncation.
+func readBatch(seen int) int {
+	remaining := maxWalkEntries - seen
+	return min(64, remaining+1)
+}
+
 // walk lists skill files under base, bounded in depth and entry count and
 // honoring the session ignore matcher. It never follows a symlink: a directory
 // symlink would let a project skill's path escape the tree it claims to be in.
@@ -282,7 +292,7 @@ func walk(base string, ig ignorefile.Matcher) ([]string, []Diagnostic) {
 		}
 		defer f.Close()
 		for {
-			entries, readErr := f.ReadDir(64)
+			entries, readErr := f.ReadDir(readBatch(seen))
 			for _, e := range entries {
 				if seen >= maxWalkEntries {
 					diag = append(diag, Diagnostic{DiagTruncated, rel, fmt.Sprintf("more than %d entries; remaining files skipped", maxWalkEntries)})

@@ -48,7 +48,7 @@ func TestCollapsibleTool_SingleLineStatuses(t *testing.T) {
 			status:   presentation.ToolRunning,
 			toolName: "bash",
 			args:     "go test ./internal/ui",
-			wantSym:  "~",
+			wantSym:  ansi.Strip(toolStatusSymbol(presentation.ToolRunning)),
 			wantName: "Bash",
 			output:   "running output line 1\nline 2",
 		},
@@ -336,8 +336,9 @@ func TestCollapsibleTool_StreamingUpdatesNoDuplicates(t *testing.T) {
 	if len(f.lines) != 2 {
 		t.Fatalf("expected 2 lines for running tool (expanded by default), got %d: %v", len(f.lines), f.lines)
 	}
-	if !strings.Contains(ansi.Strip(f.lines[0]), "~") {
-		t.Errorf("expected running symbol ~ in line: %q", f.lines[0])
+	runningSym := ansi.Strip(toolStatusSymbol(presentation.ToolRunning))
+	if !strings.Contains(ansi.Strip(f.lines[0]), runningSym) {
+		t.Errorf("expected running symbol %s in line: %q", runningSym, f.lines[0])
 	}
 
 	// ToolEnd: completed tool auto-collapses to single-line summary

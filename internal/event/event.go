@@ -50,7 +50,11 @@ const (
 	// was told and whether it came from the trusted or the project scope.
 	EventSkills    EventType = "skills"
 	EventSkillBody EventType = "skill_body"
-	RunEnd         EventType = "run_end"
+	// EventMCPToolResult carries one MCP tool call's output. The output is
+	// untrusted server content: it is fenced at the journal→wire translation
+	// point and never trusted as instructions.
+	EventMCPToolResult EventType = "mcp_tool_result"
+	RunEnd             EventType = "run_end"
 )
 
 // Event is one line in the journal. Append-only, never rewritten.
@@ -113,6 +117,7 @@ type Event struct {
 	// built once.
 	Skills    []skill.EventSkills `json:"skills,omitempty"`
 	SkillBody *SkillBodyEvent     `json:"skill_body,omitempty"`
+	MCPResult *MCPToolResultEvent `json:"mcp_result,omitempty"`
 
 	FirstKept int              `json:"first_kept,omitempty"`
 	Compact   *CompactionStats `json:"compact,omitempty"`
@@ -124,6 +129,16 @@ type SkillBodyEvent struct {
 	Body  string            `json:"body"`
 	Scope skill.Scope       `json:"scope"`
 	Class SkillContentClass `json:"class"`
+}
+
+// MCPToolResultEvent is one MCP tool call's output. Class is always
+// SkillContentClassUntrusted: server output is data, never instructions.
+type MCPToolResultEvent struct {
+	Server  string            `json:"server"`
+	Tool    string            `json:"tool"`
+	Output  string            `json:"output"`
+	Class   SkillContentClass `json:"class"`
+	IsError bool              `json:"is_error,omitempty"`
 }
 
 // ProviderRoute records one routing decision attempt/event (Section O).
@@ -244,6 +259,18 @@ const (
 	// NoticeCategoryDisplay is emitted for UI/display informational
 	// notices (e.g. dropped events, config conflicts). Monitoring only.
 	NoticeCategoryDisplay
+
+	// NoticeCategoryProviderEmpty is emitted when a turn produced no text and
+	// no tool calls because the provider returned nothing. It is the structural
+	// identity of that condition: the headless exit decision reads this
+	// category instead of matching the notice wording, which is display text
+	// that may be reworded or translated. Monitoring only — deliberately absent
+	// from noticeReachesModel, so it cannot reach the model's context.
+	//
+	// Appended last on purpose. The value is persisted as an integer in the
+	// append-only journal, so appending is safe and renumbering an existing
+	// value would silently rewrite the meaning of every record already written.
+	NoticeCategoryProviderEmpty
 )
 
 // noticeReachesModel is the enumerated allowlist of notice categories
@@ -337,6 +364,10 @@ type EditRecord struct {
 	ModeBefore os.FileMode `json:"mode_before,omitempty"`
 	BlobBefore string      `json:"blob_before,omitempty"`
 	BlobAfter  string      `json:"blob_after,omitempty"`
+	// Excluded marks a record for a path excluded from shadow storage
+	// (P0-4). Blobs are never stored for excluded paths; /undo refuses
+	// with ErrUndoExcluded instead of deleting the file.
+	Excluded bool `json:"excluded,omitempty"`
 }
 
 // ToolCall carries both the request and its outcome.

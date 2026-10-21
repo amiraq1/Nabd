@@ -10,6 +10,7 @@ import (
 	"nabd/internal/config"
 	"nabd/internal/event"
 	"nabd/internal/ignorefile"
+	"nabd/internal/mcp"
 	"nabd/internal/payload"
 	"nabd/internal/perm"
 	"nabd/internal/provider"
@@ -34,6 +35,7 @@ type interactiveSession struct {
 	pol  *perm.Policy
 	ap   *ui.Approver
 	loop *agent.Loop
+	mcp  *mcp.Manager // nil when MCP is disabled; closed with the session
 	// ctx is the session lifecycle context: background work started by
 	// slash commands (e.g. /compact summarisation) derives from it so it
 	// is cancelled when the session ends instead of running on
@@ -56,7 +58,7 @@ func loadSessionSkills(root *tools.Root) ([]skill.Skill, []skill.Diagnostic, err
 // open a journal or wire a sink: the journal and the view are the caller's
 // concern, and they are the only things the two entry points legitimately
 // differ on.
-func newInteractiveSession(prov provider.Provider) (*interactiveSession, error) {
+func newInteractiveSession(prov provider.Provider, noMCP bool) (*interactiveSession, error) {
 	root, err := tools.NewRoot("")
 	if err != nil {
 		return nil, err
@@ -76,8 +78,13 @@ func newInteractiveSession(prov provider.Provider) (*interactiveSession, error) 
 	reg.SetSkillIndex(func() []skill.Skill { return allSkills })
 	pol := perm.New(reg)
 	wirePathRule(root, reg, pol)
+	g := &gate{p: pol}
+	mcpMgr, err := wireMCPForSession(noMCP, root.Dir(), reg, pol, g)
+	if err != nil {
+		return nil, err
+	}
 	ap := ui.NewApprover()
-	loop := newSessionLoop(prov, reg, gate{pol}, ap)
+	loop := newSessionLoop(prov, reg, *g, ap)
 	promptSkills, promptDiag := skill.FormatForPrompt(allSkills)
 	for _, d := range promptDiag {
 		fmt.Fprintln(os.Stderr, d.String())
@@ -92,14 +99,18 @@ func newInteractiveSession(prov provider.Provider) (*interactiveSession, error) 
 	}
 	loop.SkillInventory = skill.JournalRecords(allSkills)
 	ctx, cancel := context.WithCancel(context.Background())
-	return &interactiveSession{root: root, reg: reg, pol: pol, ap: ap, loop: loop, ctx: ctx, cancel: cancel}, nil
+	return &interactiveSession{root: root, reg: reg, pol: pol, ap: ap, loop: loop, mcp: mcpMgr, ctx: ctx, cancel: cancel}, nil
 }
 
 // Close ends the session lifecycle, cancelling background work such as an
-// in-flight /compact summarisation. Safe to call more than once.
+// in-flight /compact summarisation, and shutting down MCP servers. Safe to
+// call more than once.
 func (s *interactiveSession) Close() {
 	if s.cancel != nil {
 		s.cancel()
+	}
+	if s.mcp != nil {
+		_ = s.mcp.Close()
 	}
 }
 

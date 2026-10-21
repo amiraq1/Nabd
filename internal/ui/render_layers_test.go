@@ -98,6 +98,7 @@ func TestRenderTextLayerDeclarations(t *testing.T) {
 	want := []string{
 		"AllowedUISymbols",
 		"DefaultWidth",
+		"agentText",
 		"bad",
 		"block",
 		"bold",
@@ -167,6 +168,9 @@ func TestRenderEventLayerDeclarations(t *testing.T) {
 		"argSummary",
 		"callLine",
 		"flushJoin",
+		"sanitizeEventText",
+		"sanitizeStreamText",
+		"sanitizeToolOutput",
 		"toolEnd",
 	}
 
