@@ -125,3 +125,42 @@ func TestDecisionFailClosed(t *testing.T) {
 		t.Fatalf("MarshalText(AllowOnce) = %q, %v; want once, nil", b, err)
 	}
 }
+
+// TestNoticeCategoryValuesAreAppendOnly pins the numeric value of every notice
+// category. The category is persisted as an integer in the append-only journal
+// ("notice_category"), so appending a new value at the end is safe while
+// renumbering an existing one silently rewrites the meaning of every record
+// already on disk. This is the guard for that rule.
+func TestNoticeCategoryValuesAreAppendOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		got  event.NoticeCategory
+		want int
+	}{
+		{"Unknown", event.NoticeCategoryUnknown, 0},
+		{"UndoResult", event.NoticeCategoryUndoResult, 1},
+		{"LoopLimit", event.NoticeCategoryLoopLimit, 2},
+		{"Calibration", event.NoticeCategoryCalibration, 3},
+		{"ContextPressure", event.NoticeCategoryContextPressure, 4},
+		{"RateLimit", event.NoticeCategoryRateLimit, 5},
+		{"LengthLimit", event.NoticeCategoryLengthLimit, 6},
+		{"TPM", event.NoticeCategoryTPM, 7},
+		{"Display", event.NoticeCategoryDisplay, 8},
+		{"ProviderEmpty", event.NoticeCategoryProviderEmpty, 9},
+	} {
+		if int(tc.got) != tc.want {
+			t.Errorf("NoticeCategory%s = %d, want %d: existing category values are persisted in the journal and must not be renumbered",
+				tc.name, int(tc.got), tc.want)
+		}
+	}
+}
+
+// TestNoticeCategoryProviderEmptyIsNotModelFacing asserts the new category is
+// outside the model-facing allowlist. This is the static half of the isolation
+// guarantee; the behavioural half lives in the agent package, which asserts on
+// what Messages actually sends.
+func TestNoticeCategoryProviderEmptyIsNotModelFacing(t *testing.T) {
+	if event.NoticeAllowedForModel(event.NoticeCategoryProviderEmpty) {
+		t.Fatal("NoticeCategoryProviderEmpty is in the model-facing allowlist; a provider failure notice must not enter the model's context")
+	}
+}

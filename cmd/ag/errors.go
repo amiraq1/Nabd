@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"nabd/internal/config"
+	"nabd/internal/provider"
 	"nabd/internal/registry"
 )
 
@@ -37,6 +38,14 @@ const (
 	// error and stay on the ASCII baseline; the sentence lives here, at the
 	// single CLI language boundary (ADR-0002, decision 5).
 	ownerMismatchNotice = "%s: يملكه uid %d ولا يملكه %s — شغّل: chown %s %s"
+	// providerModelUnavailableArabic and providerFirstByteTimeoutArabic are the
+	// provider error wording. internal/provider keeps ASCII English baselines
+	// and renders through its language seam (SetModelUnavailableMessage /
+	// SetFirstByteTimeoutMessage); installProviderLanguage installs these at
+	// startup (ADR-0002 decision 4, provider leg). The values are
+	// byte-identical to what internal/provider held before the move.
+	providerModelUnavailableArabic = "الموديل %q غير متاح على هذا الخادم (%d)%s"
+	providerFirstByteTimeoutArabic = "الخادم لم يبدأ الردّ خلال 25 ثانية — جرّب NABD_MODEL آخر"
 )
 
 // ownerNotice carries the Arabic rendering of an ownership refusal while keeping
@@ -84,4 +93,15 @@ func loadConfig() error { return localizeOwnerMismatch(config.Load()) }
 func loadRegistry() (*registry.Registry, error) {
 	reg, err := registry.Load()
 	return reg, localizeOwnerMismatch(err)
+}
+
+// installProviderLanguage installs the Arabic provider-error wording into the
+// provider package's language seam. It is called once at the top of main,
+// before any CLI path can stream a provider answer, so no surface — feed,
+// headless stderr, journal, router details — can observe the ASCII baseline.
+func installProviderLanguage() {
+	provider.SetModelUnavailableMessage(func(model string, status int, suffix string) string {
+		return fmt.Sprintf(providerModelUnavailableArabic, model, status, suffix)
+	})
+	provider.SetFirstByteTimeoutMessage(providerFirstByteTimeoutArabic)
 }

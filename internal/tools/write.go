@@ -196,6 +196,13 @@ func (w writeFile) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 	if err != nil {
 		return "", false, err
 	}
+	// P0-3: refuse writes to .git/.ag. Unlike edit_file (which uses
+	// pathEditRefused and thus also refuses gitignored paths), write_file
+	// must still allow excluded build paths like dist/ — so we check only
+	// the protected components here.
+	if blocked, comp := perm.IsProtectedPath(rel); blocked {
+		return "", false, fmt.Errorf("write refused: %q is inside %s, which is never writable by tools", rel, comp)
+	}
 	before, after, err := commit(ctx, w.root, w.sh, w.log, w.reg, "write_file", rel, []byte(content))
 	if err != nil {
 		return "", false, err

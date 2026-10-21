@@ -3,18 +3,45 @@ package provider
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"unicode"
 )
 
-// Golden constants: the two user-facing formats exactly as they stood on master
-// before the typed error replaced them. They are the originals, not a
-// paraphrase. After this change merges there is no longer any in-tree source to
-// extract them from, so updating them must be as deliberate as updating any
+// Golden constants: the two user-facing formats exactly as the typed error
+// shipped them (#227, PR #234), before the provider leg of ADR-0002 decision 4
+// moved the wording out of this package. They are the originals, not a
+// paraphrase: the provider now renders through its language seam with an ASCII
+// English default, and TestModelUnavailableRendersBothSitesByteIdentical
+// installs these historical formats through that seam to pin the call-site
+// shapes byte for byte. Updating them must be as deliberate as updating any
 // other golden value.
 const (
 	origAnthropicFmt = "الموديل %q غير متاح على هذا الخادم (%d)"
 	origOpenAIFmt    = "الموديل %q غير متاح على هذا الخادم (%d).\n%s"
 )
+
+// testASCIIOnly reports whether s contains only ASCII runes.
+func testASCIIOnly(s string) bool {
+	for _, r := range s {
+		if r > unicode.MaxASCII {
+			return false
+		}
+	}
+	return true
+}
+
+// The provider package carries no user-facing Arabic of its own: the
+// model-unavailable message renders from an ASCII English baseline until the
+// CLI installs the Arabic catalog through the language seam at startup
+// (ADR-0002 decision 4). A library caller, or any path that never runs
+// cmd/ag, must see the explicit baseline rather than half of a translation.
+func TestModelUnavailableRenderingDefaultsToASCIIBaseline(t *testing.T) {
+	got := (&modelUnavailableError{Model: "m", Status: 404, Suffix: ".\nlookup"}).Error()
+	if !testASCIIOnly(got) {
+		t.Fatalf("model-unavailable default rendering is not ASCII: %q", got)
+	}
+}
 
 // A model-unavailable answer (404/410) is classified by TYPE. Before this, the
 // retry decision read the wording of the message with strings.Contains, so
@@ -44,10 +71,65 @@ func TestModelUnavailableRetryDecisionIgnoresWording(t *testing.T) {
 	}
 }
 
+// historicalArabicRendering reproduces the historical runtime template
+// exactly: the two verbs render model and status, and the suffix is appended
+// verbatim (the empty, ".\n", and ".\n"+hint shapes all derive from it).
+func historicalArabicRendering(model string, status int, suffix string) string {
+	return fmt.Sprintf(origAnthropicFmt, model, status) + suffix
+}
+
+// Error() must render through the installed seam, not through a copy of the
+// wording: the cmd/ag catalog test pins what the CLI installs, and this pins
+// that Error() consults whatever has been installed.
+func TestModelUnavailableErrorReadsTheSeam(t *testing.T) {
+	SetModelUnavailableMessage(func(model string, status int, suffix string) string {
+		return fmt.Sprintf("seam(%s|%d|%s)", model, status, suffix)
+	})
+	t.Cleanup(func() { SetModelUnavailableMessage(defaultModelUnavailableRendering) })
+
+	got := (&modelUnavailableError{Model: "m", Status: 410, Suffix: "!s"}).Error()
+	if want := "seam(m|410|!s)"; got != want {
+		t.Fatalf("Error() must read the seam:\n got %q\nwant %q", got, want)
+	}
+	// The pre-rendered Message branch bypasses the seam by design.
+	if got := (&modelUnavailableError{Model: "m", Status: 400, Message: "raw body"}).Error(); got != "raw body" {
+		t.Fatalf("pre-rendered Message must bypass the seam, got %q", got)
+	}
+}
+
+// Router.classifyError falls back to matching a route error's rendered text
+// against isModelNotFound for errors that are not *httpError, and a
+// modelUnavailableError is exactly such an error. Neither the ASCII baseline
+// nor the installed Arabic catalog may read as a model-not-found body, or a
+// wording edit would silently move the refusal onto the router's 400 text
+// path.
+func TestModelUnavailableTextNeverReadsAsModelNotFound(t *testing.T) {
+	renderings := map[string]func(model string, status int, suffix string) string{
+		"ascii baseline":   defaultModelUnavailableRendering,
+		"installed arabic": historicalArabicRendering,
+	}
+	suffix := ".\n" + modelLookupHint("openai", "gpt-x")
+	for name, render := range renderings {
+		for _, status := range []int{404, 410} {
+			text := render("gpt-x", status, suffix)
+			if isModelNotFound(400, text) {
+				t.Fatalf("%s: rendered text reads as a model-not-found body: %q", name, text)
+			}
+			if strings.Contains(text, "400") {
+				t.Fatalf("%s: rendered text contains \"400\" and would take the router's text 400 branch: %q", name, text)
+			}
+		}
+	}
+}
+
 // Neither user-facing message may change by a byte, including the body-based
 // OpenAI heuristic and the empty-hint shape the status branch could in
-// principle produce.
+// principle produce. The historical formats are installed through the same
+// seam the CLI uses, so this also pins that the seam reproduces them exactly.
 func TestModelUnavailableRendersBothSitesByteIdentical(t *testing.T) {
+	SetModelUnavailableMessage(historicalArabicRendering)
+	t.Cleanup(func() { SetModelUnavailableMessage(defaultModelUnavailableRendering) })
+
 	hint := modelLookupHint("openai", "gpt-x")
 
 	wantHeuristic := "model not found\n" + hint

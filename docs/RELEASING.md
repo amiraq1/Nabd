@@ -47,7 +47,7 @@ of repository ownership.
 ```sh
 test -z "$(gofmt -l .)"
 go vet ./...
-staticcheck ./...          # v0.8.1
+staticcheck ./...          # v0.8.2
 go test ./... -race -count=1
 TMPDIR=${TMPDIR:-$(mktemp -d)}
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$TMPDIR/nabd-linux-amd64" ./cmd/ag
@@ -80,12 +80,12 @@ git push origin "$VERSION"
 ```
 
 Pushing `v*` runs `.github/workflows/release.yml`, which runs
-`goreleaser release --clean`. The pipeline publishes five static, trimpath,
-ldflags-stamped `nabd` binaries, one distinct Syft SBOM per binary,
-`checksums.txt`, and the checksum signature and certificate. SBOMs are included
-in `checksums.txt`; signing that checksum transitively covers every listed
-binary and SBOM. The workflow also attaches a build-provenance attestation to
-`dist/checksums.txt`.
+`goreleaser release --clean`. The pipeline publishes one static, trimpath,
+ldflags-stamped `nabd` binary for the only release target, `android/arm64`,
+its Syft SBOM, `checksums.txt`, and the checksum signature and certificate.
+The SBOM is included in `checksums.txt`; signing that checksum transitively
+covers the binary and the SBOM. The workflow also attaches a build-provenance
+attestation to `dist/checksums.txt`.
 
 ## 4. Verify and smoke the artifacts
 
