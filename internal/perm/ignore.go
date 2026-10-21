@@ -97,10 +97,39 @@ func (p *Policy) matchIgnore(rel string) (matched bool, pattern, cleanPath strin
 // YOLO is deliberately not consulted. YOLO is consent to change the world
 // without being asked; it is not a licence to read what the project declared
 // excluded, and a containment boundary that a convenience flag silently lifts is
+// IsProtectedPath reports whether rel contains a .git or .ag path component.
+// Used by write_file to refuse writes to protected directories even though
+// CheckEdit (via pathEditRefused) would also refuse gitignored paths that
+// write_file must still allow (e.g. dist/).
+func IsProtectedPath(rel string) (bool, string) {
+	return protectedComponent(rel)
+}
+
+// protectedComponent reports whether rel contains a .git or .ag path
+// component. rel is already root-relative (callers pass paths resolved
+// against the project root), so a .git/.ag component here means it is
+// INSIDE the project — not a parent directory named .git/.ag (P0-2).
+// Comparison is case-insensitive: .GIT must not bypass the check.
+func protectedComponent(rel string) (bool, string) {
+	slashed := strings.ReplaceAll(rel, "\\", "/")
+	for _, comp := range strings.Split(slashed, "/") {
+		switch strings.ToLower(comp) {
+		case ".git":
+			return true, ".git"
+		case ".ag":
+			return true, ".ag"
+		}
+	}
+	return false, ""
+}
+
 // not a boundary. Ask is deliberately not returned either: a permission modal
 // exists to approve a change, and this refusal is about disclosure, so the
 // answer is a message the caller can act on rather than a prompt to click past.
 func (p *Policy) CheckRead(rel string) (Verdict, string) {
+	if blocked, comp := protectedComponent(rel); blocked {
+		return Deny, fmt.Sprintf("%q is inside %s, which is never readable by tools (P0-2)", rel, comp)
+	}
 	matched, pattern, slashed := p.matchIgnore(rel)
 	if !matched {
 		return Allow, ""
@@ -123,6 +152,9 @@ func (p *Policy) CheckRead(rel string) (Verdict, string) {
 // .gitignore. allow-reads is an override for reads, not a licence to edit, and
 // mutating tools are denied in that mode anyway.
 func (p *Policy) CheckEdit(rel string) (Verdict, string) {
+	if blocked, comp := protectedComponent(rel); blocked {
+		return Deny, fmt.Sprintf("%q is inside %s, which is never writable by tools (P0-3)", rel, comp)
+	}
 	matched, pattern, slashed := p.matchIgnore(rel)
 	if !matched {
 		return Allow, ""
