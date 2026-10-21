@@ -12,6 +12,7 @@ permissions:
 jobs:
   module-tidiness:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -23,6 +24,7 @@ jobs:
 
   vulnerability-scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -32,6 +34,9 @@ jobs:
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           "$(go env GOPATH)/bin/govulncheck" ./...
+      - name: Run govulncheck (nested bubbles module)
+        working-directory: third_party/bubbles
+        run: '"$(go env GOPATH)/bin/govulncheck" ./...'
 
   build:
     runs-on: ubuntu-latest
