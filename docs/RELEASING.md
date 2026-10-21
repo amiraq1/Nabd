@@ -47,7 +47,7 @@ of repository ownership.
 ```sh
 test -z "$(gofmt -l .)"
 go vet ./...
-staticcheck ./...          # v0.8.1
+staticcheck ./...          # v0.8.2
 go test ./... -race -count=1
 TMPDIR=${TMPDIR:-$(mktemp -d)}
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$TMPDIR/nabd-linux-amd64" ./cmd/ag

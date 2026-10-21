@@ -88,3 +88,20 @@
 4. **نطاق الموجة الأولى:** أخطاء المزوّد (`modelUnavailableError` وما حولها) مسار منفصل عن 3ج، ويبدأ بإصلاح #227.
 5. **ملفات `owner_unix.go`:** `internal/config/owner_unix.go` و`internal/registry/owner_unix.go` يتبعان النمط ب (خطأ بنوع محدد في الطبقة الدنيا، والنص العربي عند الحدود في `cmd/ag/errors.go`).
 6. **مصير الحارس بعد 3ج:** يبقى الحارس ratchet دائمًا، وينتقل إلى فحص السلاسل الحرفية فقط (عبر `go/parser` و`go/ast`، بدون عدّ التعليقات)، لأن #223 يخص ما يراه المستخدم. شرط إغلاق #223: أن تقتصر القائمة على ملفات الكتالوج المعتمدة، لا أن تفرغ.
+
+## ملحق 2026-10-18: المسار المزوّد — آخر نصّ عربي خارج الكتالوجات
+
+أُغلق #227 في PR #234 (تأطير خطأ عدم توفّر الموديل بالنوع لا بالنص)، ثم نُفِّذ المسار الذي خصّصه القرار 4:
+
+* `internal/provider` صار بلا أي literal عربي: نصّ مهلة أول بايت (كان مكررًا حرفيًا في `anthropic.go` و`openai.go`) وصيغة `modelUnavailableError` أصبحا أساسًا ASCII إنجليزيًا (`defaultModelUnavailableFormat`، `defaultFirstByteTimeoutMessage`) ومنفذ تثبيت (`SetModelUnavailableMessage`، `SetFirstByteTimeoutMessage`) في `internal/provider/messages.go`.
+* `cmd/ag/errors.go` — الكتالوج الوحيد — يحمل النصّ العربي حرفيًا (`providerModelUnavailableArabic`، `providerFirstByteTimeoutArabic`)، و`installProviderLanguage` يثبّته في أعلى `main()` قبل `flag.Parse`، فلا ترى أي واجهة CLI الأساس الإنجليزي.
+
+**لماذا التثبيت داخل المزوّد لا الاستبدال عند حدّ العرض** (خلافًا لبقية دفعات 3ج):
+
+* الرسالتان تُحوَّلان إلى نصّ **قبل** أي حدّ عرض: `RouterExhaustedError.Error()` يدمج نصّ فشل كل مسار في رسالته، و`RunErrorEvent` يدوّن `err.Error()` في السجل. تثبيت الصياغة عند نقطة الصياغة نفسها هو ما يُبقي التغذية وstderr في headless والسجل وتفاصيل الراوتر مطابقة بايتيًا للصيغ السابقة، وقد ثُبّتت ذهبيًا عبر المنفذ نفسه (`TestModelUnavailableRendersBothSitesByteIdentical`) وعبر كتالوج الـCLI (`TestProviderLanguageCatalogIsInstalledByteIdentical`).
+* مفردات `ErrorCode` المغلقة لا تحمل الحقول الديناميكية للرسالة (الموديل، الحالة، اللاحقة)، وإعادة البناء عند العرض كانت ستغيّر المتن المدوّن أو تتطلّب حقل حدث جديدًا — وهو ما يتجاوز نطاق إغلاق #223.
+
+**العواقب:**
+
+* مستدعٍ يتضمّن `internal/provider` دون المرور بـ`cmd/ag` (مكتبة أو اختبار) يرى الأساس الإنجليزي — سلوك صريح مقصود (القرار 3)، مثبَّت باختبارات.
+* لم يبق نصّ عربي مكتوب يدويًا خارج الكتالوجات المعتمدة؛ حارس 3أ يقصر قائمته على ملفات الكتالوج هذه ويفرض الشرط آليًا عبر `TestArabicLiteralAllowlistIsRestrictedToSanctionedCatalogFiles` — وهو شرط إغلاق #223 في القرار 6.

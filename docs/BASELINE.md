@@ -88,7 +88,7 @@ the expected windows platform constraint above.
 | test_threat_model_freshness | PASS | required | `scripts/test-threat-model-freshness.sh` exit=0 in 4.3 s |
 | check_security_invariants_rg_subcheck | UNAVAILABLE | attempted | ripgrep not installed on this host: the exec-coverage sub-check of check-security-invariants.sh scanned zero files and passed vacuously — recorded so a vacuous pass is never mistaken for coverage |
 | check_threat_model_freshness | PASS | required | `scripts/check-threat-model-freshness.sh HEAD~1` exit=0 in 0.4 s (proves the gate executes; full PR-base usage is in ci mode) |
-| staticcheck | UNAVAILABLE | optional | not installed on this host; ci installs it pinned (staticcheck v0.8.1) |
+| staticcheck | UNAVAILABLE | optional | not installed on this host; ci installs it pinned (staticcheck v0.8.2) |
 | govulncheck | UNAVAILABLE | optional | not installed on this host; ci installs it pinned (govulncheck v1.8.0) |
 | binary_artifact | PASS | attempted | `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o <tmp>/nabd_linux_amd64 ./cmd/ag`: 14,502,152 bytes, sha256 `e63f3bbb26acfc88292205725e365e7ed478e610a50b8fb38b797fb735529222` (identical across two captures — deterministic build) |
 | sbom | SKIPPED | attempted | SBOM generation exists in the release-dryrun CI job via anchore/sbom-action/download-syft; not reproduced here to avoid adding tooling outside the Hard Scope Gate |
