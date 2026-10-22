@@ -38,6 +38,31 @@ func TestBashRejectsNonStrictArgs(t *testing.T) {
 			raw:  `{"cmd":"true","cmd":"false"}`,
 			want: "duplicate key",
 		},
+		{
+			name: "trailing object",
+			raw:  `{"cmd":"true"}{"cmd":"false"}`,
+			want: "unexpected trailing data",
+		},
+		{
+			name: "trailing primitive",
+			raw:  `{"cmd":"true"} 5`,
+			want: "unexpected trailing data",
+		},
+		{
+			name: "mixed-case duplicate key",
+			raw:  `{"cmd":"true","Cmd":"false"}`,
+			want: "duplicate key",
+		},
+		{
+			name: "leading whitespace duplicate key",
+			raw:  "  {\"cmd\":\"true\",\"cmd\":\"false\"}",
+			want: "duplicate key",
+		},
+		{
+			name: "nested duplicate key",
+			raw:  `{"cmd":"true","opts":{"a":1,"a":2}}`,
+			want: "duplicate key",
+		},
 	}
 
 	for _, tt := range tests {

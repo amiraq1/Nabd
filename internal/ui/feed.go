@@ -92,6 +92,9 @@ type Feed struct {
 	// Header info.
 	header string
 
+	// Derived during refresh; View must not copy the projector's full history.
+	welcomeBoundaryOnly bool
+
 	// Git status header tracking.
 	gitHeaderEnabled bool
 	gitBranch        string

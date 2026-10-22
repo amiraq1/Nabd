@@ -93,6 +93,12 @@ func main() {
 	// config.Load() into a private map — never merged into os.Environ, so no
 	// provider key ever reaches the process-global environment or any child
 	// process spawned by the bash tool.
+	//
+	// Install the provider-error language catalog before any code path can
+	// stream a provider answer (ADR-0002 decision 4, provider leg): a startup
+	// decision, not a per-surface one, so no CLI path can observe the ASCII
+	// baseline.
+	installProviderLanguage()
 	replay := flag.String("replay", "", "replay a session.jsonl and exit")
 	speed := flag.Float64("speed", 1, "replay multiplier; 0 is instant")
 	sessDir := flag.String("dir", "", "session directory (default ~/.ag/sessions)")

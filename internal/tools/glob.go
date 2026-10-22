@@ -41,7 +41,15 @@ func (t globFiles) Run(ctx context.Context, raw json.RawMessage) (string, bool, 
 		Limit   int    `json:"limit"`
 		Offset  int    `json:"offset"`
 	}
-	if err := json.Unmarshal(raw, &a); err != nil {
+	// One decode point for the call that runs: repair may already have dropped a
+	// key this schema does not declare (and recorded the drop), and whatever
+	// remains is decoded here, so the arguments that execute are the arguments
+	// the gate classified and the journal carries. A duplicate key, an
+	// undeclared field, data after the first value, or nesting past the ceiling
+	// is refused rather than silently reinterpreted — which is what
+	// json.Unmarshal did (last value wins for a duplicate; undeclared keys
+	// vanish). See V14 in docs/THREAT_MODEL.md.
+	if err := decodeStrict(raw, &a); err != nil {
 		return "", false, fmt.Errorf("invalid args: %w", err)
 	}
 	pat := strings.TrimSpace(a.Pattern)

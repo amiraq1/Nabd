@@ -380,3 +380,27 @@ func TestMCPToolRegistered(t *testing.T) {
 		t.Fatal("toolvocab.Guarded(mcp_tool) must be true")
 	}
 }
+
+// TestMCPArgumentsStrictBoundary pins the decoder for the one declared field
+// that is forwarded unexamined: `args` reaches the server as raw JSON, so a key
+// repeated inside it would be collapsed there with the last value winning. The
+// repair layer does not descend into a declared field, so this is the only net.
+func TestMCPArgumentsStrictBoundary(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{"duplicate inside args", `{"server":"s","tool":"t","args":{"x":1,"x":2}}`, "duplicate key"},
+		{"mixed-case duplicate top-level key", `{"server":"s","tool":"t","Server":"s2"}`, "duplicate key"},
+		{"duplicate nested two levels down", `{"server":"s","tool":"t","args":{"a":{"b":1,"b":2}}}`, "duplicate key"},
+		{"trailing data", `{"server":"s","tool":"t","args":{}}{}`, "unexpected trailing data"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseMCPArgs(json.RawMessage(tc.raw)); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("parseMCPArgs(%q) = %v, want an error containing %q", tc.raw, err, tc.want)
+			}
+		})
+	}
+}
