@@ -1503,6 +1503,15 @@ before updating the relevant claim. No P0 severity is assigned by this list.
   its historical "unchanged" statement does not describe the v14 result.
 
 
+2026-10-22, PR checklist identity handling (documentation-only security review):
+- Documented that the checklist gate accepts the official Dependabot app author
+  (`dependabot[bot]` / `app/dependabot`) while retaining the separate
+  `GITHUB_ACTOR=dependabot[bot]` check; this changes CI identity recognition,
+  not product permissions, storage, transport, or threat boundaries.
+- No claim status, guarantee, residual risk, or operator boundary changed.
+- The corresponding regression test remains `TestPRChecklistGateDependabotPath`
+  (and its source/script assertions); this entry records the guard's scope only.
+
 ### Superseded provenance — v13 editorial revision only
 
 The following record describes only the earlier editorial step. Its "not

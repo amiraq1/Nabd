@@ -12,7 +12,7 @@ set -euo pipefail
 # explicit, bounded trust properties:
 #
 #   1. Event-level identity verification:
-#      - PR_AUTHOR_LOGIN must be exactly "dependabot[bot]" (the pull request author
+#      - PR_AUTHOR_LOGIN must be exactly "dependabot[bot]" or "app/dependabot" (the pull request author
 #        from github.event.pull_request.user.login).
 #      - GITHUB_ACTOR must be exactly "dependabot[bot]" (the actor triggering the
 #        current event from github.actor).
@@ -71,7 +71,7 @@ is_dependabot_allowed_file() {
   esac
 }
 
-if [[ "${PR_AUTHOR_LOGIN:-}" == "dependabot[bot]" && "${GITHUB_ACTOR:-}" == "dependabot[bot]" ]]; then
+if [[ ("${PR_AUTHOR_LOGIN:-}" == "dependabot[bot]" || "${PR_AUTHOR_LOGIN:-}" == "app/dependabot") && "${GITHUB_ACTOR:-}" == "dependabot[bot]" ]]; then
   git fetch --no-tags --depth=1 origin "$GITHUB_BASE_REF" 2>/dev/null || true
   dep_base="origin/${GITHUB_BASE_REF}"
   git rev-parse --verify -q "$dep_base" >/dev/null || {
