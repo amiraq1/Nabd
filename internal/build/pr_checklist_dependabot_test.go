@@ -252,8 +252,8 @@ func TestPRChecklistGateDependabotAllowedPrefixesDocumented(t *testing.T) {
 	checklist := readRepoFile(t, "scripts/check-pr-security-checklist.sh")
 
 	// Both identities must be asserted exactly
-	if !strings.Contains(checklist, `"${PR_AUTHOR_LOGIN:-}" == "dependabot[bot]"`) {
-		t.Error(`checklist gate must check exact PR author identity: "${PR_AUTHOR_LOGIN:-}" == "dependabot[bot]"`)
+	if !strings.Contains(checklist, `"${PR_AUTHOR_LOGIN:-}" == "dependabot[bot]"`) || !strings.Contains(checklist, `"${PR_AUTHOR_LOGIN:-}" == "app/dependabot"`) {
+		t.Error("checklist gate must allow only the exact Dependabot PR identities")
 	}
 	if !strings.Contains(checklist, `"${GITHUB_ACTOR:-}" == "dependabot[bot]"`) {
 		t.Error(`checklist gate must check exact actor identity: "${GITHUB_ACTOR:-}" == "dependabot[bot]"`)
