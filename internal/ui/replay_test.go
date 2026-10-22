@@ -13,6 +13,8 @@ import (
 // of text, flushed by the next non-text event. README promises the live and
 // replayed views go through the same render path; this pins it.
 func TestReplayCoalescesDeltasLikeChat(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
+	resetRTLModeCache()
 	evs := []event.Event{
 		{Seq: 1, Type: event.RunStart, Text: "x"},
 		{Seq: 2, Parent: 1, Type: event.TextDelta, Text: "أقرأ "},

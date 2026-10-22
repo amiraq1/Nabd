@@ -20,6 +20,7 @@
 
 # Tooling
 .commandcode/
+.idea/
 
 # Agent instructions are auto-loaded from the repository root; stale copies can direct new agents to obsolete plans.
 PROJECT.md

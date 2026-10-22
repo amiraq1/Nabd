@@ -98,6 +98,7 @@ func TestRenderTextLayerDeclarations(t *testing.T) {
 	want := []string{
 		"AllowedUISymbols",
 		"DefaultWidth",
+		"agentText",
 		"bad",
 		"block",
 		"bold",

@@ -16,10 +16,10 @@ import (
 // PR 1 implements exactly these steps: bidi levels (UAX #9 through rule L2),
 // cluster-safe rule L3 (grapheme clusters are the only reordering unit; raw
 // runes are never reversed), and rule L4 glyph mirroring. Arabic cursive
-// shaping is NOT implemented. A ShapingMode decision — after measuring Termux
-// rendering to avoid double shaping — is required before Layout is wired into
-// the feed, and PR 2 must not treat ReorderAndMirror as a complete Arabic
-// solution. See provenance.md, "Arabic shaping gate for PR 2".
+// shaping is NOT implemented in Layout. Per the resolved decision (see
+// docs/termux-shaping-measurements.md), shaping is applied at the UI layer
+// (internal/ui/shaping.go) as an explicit policy, not as an implicit engine
+// side effect. See provenance.md, "Arabic shaping gate for PR 2".
 type Mode uint8
 
 const (
@@ -72,8 +72,10 @@ const (
 	RTL
 )
 
-// Policy controls one Layout call. Shaping is deliberately absent: it will be
-// a separate policy after the ShapingMode decision (see provenance.md).
+// Policy controls one Layout call. Shaping is deliberately absent here: it is
+// applied at the UI layer via shapeProseRuns (see docs/termux-shaping-
+// measurements.md and docs/rtl-step1-shape-after-markdown.md for the
+// decisions). The engine's shaping option remains internal/test-only.
 type Policy struct {
 	Mode Mode
 	Base Direction
@@ -118,34 +120,6 @@ type classifiedCluster struct {
 	SpanID  int
 }
 
-// Layout runs the display pipeline over already-sanitized logical text with
-// caller-supplied semantic spans:
-//
-//	spans -> provisional logical wrap -> grapheme clusters ->
-//	canonical bracket pairing (bidi engine) -> levels -> L1/L2 at cluster
-//	granularity -> L3 (clusters never split) -> mirroring ->
-//	final width measurement
-//
-// Spans must be:
-//   - sorted ascending by Start;
-//   - non-overlapping;
-//   - non-empty: Start < End;
-//   - inside [0, len(logical)];
-//   - aligned to UTF-8 rune boundaries and extended grapheme-cluster
-//     boundaries.
-//
-// Any violation returns an error matching ErrInvalidSpans, never a panic.
-// Layout never modifies logical or spans.
-//
-// A nil or empty span slice means the whole text is prose with StyleID 0.
-// Gaps between spans are prose with StyleID 0 and are breakable; every span
-// is one atom (its clusters are never merged with neighbours for wrapping or
-// attribution, even when the next span has the same Kind), and spans with
-// Kind != Prose additionally keep an even, LTR-island embedding level. Spans
-// covering whitespace are allowed when a caller (the Markdown layer in PR 2)
-// emits them explicitly. Binding "\n" separates lines; each line is an
-// independent paragraph. The returned clusters carry absolute source ranges
-// into logical.
 // layoutOptions controls internal unexported features of Layout.
 type layoutOptions struct {
 	arabicShaping bool

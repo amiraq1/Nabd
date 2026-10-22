@@ -88,6 +88,11 @@ type Policy struct {
 	granted map[string]bool
 	yolo    bool
 	mode    Mode
+	// yoloExempt names tools that YOLO must never auto-approve, even when
+	// their class would otherwise allow it. MCP tools are exempt by
+	// construction (the adapter prompts for write/execute itself), and this
+	// is the structural backstop in the policy itself (ADR-0003 §7).
+	yoloExempt map[string]bool
 	// ignored is the session ignore rule (see ignore.go). It is part of the
 	// policy, not of a tool: the same patterns must answer for the picker, for
 	// read_file and for grep.
@@ -95,7 +100,18 @@ type Policy struct {
 }
 
 func New(cls Classifier) *Policy {
-	return &Policy{cls: cls, granted: map[string]bool{}}
+	return &Policy{cls: cls, granted: map[string]bool{}, yoloExempt: map[string]bool{}}
+}
+
+// SetYOLOExempt marks tools that YOLO must never auto-approve. Exemption is
+// structural: it holds even when the tool's class would otherwise let YOLO
+// through, and it is independent of any per-tool approval state.
+func (p *Policy) SetYOLOExempt(tools ...string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, t := range tools {
+		p.yoloExempt[t] = true
+	}
 }
 
 // SetMode sets the permission policy the session runs under. It is set by the
@@ -182,6 +198,12 @@ func (p *Policy) CheckReason(tool string) (Verdict, event.PermissionReason, stri
 		return Deny, event.PermissionReasonPolicyDenied, "denied by policy"
 	}
 	if yolo && class == Mutating {
+		p.mu.Lock()
+		exempt := p.yoloExempt[tool]
+		p.mu.Unlock()
+		if exempt {
+			return Ask, event.PermissionReasonRequired, "permission required"
+		}
 		return Allow, "", ""
 	}
 	return Ask, event.PermissionReasonRequired, "permission required"

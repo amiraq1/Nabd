@@ -10,6 +10,15 @@ import (
 var (
 	ErrUndoConflictMissing = errors.New("target file is missing; will not overwrite your deletion")
 	ErrUndoConflictChanged = errors.New("changed after the agent wrote it; will not overwrite your work")
+	// ErrUndoBeforeMissing is the V16 fail-closed refusal: the record says the
+	// file existed (it carries a before-hash) but the content reference needed
+	// to restore it is absent. Deleting the file there would destroy exactly
+	// the content the record says was replaced.
+	ErrUndoBeforeMissing = errors.New("before-content reference is missing for an existing file; refusing to delete it")
+	// ErrUndoExcluded is the P0-4 refusal: excluded paths were never stored in
+	// shadow; refusing is safer than deleting the user's file or attempting
+	// restoration from non-existent shadow blobs.
+	ErrUndoExcluded = errors.New("excluded path was never stored in shadow; cannot undo")
 )
 
 // UndoResult is one attempted rewind, in the order attempted.
@@ -46,11 +55,32 @@ func (r *Registry) PersistedUndo(recs []*event.EditRecord, n int) []UndoResult {
 // rewindRecord restores one persisted record: verify the file still matches
 // HashAfter, then put BlobBefore back through the shadow.
 func (r *Registry) rewindRecord(rec *event.EditRecord) UndoResult {
+	// V16: an existing file with no before-content reference is fail-closed.
+	// Check this before the Excluded marker so malformed records retain the
+	// more specific missing-before diagnostic.
+	if rec.BlobBefore == "" && rec.HashBefore != "" {
+		return UndoResult{Rel: rec.Path, Note: ErrUndoBeforeMissing.Error()}
+	}
+	// P0-4: excluded records never have shadow content and must be refused
+	// before resolving the root or capturing the current file. This also keeps
+	// malformed/minimal registries from panicking while handling the record.
+	if rec.Excluded {
+		return UndoResult{Rel: rec.Path, Note: ErrUndoExcluded.Error()}
+	}
 	// D: Restore Only Through the Descriptor-Relative Path. relative is the
 	// filesystem authority; abs is metadata for the messages and the journal.
 	rel, abs, err := writePathFromRoot(r.root, rec.Path)
 	if err != nil {
 		return UndoResult{Rel: rec.Path, Note: err.Error()}
+	}
+	// P0-4: an excluded path was never stored in shadow. Refuse before the
+	// capture below, because captureFromRoot writes the current bytes to the
+	// shadow store and would persist exactly the content this path must never
+	// store, even though the rewind is about to be refused. The current path
+	// policy is authoritative; a record stamped Excluded for a path that is no
+	// longer excluded is handled below.
+	if r.pathGate != nil && r.pathGate.IsPathExcluded(rel) {
+		return UndoResult{Rel: rec.Path, Note: ErrUndoExcluded.Error()}
 	}
 	now, err := captureFromRoot(r.sh, r.root, rel, abs)
 	if err != nil {
@@ -72,7 +102,9 @@ func (r *Registry) rewindRecord(rec *event.EditRecord) UndoResult {
 	}
 
 	if rec.BlobBefore == "" {
-		// Creation: the "before" was absence.
+		// Creation: the "before" was absence. The V16 guard above already
+		// refused a record that claims the file existed without a content
+		// reference.
 		if err := removeFromRoot(r.root, rel, abs); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return UndoResult{Rel: rec.Path, Note: err.Error()}
 		}

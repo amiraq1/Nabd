@@ -724,13 +724,13 @@ func (l *Loop) streamTurn(ctx context.Context, ms []provider.Message) ([]provide
 		} else if (finishReason == "stop" || stop == "end_turn") && promptTokens == 0 && completionTokens == 0 {
 			_ = l.emit(event.Event{
 				Type:           event.Notice,
-				NoticeCategory: event.NoticeCategoryDisplay,
+				NoticeCategory: event.NoticeCategoryProviderEmpty,
 				Text:           "provider returned an empty response (upstream issue)",
 			})
 		} else {
 			_ = l.emit(event.Event{
 				Type:           event.Notice,
-				NoticeCategory: event.NoticeCategoryDisplay,
+				NoticeCategory: event.NoticeCategoryProviderEmpty,
 				Text:           "provider returned an empty response (upstream issue)",
 			})
 		}

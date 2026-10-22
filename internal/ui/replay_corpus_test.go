@@ -72,12 +72,13 @@ func runReplayInPTY(t *testing.T, binPath, journalPath string, envOverrides map[
 
 	// Pinned ambient environment
 	pinnedEnv := map[string]string{
-		"TERM":   "xterm-256color",
-		"HOME":   "/corpus/home",
-		"TZ":     "UTC",
-		"LANG":   "C.UTF-8",
-		"LC_ALL": "C.UTF-8",
-		"PATH":   os.Getenv("PATH"),
+		"TERM":     "xterm-256color",
+		"HOME":     "/corpus/home",
+		"TZ":       "UTC",
+		"LANG":     "C.UTF-8",
+		"LC_ALL":   "C.UTF-8",
+		"PATH":     os.Getenv("PATH"),
+		"NABD_RTL": "off",
 	}
 	for k, v := range envOverrides {
 		if v == "" {
@@ -152,6 +153,8 @@ func runReplayInPTY(t *testing.T, binPath, journalPath string, envOverrides map[
 // TestReplayCorpusGolden matches every corpus scenario against its committed golden text and sha256 index.
 // If UPDATE_GOLDEN=1 is set, it updates the golden files and index.
 func TestReplayCorpusGolden(t *testing.T) {
+	t.Setenv("NABD_RTL", "off")
+	resetRTLModeCache()
 	binPath := getOrBuildCorpusBinary(t)
 	corpusDir := "../../testdata/replay-corpus"
 

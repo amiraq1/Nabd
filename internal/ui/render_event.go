@@ -142,6 +142,23 @@ func RenderEvent(e event.Event, width int) string {
 		}
 		return dim.Render(fmt.Sprintf("⚑ %d skills · %d project", len(e.Skills), proj))
 
+	case event.EventMCPToolResult:
+		// MCP tool output is untrusted server content: show the call
+		// identity and a sanitized preview, never raw output.
+		if e.MCPResult == nil {
+			return ""
+		}
+		mr := e.MCPResult
+		status := "ok"
+		if mr.IsError {
+			status = "error"
+		}
+		out := sanitizeToolOutput(mr.Output)
+		if len(out) > 500 {
+			out = out[:500] + "…"
+		}
+		return dim.Render(fmt.Sprintf("⚙ mcp %s/%s · %s", mr.Server, mr.Tool, status)) + "\n" + out
+
 	case event.Rewind:
 		// A rewind is a branch point in the session tree. Hiding it makes
 		// replay show an unexplained jump. Reuses the RunStart separator.
@@ -267,7 +284,7 @@ func sanitizeStreamText(s string) string {
 func flushJoin(buf *string, e event.Event, width int) string {
 	var prints []string
 	if *buf != "" {
-		prints = append(prints, block(" ", sanitizeStreamText(*buf), width, lipgloss.NewStyle()))
+		prints = append(prints, renderAgentText(sanitizeStreamText(*buf), width))
 		*buf = ""
 	}
 	if s := RenderEvent(e, width); s != "" {

@@ -32,7 +32,7 @@ func TestConnectSecretNeverEntersTheJournal(t *testing.T) {
 	// Distinct canary secret string with unmistakable bytes.
 	const canarySecret = "sk-antigravity-canary-secret-never-leak-9988776655"
 
-	sess, err := newInteractiveSession(nil)
+	sess, err := newInteractiveSession(nil, true)
 	if err != nil {
 		t.Fatalf("newInteractiveSession: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestSessionProviderAndModelsCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sess, err := newInteractiveSession(nil)
+	sess, err := newInteractiveSession(nil, true)
 	if err != nil {
 		t.Fatalf("newInteractiveSession: %v", err)
 	}

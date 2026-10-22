@@ -43,10 +43,14 @@ and therefore use the same `renderItem` path.
 Unknown values fail closed to logical rendering. The selected mode is part of
 the per-card render-cache key.
 
-Arabic shaping is deliberately disabled. The adapter performs no joining-form
-conversion, Presentation Forms substitution, or GSUB. A later change may add
-an explicit shaping policy after Termux behavior is measured; it must not be
-an implicit side effect of BiDi layout.
+Arabic shaping is disabled inside the engine: the adapter performs no
+joining-form conversion, Presentation Forms substitution, or GSUB. Since the
+Termux measurements established the need (`docs/termux-shaping-measurements.md`),
+shaping is an explicit UI-layer policy applied to prose only, after inline
+Markdown parsing (`shapeProseRuns`, `internal/ui/shaping.go`; see
+`docs/rtl-step1-shape-after-markdown.md`). It is never an implicit side
+effect of BiDi layout, and LTR islands (code, paths, URLs, commands) are
+never shaped.
 
 ## Unchanged areas
 

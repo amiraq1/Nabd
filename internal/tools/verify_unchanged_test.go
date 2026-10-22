@@ -31,7 +31,7 @@ func TestVerifyUnchanged(t *testing.T) {
 	}
 
 	// Unmodified: passes.
-	if err := verifyUnchanged(sh, root, "doc.txt", p, before); err != nil {
+	if err := verifyUnchanged(sh, root, "doc.txt", p, before, false); err != nil {
 		t.Fatalf("unmodified file failed verification: %v", err)
 	}
 
@@ -39,7 +39,7 @@ func TestVerifyUnchanged(t *testing.T) {
 	if err := os.WriteFile(p, []byte("v2-external"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyUnchanged(sh, root, "doc.txt", p, before); err == nil {
+	if err := verifyUnchanged(sh, root, "doc.txt", p, before, false); err == nil {
 		t.Fatal("expected verification to fail after external modification")
 	}
 
@@ -54,7 +54,7 @@ func TestVerifyUnchanged(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "new.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := verifyUnchanged(sh, root, "new.txt", filepath.Join(dir, "new.txt"), absentBefore); err == nil {
+	if err := verifyUnchanged(sh, root, "new.txt", filepath.Join(dir, "new.txt"), absentBefore, false); err == nil {
 		t.Fatal("expected verification to fail for concurrently created file")
 	}
 }

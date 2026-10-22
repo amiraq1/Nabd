@@ -76,6 +76,7 @@ func TestPRChecklistGateScopesThreatModelClaim(t *testing.T) {
 	for _, path := range []string{
 		"internal/agent/fence.go",
 		"internal/config/",
+		"internal/mcp/",
 		"internal/perm/",
 		"internal/pathindex/",
 		"internal/provider/",
