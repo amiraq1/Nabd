@@ -170,6 +170,7 @@ changed=$(git diff --name-only "$base" HEAD)
 security_files=(
   internal/agent/fence.go
   internal/config/
+  internal/mcp/
   internal/perm/
   internal/pathindex/
   internal/provider/
