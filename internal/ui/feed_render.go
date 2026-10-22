@@ -6,8 +6,6 @@ import (
 
 	"nabd/internal/presentation"
 
-	"nabd/internal/rtl"
-
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -115,14 +113,6 @@ func renderAssistant(it presentation.FeedItem, width int) []string {
 		} else {
 			prose := strings.Trim(seg.text, "\n")
 			if prose != "" {
-				// Apply Arabic shaping (presentation forms) so Termux
-				// displays connected letters. Shaping is display-only;
-				// the logical source remains canonical. Skipped in
-				// ASCII-only mode and when RTL is Logical/off, where
-				// presentation forms are unwanted.
-				if !asciiOnly() && rtlDisplayMode() != rtl.Logical {
-					prose = shapeArabicText(prose)
-				}
 				out = append(out, formatMarkdown(prose, width)...)
 			}
 		}
