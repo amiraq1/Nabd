@@ -48,14 +48,14 @@ func formatMarkdownVisual(text string, width int) []string {
 
 		// Headings
 		if _, content, ok := parseHeading(line); ok {
-			logical, spans := parseInlineSemantic(content, styleBold)
+			logical, spans := parseInlineDisplay(content, styleBold)
 			out = append(out, renderMarkdownSemantic(logical, spans, width)...)
 			continue
 		}
 
 		// Lists
 		if lPrefix, lIndent, content, ok := parseList(line); ok {
-			logical, spans := parseInlineSemantic(content, styleNone)
+			logical, spans := parseInlineDisplay(content, styleNone)
 			contentWidth := width - ansi.StringWidth(lIndent)
 			if contentWidth < 8 {
 				contentWidth = 8
@@ -73,7 +73,7 @@ func formatMarkdownVisual(text string, width int) []string {
 		}
 
 		// Normal paragraph line
-		logical, spans := parseInlineSemantic(line, styleNone)
+		logical, spans := parseInlineDisplay(line, styleNone)
 		out = append(out, renderMarkdownSemantic(logical, spans, width)...)
 	}
 	return out
@@ -240,6 +240,17 @@ func parseInlineSemantic(text string, inheritedStyle uint16) (string, []rtl.Span
 		i = next
 	}
 	return sb.String(), spans
+}
+
+// parseInlineDisplay parses inline Markdown and applies the display shaping
+// policy: the returned spans are already rebuilt in visual-offset space by
+// shapeProseRuns. ASCII-only mode never emits presentation forms.
+func parseInlineDisplay(text string, style uint16) (string, []rtl.Span) {
+	logical, spans := parseInlineSemantic(text, style)
+	if asciiOnly() {
+		return logical, spans
+	}
+	return shapeProseRuns(logical, spans)
 }
 
 // formatInline is the established logical-mode formatter. The visual RTL

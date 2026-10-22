@@ -73,9 +73,9 @@ const (
 )
 
 // Policy controls one Layout call. Shaping is deliberately absent here: it is
-// applied at the UI layer via shapeArabicText (see docs/termux-shaping-
-// measurements.md for the decision). The engine's shaping option remains
-// internal/test-only.
+// applied at the UI layer via shapeProseRuns (see docs/termux-shaping-
+// measurements.md and docs/rtl-step1-shape-after-markdown.md for the
+// decisions). The engine's shaping option remains internal/test-only.
 type Policy struct {
 	Mode Mode
 	Base Direction
@@ -120,34 +120,6 @@ type classifiedCluster struct {
 	SpanID  int
 }
 
-// Layout runs the display pipeline over already-sanitized logical text with
-// caller-supplied semantic spans:
-//
-//	spans -> provisional logical wrap -> grapheme clusters ->
-//	canonical bracket pairing (bidi engine) -> levels -> L1/L2 at cluster
-//	granularity -> L3 (clusters never split) -> mirroring ->
-//	final width measurement
-//
-// Spans must be:
-//   - sorted ascending by Start;
-//   - non-overlapping;
-//   - non-empty: Start < End;
-//   - inside [0, len(logical)];
-//   - aligned to UTF-8 rune boundaries and extended grapheme-cluster
-//     boundaries.
-//
-// Any violation returns an error matching ErrInvalidSpans, never a panic.
-// Layout never modifies logical or spans.
-//
-// A nil or empty span slice means the whole text is prose with StyleID 0.
-// Gaps between spans are prose with StyleID 0 and are breakable; every span
-// is one atom (its clusters are never merged with neighbours for wrapping or
-// attribution, even when the next span has the same Kind), and spans with
-// Kind != Prose additionally keep an even, LTR-island embedding level. Spans
-// covering whitespace are allowed when a caller (the Markdown layer in PR 2)
-// emits them explicitly. Binding "\n" separates lines; each line is an
-// independent paragraph. The returned clusters carry absolute source ranges
-// into logical.
 // layoutOptions controls internal unexported features of Layout.
 type layoutOptions struct {
 	arabicShaping bool

@@ -451,3 +451,9 @@ quick one-off overrides and v1 compatibility.
 | `NABD_FORCE_TOUCH` | `1` enables touch/mouse input on platforms where it is disabled by default (e.g. non-Termux terminals). |
 | `NABD_CLIPBOARD` | Clipboard transport override. `exec` forces the subprocess-based path. Unset uses the default heuristic. |
 | `NABD_EXPORTS_DIR` | Directory where `/export` session reports are written. Defaults to `~/.ag/exports`. |
+
+### Diagnostics
+
+| Variable | Purpose |
+|---|---|
+| `NABD_DEBUG` | Any non-empty value enables `slog` warnings on stderr. Today it reports an unknown event type encountered while translating the journal to the wire (`internal/agent/messages.go`). Leave it unset in interactive sessions: a stray stderr line corrupts the rendered frame, so the default path stays silent. |

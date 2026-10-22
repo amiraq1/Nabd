@@ -55,6 +55,18 @@ func (r *Registry) PersistedUndo(recs []*event.EditRecord, n int) []UndoResult {
 // rewindRecord restores one persisted record: verify the file still matches
 // HashAfter, then put BlobBefore back through the shadow.
 func (r *Registry) rewindRecord(rec *event.EditRecord) UndoResult {
+	// V16: an existing file with no before-content reference is fail-closed.
+	// Check this before the Excluded marker so malformed records retain the
+	// more specific missing-before diagnostic.
+	if rec.BlobBefore == "" && rec.HashBefore != "" {
+		return UndoResult{Rel: rec.Path, Note: ErrUndoBeforeMissing.Error()}
+	}
+	// P0-4: excluded records never have shadow content and must be refused
+	// before resolving the root or capturing the current file. This also keeps
+	// malformed/minimal registries from panicking while handling the record.
+	if rec.Excluded {
+		return UndoResult{Rel: rec.Path, Note: ErrUndoExcluded.Error()}
+	}
 	// D: Restore Only Through the Descriptor-Relative Path. relative is the
 	// filesystem authority; abs is metadata for the messages and the journal.
 	rel, abs, err := writePathFromRoot(r.root, rec.Path)
@@ -68,20 +80,6 @@ func (r *Registry) rewindRecord(rec *event.EditRecord) UndoResult {
 	// policy is authoritative; a record stamped Excluded for a path that is no
 	// longer excluded is handled below.
 	if r.pathGate != nil && r.pathGate.IsPathExcluded(rel) {
-		return UndoResult{Rel: rec.Path, Note: ErrUndoExcluded.Error()}
-	}
-	// V16: creation is a statement the record makes about itself: no before
-	// content AND no before hash. HashBefore is written exactly when the file
-	// existed (buildRecord), so an absent content reference beside a before-hash
-	// is a record this reader cannot restore — a writer that stores no content
-	// blobs (the capture-ordering change proposed in the open PR #270) or a
-	// legacy record whose reference is gone. Refuse before any capture.
-	if rec.BlobBefore == "" && rec.HashBefore != "" {
-		return UndoResult{Rel: rec.Path, Note: ErrUndoBeforeMissing.Error()}
-	}
-	// P0-4: a record stamped Excluded (a true creation on an excluded path)
-	// carries no shadow content even if the path is no longer excluded.
-	if rec.Excluded {
 		return UndoResult{Rel: rec.Path, Note: ErrUndoExcluded.Error()}
 	}
 	now, err := captureFromRoot(r.sh, r.root, rel, abs)
