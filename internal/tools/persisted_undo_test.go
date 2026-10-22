@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"nabd/internal/event"
@@ -174,5 +175,113 @@ func TestPersistedUndoDiagnostics(t *testing.T) {
 	if res[0].OK || res[0].Note != snap.ErrShadowMissing.Error()+": stat "+blobPath+": no such file or directory" {
 		// allow for OS error variation by only checking the prefix?
 		t.Logf("res note = %q", res[0].Note)
+	}
+}
+
+// TestPersistedUndoRefusesMissingBeforeBlob pins V16: a record that says the
+// file existed (it carries a before-hash) but whose before-content reference is
+// absent must not be read as a creation. A reader that decides "creation" from
+// an empty BlobBefore alone deletes the user's file on /undo, which is the data
+// loss the hypothesis predicts.
+//
+// The fixture is written the way a capture-ordering change such as the open
+// PR #270 writes it: hashes present, content blobs intentionally absent, and an
+// "excluded" marker. The path itself is not excluded, so the refusal has to
+// come from data the older schema already has — the present before-hash beside
+// the missing blob — not from the newer exclusion marker.
+func TestPersistedUndoRefusesMissingBeforeBlob(t *testing.T) {
+	dir := t.TempDir()
+	root, err := NewRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := snap.New(root.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const before = "content that existed before the agent wrote\n"
+	const after = "content the agent wrote\n"
+	path := filepath.Join(dir, "notes.txt")
+	if err := os.WriteFile(path, []byte(after), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	line := `{"type":"edit","edit":{"mutation_id":"v16","path":"notes.txt","hash_before":"` +
+		sha256hex([]byte(before)) + `","hash_after":"` + sha256hex([]byte(after)) +
+		`","patch":"","read_lines":0,"excluded":true}}` + "\n"
+	journalPath := filepath.Join(dir, "journal.jsonl")
+	if err := os.WriteFile(journalPath, []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := store.Read(journalPath)
+	if err != nil {
+		t.Fatalf("store read failed: %v", err)
+	}
+	var recs []*event.EditRecord
+	for _, ev := range events {
+		if ev.Edit != nil {
+			recs = append(recs, ev.Edit)
+		}
+	}
+	if len(recs) != 1 {
+		t.Fatalf("journal fixture did not decode into one record: %+v", events)
+	}
+	if recs[0].HashBefore == "" || recs[0].BlobBefore != "" {
+		t.Fatalf("fixture must be the V16 shape (before-hash present, before-blob absent), got hash_before=%q blob_before=%q",
+			recs[0].HashBefore, recs[0].BlobBefore)
+	}
+
+	res := NewRegistry(root, sh).PersistedUndo(recs, 1)
+	if len(res) != 1 {
+		t.Fatalf("want one undo result, got %+v", res)
+	}
+	if res[0].OK {
+		t.Fatalf("undo accepted a record whose before-content is missing: note=%q", res[0].Note)
+	}
+	if !strings.Contains(res[0].Note, "before-content") {
+		t.Errorf("refusal must name the missing before-content, got %q", res[0].Note)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("undo deleted the file: %v", err)
+	}
+	if string(b) != after {
+		t.Fatalf("undo changed the file: %q", b)
+	}
+}
+
+// TestPersistedUndoDeletesTrueCreation is the control: a record whose own
+// fields say there was no before (no before-hash, no before-blob) still deletes
+// the file, so the fix cannot turn every undo into a refusal.
+func TestPersistedUndoDeletesTrueCreation(t *testing.T) {
+	dir := t.TempDir()
+	root, err := NewRoot(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh, err := snap.New(root.Dir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const after = "created by the agent\n"
+	path := filepath.Join(dir, "created.txt")
+	if err := os.WriteFile(path, []byte(after), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := &event.EditRecord{
+		MutationID: "creation",
+		Path:       "created.txt",
+		HashAfter:  sha256hex([]byte(after)),
+	}
+	res := NewRegistry(root, sh).PersistedUndo([]*event.EditRecord{rec}, 1)
+	if len(res) != 1 || !res[0].OK {
+		t.Fatalf("undo of a true creation must delete the file, got %+v", res)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("undo of a true creation did not delete the file, err=%v", err)
 	}
 }

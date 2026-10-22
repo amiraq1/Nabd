@@ -259,6 +259,18 @@ const (
 	// NoticeCategoryDisplay is emitted for UI/display informational
 	// notices (e.g. dropped events, config conflicts). Monitoring only.
 	NoticeCategoryDisplay
+
+	// NoticeCategoryProviderEmpty is emitted when a turn produced no text and
+	// no tool calls because the provider returned nothing. It is the structural
+	// identity of that condition: the headless exit decision reads this
+	// category instead of matching the notice wording, which is display text
+	// that may be reworded or translated. Monitoring only — deliberately absent
+	// from noticeReachesModel, so it cannot reach the model's context.
+	//
+	// Appended last on purpose. The value is persisted as an integer in the
+	// append-only journal, so appending is safe and renumbering an existing
+	// value would silently rewrite the meaning of every record already written.
+	NoticeCategoryProviderEmpty
 )
 
 // noticeReachesModel is the enumerated allowlist of notice categories
@@ -352,6 +364,10 @@ type EditRecord struct {
 	ModeBefore os.FileMode `json:"mode_before,omitempty"`
 	BlobBefore string      `json:"blob_before,omitempty"`
 	BlobAfter  string      `json:"blob_after,omitempty"`
+	// Excluded marks a record for a path excluded from shadow storage
+	// (P0-4). Blobs are never stored for excluded paths; /undo refuses
+	// with ErrUndoExcluded instead of deleting the file.
+	Excluded bool `json:"excluded,omitempty"`
 }
 
 // ToolCall carries both the request and its outcome.

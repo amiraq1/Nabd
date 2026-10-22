@@ -32,7 +32,7 @@ type composer struct {
 func newComposer() *composer {
 	ta := textarea.New()
 	ta.Prompt = "› "
-	ta.Placeholder = "type a message… (Enter to send)"
+	ta.Placeholder = "type a message… (/help for commands)"
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0 // the feed enforces maxInputRunes atomically, never cutting silently
 	ta.MaxHeight = maxComposerHeight
