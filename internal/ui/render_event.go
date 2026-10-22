@@ -76,7 +76,7 @@ func RenderEvent(e event.Event, width int) string {
 		if e.Edit == nil {
 			return ""
 		}
-		s := "✎ " + e.Edit.Path
+		s := "✎ " + sanitizeSingleLine(e.Edit.Path)
 		if e.Edit.ReadLines > 0 {
 			s += fmt.Sprintf(" · read %d lines", e.Edit.ReadLines)
 		}
@@ -94,7 +94,7 @@ func RenderEvent(e event.Event, width int) string {
 			return ""
 		}
 		if e.Read.Truncated {
-			return warn.Render("✂ " + e.Read.Path + " · partially read")
+			return warn.Render("✂ " + sanitizeSingleLine(e.Read.Path) + " · partially read")
 		}
 		return ""
 	case event.EventRateLimit:
@@ -180,12 +180,12 @@ func callLine(c *event.ToolCall) string {
 		return "?"
 	}
 	// Tool names and arguments are model-controlled: sanitize at the render
-	// boundary. Same policy as the feed tool summary (single line, no
-	// newlines/tabs, redaction enabled). Both ToolStart and PermAsk render
-	// through here; the permission prompt is the security-critical path.
-	name := display.SanitizeForDisplay(c.Name, display.DisplayPolicy{Redact: true})
+	// boundary through singleLineDisplayPolicy, the same definition the edit
+	// and read rows use. Both ToolStart and PermAsk render through here; the
+	// permission prompt is the security-critical path.
+	name := sanitizeSingleLine(c.Name)
 	if a := argSummary(c); a != "" {
-		return name + " " + display.SanitizeForDisplay(a, display.DisplayPolicy{Redact: true})
+		return name + " " + sanitizeSingleLine(a)
 	}
 	return name
 }
@@ -274,6 +274,21 @@ func sanitizeEventText(s string) string {
 // tabs allowed, no credential redaction (model output, not secrets).
 func sanitizeStreamText(s string) string {
 	return display.SanitizeForDisplay(s, display.DisplayPolicy{AllowNewline: true, AllowTab: true, Redact: false})
+}
+
+// singleLineDisplayPolicy is the one display policy for a model-controlled
+// field that must occupy exactly one terminal line: tool names, tool
+// arguments, and recorded paths. It is defined once so that the permission
+// prompt (callLine) and the recorded rows cannot drift apart. The strings they
+// produce may still differ, and legitimately do: the prompt shows the argument
+// the model sent, while a row shows the resolved project-relative path.
+var singleLineDisplayPolicy = display.DisplayPolicy{Redact: true}
+
+// sanitizeSingleLine applies singleLineDisplayPolicy. Named for the policy
+// rather than for paths because callLine applies it to tool names and to
+// non-path arguments (cmd, pattern, query) as well.
+func sanitizeSingleLine(s string) string {
+	return display.SanitizeForDisplay(s, singleLineDisplayPolicy)
 }
 
 // flushJoin is the one place text-delta buffers turn into scrollback. Both

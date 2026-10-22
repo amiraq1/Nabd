@@ -169,8 +169,10 @@ func TestRenderEventLayerDeclarations(t *testing.T) {
 		"callLine",
 		"flushJoin",
 		"sanitizeEventText",
+		"sanitizeSingleLine",
 		"sanitizeStreamText",
 		"sanitizeToolOutput",
+		"singleLineDisplayPolicy",
 		"toolEnd",
 	}
 
