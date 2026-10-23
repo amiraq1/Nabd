@@ -4,7 +4,7 @@ on:
   push:
     branches: [ "master", "main", "feature/**", "fix/**", "docs/**", "ci/**" ]
   pull_request:
-    branches: [ "master", "main" ]
+    branches: [ "master", "main", "rebuild/nabd-v2" ]
 
 permissions:
   contents: read

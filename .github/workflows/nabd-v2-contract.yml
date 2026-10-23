@@ -14,17 +14,37 @@ permissions:
 jobs:
   contract:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: nabd-v2
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          go-version-file: nabd-v2/go.mod
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: .go-version
           cache: false
       - run: test -z "$(gofmt -l .)"
       - run: go vet ./...
       - run: go test ./...
       - run: go test -race ./...
-      - run: git diff --check
+      - name: Check whitespace in the actual change range
+        env:
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+          PUSH_HEAD_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == pull_request ]]; then
+            git diff --check "${PR_BASE_SHA}...${PR_HEAD_SHA}"
+          elif [[ "$PUSH_BEFORE_SHA" != 0000000000000000000000000000000000000000 ]]; then
+            git diff --check "$PUSH_BEFORE_SHA" "$PUSH_HEAD_SHA"
+          else
+            # New branch: check all whitespace introduced by its first tip.
+            git show --format= --check "$PUSH_HEAD_SHA"
+          fi

@@ -2,7 +2,7 @@ name: PR checklist
 
 on:
   pull_request:
-    branches: [ "master", "main" ]
+    branches: [ "master", "main", "rebuild/nabd-v2" ]
     types: [opened, synchronize, reopened, edited]
 
 permissions:
