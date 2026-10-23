@@ -1,0 +1,8 @@
+{"seq":1,"parent":0,"time":"2026-10-23T00:00:00Z","kind":"session_start","data":{"journal":1,"session_id":"read-denied","permission_mode":"deny"}}
+{"seq":2,"parent":1,"time":"2026-10-23T00:00:00Z","kind":"user","data":{"text":"Read hello.txt"}}
+{"seq":3,"parent":2,"time":"2026-10-23T00:00:00Z","kind":"tool_call","data":{"call_id":"read-1","turn_id":"turn-1","name":"read_file","class":"read","args":{"path":"hello.txt"},"request_hash":"3611524132762a927affd6bb1b11b4b936b4f97e7115a8f34297f94d55eeb780"}}
+{"seq":4,"parent":3,"time":"2026-10-23T00:00:00Z","kind":"perm_reply","data":{"call_id":"read-1","request_hash":"3611524132762a927affd6bb1b11b4b936b4f97e7115a8f34297f94d55eeb780","decision":"deny"}}
+{"seq":5,"parent":4,"time":"2026-10-23T00:00:00Z","kind":"tool_result","data":{"call_id":"read-1","output":"permission denied","is_error":true,"code":"permission.denied"}}
+{"time":"2026-10-23T00:00:00Z","kind":"notice","data":{"code":"turn.end","turn_id":"turn-1","status":"completed"},"seq":6,"parent":5}
+{"seq":7,"parent":6,"time":"2026-10-23T00:00:00Z","kind":"text","data":{"text":"Read denied; no file was opened.","turn_id":"turn-2"}}
+{"seq":8,"parent":7,"time":"2026-10-23T00:00:00Z","kind":"notice","data":{"code":"turn.end","turn_id":"turn-2","status":"completed"}}
