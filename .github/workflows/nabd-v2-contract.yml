@@ -1,0 +1,30 @@
+name: Nabd v2 contract
+on:
+  pull_request:
+    paths:
+      - 'nabd-v2/**'
+      - '.github/workflows/nabd-v2-contract.yml'
+  push:
+    branches: ['rebuild/**']
+    paths:
+      - 'nabd-v2/**'
+      - '.github/workflows/nabd-v2-contract.yml'
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nabd-v2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: nabd-v2/go.mod
+          cache: false
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -race ./...
+      - run: git diff --check

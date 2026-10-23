@@ -1,0 +1,8 @@
+{
+  "files": {
+    "hello.txt": {
+      "before": "hello\n",
+      "after": "hello nabd\n"
+    }
+  }
+}
