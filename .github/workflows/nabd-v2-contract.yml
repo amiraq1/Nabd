@@ -5,7 +5,7 @@ on:
       - 'nabd-v2/**'
       - '.github/workflows/nabd-v2-contract.yml'
   push:
-    branches: ['rebuild/**']
+    branches: ['master', 'rebuild/**']
     paths:
       - 'nabd-v2/**'
       - '.github/workflows/nabd-v2-contract.yml'

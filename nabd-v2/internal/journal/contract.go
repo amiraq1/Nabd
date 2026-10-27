@@ -74,6 +74,9 @@ type TextData struct {
 
 // Args is complete, validated input, never a partial provider-stream delta.
 // RequestHash binds consent to canonical name/args + resolved working directory.
+// Class recorded in CallData is for audit/replay only. The runtime permission
+// gate must derive and enforce tool classification from its own trusted tool
+// registry rather than trusting caller-declared Class.
 type CallData struct {
 	CallID      string          `json:"call_id"`
 	TurnID      string          `json:"turn_id"`
@@ -103,16 +106,46 @@ type FileState struct {
 	SHA256 string `json:"sha256,omitempty"`
 }
 
+type Action string
+
+const (
+	ActionApply Action = "apply"
+	ActionUndo  Action = "undo"
+)
+
+func (a Action) IsValid() bool {
+	return a == ActionApply || a == ActionUndo
+}
+
 // ChangeData is used in the durable intent and in the confirmed file_edit.
 // Undo is itself a change; Undoes points to the original apply's event Seq.
 type ChangeData struct {
 	OperationID string    `json:"operation_id"`
 	Path        string    `json:"path"`
-	Action      string    `json:"action"` // apply or undo
+	Action      Action    `json:"action"` // apply or undo
 	Before      FileState `json:"before"`
 	After       FileState `json:"after"`
 	Snapshot    string    `json:"snapshot,omitempty"` // hash of Before, if it existed
 	Undoes      int64     `json:"undoes,omitempty"`
+}
+
+type Status string
+
+const (
+	StatusCompleted Status = "completed"
+	StatusFailed    Status = "failed"
+	StatusCancelled Status = "cancelled"
+	StatusLimit     Status = "limit"
+	StatusUncertain Status = "uncertain"
+)
+
+func (s Status) IsValid() bool {
+	switch s {
+	case StatusCompleted, StatusFailed, StatusCancelled, StatusLimit, StatusUncertain:
+		return true
+	default:
+		return false
+	}
 }
 
 // Known codes: turn.end, tool.execution_started, file.change_intent.
@@ -121,9 +154,17 @@ type ChangeData struct {
 type NoticeData struct {
 	Code   string      `json:"code"`
 	TurnID string      `json:"turn_id,omitempty"`
-	Status string      `json:"status,omitempty"`
+	Status Status      `json:"status,omitempty"`
 	CallID string      `json:"call_id,omitempty"`
 	Change *ChangeData `json:"change,omitempty"`
+}
+
+// ValidateStatus ensures Status is valid for turn.end notices, and empty for all other notice codes.
+func (n NoticeData) ValidateStatus() bool {
+	if n.Code == "turn.end" {
+		return n.Status.IsValid()
+	}
+	return n.Status == ""
 }
 
 type ErrorData struct {
