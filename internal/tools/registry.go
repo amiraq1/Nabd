@@ -51,7 +51,7 @@ func (r *Registry) resolveSafePath(relPath string) (string, error) {
 	target := filepath.Join(r.workDir, cleaned)
 	rel, err := filepath.Rel(r.workDir, target)
 	if err != nil || strings.HasPrefix(rel, "..") {
-		return "", fmt.Errorf("مسار غير مسموح خارج مساحة العمل: %s", relPath)
+		return "", fmt.Errorf("path outside workspace not allowed: %s", relPath)
 	}
 	return target, nil
 }
@@ -63,7 +63,7 @@ func (r *Registry) Run(ctx context.Context, name string, rawArgs json.RawMessage
 	}
 	if spec.NeedsConfirm && r.approve != nil {
 		if !r.approve(name, string(rawArgs)) {
-			return "تم رفض الإجراء من قبل المستخدم."
+			return "Action rejected by user."
 		}
 	}
 	out, err := spec.Execute(ctx, rawArgs)
@@ -76,7 +76,7 @@ func (r *Registry) Run(ctx context.Context, name string, rawArgs json.RawMessage
 func (r *Registry) registerDefaults() {
 	r.handlers["edit_file"] = ToolSpec{
 		Name:         "edit_file",
-		Description:  "استبدال كتلة نص دقيقة في ملف. يفحص syntax لملفات Go قبل الحفظ.",
+		Description:  "Replace an exact block of text in a file. Validates Go syntax before saving.",
 		NeedsConfirm: true,
 		Parameters:   json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"}},"required":["path","old_text","new_text"]}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
@@ -99,10 +99,10 @@ func (r *Registry) registerDefaults() {
 			content := string(contentBytes)
 			count := strings.Count(content, p.OldText)
 			if count == 0 {
-				return "", fmt.Errorf("old_text غير موجود في الملف %s", p.Path)
+				return "", fmt.Errorf("old_text not found in %s", p.Path)
 			}
 			if count != 1 {
-				return "", fmt.Errorf("old_text يتكرر %d مرات؛ أضف سياقاً أكثر لتحديده بدقة", count)
+				return "", fmt.Errorf("old_text appears %d times; include more context to make it unique", count)
 			}
 
 			updated := strings.Replace(content, p.OldText, p.NewText, 1)
@@ -110,20 +110,20 @@ func (r *Registry) registerDefaults() {
 			if strings.HasSuffix(safePath, ".go") {
 				fset := token.NewFileSet()
 				if _, err := parser.ParseFile(fset, p.Path, updated, parser.AllErrors); err != nil {
-					return "", fmt.Errorf("رفض التعديل بسبب خطأ syntax:\n%v", err)
+					return "", fmt.Errorf("edit rejected due to syntax error:\n%v", err)
 				}
 			}
 
 			if err := os.WriteFile(safePath, []byte(updated), 0644); err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("تم تحديث %s بنجاح", p.Path), nil
+			return fmt.Sprintf("Successfully updated %s", p.Path), nil
 		},
 	}
 
 	r.handlers["go_verify"] = ToolSpec{
 		Name:         "go_verify",
-		Description:  "تشغيل go test و go vet مع قيود ذاكرة مناسبة لـ Termux.",
+		Description:  "Run go test and go vet with Termux-safe memory limits.",
 		NeedsConfirm: false,
 		Parameters:   json.RawMessage(`{"type":"object","properties":{"pkg":{"type":"string"}}}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
@@ -161,7 +161,7 @@ func (r *Registry) registerDefaults() {
 
 	r.handlers["read_file"] = ToolSpec{
 		Name:         "read_file",
-		Description:  "قراءة محتوى ملف",
+		Description:  "Read the contents of a file",
 		NeedsConfirm: false,
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var p struct{ Path string `json:"path"` }
@@ -182,7 +182,7 @@ func (r *Registry) registerDefaults() {
 
 	r.handlers["list_dir"] = ToolSpec{
 		Name:         "list_dir",
-		Description:  "عرض محتويات مجلد",
+		Description:  "List directory contents",
 		NeedsConfirm: false,
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var p struct{ Path string `json:"path"` }
@@ -216,5 +216,5 @@ func truncateOutput(s string) string {
 		return s
 	}
 	half := maxOutputBytes / 2
-	return s[:half] + "\n...[تم تقليم المخرجات]...\n" + s[len(s)-half:]
+	return s[:half] + "\n...[output truncated]...\n" + s[len(s)-half:]
 }
