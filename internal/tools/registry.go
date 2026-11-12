@@ -13,6 +13,10 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
+	"github.com/mark3labs/mcp-go/mcp"
 )
 
 const maxOutputBytes = 4096
@@ -291,6 +295,58 @@ func (r *Registry) registerDefaults() {
 				b.WriteString(fmt.Sprintf("%s  %s\n", typ, e.Name()))
 			}
 			return b.String(), nil
+		},
+	}
+
+	r.handlers["mcp_call"] = ToolSpec{
+		Name:         "mcp_call",
+		Description:  "Call a tool on an external MCP server via stdio. Starts the server process, calls the tool, then closes it.",
+		NeedsConfirm: true,
+		Parameters:   json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Command to start the MCP server (e.g. nabd-mcp)"},"tool":{"type":"string","description":"Name of the tool to call on the MCP server"},"arguments":{"type":"object","description":"Arguments to pass to the tool"}},"required":["command","tool"]}`),
+		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
+			var p struct {
+				Command   string                 `json:"command"`
+				Tool      string                 `json:"tool"`
+				Arguments map[string]interface{} `json:"arguments"`
+			}
+			if err := json.Unmarshal(args, &p); err != nil {
+				return "", err
+			}
+			if p.Command == "" || p.Tool == "" {
+				return "", fmt.Errorf("command and tool are required")
+			}
+
+			tCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+			defer cancel()
+
+			stdioTransport := transport.NewStdio(p.Command, nil)
+			c := client.NewClient(stdioTransport)
+			if err := c.Start(tCtx); err != nil {
+				return "", fmt.Errorf("failed to start MCP server: %w", err)
+			}
+			defer c.Close()
+
+			result, err := c.CallTool(tCtx, mcp.CallToolRequest{
+				Params: mcp.CallToolParams{
+					Name:      p.Tool,
+					Arguments: p.Arguments,
+				},
+			})
+			if err != nil {
+				return "", fmt.Errorf("mcp call failed: %w", err)
+			}
+
+			var out strings.Builder
+			for _, content := range result.Content {
+				if tc, ok := content.(mcp.TextContent); ok {
+					out.WriteString(tc.Text)
+					out.WriteString("\n")
+				}
+			}
+			if out.Len() == 0 {
+				return "(no text content returned)", nil
+			}
+			return out.String(), nil
 		},
 	}
 }
