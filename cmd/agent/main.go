@@ -47,27 +47,27 @@ type model struct {
 
 func initialModel(reg *tools.Registry) model {
 	ti := textinput.New()
-	ti.Placeholder = "رسالة لـ NabdCoder..."
+	ti.Placeholder = "Message to NabdCoder..."
 	ti.Focus()
 	ti.Width = 80
 
 	vp := viewport.New(80, 20)
-	vp.SetContent("NabdCoder جاهز — أدوات محمية + قيود ذاكرة Termux\n")
+	vp.SetContent("NabdCoder ready — protected tools + Termux memory limits\n")
 
-	system := `أنت NabdCoder، وكيل متخصص في مشروع Nabd.
-استخدم الأدوات المتاحة:
+	system := `You are NabdCoder, a coding agent specialized in the Nabd project.
+Available tools:
 - read_file(path)
-- edit_file(path, old_text, new_text)  ← مع فحص syntax
-- go_verify(pkg)                        ← مع قيود ذاكرة
+- edit_file(path, old_text, new_text)  ← with syntax check
+- go_verify(pkg)                        ← with memory limits
 - list_dir(path)
 
-ركز على الأمان وجودة الكود. أجب بالعربية.`
+Focus on security and code quality. Reply in English.`
 
 	return model{
 		textInput: ti,
 		viewport:  vp,
 		messages:  []Message{{Role: "system", Content: system}},
-		status:    "جاهز",
+		status:    "Ready",
 		registry:  reg,
 	}
 }
@@ -100,7 +100,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.messages = append(m.messages, Message{Role: "user", Content: input})
 			m.textInput.SetValue("")
 			m.busy = true
-			m.status = "يفكر..."
+			m.status = "Thinking..."
 			m.refresh()
 			return m, m.runAgent()
 		}
@@ -111,7 +111,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.refresh()
 	case agentDone:
 		m.busy = false
-		m.status = "جاهز"
+		m.status = "Ready"
 		m.refresh()
 		return m, nil
 	}
@@ -127,7 +127,7 @@ func (m model) View() string {
 		m.viewport.View() + "\n" +
 		helpStyle.Render("────────────────────────────────") + "\n" +
 		m.textInput.View() + "\n" +
-		helpStyle.Render("Enter: إرسال | clear | Ctrl+C")
+		helpStyle.Render("Enter: send | clear | Ctrl+C")
 }
 
 func (m *model) refresh() {
@@ -135,11 +135,11 @@ func (m *model) refresh() {
 	for _, msg := range m.messages {
 		switch msg.Role {
 		case "user":
-			b.WriteString(userStyle.Render("أنت: ") + msg.Content + "\n\n")
+			b.WriteString(userStyle.Render("You: ") + msg.Content + "\n\n")
 		case "assistant":
 			b.WriteString(assistantStyle.Render("NabdCoder: ") + msg.Content + "\n\n")
 		case "tool":
-			b.WriteString(toolStyle.Render("🔧 ") + msg.Content + "\n\n")
+			b.WriteString(toolStyle.Render("Tool: ") + msg.Content + "\n\n")
 		}
 	}
 	m.viewport.SetContent(b.String())
@@ -167,7 +167,7 @@ func (m model) runAgent() tea.Cmd {
 				result := m.registry.Run(ctx, tc.Name, args)
 				history = append(history, Message{
 					Role:    "tool",
-					Content: tc.Name + " → " + result,
+					Content: tc.Name + " -> " + result,
 				})
 			}
 		}
@@ -187,42 +187,42 @@ type llmResp struct {
 
 func callLLMStub(msgs []Message) llmResp {
 	last := msgs[len(msgs)-1].Content
-	if strings.Contains(strings.ToLower(last), "test") || strings.Contains(last, "اختبار") {
+	if strings.Contains(strings.ToLower(last), "test") {
 		return llmResp{
-			Content: "سأشغل go_verify للتحقق من الاختبارات.",
+			Content: "Running go_verify to check tests.",
 			ToolCalls: []toolCall{{
 				Name:      "go_verify",
 				Arguments: map[string]interface{}{"pkg": "./..."},
 			}},
 		}
 	}
-	return llmResp{Content: "فهمت. أخبرني بالتعديل المطلوب أو الملف الذي تريد مراجعته."}
+	return llmResp{Content: "Understood. Tell me what to change or which file to review."}
 }
 
 func terminalApprover(toolName, summary string) bool {
-	fmt.Printf("\n[بوابة الأمان] الأداة: %s\nالمعاملات: %s\nموافق؟ [y/N]: ", toolName, summary)
+	fmt.Printf("\n[Security Gate] Tool: %s\nArgs: %s\nApprove? [y/N]: ", toolName, summary)
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	ans := strings.TrimSpace(strings.ToLower(line))
-	return ans == "y" || ans == "yes" || ans == "نعم"
+	return ans == "y" || ans == "yes"
 }
 
 func main() {
 	cwd, err := os.Getwd()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "خطأ: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	reg, err := tools.NewRegistry(cwd, terminalApprover)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "خطأ في تهيئة الأدوات: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to init tools: %v\n", err)
 		os.Exit(1)
 	}
 
 	p := tea.NewProgram(initialModel(reg), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
-		fmt.Printf("خطأ TUI: %v\n", err)
+		fmt.Printf("TUI error: %v\n", err)
 		os.Exit(1)
 	}
 	_ = time.Second
