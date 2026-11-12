@@ -1,4 +1,4 @@
-module coding-agent
+module github.com/amiraq1/nabd
 
 go 1.22
 

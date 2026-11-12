@@ -1,29 +1,33 @@
 # NabdCoder
 
-وكيل برمجة متخصص في مشروع **Nabd** (Approval System + Shadow Storage).
+وكيل برمجة متخصص في مشروع Nabd، محسّن لبيئة Termux.
 
-## الاسم
-**NabdCoder** — وكيل مخصص لتطوير ومراجعة وتحسين كود مستودع Nabd.
+## المميزات الجديدة
+- **edit_file**: تعديل آمن بـ Search/Replace + فحص syntax لملفات Go قبل الحفظ.
+- **go_verify**: تشغيل `go test` و`go vet` مع قيود ذاكرة (`GOMEMLIMIT`, `GOGC`, `-p 2`) مناسبة لأندرويد.
+- **Workspace Jail**: منع تعديل ملفات خارج مجلد العمل.
+- **Approval Gate**: تأكيد يدوي قبل أي تعديل.
+- هيكل نظيف: `cmd/agent` + `internal/tools`.
 
-## المميزات
-- System Prompt مخصص لمشروع Nabd (يعي بالـ Threat Model ونظام الموافقات).
-- واجهة TUI باستخدام BubbleTea.
-- أدوات: قراءة/كتابة ملفات، تنفيذ أوامر، عرض المجلدات.
-- مصمم للعمل داخل Termux.
-
-## التشغيل
+## البناء في Termux
 
 ```bash
-cd coding-agent
+pkg install golang git
+git clone https://github.com/amiraq1/nabd.git
+cd nabd
 go mod tidy
-go build -o nabdcoder .
-./nabdcoder
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o $PREFIX/bin/nabdcoder ./cmd/agent
+nabdcoder
 ```
 
-## ربطه بمستودع Nabd
+## الأدوات المتاحة
+| الأداة       | الوصف                                      | تأكيد؟ |
+|--------------|--------------------------------------------|--------|
+| read_file    | قراءة ملف                                  | لا     |
+| edit_file    | استبدال نص دقيق + فحص syntax               | نعم    |
+| go_verify    | go test + vet مع قيود ذاكرة                | لا     |
+| list_dir     | عرض محتويات مجلد                           | لا     |
 
-```bash
-git clone https://github.com/amiraq1/Nabd.git
-cd Nabd
-../coding-agent/nabdcoder
-```
+## ملاحظات
+- النسخة الحالية تحتوي على stub بسيط لاستدعاء LLM (يُستبدل بعميل OpenAI-compatible حقيقي).
+- صُمم للعمل داخل مجلد مشروع Nabd.
