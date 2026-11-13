@@ -215,7 +215,11 @@ func TestUndoCommandRestoresFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out := m.registry.RunApproved(context.Background(), "edit_file", args); !strings.Contains(out, "Successfully") {
+	approval, err := m.registry.Approve("edit_file", args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := m.registry.RunApproved(context.Background(), "edit_file", args, approval); !strings.Contains(out, "Successfully") {
 		t.Fatalf("edit = %q", out)
 	}
 

@@ -16,9 +16,11 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
+	"github.com/amiraq1/nabd/internal/audit"
 	shadowstore "github.com/amiraq1/nabd/internal/shadow"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
@@ -49,9 +51,29 @@ type Registry struct {
 	workDir  string
 	root     *os.Root
 	shadow   *shadowstore.Store
+	auditLog *audit.Log
 	approve  ApprovalFunc
 	handlers map[string]ToolSpec
+	mu       sync.Mutex
+	pending  map[string]pendingApproval
+	now      func() time.Time
 }
+
+type pendingApproval struct {
+	tool     string
+	argsHash string
+	expires  time.Time
+}
+
+// Approval is a single-use token proving that the UI obtained an explicit
+// approval for this exact tool call.
+type Approval struct {
+	Token      string
+	Tool       string
+	ArgsSHA256 string
+}
+
+const approvalTTL = 5 * time.Minute
 
 func NewRegistry(workDir string, approve ApprovalFunc) (*Registry, error) {
 	absRoot, err := filepath.Abs(workDir)
@@ -70,12 +92,20 @@ func NewRegistry(workDir string, approve ApprovalFunc) (*Registry, error) {
 		_ = root.Close()
 		return nil, err
 	}
+	auditLog, err := audit.Open(root)
+	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
 	r := &Registry{
 		workDir:  absRoot,
 		root:     root,
 		shadow:   store,
+		auditLog: auditLog,
 		approve:  approve,
 		handlers: make(map[string]ToolSpec),
+		pending:  make(map[string]pendingApproval),
+		now:      time.Now,
 	}
 	r.registerDefaults()
 	return r, nil
@@ -331,6 +361,7 @@ func (r *Registry) Undo(relPath string) (string, error) {
 		return "", err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
+		_ = r.logEvent(audit.Event{Event: "denied", Tool: "undo", Detail: entry.Path, Reason: "symlink"})
 		return "", fmt.Errorf("refusing to undo a symlink: %s", entry.Path)
 	}
 
@@ -338,16 +369,23 @@ func (r *Registry) Undo(relPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if hashBytes(current) != entry.SHA256After {
+	currentHash := hashBytes(current)
+	if currentHash != entry.SHA256After {
+		_ = r.logEvent(audit.Event{Event: "denied", Tool: "undo", ArgsSHA256: currentHash, Detail: entry.Path, Reason: "file changed since the edit"})
 		return "", fmt.Errorf("refusing undo: %s changed since the edit", entry.Path)
 	}
 
+	if err := r.logEvent(audit.Event{Event: "requested", Tool: "undo", ArgsSHA256: currentHash, Detail: entry.Path}); err != nil {
+		return "", err
+	}
 	if err := r.atomicWrite(currentPath, backup, os.FileMode(entry.Mode)); err != nil {
+		_ = r.logEvent(audit.Event{Event: "failed", Tool: "undo", ArgsSHA256: currentHash, Detail: entry.Path})
 		return "", err
 	}
 	if err := r.shadow.MarkUndone(entry.ID); err != nil {
 		return "", fmt.Errorf("restored %s but could not update shadow metadata: %w", entry.Path, err)
 	}
+	_ = r.logEvent(audit.Event{Event: "applied", Tool: "undo", ArgsSHA256: currentHash, ResultSHA256: entry.SHA256Before, Detail: entry.Path})
 	return fmt.Sprintf("Restored %s from shadow %s", entry.Path, entry.ID), nil
 }
 
@@ -390,36 +428,157 @@ func randomHex(n int) string {
 
 // Run executes a tool. Tools that are not read-only are refused unless an
 // approver is configured and grants the request, so callers without an
-// interactive approval path fail closed.
+// interactive approval path fail closed. Every action is appended to the
+// audit log.
 func (r *Registry) Run(ctx context.Context, name string, rawArgs json.RawMessage) string {
-	return r.run(ctx, name, rawArgs, false)
-}
-
-// RunApproved executes a tool after the caller has already obtained explicit
-// approval. Callers must only use it immediately after their own approval
-// step; Run remains the fail-closed entry point for everyone else.
-func (r *Registry) RunApproved(ctx context.Context, name string, rawArgs json.RawMessage) string {
-	return r.run(ctx, name, rawArgs, true)
-}
-
-func (r *Registry) run(ctx context.Context, name string, rawArgs json.RawMessage, approved bool) string {
 	spec, ok := r.handlers[name]
 	if !ok {
 		return fmt.Sprintf("Error: unknown tool %q", name)
 	}
-	if !spec.ReadOnly && !approved {
-		if r.approve == nil {
-			return fmt.Sprintf("Error: tool %q requires approval, but no approver is configured", name)
-		}
-		if !r.approve(name, string(rawArgs)) {
-			return "Action rejected by user."
-		}
+	hash := hashBytes(rawArgs)
+	detail := toolDetail(name, rawArgs)
+
+	if spec.ReadOnly {
+		_ = r.logEvent(audit.Event{Event: "requested", Tool: name, ArgsSHA256: hash, Detail: detail})
+		return r.execute(ctx, spec, name, rawArgs, hash)
 	}
+
+	if err := r.logEvent(audit.Event{Event: "requested", Tool: name, ArgsSHA256: hash, Detail: detail}); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	if r.approve == nil {
+		_ = r.logEvent(audit.Event{Event: "denied", Tool: name, ArgsSHA256: hash, Reason: "no approver configured"})
+		return fmt.Sprintf("Error: tool %q requires approval, but no approver is configured", name)
+	}
+	if !r.approve(name, string(rawArgs)) {
+		_ = r.logEvent(audit.Event{Event: "denied", Tool: name, ArgsSHA256: hash, Reason: "denied by approver"})
+		return "Action rejected by user."
+	}
+	if err := r.logEvent(audit.Event{Event: "approved", Tool: name, ArgsSHA256: hash}); err != nil {
+		return fmt.Sprintf("Error: %v", err)
+	}
+	return r.execute(ctx, spec, name, rawArgs, hash)
+}
+
+// Approve records an explicit approval and returns a single-use token bound to
+// this exact tool call. The audit write is mandatory: if it fails, no token is
+// issued and nothing can execute.
+func (r *Registry) Approve(name string, rawArgs json.RawMessage) (Approval, error) {
+	spec, ok := r.handlers[name]
+	if !ok {
+		return Approval{}, fmt.Errorf("unknown tool %q", name)
+	}
+	if spec.ReadOnly {
+		return Approval{}, fmt.Errorf("tool %q does not require approval", name)
+	}
+
+	hash := hashBytes(rawArgs)
+	if err := r.logEvent(audit.Event{Event: "requested", Tool: name, ArgsSHA256: hash, Detail: toolDetail(name, rawArgs)}); err != nil {
+		return Approval{}, err
+	}
+	if err := r.logEvent(audit.Event{Event: "approved", Tool: name, ArgsSHA256: hash}); err != nil {
+		return Approval{}, err
+	}
+
+	now := r.now()
+	token := randomHex(16)
+	r.mu.Lock()
+	r.pruneApprovalsLocked(now)
+	r.pending[token] = pendingApproval{tool: name, argsHash: hash, expires: now.Add(approvalTTL)}
+	r.mu.Unlock()
+
+	return Approval{Token: token, Tool: name, ArgsSHA256: hash}, nil
+}
+
+// RunApproved executes a tool with a token issued by Approve. Tokens are bound
+// to the tool and argument hash, expire, and can be used once.
+func (r *Registry) RunApproved(ctx context.Context, name string, rawArgs json.RawMessage, approval Approval) string {
+	spec, ok := r.handlers[name]
+	if !ok {
+		return fmt.Sprintf("Error: unknown tool %q", name)
+	}
+	hash := hashBytes(rawArgs)
+
+	if spec.ReadOnly {
+		_ = r.logEvent(audit.Event{Event: "requested", Tool: name, ArgsSHA256: hash, Detail: toolDetail(name, rawArgs)})
+		return r.execute(ctx, spec, name, rawArgs, hash)
+	}
+
+	if !r.consumeApproval(name, hash, approval) {
+		_ = r.logEvent(audit.Event{Event: "denied", Tool: name, ArgsSHA256: hash, Reason: "invalid or expired approval token"})
+		return "Error: approval token is invalid or expired"
+	}
+	return r.execute(ctx, spec, name, rawArgs, hash)
+}
+
+func (r *Registry) execute(ctx context.Context, spec ToolSpec, name string, rawArgs json.RawMessage, hash string) string {
 	out, err := spec.Execute(ctx, rawArgs)
 	if err != nil {
-		return fmt.Sprintf("Error: %v\nOutput:\n%s", err, truncateOutput(out))
+		result := fmt.Sprintf("Error: %v\nOutput:\n%s", err, truncateOutput(out))
+		_ = r.logEvent(audit.Event{Event: "failed", Tool: name, ArgsSHA256: hash, ResultSHA256: hashBytes([]byte(result))})
+		return result
 	}
-	return truncateOutput(out)
+	result := truncateOutput(out)
+	if err := r.logEvent(audit.Event{Event: "applied", Tool: name, ArgsSHA256: hash, ResultSHA256: hashBytes([]byte(result))}); err != nil && !spec.ReadOnly {
+		result += "\nWarning: audit log write failed"
+	}
+	return result
+}
+
+func (r *Registry) consumeApproval(name, hash string, approval Approval) bool {
+	if approval.Token == "" || approval.Tool != name || approval.ArgsSHA256 != hash {
+		return false
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	pending, ok := r.pending[approval.Token]
+	if !ok {
+		return false
+	}
+	delete(r.pending, approval.Token)
+	return pending.tool == name && pending.argsHash == hash && !r.now().After(pending.expires)
+}
+
+func (r *Registry) pruneApprovalsLocked(now time.Time) {
+	for token, pending := range r.pending {
+		if now.After(pending.expires) {
+			delete(r.pending, token)
+		}
+	}
+}
+
+func (r *Registry) logEvent(event audit.Event) error {
+	return r.auditLog.Write(event)
+}
+
+func toolDetail(name string, rawArgs json.RawMessage) string {
+	var p struct {
+		Path    string `json:"path"`
+		Pkg     string `json:"pkg"`
+		Command string `json:"command"`
+	}
+	_ = json.Unmarshal(rawArgs, &p)
+
+	var detail string
+	switch name {
+	case "edit_file", "read_file", "list_dir":
+		detail = p.Path
+	case "go_verify":
+		detail = p.Pkg
+		if detail == "" {
+			detail = "./..."
+		}
+	case "mcp_call":
+		detail = p.Command
+	}
+	if name == "list_dir" && detail == "" {
+		detail = "."
+	}
+	if len(detail) > 200 {
+		detail = detail[:200]
+	}
+	return strings.ToValidUTF8(detail, "\uFFFD")
 }
 
 func (r *Registry) registerDefaults() {
