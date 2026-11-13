@@ -3,6 +3,8 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"go/format"
@@ -24,11 +26,14 @@ const maxOutputBytes = 4096
 type ApprovalFunc func(toolName, summary string) bool
 
 type ToolSpec struct {
-	Name         string
-	Description  string
-	Parameters   json.RawMessage
-	NeedsConfirm bool
-	Execute      func(ctx context.Context, args json.RawMessage) (string, error)
+	Name        string
+	Description string
+	Parameters  json.RawMessage
+	// ReadOnly marks tools that cannot modify the workspace or execute
+	// external code. The zero value is false, so every new tool requires
+	// approval unless its author explicitly declares it read-only.
+	ReadOnly bool
+	Execute  func(ctx context.Context, args json.RawMessage) (string, error)
 }
 
 type Registry struct {
@@ -83,17 +88,37 @@ func (r *Registry) OpenAITools() []map[string]any {
 	return out
 }
 
-func (r *Registry) NeedsApproval(name string) bool {
+// RequiresApproval reports whether a tool must be approved before running.
+// Unknown tools and every tool that is not explicitly read-only require
+// approval.
+func (r *Registry) RequiresApproval(name string) bool {
 	spec, ok := r.handlers[name]
 	if !ok {
 		return true
 	}
-	return spec.NeedsConfirm
+	return !spec.ReadOnly
+}
+
+// Has reports whether a tool is registered.
+func (r *Registry) Has(name string) bool {
+	_, ok := r.handlers[name]
+	return ok
+}
+
+// Disable removes tools from the registry. Disabled tools are neither
+// advertised nor executable.
+func (r *Registry) Disable(names ...string) {
+	for _, name := range names {
+		delete(r.handlers, name)
+	}
 }
 
 func (r *Registry) resolveSafePath(relPath string) (string, error) {
 	if strings.TrimSpace(relPath) == "" {
 		return "", fmt.Errorf("empty path is not allowed")
+	}
+	if strings.ContainsRune(relPath, 0) {
+		return "", fmt.Errorf("invalid path: contains NUL byte")
 	}
 	cleaned := filepath.Clean(relPath)
 	if filepath.IsAbs(cleaned) {
@@ -105,23 +130,95 @@ func (r *Registry) resolveSafePath(relPath string) (string, error) {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path outside workspace not allowed: %s", relPath)
 	}
+	if isSensitivePath(rel) {
+		return "", fmt.Errorf("access to sensitive path denied: %s", relPath)
+	}
 
 	if resolved, err := filepath.EvalSymlinks(target); err == nil {
 		relResolved, err := filepath.Rel(r.workDir, resolved)
 		if err != nil || relResolved == ".." || strings.HasPrefix(relResolved, ".."+string(filepath.Separator)) {
 			return "", fmt.Errorf("symlink points outside workspace: %s", relPath)
 		}
+		if isSensitivePath(relResolved) {
+			return "", fmt.Errorf("access to sensitive path denied: %s", relPath)
+		}
 	}
 
 	return target, nil
 }
 
+// isSensitivePath denies credentials, VCS internals and the reserved .nabd
+// directory. The check is intentionally case-insensitive so it also holds on
+// case-insensitive filesystems such as Android shared storage.
+func isSensitivePath(rel string) bool {
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	for _, part := range parts {
+		switch strings.ToLower(part) {
+		case ".nabd", ".git":
+			return true
+		}
+	}
+
+	base := strings.ToLower(parts[len(parts)-1])
+	switch {
+	case base == ".env":
+		return true
+	case strings.HasPrefix(base, ".env."):
+		switch base {
+		case ".env.example", ".env.sample", ".env.template", ".env.dist":
+			return false
+		}
+		return true
+	case strings.HasPrefix(base, "id_") && !strings.HasSuffix(base, ".pub"):
+		return true
+	}
+
+	switch strings.ToLower(filepath.Ext(base)) {
+	case ".pem", ".key", ".p12", ".pfx", ".jks", ".keystore":
+		return true
+	}
+	return false
+}
+
+// FileDigest returns the SHA-256 of a file inside the workspace. The approval
+// UI uses it to confirm that the file did not change between the preview and
+// the approved edit.
+func (r *Registry) FileDigest(relPath string) (string, error) {
+	safe, err := r.resolveSafePath(relPath)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(safe)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+// Run executes a tool. Tools that are not read-only are refused unless an
+// approver is configured and grants the request, so callers without an
+// interactive approval path fail closed.
 func (r *Registry) Run(ctx context.Context, name string, rawArgs json.RawMessage) string {
+	return r.run(ctx, name, rawArgs, false)
+}
+
+// RunApproved executes a tool after the caller has already obtained explicit
+// approval. Callers must only use it immediately after their own approval
+// step; Run remains the fail-closed entry point for everyone else.
+func (r *Registry) RunApproved(ctx context.Context, name string, rawArgs json.RawMessage) string {
+	return r.run(ctx, name, rawArgs, true)
+}
+
+func (r *Registry) run(ctx context.Context, name string, rawArgs json.RawMessage, approved bool) string {
 	spec, ok := r.handlers[name]
 	if !ok {
 		return fmt.Sprintf("Error: unknown tool %q", name)
 	}
-	if spec.NeedsConfirm && r.approve != nil {
+	if !spec.ReadOnly && !approved {
+		if r.approve == nil {
+			return fmt.Sprintf("Error: tool %q requires approval, but no approver is configured", name)
+		}
 		if !r.approve(name, string(rawArgs)) {
 			return "Action rejected by user."
 		}
@@ -135,10 +232,10 @@ func (r *Registry) Run(ctx context.Context, name string, rawArgs json.RawMessage
 
 func (r *Registry) registerDefaults() {
 	r.handlers["edit_file"] = ToolSpec{
-		Name:         "edit_file",
-		Description:  "Replace an exact block of text in a file. Validates and formats Go code before saving.",
-		NeedsConfirm: true,
-		Parameters:   json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative file path"},"old_text":{"type":"string","description":"Exact existing block to replace"},"new_text":{"type":"string","description":"Replacement block"}},"required":["path","old_text","new_text"]}`),
+		Name:        "edit_file",
+		Description: "Replace an exact block of text in a file. Validates and formats Go code before saving.",
+		ReadOnly:    false,
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative file path"},"old_text":{"type":"string","description":"Exact existing block to replace"},"new_text":{"type":"string","description":"Replacement block"}},"required":["path","old_text","new_text"]}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var p struct {
 				Path    string `json:"path"`
@@ -194,10 +291,10 @@ func (r *Registry) registerDefaults() {
 	}
 
 	r.handlers["go_verify"] = ToolSpec{
-		Name:         "go_verify",
-		Description:  "Run go test and go vet with Termux-safe memory limits.",
-		NeedsConfirm: false,
-		Parameters:   json.RawMessage(`{"type":"object","properties":{"pkg":{"type":"string","description":"Package pattern, default ./..."}}}`),
+		Name:        "go_verify",
+		Description: "Run go test and go vet with Termux-safe memory limits.",
+		ReadOnly:    false,
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"pkg":{"type":"string","description":"Package pattern, default ./..."}}}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var p struct {
 				Pkg string `json:"pkg"`
@@ -222,16 +319,7 @@ func (r *Registry) registerDefaults() {
 
 			cmd := exec.CommandContext(tCtx, "go", "test", "-p", "2", "-vet=all", pkg)
 			cmd.Dir = r.workDir
-			env := append(os.Environ(),
-				"GOMEMLIMIT=512MiB",
-				"GOGC=50",
-			)
-			if os.Getenv("TMPDIR") == "" {
-				if prefix := os.Getenv("PREFIX"); prefix != "" {
-					env = append(env, "TMPDIR="+filepath.Join(prefix, "tmp"))
-				}
-			}
-			cmd.Env = env
+			cmd.Env = buildVerifyEnv()
 
 			var out bytes.Buffer
 			cmd.Stdout = &out
@@ -242,10 +330,10 @@ func (r *Registry) registerDefaults() {
 	}
 
 	r.handlers["read_file"] = ToolSpec{
-		Name:         "read_file",
-		Description:  "Read the contents of a file inside the workspace.",
-		NeedsConfirm: false,
-		Parameters:   json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative file path"}},"required":["path"]}`),
+		Name:        "read_file",
+		Description: "Read the contents of a file inside the workspace.",
+		ReadOnly:    true,
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative file path"}},"required":["path"]}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var p struct {
 				Path string `json:"path"`
@@ -266,10 +354,10 @@ func (r *Registry) registerDefaults() {
 	}
 
 	r.handlers["list_dir"] = ToolSpec{
-		Name:         "list_dir",
-		Description:  "List directory contents inside the workspace.",
-		NeedsConfirm: false,
-		Parameters:   json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative directory path (default .)"}}}`),
+		Name:        "list_dir",
+		Description: "List directory contents inside the workspace.",
+		ReadOnly:    true,
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"Relative directory path (default .)"}}}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var p struct {
 				Path string `json:"path"`
@@ -288,6 +376,9 @@ func (r *Registry) registerDefaults() {
 			}
 			var b strings.Builder
 			for _, e := range entries {
+				if isSensitivePath(filepath.Join(p.Path, e.Name())) {
+					continue
+				}
 				typ := "F"
 				if e.IsDir() {
 					typ = "D"
@@ -299,10 +390,10 @@ func (r *Registry) registerDefaults() {
 	}
 
 	r.handlers["mcp_call"] = ToolSpec{
-		Name:         "mcp_call",
-		Description:  "Call a tool on an external MCP server via stdio. Starts the server process, calls the tool, then closes it.",
-		NeedsConfirm: true,
-		Parameters:   json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Command to start the MCP server (e.g. nabd-mcp)"},"tool":{"type":"string","description":"Name of the tool to call on the MCP server"},"arguments":{"type":"object","description":"Arguments to pass to the tool"}},"required":["command","tool"]}`),
+		Name:        "mcp_call",
+		Description: "Call a tool on an external MCP server via stdio. Starts the server process, calls the tool, then closes it.",
+		ReadOnly:    false,
+		Parameters:  json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"Command to start the MCP server (e.g. nabd-mcp)"},"tool":{"type":"string","description":"Name of the tool to call on the MCP server"},"arguments":{"type":"object","description":"Arguments to pass to the tool"}},"required":["command","tool"]}`),
 		Execute: func(ctx context.Context, args json.RawMessage) (string, error) {
 			var p struct {
 				Command   string                 `json:"command"`
@@ -349,6 +440,41 @@ func (r *Registry) registerDefaults() {
 			return out.String(), nil
 		},
 	}
+}
+
+// verifyEnvAllowlist is the only set of parent variables forwarded to project
+// test code. Secrets such as API keys and proxy credentials are intentionally
+// omitted.
+var verifyEnvAllowlist = []string{
+	"PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "TZ",
+	"TMPDIR", "TMP", "TEMP",
+	"GOROOT", "GOPATH", "GOCACHE", "GOMODCACHE", "GOTOOLCHAIN",
+	"GOOS", "GOARCH", "GOARM", "GOAMD64", "GOEXPERIMENT",
+	"CGO_ENABLED", "CC", "CXX", "PKG_CONFIG",
+	"PREFIX", "ANDROID_ROOT", "ANDROID_DATA", "ANDROID_STORAGE",
+	"SSL_CERT_FILE", "SSL_CERT_DIR",
+	"SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
+	"USERPROFILE", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
+}
+
+func buildVerifyEnv() []string {
+	env := make([]string, 0, len(verifyEnvAllowlist)+4)
+	for _, key := range verifyEnvAllowlist {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
+	}
+	env = append(env,
+		"GOMEMLIMIT=512MiB",
+		"GOGC=50",
+		"GOFLAGS=-mod=readonly",
+	)
+	if os.Getenv("TMPDIR") == "" {
+		if prefix := os.Getenv("PREFIX"); prefix != "" {
+			env = append(env, "TMPDIR="+filepath.Join(prefix, "tmp"))
+		}
+	}
+	return env
 }
 
 func truncateOutput(s string) string {
