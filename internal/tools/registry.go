@@ -520,33 +520,14 @@ func (r *Registry) registerDefaults() {
 			var p struct {
 				Pkg string `json:"pkg"`
 			}
-			_ = json.Unmarshal(args, &p)
-			pkg := strings.TrimSpace(p.Pkg)
-			if pkg == "" {
-				pkg = "./..."
+			if err := json.Unmarshal(args, &p); err != nil {
+				return "", err
 			}
-
-			if strings.HasPrefix(pkg, "-") {
-				return "", fmt.Errorf("invalid package pattern %q: flags are not allowed", pkg)
+			pkg, err := r.validatePkgPattern(p.Pkg)
+			if err != nil {
+				return "", err
 			}
-			if pkg != "./..." && pkg != "." {
-				if _, err := r.resolveSafePath(strings.TrimSuffix(pkg, "/...")); err != nil {
-					return "", err
-				}
-			}
-
-			tCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
-			defer cancel()
-
-			cmd := exec.CommandContext(tCtx, "go", "test", "-p", "2", "-vet=all", pkg)
-			cmd.Dir = r.workDir
-			cmd.Env = buildVerifyEnv()
-
-			var out bytes.Buffer
-			cmd.Stdout = &out
-			cmd.Stderr = &out
-			err := cmd.Run()
-			return out.String(), err
+			return r.runGoVerify(ctx, pkg, 90*time.Second)
 		},
 	}
 
@@ -644,6 +625,144 @@ func (r *Registry) registerDefaults() {
 	}
 }
 
+// validatePkgPattern accepts only package patterns that stay inside the
+// workspace. Module paths ("std", "github.com/...") are rejected so go_verify
+// cannot be pointed at packages outside the project.
+func (r *Registry) validatePkgPattern(pattern string) (string, error) {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return "./...", nil
+	}
+	if strings.HasPrefix(pattern, "-") {
+		return "", fmt.Errorf("invalid package pattern %q: flags are not allowed", pattern)
+	}
+	switch pattern {
+	case ".", "./":
+		return ".", nil
+	case "./...":
+		return pattern, nil
+	}
+	if !strings.HasPrefix(pattern, "./") {
+		return "", fmt.Errorf("package pattern must be workspace-relative (for example ./... or ./pkg)")
+	}
+
+	rel := strings.TrimSuffix(pattern, "/...")
+	rel = strings.TrimPrefix(rel, "./")
+	if rel == "" {
+		return "", fmt.Errorf("invalid package pattern %q", pattern)
+	}
+	if _, err := r.resolveSafePath(rel); err != nil {
+		return "", err
+	}
+	return pattern, nil
+}
+
+// runGoVerify executes go test with a hard timeout and a structured summary.
+// Test failures are normal results, not tool errors.
+func (r *Registry) runGoVerify(ctx context.Context, pkg string, timeout time.Duration) (string, error) {
+	tCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(tCtx, "go", "test", "-p", "2", "-vet=all", pkg)
+	cmd.Dir = r.workDir
+	cmd.Env = buildVerifyEnv()
+	cmd.WaitDelay = 2 * time.Second
+	configureProcessTree(cmd)
+
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	err := cmd.Run()
+
+	status := "PASS"
+	if err != nil {
+		status = "FAIL"
+	}
+	if tCtx.Err() == context.DeadlineExceeded {
+		status = "FAIL (timeout)"
+	}
+	if err != nil && !isGoTestFailure(tCtx, err) {
+		return "", err
+	}
+	return summarizeGoTest(status, out.String(), err), nil
+}
+
+func isGoTestFailure(ctx context.Context, err error) bool {
+	if ctx.Err() != nil {
+		return true
+	}
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr)
+}
+
+const (
+	maxSummarySignals = 5
+	maxSummaryTail    = 12
+	maxSummaryLine    = 180
+)
+
+// summarizeGoTest returns a small, structured result instead of raw logs: a
+// status line, the first failure signals, and the tail of the output.
+func summarizeGoTest(status, output string, err error) string {
+	lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+
+	var b strings.Builder
+	b.WriteString(status)
+	if err != nil {
+		b.WriteString(" (")
+		b.WriteString(clipSummary(err.Error(), maxSummaryLine))
+		b.WriteString(")")
+	}
+	b.WriteString("\n")
+
+	signals := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "--- FAIL:") ||
+			strings.Contains(trimmed, "build failed") ||
+			strings.Contains(trimmed, "cannot find") ||
+			strings.Contains(trimmed, "undefined:") ||
+			strings.Contains(trimmed, "panic:") {
+			if signals >= maxSummarySignals {
+				break
+			}
+			b.WriteString("  ")
+			b.WriteString(clipSummary(trimmed, maxSummaryLine))
+			b.WriteString("\n")
+			signals++
+		}
+	}
+
+	b.WriteString("--- tail ---\n")
+	if len(lines) == 1 && lines[0] == "" {
+		b.WriteString("(no output)\n")
+		return b.String()
+	}
+	start := len(lines) - maxSummaryTail
+	if start < 0 {
+		start = 0
+	}
+	for _, line := range lines[start:] {
+		b.WriteString(clipSummary(line, maxSummaryLine))
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func clipSummary(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	cut := n
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
+}
+
 // verifyEnvAllowlist is the only set of parent variables forwarded to project
 // test code. Secrets such as API keys and proxy credentials are intentionally
 // omitted.
@@ -670,6 +789,8 @@ func buildVerifyEnv() []string {
 		"GOMEMLIMIT=512MiB",
 		"GOGC=50",
 		"GOFLAGS=-mod=readonly",
+		"GOPROXY=off",
+		"GOTOOLCHAIN=local",
 	)
 	if os.Getenv("TMPDIR") == "" {
 		if prefix := os.Getenv("PREFIX"); prefix != "" {
