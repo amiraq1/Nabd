@@ -130,10 +130,23 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.refresh()
 					return m.advance()
 				}
+				approval, err := m.registry.Approve(tc.Function.Name, json.RawMessage(tc.Function.Arguments))
+				if err != nil {
+					m.pendingTools = m.pendingTools[1:]
+					m.approval = approvalPreview{}
+					m.messages = append(m.messages, Message{
+						Role:       "tool",
+						ToolCallID: tc.ID,
+						Content:    "Error: approval could not be recorded: " + err.Error(),
+						Display:    "Approval not recorded",
+					})
+					m.refresh()
+					return m.advance()
+				}
 				m.approval = approvalPreview{}
 				m.status = "Executing: " + sanitizeForDisplay(tc.Function.Name)
 				m.refresh()
-				return m, executeToolCmd(m.registry, tc)
+				return m, executeToolCmd(m.registry, tc, &approval)
 			}
 			if key == "n" || key == "no" || msg.Type == tea.KeyEsc {
 				m.awaitingApproval = false
@@ -244,7 +257,7 @@ func (m uiModel) advance() (tea.Model, tea.Cmd) {
 	if !m.registry.Has(next.Function.Name) {
 		m.status = "Running: " + sanitizeForDisplay(next.Function.Name)
 		m.refresh()
-		return m, executeToolCmd(m.registry, next)
+		return m, executeToolCmd(m.registry, next, nil)
 	}
 	if m.registry.RequiresApproval(next.Function.Name) {
 		m.awaitingApproval = true
@@ -256,7 +269,7 @@ func (m uiModel) advance() (tea.Model, tea.Cmd) {
 	m.approval = approvalPreview{}
 	m.status = "Running: " + sanitizeForDisplay(next.Function.Name)
 	m.refresh()
-	return m, executeToolCmd(m.registry, next)
+	return m, executeToolCmd(m.registry, next, nil)
 }
 
 func (m uiModel) View() string {
@@ -381,9 +394,14 @@ func callLLM(reg *tools.Registry, messages []Message) (*Message, error) {
 	return &msg, nil
 }
 
-func executeToolCmd(reg *tools.Registry, tc ToolCall) tea.Cmd {
+func executeToolCmd(reg *tools.Registry, tc ToolCall, approval *tools.Approval) tea.Cmd {
 	return func() tea.Msg {
-		result := reg.RunApproved(context.Background(), tc.Function.Name, json.RawMessage(tc.Function.Arguments))
+		var result string
+		if approval != nil {
+			result = reg.RunApproved(context.Background(), tc.Function.Name, json.RawMessage(tc.Function.Arguments), *approval)
+		} else {
+			result = reg.Run(context.Background(), tc.Function.Name, json.RawMessage(tc.Function.Arguments))
+		}
 		return toolExecutedMsg{
 			toolMsg: Message{
 				Role:       "tool",

@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/amiraq1/nabd/internal/audit"
 )
 
 func newTestRegistry(t *testing.T) (string, *Registry) {
@@ -50,7 +52,11 @@ func runToolApproved(t *testing.T, reg *Registry, name string, args map[string]a
 	if err != nil {
 		t.Fatal(err)
 	}
-	return reg.RunApproved(context.Background(), name, raw)
+	approval, err := reg.Approve(name, raw)
+	if err != nil {
+		t.Fatalf("Approve(%s): %v", name, err)
+	}
+	return reg.RunApproved(context.Background(), name, raw, approval)
 }
 
 func listedNames(t *testing.T, out string) []string {
@@ -713,5 +719,227 @@ func TestShadowDeniedToFileTools(t *testing.T) {
 	}
 	if out := runTool(t, reg, "list_dir", map[string]any{"path": ".nabd"}); !strings.Contains(out, "sensitive path denied") {
 		t.Fatalf("shadow list = %q", out)
+	}
+}
+
+func readAuditLog(t *testing.T, root string) ([]audit.Event, string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(root, ".nabd", "audit.log"))
+	if err != nil {
+		t.Fatalf("read audit log: %v", err)
+	}
+	var events []audit.Event
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var event audit.Event
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("invalid audit line %q: %v", line, err)
+		}
+		events = append(events, event)
+	}
+	return events, string(data)
+}
+
+func TestAuditLogApprovalFlow(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "target.txt"), "original\n")
+	raw, err := json.Marshal(map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "changed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	approval, err := reg.Approve("edit_file", raw)
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if out := reg.RunApproved(context.Background(), "edit_file", raw, approval); !strings.Contains(out, "Successfully") {
+		t.Fatalf("RunApproved = %q", out)
+	}
+
+	events, rawLog := readAuditLog(t, root)
+	if len(events) != 3 {
+		t.Fatalf("audit events = %d, want 3: %+v", len(events), events)
+	}
+	want := []string{"requested", "approved", "applied"}
+	for i, event := range events {
+		if event.Event != want[i] {
+			t.Errorf("event %d = %q, want %q", i, event.Event, want[i])
+		}
+		if event.Tool != "edit_file" || event.ArgsSHA256 == "" {
+			t.Errorf("event %d missing tool/args hash: %+v", i, event)
+		}
+	}
+	if events[0].Detail != "target.txt" {
+		t.Errorf("requested detail = %q", events[0].Detail)
+	}
+	if events[2].ResultSHA256 == "" {
+		t.Errorf("applied event has no result hash")
+	}
+	for _, secret := range []string{"original", "changed", "Successfully"} {
+		if strings.Contains(rawLog, secret) {
+			t.Errorf("audit log leaks content %q:\n%s", secret, rawLog)
+		}
+	}
+}
+
+func TestAuditLogDeniedWithoutApprover(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "target.txt"), "original\n")
+
+	out := runTool(t, reg, "edit_file", map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "changed",
+	})
+	if !strings.Contains(out, "requires approval") {
+		t.Fatalf("Run = %q", out)
+	}
+
+	events, _ := readAuditLog(t, root)
+	if len(events) != 2 || events[0].Event != "requested" || events[1].Event != "denied" {
+		t.Fatalf("audit events = %+v", events)
+	}
+	if !strings.Contains(events[1].Reason, "no approver") {
+		t.Fatalf("denied reason = %q", events[1].Reason)
+	}
+}
+
+func TestAuditLogFailClosedForWrites(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "target.txt"), "original\n")
+	if err := os.WriteFile(filepath.Join(root, ".nabd"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := json.Marshal(map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "changed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := reg.Approve("edit_file", raw); err == nil {
+		t.Fatal("Approve succeeded without a writable audit log")
+	}
+	if out := runTool(t, reg, "edit_file", map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "changed",
+	}); !strings.HasPrefix(out, "Error") {
+		t.Fatalf("Run = %q", out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "target.txt")); string(got) != "original\n" {
+		t.Fatalf("write happened without audit: %q", got)
+	}
+}
+
+func TestReadOnlyToolsSurviveAuditFailure(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "a.txt"), "hello")
+	if err := os.WriteFile(filepath.Join(root, ".nabd"), []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if out := runTool(t, reg, "read_file", map[string]any{"path": "a.txt"}); out != "hello" {
+		t.Fatalf("read_file = %q", out)
+	}
+}
+
+func TestApprovalTokenRequiredAndSingleUse(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "target.txt"), "original\n")
+	raw, err := json.Marshal(map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "changed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if out := reg.RunApproved(context.Background(), "edit_file", raw, Approval{}); !strings.Contains(out, "invalid or expired") {
+		t.Fatalf("RunApproved without token = %q", out)
+	}
+
+	approval, err := reg.Approve("edit_file", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := json.Marshal(map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "different",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := reg.RunApproved(context.Background(), "edit_file", other, approval); !strings.Contains(out, "invalid or expired") {
+		t.Fatalf("RunApproved with wrong args = %q", out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "target.txt")); string(got) != "original\n" {
+		t.Fatalf("wrong-args approval wrote the file: %q", got)
+	}
+
+	if out := reg.RunApproved(context.Background(), "edit_file", raw, approval); !strings.Contains(out, "Successfully") {
+		t.Fatalf("RunApproved with token = %q", out)
+	}
+	if out := reg.RunApproved(context.Background(), "edit_file", raw, approval); !strings.Contains(out, "invalid or expired") {
+		t.Fatalf("token reuse = %q", out)
+	}
+}
+
+func TestApprovalTokenExpires(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "target.txt"), "original\n")
+	raw, err := json.Marshal(map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "changed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Now()
+	reg.now = func() time.Time { return base }
+	approval, err := reg.Approve("edit_file", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.now = func() time.Time { return base.Add(approvalTTL + time.Second) }
+	if out := reg.RunApproved(context.Background(), "edit_file", raw, approval); !strings.Contains(out, "invalid or expired") {
+		t.Fatalf("expired token = %q", out)
+	}
+}
+
+func TestApproveRejectsReadOnlyTool(t *testing.T) {
+	_, reg := newTestRegistry(t)
+	if _, err := reg.Approve("read_file", json.RawMessage(`{"path":"x"}`)); err == nil {
+		t.Fatal("Approve accepted a read-only tool")
+	}
+}
+
+func TestUndoIsAudited(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "target.txt"), "original\n")
+	runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "changed",
+	})
+
+	if _, err := reg.Undo("target.txt"); err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+
+	events, _ := readAuditLog(t, root)
+	var undoEvents []audit.Event
+	for _, event := range events {
+		if event.Tool == "undo" {
+			undoEvents = append(undoEvents, event)
+		}
+	}
+	if len(undoEvents) != 2 {
+		t.Fatalf("undo audit events = %+v", undoEvents)
+	}
+	if undoEvents[0].Event != "requested" || undoEvents[1].Event != "applied" {
+		t.Fatalf("undo events = %+v", undoEvents)
+	}
+	if undoEvents[0].ArgsSHA256 == "" || undoEvents[1].ResultSHA256 == "" {
+		t.Fatalf("undo hashes missing: %+v", undoEvents)
+	}
+	if undoEvents[0].Detail != "target.txt" {
+		t.Fatalf("undo detail = %q", undoEvents[0].Detail)
 	}
 }

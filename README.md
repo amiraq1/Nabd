@@ -36,6 +36,8 @@ nabdcoder
 - المسارات الحساسة (`.env`, `.git/`, `.nabd/`, `id_*`, `*.pem`, `*.key`) مرفوضة لأدوات الملفات.
 - `cmd/mcp-server` للقراءة فقط: يرفض `edit_file` و`go_verify` لغياب approver، و`mcp_call` معطّل فيه.
 - `go_verify` يمرر بيئة محدودة (allowlist) دون مفاتيح API، ويستخدم `GOFLAGS=-mod=readonly` و`GOPROXY=off` و`GOTOOLCHAIN=local`.
+- Audit log: كل `requested`/`approved`/`denied`/`applied`/`failed` يُضاف إلى `.nabd/audit.log` (JSONL) مع SHA-256 للوسائط والنتيجة فقط، بلا محتوى ملفات؛ والكتابة إلزامية للأدوات الكاتبة/المنفذة.
+- موافقة الـTUI تُصدر token أحادي الاستخدام مرتبط بالأداة وhash الوسائط وينتهي بعد 5 دقائق؛ لا يمكن تنفيذ أداة كاتبة بدونه.
 - مهلة `go_verify` (90s) تقتل شجرة العمليات كاملة، والنتيجة منظمة: `PASS`/`FAIL`، أول 5 إخفاقات، وذيل الإخراج.
 - أنماط حزم `go_verify` يجب أن تكون workspace-relative مثل `./...` أو `./pkg`؛ المسارات الخارجية و`std` مرفوضة.
 - التعديل ذرّي (temp + fsync + rename) ويحافظ على صلاحيات الملف.
