@@ -33,6 +33,7 @@ func TestServerIsReadOnlyAndDisablesMCPCall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = reg.Close() })
 	reg.Disable("mcp_call")
 
 	if reg.Has("mcp_call") {

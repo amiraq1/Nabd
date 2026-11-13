@@ -5,10 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestRegistry(t *testing.T) (string, *Registry) {
@@ -18,6 +21,7 @@ func newTestRegistry(t *testing.T) (string, *Registry) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
+	t.Cleanup(func() { _ = reg.Close() })
 	return root, reg
 }
 
@@ -251,6 +255,7 @@ func TestRunApprovedAndApproverDecisions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = reg.Close() })
 		writeTestFile(t, filepath.Join(root, "target.txt"), "original")
 		out := runTool(t, reg, "edit_file", map[string]any{
 			"path": "target.txt", "old_text": "original", "new_text": "changed",
@@ -272,6 +277,7 @@ func TestRunApprovedAndApproverDecisions(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = reg.Close() })
 		writeTestFile(t, filepath.Join(root, "target.txt"), "original")
 		out := runTool(t, reg, "edit_file", map[string]any{
 			"path": "target.txt", "old_text": "original", "new_text": "changed",
@@ -429,5 +435,273 @@ func TestLoud(t *testing.T) {
 	}
 	if !strings.Contains(out, "truncated") || !strings.Contains(out, "intentional failure") {
 		t.Fatalf("capped output lost its head or tail: %d bytes", len(out))
+	}
+}
+
+func TestEditAtomicPreservesModeAndLeavesNoTemp(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	path := filepath.Join(root, "script.sh")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho old\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "script.sh", "old_text": "echo old", "new_text": "echo new",
+	})
+	if !strings.Contains(out, "Successfully") {
+		t.Fatalf("edit = %q", out)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
+		t.Fatalf("mode = %v, want 0755", info.Mode().Perm())
+	}
+
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".nabd-tmp-") {
+			t.Fatalf("temporary file left behind: %s", entry.Name())
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, ".nabd", "shadow")); err != nil {
+		t.Fatalf("shadow directory missing: %v", err)
+	}
+}
+
+func TestEditRejectsNoOp(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "a.txt"), "alpha\n")
+
+	if out := runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "a.txt", "old_text": "alpha", "new_text": "alpha",
+	}); !strings.Contains(out, "identical") {
+		t.Errorf("exact no-op = %q", out)
+	}
+	if out := runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "a.txt", "old_text": "alpha\n", "new_text": "alpha\r\n",
+	}); !strings.Contains(out, "line-ending normalization") {
+		t.Errorf("CRLF no-op = %q", out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "a.txt")); string(got) != "alpha\n" {
+		t.Fatalf("no-op changed the file: %q", got)
+	}
+}
+
+func TestEditPreservesCRLFInGo(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	path := filepath.Join(root, "crlf.go")
+	if err := os.WriteFile(path, []byte("package demo\r\n\r\nvar x = 1\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "crlf.go", "old_text": "var x = 1", "new_text": "var x = 2",
+	})
+	if !strings.Contains(out, "Successfully") {
+		t.Fatalf("edit = %q", out)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "var x = 2\r\n") {
+		t.Fatalf("CRLF not preserved:\n%q", got)
+	}
+	if strings.Contains(strings.ReplaceAll(string(got), "\r\n", ""), "\n") {
+		t.Fatalf("mixed line endings after edit:\n%q", got)
+	}
+}
+
+func TestEditRejectsLargeFile(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "big.txt"), strings.Repeat("A", maxEditBytes+1))
+
+	out := runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "big.txt", "old_text": "A", "new_text": "B",
+	})
+	if !strings.Contains(out, "too large") {
+		t.Fatalf("large edit = %q", out)
+	}
+}
+
+func TestReadFileCap(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "big.txt"), strings.Repeat("A", maxReadBytes+100))
+
+	out, err := reg.readFile("big.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) > maxReadBytes+64 {
+		t.Fatalf("read returned %d bytes", len(out))
+	}
+	if !strings.Contains(out, "truncated at") {
+		t.Fatal("truncation notice missing")
+	}
+}
+
+func TestListDirCap(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	for i := 0; i < maxListEntries+5; i++ {
+		writeTestFile(t, filepath.Join(root, fmt.Sprintf("f%04d.txt", i)), "x")
+	}
+
+	out, err := reg.listDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != maxListEntries+1 {
+		t.Fatalf("listed %d lines, want %d", len(lines), maxListEntries+1)
+	}
+	if !strings.Contains(out, "5 more entries") {
+		t.Fatalf("entry-cap notice missing")
+	}
+	if !strings.HasPrefix(lines[0], "F  f0000.txt") {
+		t.Fatalf("list is not sorted: %q", lines[0])
+	}
+}
+
+func TestEditRejectsSymlink(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "real.txt"), "original")
+	if err := os.Symlink("real.txt", filepath.Join(root, "link.txt")); err != nil {
+		t.Skipf("symlink creation unsupported: %v", err)
+	}
+
+	out := runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "link.txt", "old_text": "original", "new_text": "changed",
+	})
+	if !strings.Contains(out, "symlinks is not supported") {
+		t.Fatalf("symlink edit = %q", out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "real.txt")); string(got) != "original" {
+		t.Fatalf("symlink target was modified: %q", got)
+	}
+}
+
+func TestEditThroughSymlinkedParentRejected(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	outside := filepath.Join(filepath.Dir(root), "outside")
+	writeTestFile(t, filepath.Join(outside, "secret.txt"), "outside")
+	if err := os.Symlink(outside, filepath.Join(root, "linkdir")); err != nil {
+		t.Skipf("symlink creation unsupported: %v", err)
+	}
+
+	out := runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "linkdir/secret.txt", "old_text": "outside", "new_text": "changed",
+	})
+	if !strings.HasPrefix(out, "Error") {
+		t.Fatalf("edit through symlinked parent = %q", out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(outside, "secret.txt")); string(got) != "outside" {
+		t.Fatalf("outside file was modified: %q", got)
+	}
+}
+
+func TestUndoRestoresFile(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	path := filepath.Join(root, "target.txt")
+	writeTestFile(t, path, "original\n")
+
+	if out := runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "changed",
+	}); !strings.Contains(out, "Successfully") {
+		t.Fatalf("edit = %q", out)
+	}
+	if got, _ := os.ReadFile(path); !strings.Contains(string(got), "changed") {
+		t.Fatalf("edit did not apply: %q", got)
+	}
+
+	msg, err := reg.Undo("target.txt")
+	if err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+	if !strings.Contains(msg, "Restored target.txt") {
+		t.Fatalf("undo message = %q", msg)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "original\n" {
+		t.Fatalf("undo content = %q", got)
+	}
+	if _, err := reg.Undo("target.txt"); err == nil {
+		t.Fatal("second undo succeeded, want no-entry error")
+	}
+}
+
+func TestUndoRefusesAfterDrift(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	path := filepath.Join(root, "target.txt")
+	writeTestFile(t, path, "original\n")
+
+	runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "changed",
+	})
+	writeTestFile(t, path, "drifted\n")
+
+	if _, err := reg.Undo("target.txt"); err == nil || !strings.Contains(err.Error(), "changed since the edit") {
+		t.Fatalf("Undo after drift = %v", err)
+	}
+	if got, _ := os.ReadFile(path); string(got) != "drifted\n" {
+		t.Fatalf("drift was overwritten: %q", got)
+	}
+}
+
+func TestUndoNoArgRestoresLatest(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "a.txt"), "original-a\n")
+	writeTestFile(t, filepath.Join(root, "b.txt"), "original-b\n")
+
+	runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "a.txt", "old_text": "original-a", "new_text": "changed-a",
+	})
+	time.Sleep(2 * time.Millisecond)
+	runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "b.txt", "old_text": "original-b", "new_text": "changed-b",
+	})
+
+	if _, err := reg.Undo(""); err != nil {
+		t.Fatalf("Undo(any): %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "b.txt")); string(got) != "original-b\n" {
+		t.Fatalf("latest file not restored: %q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, "a.txt")); !strings.Contains(string(got), "changed-a") {
+		t.Fatalf("older edit was undone too: %q", got)
+	}
+}
+
+func TestShadowDeniedToFileTools(t *testing.T) {
+	root, reg := newTestRegistry(t)
+	writeTestFile(t, filepath.Join(root, "target.txt"), "original\n")
+	runToolApproved(t, reg, "edit_file", map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "changed",
+	})
+
+	entries, err := os.ReadDir(filepath.Join(root, ".nabd", "shadow"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var backup string
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".bak") {
+			backup = entry.Name()
+		}
+	}
+	if backup == "" {
+		t.Fatal("no shadow backup created")
+	}
+
+	if out := runTool(t, reg, "read_file", map[string]any{"path": ".nabd/shadow/" + backup}); !strings.Contains(out, "sensitive path denied") {
+		t.Fatalf("shadow read = %q", out)
+	}
+	if out := runTool(t, reg, "list_dir", map[string]any{"path": ".nabd"}); !strings.Contains(out, "sensitive path denied") {
+		t.Fatalf("shadow list = %q", out)
 	}
 }
