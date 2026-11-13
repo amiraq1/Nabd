@@ -1,1 +1,7 @@
 .nabd/
+/nabdcoder
+/nabdcoder.exe
+/nabdcoder-arm64
+/mcp-server
+/mcp-server.exe
+*.test
