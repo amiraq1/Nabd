@@ -3,11 +3,14 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/format"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,12 +19,18 @@ import (
 	"time"
 	"unicode/utf8"
 
+	shadowstore "github.com/amiraq1/nabd/internal/shadow"
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-const maxOutputBytes = 4096
+const (
+	maxOutputBytes = 4096
+	maxReadBytes   = 512 << 10
+	maxEditBytes   = 2 << 20
+	maxListEntries = 1000
+)
 
 type ApprovalFunc func(toolName, summary string) bool
 
@@ -38,6 +47,8 @@ type ToolSpec struct {
 
 type Registry struct {
 	workDir  string
+	root     *os.Root
+	shadow   *shadowstore.Store
 	approve  ApprovalFunc
 	handlers map[string]ToolSpec
 }
@@ -50,13 +61,34 @@ func NewRegistry(workDir string, approve ApprovalFunc) (*Registry, error) {
 	if resolved, err := filepath.EvalSymlinks(absRoot); err == nil {
 		absRoot = resolved
 	}
+	root, err := os.OpenRoot(absRoot)
+	if err != nil {
+		return nil, fmt.Errorf("open workspace root: %w", err)
+	}
+	store, err := shadowstore.Open(root)
+	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
 	r := &Registry{
 		workDir:  absRoot,
+		root:     root,
+		shadow:   store,
 		approve:  approve,
 		handlers: make(map[string]ToolSpec),
 	}
 	r.registerDefaults()
 	return r, nil
+}
+
+// Close releases the workspace handle. The registry must not be used afterwards.
+func (r *Registry) Close() error {
+	if r.root == nil {
+		return nil
+	}
+	err := r.root.Close()
+	r.root = nil
+	return err
 }
 
 // OpenAITools returns tool definitions sorted alphabetically to preserve KV-cache.
@@ -113,6 +145,9 @@ func (r *Registry) Disable(names ...string) {
 	}
 }
 
+// resolveSafePath validates a workspace-relative path and returns it in the
+// form expected by os.Root. File operations use the root handle, so the
+// containment check is enforced at open time, not only here.
 func (r *Registry) resolveSafePath(relPath string) (string, error) {
 	if strings.TrimSpace(relPath) == "" {
 		return "", fmt.Errorf("empty path is not allowed")
@@ -121,20 +156,20 @@ func (r *Registry) resolveSafePath(relPath string) (string, error) {
 		return "", fmt.Errorf("invalid path: contains NUL byte")
 	}
 	cleaned := filepath.Clean(relPath)
-	if filepath.IsAbs(cleaned) {
+	if filepath.IsAbs(cleaned) || filepath.VolumeName(cleaned) != "" {
 		return "", fmt.Errorf("absolute paths are not allowed: %s", relPath)
 	}
-
-	target := filepath.Join(r.workDir, cleaned)
-	rel, err := filepath.Rel(r.workDir, target)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path outside workspace not allowed: %s", relPath)
 	}
-	if isSensitivePath(rel) {
+	if isSensitivePath(cleaned) {
 		return "", fmt.Errorf("access to sensitive path denied: %s", relPath)
 	}
 
-	if resolved, err := filepath.EvalSymlinks(target); err == nil {
+	// Defense in depth: os.Root rejects escaping symlinks at open time, but we
+	// still check the resolved path so symlinks to sensitive files are denied.
+	abs := filepath.Join(r.workDir, cleaned)
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
 		relResolved, err := filepath.Rel(r.workDir, resolved)
 		if err != nil || relResolved == ".." || strings.HasPrefix(relResolved, ".."+string(filepath.Separator)) {
 			return "", fmt.Errorf("symlink points outside workspace: %s", relPath)
@@ -144,7 +179,7 @@ func (r *Registry) resolveSafePath(relPath string) (string, error) {
 		}
 	}
 
-	return target, nil
+	return cleaned, nil
 }
 
 // isSensitivePath denies credentials, VCS internals and the reserved .nabd
@@ -160,6 +195,9 @@ func isSensitivePath(rel string) bool {
 	}
 
 	base := strings.ToLower(parts[len(parts)-1])
+	if strings.HasPrefix(base, ".nabd-tmp-") {
+		return true
+	}
 	switch {
 	case base == ".env":
 		return true
@@ -184,16 +222,170 @@ func isSensitivePath(rel string) bool {
 // UI uses it to confirm that the file did not change between the preview and
 // the approved edit.
 func (r *Registry) FileDigest(relPath string) (string, error) {
-	safe, err := r.resolveSafePath(relPath)
+	rel, err := r.resolveSafePath(relPath)
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(safe)
+	f, err := r.root.Open(rel)
 	if err != nil {
 		return "", err
 	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+func (r *Registry) readFile(rel string) (string, error) {
+	info, err := r.root.Stat(rel)
+	if err != nil {
+		return "", err
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("%s is a directory", rel)
+	}
+	f, err := r.root.Open(rel)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(io.LimitReader(f, maxReadBytes+1))
+	if err != nil {
+		return "", err
+	}
+	truncated := len(data) > maxReadBytes
+	if truncated {
+		data = data[:maxReadBytes]
+	}
+	out := string(data)
+	if truncated {
+		out += fmt.Sprintf("\n...[truncated at %d bytes]", maxReadBytes)
+	}
+	return out, nil
+}
+
+func (r *Registry) listDir(rel string) (string, error) {
+	f, err := r.root.Open(rel)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	entries, err := f.ReadDir(-1)
+	if err != nil {
+		return "", err
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+
+	var b strings.Builder
+	shown, hidden := 0, 0
+	for _, e := range entries {
+		if isSensitivePath(filepath.Join(rel, e.Name())) {
+			continue
+		}
+		if shown >= maxListEntries {
+			hidden++
+			continue
+		}
+		typ := "F"
+		if e.IsDir() {
+			typ = "D"
+		}
+		b.WriteString(fmt.Sprintf("%s  %s\n", typ, e.Name()))
+		shown++
+	}
+	if hidden > 0 {
+		b.WriteString(fmt.Sprintf("... [%d more entries]\n", hidden))
+	}
+	return b.String(), nil
+}
+
+// Undo restores the most recent non-undone shadow entry for relPath (or the
+// most recent entry overall when relPath is empty). It refuses if the file
+// changed since the edit or if the shadow copy is corrupted.
+func (r *Registry) Undo(relPath string) (string, error) {
+	var target string
+	if strings.TrimSpace(relPath) != "" {
+		var err error
+		target, err = r.resolveSafePath(relPath)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	entry, backup, err := r.shadow.Latest(target)
+	if err != nil {
+		return "", err
+	}
+
+	currentPath, err := r.resolveSafePath(entry.Path)
+	if err != nil {
+		return "", err
+	}
+	info, err := r.root.Lstat(currentPath)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", fmt.Errorf("refusing to undo a symlink: %s", entry.Path)
+	}
+
+	current, err := r.root.ReadFile(currentPath)
+	if err != nil {
+		return "", err
+	}
+	if hashBytes(current) != entry.SHA256After {
+		return "", fmt.Errorf("refusing undo: %s changed since the edit", entry.Path)
+	}
+
+	if err := r.atomicWrite(currentPath, backup, os.FileMode(entry.Mode)); err != nil {
+		return "", err
+	}
+	if err := r.shadow.MarkUndone(entry.ID); err != nil {
+		return "", fmt.Errorf("restored %s but could not update shadow metadata: %w", entry.Path, err)
+	}
+	return fmt.Sprintf("Restored %s from shadow %s", entry.Path, entry.ID), nil
+}
+
+// atomicWrite writes data to a temporary file in the target directory, syncs
+// it, and renames it over the destination. All operations stay inside root.
+func (r *Registry) atomicWrite(rel string, data []byte, mode os.FileMode) error {
+	tmp := filepath.Join(filepath.Dir(rel), ".nabd-tmp-"+randomHex(8))
+	f, err := r.root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode.Perm())
+	if err != nil {
+		return fmt.Errorf("create temporary file: %w", err)
+	}
+
+	_, writeErr := f.Write(data)
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
+		_ = r.root.Remove(tmp)
+		return fmt.Errorf("write temporary file: %w", err)
+	}
+
+	if err := r.root.Rename(tmp, rel); err != nil {
+		_ = r.root.Remove(tmp)
+		return fmt.Errorf("replace %s: %w", rel, err)
+	}
+	return nil
+}
+
+func hashBytes(data []byte) string {
 	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:])
+}
+
+func randomHex(n int) string {
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buf)
 }
 
 // Run executes a tool. Tools that are not read-only are refused unless an
@@ -248,12 +440,29 @@ func (r *Registry) registerDefaults() {
 			if p.OldText == "" {
 				return "", fmt.Errorf("old_text cannot be empty")
 			}
+			if p.OldText == p.NewText {
+				return "", fmt.Errorf("old_text and new_text are identical")
+			}
 
-			safePath, err := r.resolveSafePath(p.Path)
+			rel, err := r.resolveSafePath(p.Path)
 			if err != nil {
 				return "", err
 			}
-			contentBytes, err := os.ReadFile(safePath)
+			info, err := r.root.Lstat(rel)
+			if err != nil {
+				return "", err
+			}
+			if info.IsDir() {
+				return "", fmt.Errorf("%s is a directory", p.Path)
+			}
+			if info.Mode()&os.ModeSymlink != 0 {
+				return "", fmt.Errorf("editing symlinks is not supported: %s", p.Path)
+			}
+			if info.Size() > maxEditBytes {
+				return "", fmt.Errorf("file is too large to edit (%d bytes; limit %d)", info.Size(), maxEditBytes)
+			}
+
+			contentBytes, err := r.root.ReadFile(rel)
 			if err != nil {
 				return "", err
 			}
@@ -262,6 +471,9 @@ func (r *Registry) registerDefaults() {
 			content := strings.ReplaceAll(string(contentBytes), "\r\n", "\n")
 			oldNorm := strings.ReplaceAll(p.OldText, "\r\n", "\n")
 			newNorm := strings.ReplaceAll(p.NewText, "\r\n", "\n")
+			if oldNorm == newNorm {
+				return "", fmt.Errorf("old_text and new_text are identical after line-ending normalization")
+			}
 
 			count := strings.Count(content, oldNorm)
 			if count == 0 {
@@ -273,20 +485,29 @@ func (r *Registry) registerDefaults() {
 
 			updatedBytes := []byte(strings.Replace(content, oldNorm, newNorm, 1))
 
-			if strings.HasSuffix(safePath, ".go") {
+			if strings.HasSuffix(rel, ".go") {
 				formatted, err := format.Source(updatedBytes)
 				if err != nil {
 					return "", fmt.Errorf("edit rejected due to Go syntax error:\n%v", err)
 				}
 				updatedBytes = formatted
-			} else if hasCRLF {
+			}
+			if hasCRLF {
 				updatedBytes = bytes.ReplaceAll(updatedBytes, []byte("\n"), []byte("\r\n"))
 			}
+			if bytes.Equal(updatedBytes, contentBytes) {
+				return "", fmt.Errorf("edit would not change %s", p.Path)
+			}
 
-			if err := os.WriteFile(safePath, updatedBytes, 0644); err != nil {
+			entry, err := r.shadow.Backup(rel, contentBytes, info.Mode(), updatedBytes)
+			if err != nil {
 				return "", err
 			}
-			return fmt.Sprintf("Successfully updated %s", p.Path), nil
+			if err := r.atomicWrite(rel, updatedBytes, info.Mode()); err != nil {
+				_ = r.shadow.MarkUndone(entry.ID)
+				return "", err
+			}
+			return fmt.Sprintf("Successfully updated %s (shadow %s)", p.Path, entry.ID), nil
 		},
 	}
 
@@ -341,15 +562,11 @@ func (r *Registry) registerDefaults() {
 			if err := json.Unmarshal(args, &p); err != nil {
 				return "", err
 			}
-			safe, err := r.resolveSafePath(p.Path)
+			rel, err := r.resolveSafePath(p.Path)
 			if err != nil {
 				return "", err
 			}
-			data, err := os.ReadFile(safe)
-			if err != nil {
-				return "", err
-			}
-			return string(data), nil
+			return r.readFile(rel)
 		},
 	}
 
@@ -366,26 +583,11 @@ func (r *Registry) registerDefaults() {
 			if strings.TrimSpace(p.Path) == "" {
 				p.Path = "."
 			}
-			safe, err := r.resolveSafePath(p.Path)
+			rel, err := r.resolveSafePath(p.Path)
 			if err != nil {
 				return "", err
 			}
-			entries, err := os.ReadDir(safe)
-			if err != nil {
-				return "", err
-			}
-			var b strings.Builder
-			for _, e := range entries {
-				if isSensitivePath(filepath.Join(p.Path, e.Name())) {
-					continue
-				}
-				typ := "F"
-				if e.IsDir() {
-					typ = "D"
-				}
-				b.WriteString(fmt.Sprintf("%s  %s\n", typ, e.Name()))
-			}
-			return b.String(), nil
+			return r.listDir(rel)
 		},
 	}
 

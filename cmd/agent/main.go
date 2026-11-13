@@ -173,6 +173,18 @@ func (m uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.textInput.SetValue("")
 				return m, nil
 			}
+			if input == "undo" || strings.HasPrefix(input, "undo ") {
+				target := strings.TrimSpace(strings.TrimPrefix(input, "undo"))
+				result, err := m.registry.Undo(target)
+				m.textInput.SetValue("")
+				if err != nil {
+					m.messages = append(m.messages, Message{Role: "local", Content: "undo: " + err.Error()})
+				} else {
+					m.messages = append(m.messages, Message{Role: "local", Content: result})
+				}
+				m.refresh()
+				return m, nil
+			}
 			m.messages = append(m.messages, Message{Role: "user", Content: input})
 			m.textInput.SetValue("")
 			m.busy = true
@@ -261,7 +273,7 @@ func (m uiModel) View() string {
 	} else {
 		b.WriteString(m.textInput.View() + "\n")
 	}
-	b.WriteString(helpStyle.Render("Enter: send | clear | Ctrl+C"))
+	b.WriteString(helpStyle.Render("Enter: send | clear | undo | Ctrl+C"))
 	return b.String()
 }
 
@@ -286,6 +298,8 @@ func (m *uiModel) refresh() {
 			b.WriteString(toolStyle.Render("Tool: "+sanitizeForDisplay(disp)) + "\n\n")
 		case "error":
 			b.WriteString(errorStyle.Render("Error: "+sanitizeForDisplay(msg.Content)) + "\n\n")
+		case "local":
+			b.WriteString(statusStyle.Render("• ") + sanitizeForDisplay(msg.Content) + "\n\n")
 		}
 	}
 	m.viewport.SetContent(b.String())
@@ -293,12 +307,7 @@ func (m *uiModel) refresh() {
 }
 
 func callLLMCmd(reg *tools.Registry, history []Message) tea.Cmd {
-	snapshot := make([]Message, 0, len(history))
-	for _, msg := range history {
-		if msg.Role != "error" {
-			snapshot = append(snapshot, msg)
-		}
-	}
+	snapshot := historyForLLM(history)
 	return func() tea.Msg {
 		resp, err := callLLM(reg, snapshot)
 		if err != nil {
@@ -306,6 +315,16 @@ func callLLMCmd(reg *tools.Registry, history []Message) tea.Cmd {
 		}
 		return llmResponseMsg{assistantMsg: *resp}
 	}
+}
+
+func historyForLLM(history []Message) []Message {
+	snapshot := make([]Message, 0, len(history))
+	for _, msg := range history {
+		if msg.Role != "error" && msg.Role != "local" {
+			snapshot = append(snapshot, msg)
+		}
+	}
+	return snapshot
 }
 
 func callLLM(reg *tools.Registry, messages []Message) (*Message, error) {
@@ -407,6 +426,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to init tools: %v\n", err)
 		os.Exit(1)
 	}
+	defer reg.Close()
 
 	p := tea.NewProgram(initialModel(reg), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {

@@ -23,6 +23,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "failed to create registry: %v\n", err)
 		os.Exit(1)
 	}
+	defer reg.Close()
 	// This server has no interactive approver. Registry.Run refuses every tool
 	// that is not read-only, and mcp_call (arbitrary process execution) is
 	// removed entirely.

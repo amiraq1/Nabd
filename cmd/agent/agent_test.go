@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,6 +20,7 @@ func testModel(t *testing.T) (string, uiModel) {
 	if err != nil {
 		t.Fatalf("NewRegistry: %v", err)
 	}
+	t.Cleanup(func() { _ = reg.Close() })
 	return dir, initialModel(reg)
 }
 
@@ -197,5 +200,63 @@ func TestEnsureInteractiveRejectsNonTTY(t *testing.T) {
 	defer f.Close()
 	if err := ensureInteractive(f); err == nil {
 		t.Fatal("regular file was accepted as an interactive terminal")
+	}
+}
+
+func TestUndoCommandRestoresFile(t *testing.T) {
+	dir, m := testModel(t)
+	path := filepath.Join(dir, "target.txt")
+	if err := os.WriteFile(path, []byte("original\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	args, err := json.Marshal(map[string]any{
+		"path": "target.txt", "old_text": "original", "new_text": "changed",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := m.registry.RunApproved(context.Background(), "edit_file", args); !strings.Contains(out, "Successfully") {
+		t.Fatalf("edit = %q", out)
+	}
+
+	m.textInput.SetValue("undo target.txt")
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(uiModel)
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "original\n" {
+		t.Fatalf("undo restored %q", got)
+	}
+
+	found := false
+	for _, msg := range m.messages {
+		if msg.Role == "local" && strings.Contains(msg.Content, "Restored target.txt") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no local undo confirmation: %+v", m.messages)
+	}
+}
+
+func TestHistoryForLLMExcludesLocalAndError(t *testing.T) {
+	history := []Message{
+		{Role: "system", Content: "s"},
+		{Role: "user", Content: "u"},
+		{Role: "assistant", Content: "a"},
+		{Role: "local", Content: "Restored x"},
+		{Role: "error", Content: "boom"},
+	}
+	got := historyForLLM(history)
+	if len(got) != 3 {
+		t.Fatalf("history length = %d, want 3: %+v", len(got), got)
+	}
+	for _, msg := range got {
+		if msg.Role == "local" || msg.Role == "error" {
+			t.Fatalf("filtered role leaked into LLM history: %q", msg.Role)
+		}
 	}
 }
