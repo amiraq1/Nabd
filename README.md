@@ -35,7 +35,9 @@ nabdcoder
 - الإعداد من البيئة فقط: `NABD_BASE_URL`, `NABD_MODEL`, `NABD_API_KEY`.
 - المسارات الحساسة (`.env`, `.git/`, `.nabd/`, `id_*`, `*.pem`, `*.key`) مرفوضة لأدوات الملفات.
 - `cmd/mcp-server` للقراءة فقط: يرفض `edit_file` و`go_verify` لغياب approver، و`mcp_call` معطّل فيه.
-- `go_verify` يمرر بيئة محدودة (allowlist) دون مفاتيح API، ويستخدم `GOFLAGS=-mod=readonly`.
+- `go_verify` يمرر بيئة محدودة (allowlist) دون مفاتيح API، ويستخدم `GOFLAGS=-mod=readonly` و`GOPROXY=off` و`GOTOOLCHAIN=local`.
+- مهلة `go_verify` (90s) تقتل شجرة العمليات كاملة، والنتيجة منظمة: `PASS`/`FAIL`، أول 5 إخفاقات، وذيل الإخراج.
+- أنماط حزم `go_verify` يجب أن تكون workspace-relative مثل `./...` أو `./pkg`؛ المسارات الخارجية و`std` مرفوضة.
 - التعديل ذرّي (temp + fsync + rename) ويحافظ على صلاحيات الملف.
 - Shadow Storage: نسخة قبل كل تعديل في `.nabd/shadow` (آخر 20 نسخة لكل ملف أو 7 أيام)، و`undo [path]` في الـTUI يستعيد آخر تعديل إن لم يتغيّر الملف.
 - الكتابة الذرّية تعتمد على rename: إذا كان للملف hard link آخر، فسيحتفظ الاسم الآخر بالمحتوى القديم.

@@ -381,8 +381,9 @@ func TestEnv(t *testing.T) {
 	env := "GOMEMLIMIT=" + os.Getenv("GOMEMLIMIT") + "\n" +
 		"GOGC=" + os.Getenv("GOGC") + "\n" +
 		"GOFLAGS=" + os.Getenv("GOFLAGS") + "\n" +
-		"AUDIT_SECRET=" + os.Getenv("AUDIT_SECRET") + "\n" +
-		"GOPROXY=" + os.Getenv("GOPROXY") + "\n"
+		"GOPROXY=" + os.Getenv("GOPROXY") + "\n" +
+		"GOTOOLCHAIN=" + os.Getenv("GOTOOLCHAIN") + "\n" +
+		"AUDIT_SECRET=" + os.Getenv("AUDIT_SECRET") + "\n"
 	if err := os.WriteFile("env-dump.txt", []byte(env), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +400,7 @@ func TestEnv(t *testing.T) {
 	}
 
 	env := string(dump)
-	for _, want := range []string{"GOMEMLIMIT=512MiB", "GOGC=50", "GOFLAGS=-mod=readonly"} {
+	for _, want := range []string{"GOMEMLIMIT=512MiB", "GOGC=50", "GOFLAGS=-mod=readonly", "GOPROXY=off", "GOTOOLCHAIN=local"} {
 		if !strings.Contains(env, want) {
 			t.Errorf("environment missing %q:\n%s", want, env)
 		}
@@ -433,8 +434,17 @@ func TestLoud(t *testing.T) {
 	if len(out) > maxOutputBytes+128 {
 		t.Fatalf("output not capped: %d bytes", len(out))
 	}
-	if !strings.Contains(out, "truncated") || !strings.Contains(out, "intentional failure") {
-		t.Fatalf("capped output lost its head or tail: %d bytes", len(out))
+	if !strings.Contains(out, "FAIL") || !strings.Contains(out, "intentional failure") {
+		t.Fatalf("summary lost the failure: %d bytes\n%s", len(out), out)
+	}
+	repeated := 0
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "0123456789ABCDEF") {
+			repeated++
+		}
+	}
+	if repeated > maxSummaryTail {
+		t.Fatalf("raw output was not summarized: %d repeated lines", repeated)
 	}
 }
 
